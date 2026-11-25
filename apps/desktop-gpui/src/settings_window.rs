@@ -2364,7 +2364,7 @@ impl SettingsWindow {
             // `var(--macos-settings-border)` under Liquid Glass.
             .border_l_1()
             .border_color(theme.settings_divider())
-            .child(
+            .child(crate::apply_redesign!(
                 div()
                     .id("settings-page")
                     .flex()
@@ -2395,7 +2395,10 @@ impl SettingsWindow {
                         Page::Feedback => self.render_feedback(cx),
                         Page::Changelog => self.render_changelog(cx),
                     }),
-            )
+                crate::experimental::is_desktop_redesign_enabled(&self.settings),
+                feature = "gpui-rubber-band",
+                |el: gpui::Stateful<gpui::Div>| el.scroll_rubber_band(true)
+            ))
     }
 
     // -- The Recordings page -----------------------------------------------

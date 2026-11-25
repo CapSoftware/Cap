@@ -209,7 +209,8 @@ tempfile = "3"
 
 [features]
 default = []
-experimental-redesign = []
+experimental-redesign = ["gpui-rubber-band"]
+gpui-rubber-band = ["gpui/rubber-band"]
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

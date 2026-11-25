@@ -3018,6 +3018,197 @@ impl SettingsWindow {
                 .into_any_element(),
             );
         }
+        #[cfg(feature = "gpui-rubber-band")]
+        if crate::experimental::is_desktop_redesign_enabled(&self.settings) {
+            let cfg = gpui::rubber_band_config();
+            let theme = self.theme;
+            let stepper =
+                |id: &'static str,
+                 value_label: String,
+                 on_dec: Box<dyn Fn(&mut Self, &mut Context<Self>)>,
+                 on_inc: Box<dyn Fn(&mut Self, &mut Context<Self>)>| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .id((id, 0u64))
+                                .px(px(8.))
+                                .py(px(3.))
+                                .rounded(px(6.))
+                                .bg(theme.body_border(3))
+                                .border_1()
+                                .border_color(theme.body_border(6))
+                                .text_size(px(12.))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    on_dec(this, cx);
+                                    cx.notify();
+                                }))
+                                .child("-"),
+                        )
+                        .child(
+                            div()
+                                .min_w(px(48.))
+                                .text_center()
+                                .text_size(px(12.))
+                                .child(value_label),
+                        )
+                        .child(
+                            div()
+                                .id((id, 1u64))
+                                .px(px(8.))
+                                .py(px(3.))
+                                .rounded(px(6.))
+                                .bg(theme.body_border(3))
+                                .border_1()
+                                .border_color(theme.body_border(6))
+                                .text_size(px(12.))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    on_inc(this, cx);
+                                    cx.notify();
+                                }))
+                                .child("+"),
+                        )
+                        .into_any_element()
+                };
+
+            sections.push(
+                self.section(
+                    "Rubber-Band Physics (Debug Tuning)",
+                    None,
+                    None,
+                    vec![
+                        self.rows(vec![
+                            self.setting_row(
+                                "Resistance",
+                                Some("Asymptotic pull resistance (0.10..1.00, default 0.55)."),
+                                stepper(
+                                    "rb-resistance",
+                                    format!("{:.2}", cfg.resistance),
+                                    Box::new(|_, _| {
+                                        let mut c = gpui::rubber_band_config();
+                                        c.resistance = (c.resistance - 0.05).clamp(0.10, 1.00);
+                                        gpui::set_rubber_band_config(c);
+                                    }),
+                                    Box::new(|_, _| {
+                                        let mut c = gpui::rubber_band_config();
+                                        c.resistance = (c.resistance + 0.05).clamp(0.10, 1.00);
+                                        gpui::set_rubber_band_config(c);
+                                    }),
+                                ),
+                            ),
+                            self.setting_row(
+                                "Spring Stiffness",
+                                Some("Return spring stiffness (60..600, default 220)."),
+                                stepper(
+                                    "rb-stiffness",
+                                    format!("{:.0}", cfg.spring_stiffness),
+                                    Box::new(|_, _| {
+                                        let mut c = gpui::rubber_band_config();
+                                        c.spring_stiffness =
+                                            (c.spring_stiffness - 20.0).clamp(60.0, 600.0);
+                                        gpui::set_rubber_band_config(c);
+                                    }),
+                                    Box::new(|_, _| {
+                                        let mut c = gpui::rubber_band_config();
+                                        c.spring_stiffness =
+                                            (c.spring_stiffness + 20.0).clamp(60.0, 600.0);
+                                        gpui::set_rubber_band_config(c);
+                                    }),
+                                ),
+                            ),
+                            self.setting_row(
+                                "Spring Damping",
+                                Some("Return spring damping (8..80, default 28)."),
+                                stepper(
+                                    "rb-damping",
+                                    format!("{:.0}", cfg.spring_damping),
+                                    Box::new(|_, _| {
+                                        let mut c = gpui::rubber_band_config();
+                                        c.spring_damping =
+                                            (c.spring_damping - 2.0).clamp(8.0, 80.0);
+                                        gpui::set_rubber_band_config(c);
+                                    }),
+                                    Box::new(|_, _| {
+                                        let mut c = gpui::rubber_band_config();
+                                        c.spring_damping =
+                                            (c.spring_damping + 2.0).clamp(8.0, 80.0);
+                                        gpui::set_rubber_band_config(c);
+                                    }),
+                                ),
+                            ),
+                            self.setting_row(
+                                "Momentum Carry",
+                                Some("Momentum overscroll scale (0.00..1.00, default 0.35)."),
+                                stepper(
+                                    "rb-momentum",
+                                    format!("{:.2}", cfg.momentum_carry),
+                                    Box::new(|_, _| {
+                                        let mut c = gpui::rubber_band_config();
+                                        c.momentum_carry =
+                                            (c.momentum_carry - 0.05).clamp(0.00, 1.00);
+                                        gpui::set_rubber_band_config(c);
+                                    }),
+                                    Box::new(|_, _| {
+                                        let mut c = gpui::rubber_band_config();
+                                        c.momentum_carry =
+                                            (c.momentum_carry + 0.05).clamp(0.00, 1.00);
+                                        gpui::set_rubber_band_config(c);
+                                    }),
+                                ),
+                            ),
+                            self.setting_row(
+                                "Max Overscroll Ratio",
+                                Some("Max overscroll vs viewport (0.10..0.90, default 0.50)."),
+                                stepper(
+                                    "rb-max-ratio",
+                                    format!("{:.2}", cfg.max_overscroll_ratio),
+                                    Box::new(|_, _| {
+                                        let mut c = gpui::rubber_band_config();
+                                        c.max_overscroll_ratio =
+                                            (c.max_overscroll_ratio - 0.05).clamp(0.10, 0.90);
+                                        gpui::set_rubber_band_config(c);
+                                    }),
+                                    Box::new(|_, _| {
+                                        let mut c = gpui::rubber_band_config();
+                                        c.max_overscroll_ratio =
+                                            (c.max_overscroll_ratio + 0.05).clamp(0.10, 0.90);
+                                        gpui::set_rubber_band_config(c);
+                                    }),
+                                ),
+                            ),
+                            self.setting_row(
+                                "Reset to iOS Defaults",
+                                None,
+                                div()
+                                    .id("rb-reset")
+                                    .px(px(10.))
+                                    .py(px(4.))
+                                    .rounded(px(6.))
+                                    .bg(theme.body_border(3))
+                                    .border_1()
+                                    .border_color(theme.body_border(6))
+                                    .text_size(px(12.))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|_, _, _, cx| {
+                                        gpui::set_rubber_band_config(
+                                            gpui::RubberBandConfig::DEFAULT,
+                                        );
+                                        cx.notify();
+                                    }))
+                                    .child("Reset to iOS Defaults")
+                                    .into_any_element(),
+                            ),
+                        ])
+                        .into_any_element(),
+                    ],
+                )
+                .into_any_element(),
+            );
+        }
         sections
     }
 }
