@@ -574,7 +574,11 @@ fn recover_incomplete_recording_in(
     let incomplete = RecoveryManager::inspect_recording(&canonical_path).ok_or_else(|| {
         tr::main::recovery::error::nothing_saved(canonical_path.display()).to_string()
     })?;
-    crate::recording::ensure_finalization_storage(&canonical_path).map_err(|error| {
+    crate::recording::ensure_finalization_storage(
+        &canonical_path,
+        cap_utils::disk_space::FinalizationKind::Studio,
+    )
+    .map_err(|error| {
         tr::main::recovery::error::storage(format!("{error:#}"), canonical_path.display())
             .to_string()
     })?;

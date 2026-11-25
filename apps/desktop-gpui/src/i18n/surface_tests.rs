@@ -416,6 +416,10 @@ fn main_surfaces_match_the_literals_they_replaced() {
             "Low storage. Cap will stop soon to save your recording.",
         ),
         (
+            tr::controls::low_storage_save(),
+            "Low storage. Free up space so Cap can save this recording when you stop.",
+        ),
+        (
             tr::controls::paused_for_sleep(),
             "Recording paused because your Mac went to sleep. Resume when you're ready, or press Stop to save it.",
         ),

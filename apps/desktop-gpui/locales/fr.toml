@@ -1200,6 +1200,7 @@ share_failed_hint = "Vérifiez votre connexion et réessayez."
 [controls]
 disk_full_resume = "Espace disque insuffisant pour reprendre. Libérez de l'espace et réessayez, ou appuyez sur Arrêter pour enregistrer."
 low_storage = "Espace de stockage faible. Cap va bientôt s'arrêter pour préserver votre enregistrement."
+low_storage_save = "Espace de stockage faible. Libérez de l'espace pour que Cap puisse sauvegarder cet enregistrement à l'arrêt."
 paused_for_sleep = "L'enregistrement a été mis en pause car votre Mac s'est mis en veille. Reprenez-le quand vous êtes prêt, ou cliquez sur Arrêter pour l'enregistrer."
 
 [controls.confirm]

@@ -11,7 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorageMonitor};
+use cap_utils::disk_space::{
+    DiskSpaceStatus, FinalizationKind, RecordingStorage, RecordingStorageMonitor,
+};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 use crate::app_sounds::AppSound;
@@ -418,12 +420,44 @@ async fn run_clean_control(
     CleanControlOutcome { paused, error }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageWarning {
+    SaveAtRisk,
+    NearlyFull,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum StorageCheck {
+    Continue(Option<StorageWarning>),
+    Stop,
+}
+
+fn storage_check(storage: RecordingStorage) -> StorageCheck {
+    match storage.status() {
+        DiskSpaceStatus::Exhausted => StorageCheck::Stop,
+        DiskSpaceStatus::Low if storage.nearly_full() => {
+            StorageCheck::Continue(Some(StorageWarning::NearlyFull))
+        }
+        DiskSpaceStatus::Low => StorageCheck::Continue(Some(StorageWarning::SaveAtRisk)),
+        DiskSpaceStatus::Ok => StorageCheck::Continue(None),
+    }
+}
+
+fn log_storage(storage: RecordingStorage, event: &'static str) {
+    tracing::warn!(
+        available_bytes = storage.available_bytes,
+        recording_bytes = storage.recording_bytes,
+        finalization_bytes = storage.finalization_bytes(),
+        "{event}"
+    );
+}
+
 pub struct RecordingSession {
     pub phase: Phase,
     active: Option<ActiveRecording>,
     /// Why the last start attempt failed, for the main window to surface.
     pub error: Option<String>,
-    pub storage_warning: bool,
+    pub storage_warning: Option<StorageWarning>,
     pub storage_notice: Option<String>,
     /// The last recording stopped because what it captured went away.
     pub capture_source_lost: bool,
@@ -512,7 +546,7 @@ impl RecordingSession {
             phase: Phase::Idle,
             active: None,
             error: None,
-            storage_warning: false,
+            storage_warning: None,
             storage_notice: None,
             capture_source_lost: false,
             stopped_for_low_storage: false,
@@ -818,7 +852,7 @@ impl RecordingSession {
         }
         self.phase = Phase::Starting;
         self.error = None;
-        self.storage_warning = false;
+        self.storage_warning = None;
         self.storage_notice = None;
         self.capture_source_lost = false;
         self.stopped_for_low_storage = false;
@@ -1161,9 +1195,13 @@ impl RecordingSession {
 
     fn monitor_storage(&mut self, project_dir: std::path::PathBuf, cx: &mut Context<Self>) {
         self.storage_monitor = None;
+        let kind = match self.mode() {
+            Some(recording::RecordingMode::Instant) => FinalizationKind::Instant,
+            _ => FinalizationKind::Studio,
+        };
         let task = cx.spawn(async move |this, cx| {
             let mut check_failed = false;
-            let mut storage_monitor = RecordingStorageMonitor::default();
+            let mut storage_monitor = RecordingStorageMonitor::new(kind);
             loop {
                 cx.background_executor().timer(Duration::from_secs(2)).await;
                 let is_current = |session: &Self| {
@@ -1203,17 +1241,32 @@ impl RecordingSession {
                         if !is_current(this) {
                             return false;
                         }
-                        match storage.status() {
-                            DiskSpaceStatus::Exhausted => {
-                                this.storage_warning = true;
+                        match storage_check(storage) {
+                            StorageCheck::Stop => {
+                                log_storage(
+                                    storage,
+                                    "Recording storage is full; stopping to save the recording",
+                                );
+                                this.storage_warning = Some(StorageWarning::NearlyFull);
                                 this.stopped_for_low_storage = true;
                                 this.storage_notice = Some(tr::dialog::storage::stopping().into());
                                 this.stop(cx);
                                 false
                             }
-                            status => {
-                                let warning = status == DiskSpaceStatus::Low;
+                            StorageCheck::Continue(warning) => {
                                 if warning != this.storage_warning {
+                                    log_storage(
+                                        storage,
+                                        match warning {
+                                            Some(StorageWarning::NearlyFull) => {
+                                                "Recording storage is nearly full"
+                                            }
+                                            Some(StorageWarning::SaveAtRisk) => {
+                                                "Recording storage may not fit the save after stop"
+                                            }
+                                            None => "Recording storage warning cleared",
+                                        },
+                                    );
                                     this.storage_warning = warning;
                                     cx.notify();
                                 }
@@ -2214,7 +2267,7 @@ impl RecordingSession {
         self.countdown_remaining = None;
         self.phase = Phase::Idle;
         self.mic_muted = false;
-        self.storage_warning = false;
+        self.storage_warning = None;
         self.stopped_elapsed = None;
         self.started_at = None;
         self.paused_accum = Duration::ZERO;
@@ -2261,6 +2314,91 @@ fn capture_ended_cleanly<E>(
 
 fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> bool {
     current == completed && matches!(phase, Phase::Recording { .. })
+}
+
+#[cfg(test)]
+mod storage_check_tests {
+    use super::*;
+    use cap_utils::disk_space::{RECORDING_DISK_RESERVE_BYTES, RECORDING_DISK_WARN_BYTES};
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    fn check(available_bytes: u64, recording_bytes: u64, finalization_copies: u64) -> StorageCheck {
+        storage_check(RecordingStorage {
+            available_bytes,
+            recording_bytes,
+            finalization_copies,
+        })
+    }
+
+    #[test]
+    fn a_recording_past_the_old_stop_point_keeps_recording_with_a_warning() {
+        let recording_bytes = 30 * GIB;
+        for copies in 1..=3 {
+            let old_stop = 3 * recording_bytes + RECORDING_DISK_RESERVE_BYTES;
+            assert_eq!(
+                check(old_stop, recording_bytes, copies),
+                StorageCheck::Continue(Some(StorageWarning::SaveAtRisk))
+            );
+            assert_eq!(
+                check(old_stop - GIB, recording_bytes, copies),
+                StorageCheck::Continue(Some(StorageWarning::SaveAtRisk))
+            );
+            assert_eq!(
+                check(
+                    copies * recording_bytes + RECORDING_DISK_WARN_BYTES + 1,
+                    recording_bytes,
+                    copies
+                ),
+                StorageCheck::Continue(None)
+            );
+            assert_eq!(
+                check(RECORDING_DISK_WARN_BYTES + 1, recording_bytes, copies),
+                StorageCheck::Continue(Some(StorageWarning::SaveAtRisk))
+            );
+        }
+    }
+
+    #[test]
+    fn a_recording_near_the_floor_warns_that_it_will_stop_and_stops_at_it() {
+        for recording_bytes in [0, GIB, 100 * GIB] {
+            for copies in 1..=3 {
+                assert_eq!(
+                    check(RECORDING_DISK_WARN_BYTES, recording_bytes, copies),
+                    StorageCheck::Continue(Some(StorageWarning::NearlyFull))
+                );
+                assert_eq!(
+                    check(RECORDING_DISK_RESERVE_BYTES + 1, recording_bytes, copies),
+                    StorageCheck::Continue(Some(StorageWarning::NearlyFull))
+                );
+                assert_eq!(
+                    check(RECORDING_DISK_RESERVE_BYTES, recording_bytes, copies),
+                    StorageCheck::Stop
+                );
+                assert_eq!(check(0, recording_bytes, copies), StorageCheck::Stop);
+            }
+        }
+    }
+
+    #[test]
+    fn a_recording_with_room_to_save_shows_no_warning() {
+        assert_eq!(check(100 * GIB, 10 * GIB, 2), StorageCheck::Continue(None));
+        assert_eq!(check(u64::MAX, 0, 3), StorageCheck::Continue(None));
+    }
+
+    #[test]
+    fn a_stop_at_the_floor_keeps_files_it_cannot_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordingStorage {
+            available_bytes: RECORDING_DISK_RESERVE_BYTES,
+            recording_bytes: GIB,
+            finalization_copies: 1,
+        };
+        assert_eq!(storage_check(storage), StorageCheck::Stop);
+        let error = crate::recording::finalization_storage_verdict(directory.path(), Ok(storage))
+            .unwrap_err();
+        assert!(error.to_string().starts_with("Low storage."), "{error}");
+    }
 }
 
 #[cfg(test)]

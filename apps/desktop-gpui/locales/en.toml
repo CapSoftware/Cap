@@ -1202,6 +1202,7 @@ share_failed_hint = "Check your connection and try again."
 [controls]
 disk_full_resume = "Not enough disk space to resume. Free up space and try again, or press Stop to save."
 low_storage = "Low storage. Cap will stop soon to save your recording."
+low_storage_save = "Low storage. Free up space so Cap can save this recording when you stop."
 paused_for_sleep = "Recording paused because your Mac went to sleep. Resume when you're ready, or press Stop to save it."
 
 [controls.confirm]

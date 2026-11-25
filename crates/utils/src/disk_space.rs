@@ -8,27 +8,43 @@ pub const RECORDING_DISK_WARN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const RECORDING_DISK_RESERVE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinalizationKind {
+    Studio,
+    Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordingStorage {
     pub available_bytes: u64,
     pub recording_bytes: u64,
+    pub finalization_copies: u64,
 }
 
 impl RecordingStorage {
     pub fn finalization_bytes(self) -> u64 {
-        self.recording_bytes.saturating_mul(3)
+        self.recording_bytes
+            .saturating_mul(self.finalization_copies)
     }
 
+    /// `Exhausted` only once the drive itself is nearly full. A recording
+    /// whose save no longer fits is `Low`: it keeps recording, the user is
+    /// warned, and the save after stop is checked by `can_finalize`.
     pub fn status(self) -> DiskSpaceStatus {
-        let remaining = self
-            .available_bytes
-            .saturating_sub(self.finalization_bytes());
-        if remaining <= RECORDING_DISK_RESERVE_BYTES {
+        if self.available_bytes <= RECORDING_DISK_RESERVE_BYTES {
             DiskSpaceStatus::Exhausted
-        } else if remaining <= RECORDING_DISK_WARN_BYTES {
+        } else if self
+            .available_bytes
+            .saturating_sub(self.finalization_bytes())
+            <= RECORDING_DISK_WARN_BYTES
+        {
             DiskSpaceStatus::Low
         } else {
             DiskSpaceStatus::Ok
         }
+    }
+
+    pub fn nearly_full(self) -> bool {
+        self.available_bytes <= RECORDING_DISK_WARN_BYTES
     }
 
     pub fn can_finalize(self) -> bool {
@@ -39,7 +55,40 @@ impl RecordingStorage {
     }
 }
 
-pub fn recording_storage(path: &Path) -> io::Result<RecordingStorage> {
+/// How many recording-sized files finalizing a recording at `path` writes
+/// beside it. Studio finalization stages a copy of the recording, which APFS
+/// clones for free, then writes the joined output. Instant finalization also
+/// writes the joined video before merging its audio into a second file.
+pub fn finalization_copies(path: &Path, kind: FinalizationKind) -> u64 {
+    match kind {
+        FinalizationKind::Instant => 3,
+        FinalizationKind::Studio if volume_clones_files(path) => 1,
+        FinalizationKind::Studio => 2,
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn volume_clones_files(path: &Path) -> bool {
+    use std::ffi::{CStr, CString};
+    use std::os::unix::ffi::OsStrExt;
+
+    let probe_path = resolve_existing_ancestor(path);
+    let Ok(c_path) = CString::new(probe_path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(c_path.as_ptr(), &mut stat) } != 0 {
+        return false;
+    }
+    unsafe { CStr::from_ptr(stat.f_fstypename.as_ptr()) }.to_bytes() == b"apfs"
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn volume_clones_files(_path: &Path) -> bool {
+    false
+}
+
+pub fn recording_storage(path: &Path, kind: FinalizationKind) -> io::Result<RecordingStorage> {
     let mut pending = vec![path.to_path_buf()];
     let mut recording_bytes = 0u64;
     while let Some(directory) = pending.pop() {
@@ -56,12 +105,14 @@ pub fn recording_storage(path: &Path) -> io::Result<RecordingStorage> {
     Ok(RecordingStorage {
         available_bytes: free_bytes_for_path(path)?,
         recording_bytes,
+        finalization_copies: finalization_copies(path, kind),
     })
 }
 
-#[derive(Default)]
 pub struct RecordingStorageMonitor {
     fragments: HashMap<PathBuf, FinalizedFragments>,
+    kind: FinalizationKind,
+    finalization_copies: Option<u64>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -71,6 +122,14 @@ struct FinalizedFragments {
 }
 
 impl RecordingStorageMonitor {
+    pub fn new(kind: FinalizationKind) -> Self {
+        Self {
+            fragments: HashMap::new(),
+            kind,
+            finalization_copies: None,
+        }
+    }
+
     pub fn sample(&mut self, path: &Path) -> io::Result<RecordingStorage> {
         const MAX_CACHED_DIRECTORIES: usize = 256;
         let mut pending = vec![path.to_path_buf()];
@@ -142,9 +201,14 @@ impl RecordingStorageMonitor {
                 );
             }
         }
+        let kind = self.kind;
+        let finalization_copies = *self
+            .finalization_copies
+            .get_or_insert_with(|| finalization_copies(path, kind));
         Ok(RecordingStorage {
             available_bytes: free_bytes_for_path(path)?,
             recording_bytes,
+            finalization_copies,
         })
     }
 }
@@ -290,61 +354,179 @@ fn resolve_existing_ancestor(path: &Path) -> std::path::PathBuf {
 mod tests {
     use super::*;
 
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    fn storage(available_bytes: u64, recording_bytes: u64, copies: u64) -> RecordingStorage {
+        RecordingStorage {
+            available_bytes,
+            recording_bytes,
+            finalization_copies: copies,
+        }
+    }
+
+    fn legacy_status(available_bytes: u64, recording_bytes: u64) -> DiskSpaceStatus {
+        let remaining = available_bytes.saturating_sub(recording_bytes.saturating_mul(3));
+        if remaining <= RECORDING_DISK_RESERVE_BYTES {
+            DiskSpaceStatus::Exhausted
+        } else if remaining <= RECORDING_DISK_WARN_BYTES {
+            DiskSpaceStatus::Low
+        } else {
+            DiskSpaceStatus::Ok
+        }
+    }
+
+    fn legacy_can_finalize(available_bytes: u64, recording_bytes: u64) -> bool {
+        available_bytes
+            > recording_bytes
+                .saturating_mul(3)
+                .saturating_add(RECORDING_DISK_RESERVE_BYTES / 2)
+    }
+
     #[test]
     fn recording_storage_warns_and_stops_before_the_drive_is_full() {
-        let status = |available_bytes| {
-            RecordingStorage {
-                available_bytes,
-                recording_bytes: 0,
+        for copies in 1..=3 {
+            let status = |available_bytes| storage(available_bytes, 0, copies).status();
+            assert_eq!(status(RECORDING_DISK_WARN_BYTES + 1), DiskSpaceStatus::Ok);
+            assert_eq!(status(RECORDING_DISK_WARN_BYTES), DiskSpaceStatus::Low);
+            assert_eq!(
+                status(RECORDING_DISK_RESERVE_BYTES + 1),
+                DiskSpaceStatus::Low
+            );
+            assert_eq!(
+                status(RECORDING_DISK_RESERVE_BYTES),
+                DiskSpaceStatus::Exhausted
+            );
+            assert_eq!(status(139_771_904), DiskSpaceStatus::Exhausted);
+            assert_eq!(status(0), DiskSpaceStatus::Exhausted);
+        }
+    }
+
+    #[test]
+    fn an_empty_recording_gets_the_same_answers_as_before() {
+        let half_reserve = RECORDING_DISK_RESERVE_BYTES / 2;
+        let mut available = vec![0, 1, u64::MAX, u64::MAX - 1, 100 * GIB];
+        for threshold in [
+            half_reserve,
+            RECORDING_DISK_RESERVE_BYTES,
+            RECORDING_DISK_WARN_BYTES,
+        ] {
+            available.extend([threshold - 1, threshold, threshold + 1]);
+        }
+        for copies in 0..=3 {
+            for &available_bytes in &available {
+                let storage = storage(available_bytes, 0, copies);
+                assert_eq!(
+                    storage.status(),
+                    legacy_status(available_bytes, 0),
+                    "{available_bytes} bytes free, {copies} copies"
+                );
+                assert_eq!(
+                    storage.can_finalize(),
+                    legacy_can_finalize(available_bytes, 0),
+                    "{available_bytes} bytes free, {copies} copies"
+                );
             }
-            .status()
-        };
-        assert_eq!(status(RECORDING_DISK_WARN_BYTES + 1), DiskSpaceStatus::Ok);
-        assert_eq!(status(RECORDING_DISK_WARN_BYTES), DiskSpaceStatus::Low);
-        assert_eq!(
-            status(RECORDING_DISK_RESERVE_BYTES + 1),
-            DiskSpaceStatus::Low
-        );
-        assert_eq!(
-            status(RECORDING_DISK_RESERVE_BYTES),
-            DiskSpaceStatus::Exhausted
-        );
-        assert_eq!(status(139_771_904), DiskSpaceStatus::Exhausted);
-        assert_eq!(status(0), DiskSpaceStatus::Exhausted);
+        }
     }
 
     #[test]
     fn recording_storage_saturates_large_finalization_requirements() {
-        let storage = RecordingStorage {
-            available_bytes: u64::MAX,
-            recording_bytes: u64::MAX,
-        };
+        let storage = storage(u64::MAX, u64::MAX, 3);
         assert_eq!(storage.finalization_bytes(), u64::MAX);
-        assert_eq!(storage.status(), DiskSpaceStatus::Exhausted);
+        assert_eq!(storage.status(), DiskSpaceStatus::Low);
+        assert!(!storage.nearly_full());
         assert!(!storage.can_finalize());
     }
 
     #[test]
+    fn a_recording_past_its_save_reserve_warns_and_only_stops_at_the_floor() {
+        let recording_bytes = GIB;
+        let old_stop = 3 * recording_bytes + RECORDING_DISK_RESERVE_BYTES;
+        assert_eq!(
+            legacy_status(old_stop, recording_bytes),
+            DiskSpaceStatus::Exhausted
+        );
+        for copies in 1..=3 {
+            let at = |available_bytes| storage(available_bytes, recording_bytes, copies);
+            let save_margin = copies * recording_bytes + RECORDING_DISK_WARN_BYTES;
+            assert_eq!(at(save_margin + 1).status(), DiskSpaceStatus::Ok);
+            assert_eq!(at(save_margin).status(), DiskSpaceStatus::Low);
+            assert!(!at(save_margin).nearly_full());
+            assert_eq!(at(old_stop).status(), DiskSpaceStatus::Low);
+            assert_eq!(
+                at(RECORDING_DISK_WARN_BYTES + 1).status(),
+                DiskSpaceStatus::Low
+            );
+            assert!(!at(RECORDING_DISK_WARN_BYTES + 1).nearly_full());
+            assert!(at(RECORDING_DISK_WARN_BYTES).nearly_full());
+            assert_eq!(
+                at(RECORDING_DISK_RESERVE_BYTES + 1).status(),
+                DiskSpaceStatus::Low
+            );
+            assert_eq!(
+                at(RECORDING_DISK_RESERVE_BYTES).status(),
+                DiskSpaceStatus::Exhausted
+            );
+            assert_eq!(at(0).status(), DiskSpaceStatus::Exhausted);
+        }
+    }
+
+    #[test]
     fn recording_storage_reserves_space_for_finalization() {
-        let recording_bytes = 1024 * 1024 * 1024;
-        let mut storage = RecordingStorage {
-            available_bytes: recording_bytes * 3 + RECORDING_DISK_WARN_BYTES + 1,
-            recording_bytes,
-        };
-        assert_eq!(storage.status(), DiskSpaceStatus::Ok);
-        storage.available_bytes -= 1;
-        assert_eq!(storage.status(), DiskSpaceStatus::Low);
-        storage.available_bytes = recording_bytes * 3 + RECORDING_DISK_RESERVE_BYTES;
-        assert_eq!(storage.status(), DiskSpaceStatus::Exhausted);
-        assert!(storage.can_finalize());
-        storage.available_bytes = recording_bytes * 2 + RECORDING_DISK_RESERVE_BYTES;
-        assert!(!storage.can_finalize());
-        storage.available_bytes = recording_bytes * 3 + RECORDING_DISK_RESERVE_BYTES / 2;
-        assert!(!storage.can_finalize());
-        storage.available_bytes += 1;
-        assert!(storage.can_finalize());
-        storage.available_bytes = recording_bytes * 3;
-        assert!(!storage.can_finalize());
+        let recording_bytes = GIB;
+        for copies in 1..=3 {
+            let needed = copies * recording_bytes + RECORDING_DISK_RESERVE_BYTES / 2;
+            assert_eq!(
+                storage(needed, recording_bytes, copies).finalization_bytes(),
+                copies * recording_bytes
+            );
+            assert!(!storage(needed, recording_bytes, copies).can_finalize());
+            assert!(storage(needed + 1, recording_bytes, copies).can_finalize());
+            assert!(!storage(copies * recording_bytes, recording_bytes, copies).can_finalize());
+        }
+        assert_eq!(
+            storage(
+                3 * recording_bytes + RECORDING_DISK_RESERVE_BYTES / 2 + 1,
+                recording_bytes,
+                3
+            )
+            .can_finalize(),
+            legacy_can_finalize(
+                3 * recording_bytes + RECORDING_DISK_RESERVE_BYTES / 2 + 1,
+                recording_bytes
+            )
+        );
+    }
+
+    #[test]
+    fn finalization_copies_follow_the_volume_and_the_mode() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            finalization_copies(directory.path(), FinalizationKind::Instant),
+            3
+        );
+        let studio = finalization_copies(directory.path(), FinalizationKind::Studio);
+        if cfg!(target_os = "macos") && volume_clones_files(directory.path()) {
+            assert_eq!(studio, 1);
+        } else {
+            assert_eq!(studio, 2);
+        }
+        if cfg!(not(target_os = "macos")) {
+            assert!(!volume_clones_files(directory.path()));
+        }
+        assert_eq!(
+            finalization_copies(
+                &directory.path().join("not-created-yet"),
+                FinalizationKind::Studio
+            ),
+            studio
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_system_volume_clones_files() {
+        assert!(volume_clones_files(&std::env::temp_dir()));
     }
 
     #[test]
@@ -356,7 +538,9 @@ mod tests {
         std::fs::write(segment.join("camera.m4s"), [0; 64]).unwrap();
         std::fs::write(directory.path().join("recording-meta.json"), [0; 16]).unwrap();
         assert_eq!(
-            recording_storage(directory.path()).unwrap().recording_bytes,
+            recording_storage(directory.path(), FinalizationKind::Studio)
+                .unwrap()
+                .recording_bytes,
             208
         );
     }
@@ -370,12 +554,19 @@ mod tests {
         std::fs::write(display.join("segment_1000.m4s"), [0; 64]).unwrap();
         std::fs::write(display.join("segment_1001.m4s.tmp"), [0; 32]).unwrap();
         std::fs::write(directory.path().join("camera.mp4"), [0; 16]).unwrap();
-        let mut monitor = RecordingStorageMonitor::default();
+        let mut monitor = RecordingStorageMonitor::new(FinalizationKind::Studio);
         assert_eq!(
             monitor.sample(directory.path()).unwrap().recording_bytes,
             240
         );
         assert_eq!(monitor.fragments.len(), 1);
+        assert_eq!(
+            monitor.finalization_copies,
+            Some(finalization_copies(
+                directory.path(),
+                FinalizationKind::Studio
+            ))
+        );
 
         std::fs::write(display.join("segment_1000.m4s"), [0; 96]).unwrap();
         std::fs::rename(
@@ -390,7 +581,9 @@ mod tests {
         );
         assert_eq!(
             monitor.sample(directory.path()).unwrap().recording_bytes,
-            recording_storage(directory.path()).unwrap().recording_bytes
+            recording_storage(directory.path(), FinalizationKind::Studio)
+                .unwrap()
+                .recording_bytes
         );
 
         std::fs::remove_file(display.join("segment_999.m4s")).unwrap();
@@ -405,14 +598,24 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("segment_000.m4s");
         let file = std::fs::File::create(path).unwrap();
-        file.set_len(1024 * 1024 * 1024).unwrap();
-        let mut storage = RecordingStorageMonitor::default()
-            .sample(directory.path())
-            .unwrap();
-        storage.available_bytes = 3 * storage.recording_bytes + RECORDING_DISK_RESERVE_BYTES;
-        assert_eq!(storage.recording_bytes, 1024 * 1024 * 1024);
-        assert_eq!(storage.status(), DiskSpaceStatus::Exhausted);
-        assert!(storage.can_finalize());
+        file.set_len(GIB).unwrap();
+        for kind in [FinalizationKind::Studio, FinalizationKind::Instant] {
+            let mut storage = RecordingStorageMonitor::new(kind)
+                .sample(directory.path())
+                .unwrap();
+            assert_eq!(storage.recording_bytes, GIB);
+            assert_eq!(
+                storage.finalization_bytes(),
+                finalization_copies(directory.path(), kind) * GIB
+            );
+            storage.available_bytes = storage.finalization_bytes() + RECORDING_DISK_WARN_BYTES;
+            assert_eq!(storage.status(), DiskSpaceStatus::Low);
+            assert!(storage.can_finalize());
+            storage.available_bytes =
+                storage.finalization_bytes() + RECORDING_DISK_RESERVE_BYTES / 2;
+            assert_eq!(storage.status(), DiskSpaceStatus::Low);
+            assert!(!storage.can_finalize());
+        }
     }
 
     #[test]
@@ -424,7 +627,7 @@ mod tests {
             std::fs::write(track.join("segment_000.m4s"), [0; 4]).unwrap();
             std::fs::write(track.join("segment_001.m4s"), [0; 8]).unwrap();
         }
-        let mut monitor = RecordingStorageMonitor::default();
+        let mut monitor = RecordingStorageMonitor::new(FinalizationKind::Studio);
         for _ in 0..2 {
             assert_eq!(
                 monitor.sample(directory.path()).unwrap().recording_bytes,
@@ -440,7 +643,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(directory.path(), directory.path().join("loop")).unwrap();
         assert_eq!(
-            recording_storage(directory.path()).unwrap().recording_bytes,
+            recording_storage(directory.path(), FinalizationKind::Studio)
+                .unwrap()
+                .recording_bytes,
             0
         );
     }
@@ -630,11 +835,13 @@ mod tests {
         std::fs::write(display.join("segment_000.m4s"), [0; 128]).unwrap();
         std::fs::write(project.join("recording-meta.json"), [0; 16]).unwrap();
 
-        let storage = recording_storage(&project).unwrap();
+        let storage = recording_storage(&project, FinalizationKind::Studio).unwrap();
         assert_eq!(storage.recording_bytes, 144);
         assert!(storage.available_bytes > 0);
 
-        let sampled = RecordingStorageMonitor::default().sample(&project).unwrap();
+        let sampled = RecordingStorageMonitor::new(FinalizationKind::Studio)
+            .sample(&project)
+            .unwrap();
         assert_eq!(sampled.recording_bytes, 144);
         assert!(sampled.available_bytes > 0);
     }
