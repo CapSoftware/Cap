@@ -113,7 +113,10 @@ async function hasLinkedAccount(db: MySql2Database, userId: User.UserId) {
 
 export function DrizzleAdapter(
 	db: MySql2Database,
-	options?: { getSsoIdentity: () => ValidatedSsoIdentity | null },
+	options?: {
+		getSsoIdentity: () => ValidatedSsoIdentity | null;
+		onUserCreated?: () => void;
+	},
 ): Adapter {
 	return {
 		async createUser(userData: CreateUserData) {
@@ -122,7 +125,8 @@ export function DrizzleAdapter(
 			if (ssoIdentity && ssoIdentity.email !== normalizedEmail) {
 				throw new Error("The user does not match the verified SSO identity.");
 			}
-			let userId = User.UserId.make(nanoId());
+			const newUserId = User.UserId.make(nanoId());
+			let userId = newUserId;
 			await db.transaction(async (tx) => {
 				if (ssoIdentity) {
 					const [organization] = await tx
@@ -237,6 +241,12 @@ export function DrizzleAdapter(
 					})
 					.where(eq(users.id, userId));
 			});
+
+			if (userId === newUserId) {
+				try {
+					options?.onUserCreated?.();
+				} catch {}
+			}
 
 			const rows = await db
 				.select()

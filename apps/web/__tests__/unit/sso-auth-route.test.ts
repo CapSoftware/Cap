@@ -1,3 +1,4 @@
+import type { AuthHooks } from "@cap/database/auth/auth-options";
 import type { SsoAuthContext } from "@cap/database/auth/sso";
 import {
 	createSsoLoginIntent,
@@ -14,7 +15,9 @@ import { GET, POST } from "@/app/api/auth/[...nextauth]/route";
 type RouteContext = { params: Promise<{ nextauth: string[] }> };
 
 const mocks = vi.hoisted(() => ({
-	authOptions: vi.fn<(context?: SsoAuthContext) => NextAuthOptions>(() => ({
+	authOptions: vi.fn<
+		(context?: SsoAuthContext, hooks?: AuthHooks) => NextAuthOptions
+	>(() => ({
 		providers: [],
 	})),
 	decode: vi.fn(),
@@ -453,10 +456,13 @@ describe("SSO auth request boundary", () => {
 		expect(new URLSearchParams(receivedBody).get("csrfToken")).toBe(
 			"fixture-csrf-token",
 		);
-		expect(mocks.authOptions).toHaveBeenCalledWith({
-			intent: verifySsoLoginIntent(intent, env.NEXTAUTH_SECRET),
-			actorId: "signed-in-user",
-		});
+		expect(mocks.authOptions).toHaveBeenCalledWith(
+			{
+				intent: verifySsoLoginIntent(intent, env.NEXTAUTH_SECRET),
+				actorId: "signed-in-user",
+			},
+			{ onUserCreated: expect.any(Function) },
+		);
 		expect(mocks.nextAuth).toHaveBeenCalledWith(request, context, {
 			providers: [],
 		});
@@ -648,7 +654,9 @@ describe("SSO auth request boundary", () => {
 		const response = await POST(request, context);
 
 		expect(mocks.getToken).not.toHaveBeenCalled();
-		expect(mocks.authOptions).toHaveBeenCalledWith();
+		expect(mocks.authOptions).toHaveBeenCalledWith(undefined, {
+			onUserCreated: expect.any(Function),
+		});
 		expect(mocks.nextAuth).toHaveBeenCalledWith(request, context, {
 			providers: [],
 		});

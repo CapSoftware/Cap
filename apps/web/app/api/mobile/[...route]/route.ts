@@ -77,6 +77,7 @@ import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
+import { logNewAccountAddress } from "@/lib/ip-reputation";
 import {
 	describeLinkAccessChoice,
 	isLinkRestricted,
@@ -245,8 +246,12 @@ const getMobileRedirectUrl = (redirectUri: string) => {
 	}
 };
 
-const getEmailAuthAdapter = () => {
-	const adapter = authOptions().adapter;
+const getEmailAuthAdapter = (headers: Headers) => {
+	const adapter = authOptions(undefined, {
+		onUserCreated: () => {
+			logNewAccountAddress("mobile-email-session", headers);
+		},
+	}).adapter;
 	const { createUser, getUserByEmail, updateUser } = adapter ?? {};
 
 	if (!createUser || !getUserByEmail || !updateUser) {
@@ -256,8 +261,9 @@ const getEmailAuthAdapter = () => {
 	return { createUser, getUserByEmail, updateUser };
 };
 
-const createOrUpdateEmailUser = async (email: string) => {
-	const { createUser, getUserByEmail, updateUser } = getEmailAuthAdapter();
+const createOrUpdateEmailUser = async (email: string, headers: Headers) => {
+	const { createUser, getUserByEmail, updateUser } =
+		getEmailAuthAdapter(headers);
 	const existingUser = await getUserByEmail(email);
 
 	if (existingUser) {
@@ -690,7 +696,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	}
 
 	const user = yield* Effect.tryPromise({
-		try: () => createOrUpdateEmailUser(email),
+		try: () => createOrUpdateEmailUser(email, headers),
 		catch: () => new HttpApiError.InternalServerError(),
 	});
 
