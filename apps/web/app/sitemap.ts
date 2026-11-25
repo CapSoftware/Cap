@@ -8,6 +8,14 @@ import {
 	getChangelogEntries,
 } from "@/utils/changelog";
 import { seoPages } from "../lib/seo-pages";
+import robots from "./robots";
+
+async function getDisallowedPrefixes() {
+	const { rules } = await robots();
+	return (Array.isArray(rules) ? rules : [rules]).flatMap(
+		({ disallow }) => disallow ?? [],
+	);
+}
 
 const NON_INDEXABLE_PATHS = new Set([
 	"/home",
@@ -159,12 +167,21 @@ export default async function sitemap() {
 		...docsRoutes,
 		...seoRoutes,
 	];
+	// Crawlers match a robots.txt rule as a plain prefix, so /login also
+	// covers /login-anything.
+	const disallowed = await getDisallowedPrefixes();
+	const isBlockedByRobots = (routePath: string) =>
+		disallowed.some((prefix) => routePath.startsWith(prefix));
 	const uniqueByPath = new Map<
 		string,
 		{ path: string; lastModified?: string }
 	>();
 	for (const route of combined) {
-		if (isIndexablePath(route.path) && !uniqueByPath.has(route.path)) {
+		if (
+			isIndexablePath(route.path) &&
+			!isBlockedByRobots(route.path) &&
+			!uniqueByPath.has(route.path)
+		) {
 			uniqueByPath.set(route.path, route);
 		}
 	}

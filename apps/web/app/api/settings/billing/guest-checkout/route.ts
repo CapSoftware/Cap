@@ -3,7 +3,11 @@ import { serverEnv } from "@cap/env";
 import { isValidStripePlanPriceId, stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
 import { customCheckoutEnabled } from "@/lib/checkout/enabled";
-import { checkoutPath, planForPriceId } from "@/lib/checkout/plans";
+import {
+	checkoutPath,
+	planForPriceId,
+	promotionForPlan,
+} from "@/lib/checkout/plans";
 import {
 	createWithPromotion,
 	findPromotionCodeId,
@@ -71,7 +75,7 @@ export async function POST(request: NextRequest) {
 			serverEnv().WEB_URL,
 		);
 		const checkoutSession = await createWithPromotion(
-			await findPromotionCodeId(promo),
+			await findPromotionCodeId(promotionForPlan(plan, promo)),
 			(promotionCodeId) =>
 				stripe().checkout.sessions.create({
 					line_items: [{ price: priceId, quantity: safeQuantity }],

@@ -6,6 +6,7 @@ import {
 	RATE_LIMIT_IDS,
 	type RollingBudgetRule,
 } from "@/lib/rate-limit";
+import { consumeDailyAudioUnits } from "./audio-usage";
 import { MEETING_CLIP_SAMPLE_RATE } from "./wav";
 
 export type MeetingEndpoint = "transcribe" | "notes" | "ask";
@@ -38,7 +39,7 @@ export function meetingAudioUnits(samples: number): number {
 
 export type MeetingBudgetResult =
 	| { limited: false }
-	| { limited: true; retryAfterSeconds: number };
+	| { limited: true; retryAfterSeconds: number; daily?: true };
 
 export function meetingRequestBudget(
 	endpoint: MeetingEndpoint,
@@ -68,6 +69,50 @@ export async function consumeMeetingRequestBudget(
 	return { limited: false };
 }
 
+// Notes and Ask send the meeting with every request. On top of the unit paid
+// on arrival, a request is charged one more unit per started
+// MEETING_BODY_UNIT_BYTES of body past the first, against the same rule. A
+// model never reads more tokens than the UTF-8 bytes it is sent.
+export const MEETING_BODY_UNIT_BYTES = 100_000;
+
+export function meetingBodyUnits(bytes: number): number {
+	return Math.max(1, Math.ceil(bytes / MEETING_BODY_UNIT_BYTES));
+}
+
+export async function consumeMeetingBodyBudget(
+	endpoint: "notes" | "ask",
+	userId: string,
+	bodyBytes: number,
+	headers: Headers,
+): Promise<MeetingBudgetResult> {
+	const units = meetingBodyUnits(bodyBytes) - 1;
+	if (units < 1) return { limited: false };
+	const ruleId = MEETING_REQUEST_RULE_IDS[endpoint];
+	const firewall = await checkFirewallRateLimitUnits(ruleId, {
+		key: userId,
+		units,
+		headers,
+	});
+	if (firewall === true)
+		return {
+			limited: true,
+			retryAfterSeconds: FIREWALL_RETRY_AFTER_SECONDS,
+		};
+	if (firewall === false) return { limited: false };
+
+	const decision = await consumeRollingBudget(ruleId, {
+		key: userId,
+		rule: meetingRequestBudget(endpoint),
+		cost: units,
+	});
+	return decision.allowed
+		? { limited: false }
+		: { limited: true, retryAfterSeconds: decision.retryAfterSeconds };
+}
+
+// The firewall keeps the hourly limit and the database the daily one, both
+// across instances. When either cannot answer, the per-instance daily window
+// stands in.
 export async function consumeMeetingAudioBudget(
 	userId: string,
 	samples: number,
@@ -85,7 +130,19 @@ export async function consumeMeetingAudioBudget(
 			limited: true,
 			retryAfterSeconds: AUDIO_FIREWALL_RETRY_AFTER_SECONDS,
 		};
-	if (firewall === false) return { limited: false };
+
+	const daily = await consumeDailyAudioUnits(
+		userId,
+		units,
+		MEETING_AUDIO_BUDGET.limit,
+	);
+	if (daily.allowed === false)
+		return {
+			limited: true,
+			retryAfterSeconds: daily.retryAfterSeconds,
+			daily: true,
+		};
+	if (firewall === false && daily.allowed) return { limited: false };
 
 	const decision = await consumeRollingBudget(ruleId, {
 		key: userId,
@@ -94,5 +151,9 @@ export async function consumeMeetingAudioBudget(
 	});
 	return decision.allowed
 		? { limited: false }
-		: { limited: true, retryAfterSeconds: decision.retryAfterSeconds };
+		: {
+				limited: true,
+				retryAfterSeconds: decision.retryAfterSeconds,
+				daily: true,
+			};
 }

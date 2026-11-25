@@ -409,6 +409,64 @@ async fn real_app_instant_recording_with_camera_uploads_and_verifies() {
     assert!(!log.contains("panicked at"), "the app panicked");
 }
 
+/// A Camera Only Instant recording uploads its MP4 once and verifies. The
+/// upload is the recording itself, so it must not reach the server as a
+/// replacement of the shared video, which the server answers by retiring the
+/// recording's processing job. Runs only with `CAP_GPUI_REAL_APP_CAMERA=1`.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_camera_only_instant_recording_uploads_once_and_verifies() {
+    if std::env::var("CAP_GPUI_REAL_APP_CAMERA").is_err() {
+        eprintln!("skipped: set CAP_GPUI_REAL_APP_CAMERA=1 where a camera is attached");
+        return;
+    }
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    let app = sandbox.launch(
+        "camera-only",
+        &[
+            ("CAP_GPUI_AUTO_CAMERA", "1"),
+            ("CAP_GPUI_AUTO_OVERLAY", "camera"),
+            ("CAP_GPUI_AUTO_RECORD", "instant:8"),
+        ],
+    );
+    wait_for_app(
+        &sandbox,
+        &app,
+        "a verified upload or a second upload",
+        Duration::from_secs(240),
+        || {
+            mock.count("POST", "/api/upload/multipart/initiate") > 1
+                || sandbox
+                    .projects()
+                    .first()
+                    .and_then(|project| state(project))
+                    .is_some_and(|state| state["phase"] == "Verified")
+        },
+    )
+    .await;
+    kill(app);
+    let log = sandbox.log("camera-only");
+    assert!(log.contains("auto-selecting camera"), "no camera selected");
+    let mut video = mock.created();
+    video.dedup();
+    assert_eq!(video.len(), 1, "{video:?}");
+    assert_eq!(
+        mock.count("POST", "/api/upload/multipart/initiate"),
+        1,
+        "{}",
+        mock.timeline()
+    );
+    assert!(mock.replaced().is_empty(), "{}", mock.timeline());
+    let state = state(&sandbox.projects().remove(0)).unwrap();
+    assert_eq!(state["kind"], "Mp4");
+    assert_eq!(state["phase"], "Verified", "{state}");
+    assert_eq!(mock.confirmations().len(), 1, "{}", mock.timeline());
+    assert!(mock.deleted().is_empty(), "{:?}", mock.deleted());
+    assert!(sandbox.journal().is_empty(), "{:?}", sandbox.journal());
+    assert!(!log.contains("panicked at"), "the app panicked");
+}
+
 /// Main window when recording starts: Close hides the main window and
 /// Minimise sends it to the Dock, and the reshow at the end of the recording
 /// brings either back on screen. Read from the window state the auto-record

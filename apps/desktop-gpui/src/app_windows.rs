@@ -5893,7 +5893,7 @@ fn start_preparing_editor(
                         &preparing.identity,
                         preparing.request.sequence,
                         editor_window::EditorFrame {
-                            frame,
+                            frame: editor_window::ArrivingFrame::Ready(frame),
                             layout: preparing.layout,
                             number: preparing.request.frame_number,
                         },
@@ -6199,14 +6199,25 @@ fn load_editor_project_candidate(
             return;
         }
 
-        // The pump: convert on the background executor (un-padding plus the
-        // BGRA swap is a few megabytes per frame), deliver on the main one.
         cx.spawn({
+            #[cfg(target_os = "macos")]
             let stats = stats.clone();
             let pump_instance = Arc::downgrade(&instance);
             async move |cx| {
                 while let Ok((output, layout)) = frame_rx.recv_async().await {
                     let (frame, number) = match output {
+                        #[cfg(not(target_os = "macos"))]
+                        cap_editor::EditorFrameOutput::Rgba(rgba) => {
+                            if !editor_window::frame_can_stream(&rgba) {
+                                tracing::warn!(
+                                    "a rendered frame could not be converted for display"
+                                );
+                                continue;
+                            }
+                            let number = rgba.frame_number;
+                            (editor_window::ArrivingFrame::Rgba(rgba), number)
+                        }
+                        #[cfg(target_os = "macos")]
                         cap_editor::EditorFrameOutput::Rgba(rgba) => {
                             let stats = stats.clone();
                             let number = rgba.frame_number;
@@ -6222,7 +6233,12 @@ fn load_editor_project_candidate(
                                 );
                                 continue;
                             };
-                            (editor_window::EditorPreviewFrame::Image(image), number)
+                            (
+                                editor_window::ArrivingFrame::Ready(
+                                    editor_window::EditorPreviewFrame::Image(image),
+                                ),
+                                number,
+                            )
                         }
                         cap_editor::EditorFrameOutput::Nv12(frame) => {
                             tracing::warn!(
@@ -6234,7 +6250,12 @@ fn load_editor_project_candidate(
                         #[cfg(target_os = "macos")]
                         cap_editor::EditorFrameOutput::Surface(surface) => {
                             let number = surface.frame_number;
-                            (editor_window::surface_preview_frame(surface), number)
+                            (
+                                editor_window::ArrivingFrame::Ready(
+                                    editor_window::surface_preview_frame(surface),
+                                ),
+                                number,
+                            )
                         }
                     };
                     if handle
