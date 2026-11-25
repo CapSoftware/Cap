@@ -25,6 +25,7 @@ const CADENCE_WINDOW: usize = 16;
 const CADENCE_MIN_STEPS: usize = 8;
 const SHORT_GAP_CADENCES: u64 = 4;
 const STEADY_STEPS: u32 = 4;
+const STREAM_STARTUP_NS: u64 = 1_000_000_000;
 
 /// Counts display frames ScreenCaptureKit skipped, from the display time on
 /// each complete frame. ScreenCaptureKit never marks a skipped frame; measured
@@ -38,9 +39,13 @@ const STEADY_STEPS: u32 = 4;
 ///   period (the most common recent step), in units of that period. Content
 ///   that changes slower than the capture rate or in bursts is then a lower
 ///   bound.
+/// - For about the first second of a stream it delivers a frame at every
+///   refresh even when nothing changed, so gaps there are not counted.
 #[derive(Debug)]
 pub struct CaptureGapCounter {
     slot_ns: u64,
+    startup_ns: u64,
+    first_complete_ns: Option<u64>,
     last_complete_ns: Option<u64>,
     idles_since_complete: u32,
     steps: [u64; CADENCE_WINDOW],
@@ -52,8 +57,14 @@ pub struct CaptureGapCounter {
 
 impl CaptureGapCounter {
     pub fn new(slot_ns: u64) -> Self {
+        Self::with_startup(slot_ns, STREAM_STARTUP_NS)
+    }
+
+    fn with_startup(slot_ns: u64, startup_ns: u64) -> Self {
         Self {
             slot_ns: slot_ns.max(1),
+            startup_ns,
+            first_complete_ns: None,
             last_complete_ns: None,
             idles_since_complete: 0,
             steps: [0; CADENCE_WINDOW],
@@ -77,6 +88,7 @@ impl CaptureGapCounter {
     }
 
     pub fn complete(&mut self, display_ns: u64) -> u64 {
+        let first = *self.first_complete_ns.get_or_insert(display_ns);
         let previous = self.last_complete_ns.replace(display_ns);
         let idles = std::mem::take(&mut self.idles_since_complete);
         let Some(previous) = previous.filter(|previous| display_ns > *previous) else {
@@ -102,7 +114,11 @@ impl CaptureGapCounter {
         } else {
             self.steady_run = 0;
         }
-        lost
+        if display_ns.saturating_sub(first) < self.startup_ns {
+            0
+        } else {
+            lost
+        }
     }
 
     fn push_step(&mut self, slots: u64, idles: u32) {
@@ -314,7 +330,7 @@ mod tests {
     const VSYNC_120: u64 = 8_333_333;
 
     fn counter_120() -> CaptureGapCounter {
-        CaptureGapCounter::new(capture_slot_ns(120, 120.0))
+        CaptureGapCounter::with_startup(capture_slot_ns(120, 120.0), 0)
     }
 
     #[test]
@@ -336,7 +352,7 @@ mod tests {
     impl Feed {
         fn new(slot_ns: u64) -> Self {
             Self {
-                counter: CaptureGapCounter::new(slot_ns),
+                counter: CaptureGapCounter::with_startup(slot_ns, 0),
                 t: 1_000_000_000,
                 lost: 0,
             }
@@ -459,6 +475,22 @@ mod tests {
             0,
             "one and a half slots is a late frame, not a missed one"
         );
+    }
+
+    #[test]
+    fn the_first_second_of_a_stream_is_not_counted() {
+        let mut counter = CaptureGapCounter::new(capture_slot_ns(120, 120.0));
+        let mut t = 1_000_000_000u64;
+        let mut lost = 0;
+        for i in 0..240u64 {
+            t += if i % 30 == 29 { 2 } else { 1 } * VSYNC_120;
+            let skipped = counter.complete(t);
+            if t - 1_000_000_000 - VSYNC_120 < 1_000_000_000 {
+                assert_eq!(skipped, 0, "inside the startup second");
+            }
+            lost += skipped;
+        }
+        assert_eq!(lost, 5, "one skip every 30 frames after the first second");
     }
 
     #[test]
