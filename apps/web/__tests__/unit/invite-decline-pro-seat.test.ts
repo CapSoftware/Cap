@@ -73,6 +73,7 @@ const database = {
 		deletes.push(table);
 		return { where: async () => [{ affectedRows: 1 }] };
 	}),
+	insert: vi.fn(() => ({ values: async () => [] })),
 	update: vi.fn((table: unknown) => ({
 		set: (value: Record<string, unknown>) => {
 			if (table === tables.users && "thirdPartyStripeSubscriptionId" in value) {
@@ -109,6 +110,7 @@ async function declineProSeat(
 			},
 		],
 		[{ id: "member-1", hasProSeat: true }],
+		[{ id: "user-1" }],
 		[{ id: "user-1" }],
 		remainingSeats,
 		[],
@@ -183,6 +185,7 @@ describe("POST /api/invite/decline with a Pro seat", () => {
 		expect(lockRows.mock.calls).toEqual([
 			["update", tables.organizationInvites],
 			["update", tables.organizationMembers],
+			["update", tables.users],
 			["update", tables.users],
 		]);
 	});

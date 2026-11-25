@@ -1,10 +1,18 @@
 import { getCurrentUser } from "@cap/database/auth/session";
+import {
+	organizationInvites,
+	organizationMembers,
+	organizations,
+	users,
+} from "@cap/database/schema";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockDb = {
 	select: vi.fn(),
 	update: vi.fn(),
 	delete: vi.fn(),
+	insert: vi.fn(),
+	values: vi.fn(),
 	from: vi.fn(),
 	where: vi.fn(),
 	for: vi.fn(),
@@ -26,6 +34,7 @@ vi.mock("@cap/database/schema", () => ({
 		id: "id",
 		invitedEmail: "invitedEmail",
 		organizationId: "organizationId",
+		status: "status",
 	},
 	organizationMembers: {
 		id: "memberId",
@@ -33,6 +42,7 @@ vi.mock("@cap/database/schema", () => ({
 		organizationId: "memberOrganizationId",
 		hasProSeat: "memberHasProSeat",
 	},
+	organizations: { id: "organizationsId" },
 	spaceMembers: {
 		userId: "spaceMemberUserId",
 		spaceId: "spaceMemberSpaceId",
@@ -65,6 +75,8 @@ function resetMockDb() {
 	mockDb.select.mockReturnValue(mockDb);
 	mockDb.update.mockReturnValue(mockDb);
 	mockDb.delete.mockReturnValue(mockDb);
+	mockDb.insert.mockReturnValue(mockDb);
+	mockDb.values.mockResolvedValue(undefined);
 	mockDb.from.mockReturnValue(mockDb);
 	mockDb.where.mockReturnValue(mockDb);
 	mockDb.set.mockReturnValue(mockDb);
@@ -162,5 +174,90 @@ describe("POST /api/invite/decline", () => {
 		expect(await response.json()).toEqual({ success: true });
 		expect(mockDb.delete).toHaveBeenCalledTimes(1);
 		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+	});
+
+	describe("when the invite was why signup skipped the personal organization", () => {
+		beforeEach(() => {
+			mockGetCurrentUser.mockResolvedValue({
+				id: "user-1",
+				email: "invitee@example.com",
+				activeOrganizationId: "",
+				defaultOrgId: null,
+			});
+			mockDb.for.mockResolvedValueOnce([
+				{
+					id: "invite-1",
+					invitedEmail: "invitee@example.com",
+					organizationId: "org-1",
+				},
+			]);
+			mockDb.limit.mockReturnValueOnce(mockDb);
+		});
+
+		it("gives the user a personal organization once nothing else is left", async () => {
+			const response = await POST(makeRequest({ inviteId: "invite-1" }));
+
+			expect(response.status).toBe(200);
+			expect(mockDb.insert).toHaveBeenCalledWith(organizations);
+			const [organization] = mockDb.values.mock.calls[0] ?? [];
+			expect(organization).toMatchObject({
+				ownerId: "user-1",
+				name: "My Organization",
+			});
+			expect(mockDb.values).toHaveBeenCalledWith(
+				expect.objectContaining({
+					organizationId: organization.id,
+					userId: "user-1",
+					role: "owner",
+				}),
+			);
+			expect(mockDb.set).toHaveBeenCalledWith({
+				activeOrganizationId: organization.id,
+				defaultOrgId: organization.id,
+			});
+		});
+
+		it("locks the membership, then the user row, before any plain read", async () => {
+			await POST(makeRequest({ inviteId: "invite-1" }));
+
+			expect(mockDb.from.mock.calls.map(([table]) => table)).toEqual([
+				organizationInvites,
+				organizationMembers,
+				users,
+				organizationMembers,
+				organizationInvites,
+			]);
+			const [, membershipRead, userRead, firstPlainRead] =
+				mockDb.from.mock.invocationCallOrder;
+			const [, membershipLock, userLock] = mockDb.for.mock.invocationCallOrder;
+			expect(membershipLock).toBeGreaterThan(membershipRead ?? 0);
+			expect(userRead).toBeGreaterThan(
+				membershipLock ?? Number.POSITIVE_INFINITY,
+			);
+			expect(userLock).toBeGreaterThan(userRead ?? 0);
+			expect(firstPlainRead).toBeGreaterThan(
+				userLock ?? Number.POSITIVE_INFINITY,
+			);
+		});
+
+		it("waits for the other pending invite instead of adding an empty organization", async () => {
+			mockDb.limit
+				.mockResolvedValueOnce([])
+				.mockResolvedValueOnce([{ id: "invite-2" }]);
+
+			const response = await POST(makeRequest({ inviteId: "invite-1" }));
+
+			expect(response.status).toBe(200);
+			expect(mockDb.insert).not.toHaveBeenCalled();
+		});
+
+		it("keeps an organization the user already belongs to", async () => {
+			mockDb.limit.mockResolvedValueOnce([{ organizationId: "org-2" }]);
+
+			const response = await POST(makeRequest({ inviteId: "invite-1" }));
+
+			expect(response.status).toBe(200);
+			expect(mockDb.insert).not.toHaveBeenCalled();
+		});
 	});
 });
