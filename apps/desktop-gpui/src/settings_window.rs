@@ -274,6 +274,34 @@ const FRAME_RATE_OPTIONS: &[(StudioFrameRate, Label)] = &[
     ),
 ];
 
+const DISPLAY_RATE_CEILING: Option<u32> = if cfg!(target_os = "linux") {
+    Some(60)
+} else {
+    None
+};
+
+fn frame_rate_options(
+    ceiling: Option<u32>,
+) -> impl Iterator<Item = &'static (StudioFrameRate, Label)> {
+    FRAME_RATE_OPTIONS
+        .iter()
+        .filter(move |(rate, _)| match (rate, ceiling) {
+            (_, None) => true,
+            (StudioFrameRate::Fixed(fps), Some(ceiling)) => *fps <= ceiling,
+            (StudioFrameRate::MatchDisplay, Some(_)) => false,
+        })
+}
+
+fn shown_frame_rate(current: StudioFrameRate, ceiling: Option<u32>) -> StudioFrameRate {
+    match (current, ceiling) {
+        (StudioFrameRate::MatchDisplay, Some(ceiling)) => StudioFrameRate::Fixed(ceiling),
+        (StudioFrameRate::Fixed(fps), Some(ceiling)) if fps > ceiling => {
+            StudioFrameRate::Fixed(ceiling)
+        }
+        _ => current,
+    }
+}
+
 /// The Countdown select's options.
 const COUNTDOWN_OPTIONS: &[(u32, fn() -> &'static str)] = &[
     (0, tr::settings::general::recording::countdown::off),
@@ -1600,9 +1628,9 @@ impl SettingsWindow {
                     .collect()
             }
             MenuKind::MaxFps => {
-                let current = self.settings.studio_frame_rate();
-                FRAME_RATE_OPTIONS
-                    .iter()
+                let current =
+                    shown_frame_rate(self.settings.studio_frame_rate(), DISPLAY_RATE_CEILING);
+                frame_rate_options(DISPLAY_RATE_CEILING)
                     .map(|(rate, label)| ui::MenuItem::new(label(), *rate == current))
                     .collect()
             }
@@ -1643,7 +1671,7 @@ impl SettingsWindow {
                 }
             }
             MenuKind::MaxFps => {
-                if let Some((rate, _)) = FRAME_RATE_OPTIONS.get(index) {
+                if let Some((rate, _)) = frame_rate_options(DISPLAY_RATE_CEILING).nth(index) {
                     self.select_studio_frame_rate(*rate, cx);
                 }
             }
@@ -3620,9 +3648,8 @@ impl SettingsWindow {
     }
 
     fn render_studio_frame_rate(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let current = self.settings.studio_frame_rate();
-        let label = FRAME_RATE_OPTIONS
-            .iter()
+        let current = shown_frame_rate(self.settings.studio_frame_rate(), DISPLAY_RATE_CEILING);
+        let label = frame_rate_options(DISPLAY_RATE_CEILING)
             .find(|(rate, _)| *rate == current)
             .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| self.settings.max_fps.to_string());
@@ -5178,6 +5205,70 @@ mod server_change_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn offered(ceiling: Option<u32>) -> Vec<StudioFrameRate> {
+        frame_rate_options(ceiling).map(|(rate, _)| *rate).collect()
+    }
+
+    #[test]
+    fn linux_offers_only_the_rates_it_can_record() {
+        use StudioFrameRate::{Fixed, MatchDisplay};
+        assert_eq!(
+            offered(Some(60)),
+            vec![Fixed(24), Fixed(25), Fixed(30), Fixed(60)]
+        );
+        assert_eq!(
+            offered(None),
+            vec![
+                Fixed(24),
+                Fixed(25),
+                Fixed(30),
+                Fixed(60),
+                Fixed(120),
+                Fixed(144),
+                Fixed(165),
+                Fixed(240),
+                MatchDisplay,
+            ]
+        );
+        assert_eq!(
+            DISPLAY_RATE_CEILING,
+            cfg!(target_os = "linux").then_some(60)
+        );
+    }
+
+    #[test]
+    fn stored_rates_above_the_ceiling_show_as_the_ceiling() {
+        use StudioFrameRate::{Fixed, MatchDisplay};
+        for (stored, shown) in [
+            (MatchDisplay, Fixed(60)),
+            (Fixed(240), Fixed(60)),
+            (Fixed(120), Fixed(60)),
+            (Fixed(60), Fixed(60)),
+            (Fixed(30), Fixed(30)),
+        ] {
+            assert_eq!(shown_frame_rate(stored, Some(60)), shown);
+            assert_eq!(shown_frame_rate(stored, None), stored);
+            assert!(offered(Some(60)).contains(&shown_frame_rate(stored, Some(60))));
+        }
+    }
+
+    #[test]
+    fn showing_a_stored_match_display_leaves_the_store_untouched() {
+        let path = std::env::temp_dir().join(format!("cap-frame-rate-{}", store::new_uuid_v4()));
+        let contents = r#"{"general_settings":{"maxFps":240,"maxFpsMatchDisplay":true}}"#;
+        std::fs::write(&path, contents).unwrap();
+        store::set_test_tauri_store_path(Some(path.clone()));
+        let settings = GeneralSettings::load();
+        assert_eq!(settings.studio_frame_rate(), StudioFrameRate::MatchDisplay);
+        assert_eq!(
+            shown_frame_rate(settings.studio_frame_rate(), Some(60)),
+            StudioFrameRate::Fixed(60)
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
+        store::set_test_tauri_store_path(None);
+        std::fs::remove_file(&path).ok();
+    }
 
     #[test]
     fn profile_request_identity_changes_when_same_user_signs_in_again() {
