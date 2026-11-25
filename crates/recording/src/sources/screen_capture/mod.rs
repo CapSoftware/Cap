@@ -822,7 +822,11 @@ mod tests {
             (0.0, 60),
             (f64::NAN, 60),
         ] {
-            assert_eq!(capture_fps(ceiling, refresh), expected, "{refresh} Hz");
+            assert_eq!(
+                capture_fps(ceiling, refresh),
+                expected.min(ceiling),
+                "{refresh} Hz"
+            );
         }
         for (max_fps, refresh, expected) in [
             (60, 144.0, 60),

@@ -344,7 +344,7 @@ ultra_description = "Behält die meisten Details für aufwendige Bearbeitung. Be
 [settings.quality.studio.frame_rate]
 description = "Der Studio-Modus nimmt mit höchstens dieser Bildrate auf und nie schneller, als Ihr Bildschirm aktualisiert. Mit eingeschalteter Kamera nimmt der Studio-Modus mit höchstens 30 FPS auf."
 description_high = "Aufnahmen über 60 FPS brauchen mehr CPU und Speicherplatz, und manche Computer kodieren sie per Software. Der Studio-Modus nimmt nie schneller auf, als Ihr Bildschirm aktualisiert. Mit eingeschalteter Kamera nimmt der Studio-Modus mit höchstens 30 FPS auf."
-description_match = "Nimmt mit der Bildwiederholrate Ihres Bildschirms auf, bis zu 240 FPS. Aufnahmen über 60 FPS brauchen mehr CPU und Speicherplatz. Mit eingeschalteter Kamera nimmt der Studio-Modus mit höchstens 30 FPS auf."
+description_match = "Nimmt mit der Bildwiederholrate Ihres Bildschirms auf, bis zu {fps} FPS. Aufnahmen über 60 FPS brauchen mehr CPU und Speicherplatz. Mit eingeschalteter Kamera nimmt der Studio-Modus mit höchstens 30 FPS auf."
 fps_120 = "120 FPS"
 fps_144 = "144 FPS"
 fps_165 = "165 FPS"

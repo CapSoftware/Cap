@@ -7026,12 +7026,14 @@ mod tests {
             .with_max_fps(fps)
             .max_fps
         };
+        let ceiling = if cfg!(target_os = "macos") { 240 } else { 120 };
+        assert_eq!(crate::defaults::MAX_STUDIO_FPS, ceiling);
         assert_eq!(builder(0), 1);
         for fps in [24, 25, 30, 60, 120, 144, 165, 240] {
-            assert_eq!(builder(fps), fps);
+            assert_eq!(builder(fps), fps.min(ceiling));
         }
-        assert_eq!(builder(241), crate::defaults::MAX_STUDIO_FPS);
-        assert_eq!(builder(u32::MAX), crate::defaults::MAX_STUDIO_FPS);
+        assert_eq!(builder(241), ceiling);
+        assert_eq!(builder(u32::MAX), ceiling);
     }
 
     #[test]

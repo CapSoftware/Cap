@@ -344,7 +344,7 @@ ultra_description = "保留最多细节，适合大量编辑。占用的磁盘�
 [settings.quality.studio.frame_rate]
 description = "Studio 模式最高以此帧率录制，且不会超过显示器的刷新率。开启摄像头时，录制帧率为 30 FPS 或更低。"
 description_high = "以高于 60 FPS 录制会占用更多 CPU 和磁盘空间，部分电脑会改用软件编码。Studio 模式录制的帧率不会超过显示器的刷新率。开启摄像头时，录制帧率为 30 FPS 或更低。"
-description_match = "按显示器的刷新率录制，最高 240 FPS。以高于 60 FPS 录制会占用更多 CPU 和磁盘空间。开启摄像头时，Studio 模式的录制帧率为 30 FPS 或更低。"
+description_match = "按显示器的刷新率录制，最高 {fps} FPS。以高于 60 FPS 录制会占用更多 CPU 和磁盘空间。开启摄像头时，Studio 模式的录制帧率为 30 FPS 或更低。"
 fps_120 = "120 FPS"
 fps_144 = "144 FPS"
 fps_165 = "165 FPS"

@@ -344,7 +344,7 @@ ultra_description = "Conserva el máximo detalle para ediciones intensas. Usa m�
 [settings.quality.studio.frame_rate]
 description = "El modo Studio graba como máximo a esta velocidad y nunca más rápido de lo que se actualiza tu pantalla. Con la cámara activada, graba a 30 FPS o menos."
 description_high = "Grabar a más de 60 FPS usa más CPU y espacio en disco, y algunos ordenadores lo codifican por software. El modo Studio nunca graba más rápido de lo que se actualiza tu pantalla. Con la cámara activada, graba a 30 FPS o menos."
-description_match = "Graba a la frecuencia de actualización de tu pantalla, hasta 240 FPS. Grabar a más de 60 FPS usa más CPU y espacio en disco. Con la cámara activada, el modo Studio graba a 30 FPS o menos."
+description_match = "Graba a la frecuencia de actualización de tu pantalla, hasta {fps} FPS. Grabar a más de 60 FPS usa más CPU y espacio en disco. Con la cámara activada, el modo Studio graba a 30 FPS o menos."
 fps_120 = "120 FPS"
 fps_144 = "144 FPS"
 fps_165 = "165 FPS"

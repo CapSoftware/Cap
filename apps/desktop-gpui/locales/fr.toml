@@ -344,7 +344,7 @@ ultra_description = "Conserve un maximum de détails pour les retouches poussée
 [settings.quality.studio.frame_rate]
 description = "Le mode Studio enregistre au plus à cette fréquence, et jamais plus vite que le rafraîchissement de votre écran. Avec la caméra activée, il enregistre à 30 i/s ou moins."
 description_high = "Au-delà de 60 i/s, l'enregistrement utilise plus de processeur et d'espace disque, et certains ordinateurs l'encodent par logiciel. Le mode Studio n'enregistre jamais plus vite que le rafraîchissement de votre écran. Avec la caméra activée, il enregistre à 30 i/s ou moins."
-description_match = "Enregistre à la fréquence de rafraîchissement de votre écran, jusqu'à 240 i/s. Au-delà de 60 i/s, l'enregistrement utilise plus de processeur et d'espace disque. Avec la caméra activée, le mode Studio enregistre à 30 i/s ou moins."
+description_match = "Enregistre à la fréquence de rafraîchissement de votre écran, jusqu'à {fps} i/s. Au-delà de 60 i/s, l'enregistrement utilise plus de processeur et d'espace disque. Avec la caméra activée, le mode Studio enregistre à 30 i/s ou moins."
 fps_120 = "120 i/s"
 fps_144 = "144 i/s"
 fps_165 = "165 i/s"

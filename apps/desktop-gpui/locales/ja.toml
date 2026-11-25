@@ -344,7 +344,7 @@ ultra_description = "本格的な編集のためにディテールを最大限�
 [settings.quality.studio.frame_rate]
 description = "Studioモードはこのフレームレートを上限に録画し、ディスプレイのリフレッシュレートを超えることはありません。カメラがオンのときは30 FPS以下で録画します。"
 description_high = "60 FPSを超える録画はCPUとディスク容量を多く使い、コンピュータによってはソフトウェアでエンコードされます。Studioモードがディスプレイのリフレッシュレートを超えて録画することはありません。カメラがオンのときは30 FPS以下で録画します。"
-description_match = "ディスプレイのリフレッシュレートで録画します（最大240 FPS）。60 FPSを超える録画はCPUとディスク容量を多く使います。カメラがオンのときは、Studioモードは30 FPS以下で録画します。"
+description_match = "ディスプレイのリフレッシュレートで録画します（最大{fps} FPS）。60 FPSを超える録画はCPUとディスク容量を多く使います。カメラがオンのときは、Studioモードは30 FPS以下で録画します。"
 fps_120 = "120 FPS"
 fps_144 = "144 FPS"
 fps_165 = "165 FPS"

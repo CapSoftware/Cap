@@ -1216,6 +1216,7 @@ pub const EDITOR_PREVIEW_ENHANCE_KEY: &str = "editorPreviewEnhance";
 pub const RECORDING_MARKER_SOUND_KEY: &str = "recordingMarkerSound";
 pub const KEEP_DRAWINGS_KEY: &str = "keepDrawingsOnScreen";
 pub const MAX_FPS_MATCH_DISPLAY_KEY: &str = "maxFpsMatchDisplay";
+pub const MATCH_DISPLAY_STORED_FPS: u32 = 240;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StudioFrameRate {
@@ -1223,10 +1224,10 @@ pub enum StudioFrameRate {
     MatchDisplay,
 }
 
-/// Match display is stored as `maxFps` at the Studio ceiling plus its own
+/// Match display is stored as `maxFps` at 240 plus its own
 /// flag, so versions that only read `maxFps` clamp it and record at the
 /// display's rate. If one of them later saves another rate, `maxFps` moves
-/// off the ceiling and the leftover flag no longer applies.
+/// off 240 and the leftover flag no longer applies.
 pub fn set_studio_frame_rate(rate: StudioFrameRate) -> bool {
     update_store_section(GENERAL_SETTINGS, |general| {
         match rate {
@@ -1235,10 +1236,7 @@ pub fn set_studio_frame_rate(rate: StudioFrameRate) -> bool {
                 general.remove(MAX_FPS_MATCH_DISPLAY_KEY);
             }
             StudioFrameRate::MatchDisplay => {
-                general.insert(
-                    "maxFps".to_string(),
-                    Value::from(cap_recording::MAX_STUDIO_FPS),
-                );
+                general.insert("maxFps".to_string(), Value::from(MATCH_DISPLAY_STORED_FPS));
                 general.insert(MAX_FPS_MATCH_DISPLAY_KEY.to_string(), Value::Bool(true));
             }
         }
@@ -1631,7 +1629,7 @@ impl Default for GeneralSettings {
 
 impl GeneralSettings {
     pub fn studio_frame_rate(&self) -> StudioFrameRate {
-        if self.max_fps_match_display && self.max_fps == cap_recording::MAX_STUDIO_FPS {
+        if self.max_fps_match_display && self.max_fps == MATCH_DISPLAY_STORED_FPS {
             StudioFrameRate::MatchDisplay
         } else {
             StudioFrameRate::Fixed(self.max_fps)
@@ -3599,7 +3597,7 @@ mod tests {
 
         assert!(set_studio_frame_rate(StudioFrameRate::MatchDisplay));
         let general = &store.read()[GENERAL_SETTINGS];
-        assert_eq!(general["maxFps"], cap_recording::MAX_STUDIO_FPS);
+        assert_eq!(general["maxFps"], MATCH_DISPLAY_STORED_FPS);
         assert_eq!(general[MAX_FPS_MATCH_DISPLAY_KEY], true);
         assert_eq!(general["future"], true);
         assert_eq!(

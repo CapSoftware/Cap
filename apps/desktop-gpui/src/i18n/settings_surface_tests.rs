@@ -207,7 +207,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Recording above 60 FPS uses more CPU and disk space, and some computers encode it in software. Studio Mode never records faster than your display refreshes. With a camera on, it records at 30 FPS or less.",
         ),
         (
-            tr::settings::quality::studio::frame_rate::description_match(),
+            tr::settings::quality::studio::frame_rate::description_match(240),
             "Records at your display's refresh rate, up to 240 FPS. Recording above 60 FPS uses more CPU and disk space. With a camera on, Studio Mode records at 30 FPS or less.",
         ),
         (
