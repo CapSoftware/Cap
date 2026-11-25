@@ -7,6 +7,8 @@ import { z } from "zod";
 import { ASSEMBLYAI_SUPPORTED_LANGUAGES } from "@/lib/assemblyai";
 
 export const MEETING_TRANSCRIPT_MAX_CHARS = 400_000;
+// About 12 hours of dense speech. Longer meetings send their start and end.
+export const MEETING_NOTES_TRANSCRIPT_MAX_CHARS = 1_000_000;
 export const MEETING_JSON_BODY_MAX_BYTES = 4_000_000;
 export const MEETING_KEYWORDS_MAX = 100;
 export const MEETING_KEYWORD_MAX_CHARS = 50;
@@ -53,7 +55,7 @@ export const meetingNotesRequestSchema = z
 			.max(100)
 			.default([]),
 		rawNotesMarkdown: z.string().max(50_000).default(""),
-		transcript: z.string().max(MEETING_TRANSCRIPT_MAX_CHARS).default(""),
+		transcript: z.string().max(MEETING_NOTES_TRANSCRIPT_MAX_CHARS).default(""),
 		transcriptTruncated: z.boolean().default(false),
 		template: z
 			.object({

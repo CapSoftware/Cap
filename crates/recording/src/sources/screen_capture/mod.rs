@@ -864,6 +864,50 @@ mod tests {
     }
 
     #[test]
+    fn studio_display_recording_size_matches_the_capture_and_encoder_path() {
+        for ((width, height), expected) in [
+            ((1280, 720), (1280, 720)),
+            ((1366, 768), (1366, 768)),
+            ((1365, 767), (1364, 766)),
+            ((1920, 1080), (1920, 1080)),
+            ((2560, 1440), (2560, 1440)),
+            ((3440, 1440), (3440, 1440)),
+            ((3024, 1964), (3024, 1964)),
+            ((3456, 2234), (3456, 2234)),
+            ((3840, 2160), (3840, 2160)),
+            ((4096, 2160), (4096, 2160)),
+            ((5120, 2880), (4096, 2304)),
+            ((6016, 3384), (4096, 2304)),
+            ((7680, 4320), (4096, 2304)),
+            ((5120, 1440), (4096, 1152)),
+            ((2160, 3840), (2160, 3840)),
+            ((2880, 5120), (2304, 4096)),
+        ] {
+            let recorded = crate::studio_recording::studio_display_recording_size(width, height);
+            assert_eq!(recorded, expected, "{width}x{height}");
+
+            for max_capture_size in [
+                None,
+                Some((crate::H264_MAX_DIMENSION, crate::H264_MAX_DIMENSION)),
+            ] {
+                let captured = constrain_capture_size(
+                    PhysicalSize::new(width as f64, height as f64),
+                    max_capture_size,
+                );
+                let (captured_width, captured_height) =
+                    (captured.width() as u32, captured.height() as u32);
+                let encoded = crate::calculate_gpu_compatible_size(
+                    captured_width,
+                    captured_height,
+                    crate::H264_MAX_DIMENSION,
+                )
+                .unwrap_or((captured_width, captured_height));
+                assert_eq!(encoded, recorded, "{width}x{height} {max_capture_size:?}");
+            }
+        }
+    }
+
+    #[test]
     #[cfg(target_os = "linux")]
     fn linux_window_source_preserves_selected_window_id() {
         let id: WindowId = "247".parse().unwrap();

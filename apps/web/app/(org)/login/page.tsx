@@ -42,7 +42,7 @@ export default async function LoginPage(props: {
 			error === "signin_consent_denied",
 	);
 
-	if (session && !isSsoEntry) {
+	if (session && !isSsoEntry && error !== "SignupBlocked") {
 		redirect(getSafeNextPath(searchParams.next, serverEnv().WEB_URL));
 	}
 

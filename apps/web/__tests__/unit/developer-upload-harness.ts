@@ -15,6 +15,7 @@ export const state = {
 	videos: new Map<string, StoredVideo>(),
 	keys: new Map<string, StoredKey | null>(),
 	apps: new Set<string>(),
+	blockedEmails: new Set<string>(),
 	environment: "production",
 	nextVideo: 0,
 	nextKey: 0,
@@ -57,6 +58,8 @@ export function revokeKey(key: string) {
 
 export const removeKey = (key: string) => state.keys.set(keyIdOf(key), null);
 
+export const ownerEmailOf = (appId: string) => `owner@${appId}.example`;
+
 const revokedTime = (revokedAt: string) =>
 	Date.parse(`${revokedAt.replace(" ", "T")}Z`);
 
@@ -81,7 +84,9 @@ async function answer(query: string, params: unknown[]) {
 		}
 		const stored = storedKey(key, appId);
 		if (!stored || stored.revokedAt) return { rows: [] };
-		return { rows: [[appId, keyIdOf(key), `owner-${appId}`]] };
+		return {
+			rows: [[appId, keyIdOf(key), `owner-${appId}`, ownerEmailOf(appId)]],
+		};
 	}
 	if (query.includes("from `developer_videos` inner join `developer_apps`")) {
 		const [keyId, , videoId, appId] = params;
@@ -93,8 +98,20 @@ async function answer(query: string, params: unknown[]) {
 		return {
 			rows: [
 				key && key.appId === video.appId
-					? [video.duration, video.deletedAt, keyId, key.revokedAt]
-					: [video.duration, video.deletedAt, null, null],
+					? [
+							video.duration,
+							video.deletedAt,
+							keyId,
+							key.revokedAt,
+							ownerEmailOf(video.appId),
+						]
+					: [
+							video.duration,
+							video.deletedAt,
+							null,
+							null,
+							ownerEmailOf(video.appId),
+						],
 			],
 		};
 	}
@@ -154,6 +171,7 @@ export function resetUploadHarness() {
 	state.videos.clear();
 	state.keys.clear();
 	state.apps = new Set(["app1", "app2"]);
+	state.blockedEmails.clear();
 	state.environment = "production";
 	state.nextVideo = 0;
 	state.query.mockImplementation(answer);

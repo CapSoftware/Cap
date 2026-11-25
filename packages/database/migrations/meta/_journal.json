@@ -470,6 +470,13 @@
 			"when": 1795222559682,
 			"tag": "0066_meeting_notes_trial_uses",
 			"breakpoints": true
+		},
+		{
+			"idx": 67,
+			"version": "5",
+			"when": 1795524690496,
+			"tag": "0067_meeting_audio_usage",
+			"breakpoints": true
 		}
 	]
 }

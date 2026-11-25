@@ -29,6 +29,11 @@ const mocks = vi.hoisted(() => ({
 		string,
 		{ completed: boolean; runs: number; asks: number }
 	>(),
+	daily: vi.fn(),
+}));
+
+vi.mock("@/lib/meetings/audio-usage", () => ({
+	consumeDailyAudioUnits: mocks.daily,
 }));
 
 // Mirrors lib/meetings/trial.ts (covered against MySQL in
@@ -93,7 +98,7 @@ vi.mock("@/lib/meetings/trial", () => {
 		spendTrialAsk: async (userId: string, meetingId: string) => {
 			if (!claimed(userId).includes(meetingId)) return false;
 			const row = state(userId, meetingId);
-			if (!row.completed || row.asks >= 20) return false;
+			if (!row.completed || row.asks >= 5) return false;
 			row.asks += 1;
 			return true;
 		},
@@ -311,6 +316,8 @@ beforeEach(() => {
 		mocks.generateText,
 	])
 		fn.mockReset();
+	mocks.daily.mockReset();
+	mocks.daily.mockResolvedValue({ allowed: true });
 	mocks.upload.mockResolvedValue("https://cdn.example/upload/1");
 	mocks.remove.mockResolvedValue({});
 	vi.spyOn(console, "log").mockImplementation(() => {});
@@ -420,6 +427,65 @@ describe("mounting", () => {
 	});
 });
 
+describe("sign-in failures", () => {
+	let address = 0;
+	const fromAddress = () => {
+		address += 1;
+		return `198.51.100.${address}`;
+	};
+	const capabilities = (
+		ip: string,
+		key = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
+	) =>
+		app.request("https://cap.so/api/desktop/meetings/capabilities", {
+			headers: { authorization: `Bearer ${key}`, "x-forwarded-for": ip },
+		});
+
+	it("limits refused sign-ins per address", async () => {
+		const ip = fromAddress();
+		for (let index = 0; index < 60; index++)
+			expect((await capabilities(ip)).status).toBe(401);
+		const limited = await capabilities(ip);
+		expect(limited.status).toBe(429);
+		expect(limited.headers.get("retry-after")).toBe("60");
+		expect(await limited.json()).toEqual({
+			error: "rate_limited",
+			retryAfterSeconds: 60,
+		});
+		expect((await capabilities(ip)).status).toBe(429);
+		expect((await capabilities(fromAddress())).status).toBe(401);
+	});
+
+	it("still serves every signed-in user on a limited address", async () => {
+		const ip = fromAddress();
+		for (let index = 0; index < 61; index++) await capabilities(ip);
+		expect((await capabilities(ip)).status).toBe(429);
+		signIn();
+		expect((await capabilities(ip)).status).toBe(200);
+		expect(
+			(await capabilities(ip, "fedcba9876543210fedcba9876543210fedc")).status,
+		).toBe(200);
+	});
+
+	it("answers requests without a desktop key from a limited address without a lookup", async () => {
+		const ip = fromAddress();
+		for (let index = 0; index < 61; index++) await capabilities(ip);
+		signIn();
+		const response = await app.request(
+			"https://cap.so/api/desktop/meetings/capabilities",
+			{ headers: { authorization: "Bearer short", "x-forwarded-for": ip } },
+		);
+		expect(response.status).toBe(429);
+	});
+
+	it("never counts signed-in requests against the address", async () => {
+		const ip = fromAddress();
+		signIn();
+		for (let index = 0; index < 150; index++)
+			expect((await capabilities(ip)).status).toBe(200);
+	});
+});
+
 describe("POST /transcribe gates", () => {
 	it("rejects missing auth before anything else", async () => {
 		const response = await transcribe(wav(16_000), "", {});
@@ -492,6 +558,20 @@ describe("POST /transcribe gates", () => {
 			error: "invalid_request",
 			detail: "audio: unsupported_format",
 		});
+		expect(mocks.upload).not.toHaveBeenCalled();
+	});
+
+	it("refuses audio over the daily cap before the provider, until the next day", async () => {
+		const user = signIn();
+		mocks.daily.mockResolvedValue({ allowed: false, retryAfterSeconds: 4_321 });
+		const response = await transcribe(wav(16_000 * 25));
+		expect(response.status).toBe(429);
+		expect(response.headers.get("retry-after")).toBe("4321");
+		expect(await response.json()).toEqual({
+			error: "daily_audio_limit",
+			retryAfterSeconds: 4_321,
+		});
+		expect(mocks.daily).toHaveBeenCalledWith(user.id, 3, 5_760);
 		expect(mocks.upload).not.toHaveBeenCalled();
 	});
 
@@ -997,7 +1077,7 @@ describe("free meetings for signed-in users", () => {
 		mocks.trialState.set(`${user.id}|m1`, {
 			completed: true,
 			runs: 3,
-			asks: 20,
+			asks: 5,
 		});
 		expect(
 			(await postJson("/notes", { ...validNotes, meetingId: "m1" })).status,
@@ -1041,6 +1121,98 @@ describe("free meetings for signed-in users", () => {
 		expect(events.map((event) => event.event)).not.toContain("done");
 		expect(events.at(-1)?.event).toBe("error");
 		expect(mocks.trial.get(user.id)).toEqual(["m1"]);
+	});
+
+	it("cuts a long free meeting's transcript and says it is incomplete", async () => {
+		const user = signIn(null);
+		mocks.env.VERCEL_ENV = "production";
+		streamNotes();
+		const line = `Speaker 1: ${"word ".repeat(40)}\n`;
+		const transcript = line
+			.repeat(Math.ceil(400_000 / line.length))
+			.slice(0, 399_000);
+		const response = await postJson("/notes", {
+			...validNotes,
+			transcript,
+			meetingId: "long",
+		});
+		expect(response.status).toBe(200);
+		await response.text();
+		const prompt = mocks.streamText.mock.calls[0]?.[0];
+		const sent = prompt.messages[0].content as string;
+		expect(Buffer.byteLength(sent)).toBeLessThan(260_000);
+		expect(sent).toContain(line.slice(0, 40));
+		expect(prompt.system).toContain("The transcript is incomplete");
+		expect(mocks.trial.get(user.id)).toEqual(["long"]);
+	});
+
+	it("bounds what a free question sends, whatever the characters", async () => {
+		const user = signIn(null);
+		mocks.trial.set(user.id, ["m1"]);
+		mocks.streamText.mockReturnValue({
+			fullStream: textStream(deltas("Friday")),
+		});
+		const response = await postJson("/ask", {
+			question: "When?",
+			transcript: "\u{20000}".repeat(199_000),
+			meetingId: "m1",
+		});
+		expect(response.status).toBe(200);
+		await response.text();
+		const sent = mocks.streamText.mock.calls[0]?.[0].messages
+			.map((message: { content: string }) => message.content)
+			.join("");
+		expect(Buffer.byteLength(sent)).toBeLessThan(260_000);
+		expect(sent).not.toContain("\uFFFD");
+		expect(mocks.streamText.mock.calls[0]?.[0].system).toContain(
+			"only the parts most related to the question are included",
+		);
+	});
+
+	it("keeps the part of a long free meeting a question is about", async () => {
+		const user = signIn(null);
+		mocks.trial.set(user.id, ["m1"]);
+		mocks.streamText.mockReturnValue({
+			fullStream: textStream(deltas("PINEAPPLE")),
+		});
+		const filler = "Speaker 1: we went through the roadmap again.\n".repeat(
+			8_000,
+		);
+		const response = await postJson("/ask", {
+			question: "What is the code word for the launch?",
+			transcript: `${filler}Speaker 2: the code word for the launch is PINEAPPLE.\n`,
+			meetingId: "m1",
+		});
+		expect(response.status).toBe(200);
+		await response.text();
+		const sent = mocks.streamText.mock.calls[0]?.[0].messages[0].content;
+		expect(Buffer.byteLength(sent)).toBeLessThan(260_000);
+		expect(sent).toContain("PINEAPPLE");
+	});
+
+	it("refuses a free request that is too large without its transcript", async () => {
+		const user = signIn(null);
+		const response = await postJson("/notes", {
+			...validNotes,
+			meetingId: "huge",
+			previous: { markdown: "€".repeat(99_000), instruction: "shorter" },
+		});
+		expect(response.status).toBe(402);
+		expect(mocks.trial.get(user.id)).toBeUndefined();
+		expect(mocks.streamText).not.toHaveBeenCalled();
+	});
+
+	it("leaves a Pro meeting's transcript whole", async () => {
+		signIn();
+		mocks.env.VERCEL_ENV = "production";
+		streamNotes();
+		const transcript = `Speaker 1: ${"x".repeat(299_000)}`;
+		const response = await postJson("/notes", { ...validNotes, transcript });
+		expect(response.status).toBe(200);
+		await response.text();
+		const prompt = mocks.streamText.mock.calls[0]?.[0];
+		expect(prompt.messages[0].content).toContain(transcript);
+		expect(prompt.system).not.toContain("The transcript is incomplete");
 	});
 
 	it("needs a meeting id to count against", async () => {

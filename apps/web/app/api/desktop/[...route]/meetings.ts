@@ -9,6 +9,7 @@ import {
 	type ToolSet,
 } from "ai";
 import { Hono } from "hono";
+import { createMiddleware } from "hono/factory";
 import { after } from "next/server";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import {
@@ -25,6 +26,11 @@ import {
 	meetingsAiConfigured,
 	runMeetingChain,
 } from "@/lib/meetings/ai-config";
+import {
+	MEETING_AUTH_FAILURE_RETRY_SECONDS,
+	meetingAuthBlocked,
+	meetingAuthFailureLimited,
+} from "@/lib/meetings/auth-failures";
 import {
 	consumeMeetingAudioBudget,
 	consumeMeetingBodyBudget,
@@ -74,14 +80,47 @@ import {
 	trialRemaining,
 } from "@/lib/meetings/trial";
 import {
+	fitTrialInput,
+	trialTranscriptBudget,
+} from "@/lib/meetings/trial-input";
+import {
 	MEETING_CLIP_MAX_BYTES,
 	MEETING_CLIP_MAX_SECONDS,
 	MEETING_CLIP_MIN_SAMPLES,
 	parseWavClip,
 } from "@/lib/meetings/wav";
-import { withAuth } from "../../utils";
+import { getAuth } from "../../utils";
 
-export const app = new Hono().use(withAuth);
+const rateLimited = (
+	retryAfterSeconds: number,
+	error: "rate_limited" | "daily_audio_limit" = "rate_limited",
+) =>
+	Response.json(
+		{ error, retryAfterSeconds },
+		{ status: 429, headers: { "Retry-After": String(retryAfterSeconds) } },
+	);
+
+// Signed-in requests are limited per user by the budgets below; only
+// requests whose sign-in was not accepted are limited per address.
+const withMeetingsAuth = createMiddleware<{
+	Variables: {
+		user: NonNullable<Awaited<ReturnType<typeof getAuth>>>["user"];
+	};
+}>(async (c, next) => {
+	const headers = c.req.raw.headers;
+	if (meetingAuthBlocked(headers))
+		return rateLimited(MEETING_AUTH_FAILURE_RETRY_SECONDS);
+	const auth = await getAuth(c);
+	if (!auth) {
+		if (await meetingAuthFailureLimited(headers))
+			return rateLimited(MEETING_AUTH_FAILURE_RETRY_SECONDS);
+		return c.text("User not authenticated", 401);
+	}
+	c.set("user", auth.user);
+	await next();
+});
+
+export const app = new Hono().use(withMeetingsAuth);
 
 const TRANSCRIBE_DEADLINE_MS = 90_000;
 const TRANSCRIBE_POLL_MS = 1_000;
@@ -155,13 +194,6 @@ const errorResponse = (
 
 const invalidRequest = (detail: string) =>
 	errorResponse(400, { error: "invalid_request", detail });
-
-const rateLimited = (retryAfterSeconds: number) =>
-	errorResponse(
-		429,
-		{ error: "rate_limited", retryAfterSeconds },
-		{ "Retry-After": String(retryAfterSeconds) },
-	);
 
 function admit(
 	user: MeetingUser,
@@ -313,7 +345,10 @@ app.post("/transcribe", async (c) => {
 	);
 	if (audioBudget.limited) {
 		log({ outcome: "audio_budget", status: 429, inputBytes });
-		return rateLimited(audioBudget.retryAfterSeconds);
+		return rateLimited(
+			audioBudget.retryAfterSeconds,
+			audioBudget.daily ? "daily_audio_limit" : "rate_limited",
+		);
 	}
 
 	const signal = AbortSignal.any([
@@ -726,8 +761,13 @@ async function answerQuestion(
 	config: MeetingsAiConfig,
 	send: SseSend,
 	signal: AbortSignal,
+	transcriptBytes?: number,
 ): Promise<number> {
-	const prompt = buildAskPrompt({ ...input, boundary: askBoundary(input) });
+	const prompt = buildAskPrompt({
+		...input,
+		boundary: askBoundary(input),
+		transcriptBytes,
+	});
 	const stream = await openTextStream(
 		meetingModelChain(config, "ask"),
 		prompt,
@@ -831,13 +871,15 @@ app.post("/notes", async (c) => {
 		return rateLimited(bodyBudget.retryAfterSeconds);
 	}
 
-	const input = body.data;
+	let input = body.data;
 	const trialMeeting = access === "trial" ? input.meetingId : undefined;
 	if (access === "trial") {
-		if (!trialMeeting) {
+		const fit = fitTrialInput(input, body.inputBytes);
+		if (!trialMeeting || !fit) {
 			log({ outcome: "upgrade_required", status: 402 });
 			return upgradeRequired();
 		}
+		if (fit.truncated) input = { ...fit.input, transcriptTruncated: true };
 		const claim = await claimTrialMeeting(
 			user.id,
 			trialMeeting,
@@ -944,18 +986,24 @@ app.post("/ask", async (c) => {
 	}
 
 	const input = body.data;
-	if (
-		access === "trial" &&
-		!(input.meetingId && (await spendTrialAsk(user.id, input.meetingId)))
-	) {
-		log({ outcome: "upgrade_required", status: 402 });
-		return upgradeRequired();
+	let transcriptBytes: number | undefined;
+	if (access === "trial") {
+		const budget = trialTranscriptBudget(input, body.inputBytes);
+		if (
+			budget === null ||
+			!(input.meetingId && (await spendTrialAsk(user.id, input.meetingId)))
+		) {
+			log({ outcome: "upgrade_required", status: 402 });
+			return upgradeRequired();
+		}
+		transcriptBytes = budget;
 	}
 	return streamGeneration(
 		c.req.raw,
 		log,
 		body.inputBytes,
 		ASK_DEADLINE_MS,
-		(send, signal) => answerQuestion(input, config, send, signal),
+		(send, signal) =>
+			answerQuestion(input, config, send, signal, transcriptBytes),
 	);
 });

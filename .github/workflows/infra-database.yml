@@ -14,10 +14,16 @@ on:
       - "apps/web/app/api/cron/developer-storage/**"
       - "apps/web/lib/user-preferences-sql.ts"
       - "apps/web/lib/meetings/trial.ts"
+      - "apps/web/lib/meetings/audio-usage.ts"
       - "apps/web/lib/media-input-policy-strikes.ts"
       - "apps/web/lib/organization-member-removal.ts"
+      - "packages/database/organization-pointer.ts"
+      - "packages/web-backend/src/Extension/Extensions.ts"
+      - "packages/web-backend/src/Videos/index.ts"
       - "packages/web-backend/src/Spaces/**"
       - "packages/web-backend/src/Folders/FoldersPolicy.ts"
+      - "packages/web-backend/src/Folders/index.ts"
+      - "apps/web/app/(org)/dashboard/dashboard-data.ts"
       - "apps/web/actions/notifications/**"
       - "apps/web/actions/analytics/**"
       - "apps/web/actions/caps/**"
@@ -46,10 +52,16 @@ on:
       - "apps/web/app/api/cron/developer-storage/**"
       - "apps/web/lib/user-preferences-sql.ts"
       - "apps/web/lib/meetings/trial.ts"
+      - "apps/web/lib/meetings/audio-usage.ts"
       - "apps/web/lib/media-input-policy-strikes.ts"
       - "apps/web/lib/organization-member-removal.ts"
+      - "packages/database/organization-pointer.ts"
+      - "packages/web-backend/src/Extension/Extensions.ts"
+      - "packages/web-backend/src/Videos/index.ts"
       - "packages/web-backend/src/Spaces/**"
       - "packages/web-backend/src/Folders/FoldersPolicy.ts"
+      - "packages/web-backend/src/Folders/index.ts"
+      - "apps/web/app/(org)/dashboard/dashboard-data.ts"
       - "apps/web/actions/notifications/**"
       - "apps/web/actions/analytics/**"
       - "apps/web/actions/caps/**"
@@ -143,4 +155,4 @@ jobs:
           CAP_INFRA_TEST_DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
           CAP_INFRA_ROUND_TRIPS_DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
           CAP_PASSKEYS_TEST_DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
-        run: bun run vitest run __tests__/integration/infra-*-database.test.ts __tests__/integration/user-preferences-database.test.ts __tests__/integration/space-creator-membership-database.test.ts __tests__/integration/dashboard-library-database.test.ts __tests__/integration/messenger-poll-database.test.ts __tests__/integration/passkeys-database.test.ts __tests__/integration/email-change-database.test.ts __tests__/integration/meetings-trial-database.test.ts
+        run: bun run vitest run __tests__/integration/infra-*-database.test.ts __tests__/integration/user-preferences-database.test.ts __tests__/integration/space-creator-membership-database.test.ts __tests__/integration/organization-pointer-database.test.ts __tests__/integration/dashboard-library-database.test.ts __tests__/integration/messenger-poll-database.test.ts __tests__/integration/passkeys-database.test.ts __tests__/integration/email-change-database.test.ts __tests__/integration/meetings-trial-database.test.ts __tests__/integration/meetings-audio-usage-database.test.ts
