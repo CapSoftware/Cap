@@ -691,6 +691,13 @@ fn system_audio_grant() -> health::AudioGrant {
     health::AudioGrant::Granted
 }
 
+/// Windows refuses to open a microphone with E_ACCESSDENIED while
+/// microphone access is off in Privacy settings (an open stream ends as if
+/// the device were unplugged).
+fn mic_access_denied(error: &str) -> bool {
+    error.contains("0x80070005")
+}
+
 /// Linux records the speakers through `parec`; without it there is nothing
 /// to record them with.
 fn linux_monitor_missing() -> bool {
@@ -1937,7 +1944,11 @@ impl Meetings {
         let stalled = self.active.as_ref().is_some_and(|active| {
             matches!(
                 active.mic.health,
-                SourceHealth::Error(HealthIssue::NoCallbacks | HealthIssue::NoInputDevice)
+                SourceHealth::Error(
+                    HealthIssue::NoCallbacks
+                        | HealthIssue::NoInputDevice
+                        | HealthIssue::MissingPermission
+                )
             )
         });
         let current = crate::feeds::Feeds::global(cx).read(cx).microphone.clone();
@@ -2147,23 +2158,44 @@ impl Meetings {
                     return;
                 };
                 let settings = crate::store::RecordingDeviceSettings::for_microphone(&name);
-                gpui_tokio::Tokio::spawn(cx, async move {
-                    match actor
+                let reopen = gpui_tokio::Tokio::spawn(cx, async move {
+                    let error = match actor
                         .ask(cap_recording::feeds::microphone::SetInput {
                             label: name,
                             settings,
                         })
                         .await
                     {
-                        Ok(ready) => {
-                            if let Err(error) = ready.await {
-                                tracing::warn!(%error, "the meeting microphone did not reopen");
-                            }
-                        }
-                        Err(error) => {
-                            tracing::warn!(%error, "the meeting microphone did not reopen")
-                        }
+                        Ok(ready) => ready.await.err().map(|error| error.to_string()),
+                        Err(error) => Some(error.to_string()),
+                    };
+                    if let Some(error) = &error {
+                        tracing::warn!(%error, "the meeting microphone did not reopen");
                     }
+                    error
+                });
+                let doc_id = doc_id.to_string();
+                cx.spawn(async move |this, cx| {
+                    let Ok(Some(error)) = reopen.await else {
+                        return;
+                    };
+                    if !(cfg!(windows) && mic_access_denied(&error)) {
+                        return;
+                    }
+                    this.update(cx, |this, cx| {
+                        if this.recording.as_ref().is_none_or(|r| r.doc_id != doc_id) {
+                            return;
+                        }
+                        let denied = SourceHealth::Error(HealthIssue::MissingPermission);
+                        if let Some(active) = this.active.as_mut()
+                            && active.mic.health != denied
+                        {
+                            tracing::info!("microphone access is off for the meeting");
+                            active.mic.health = denied;
+                            this.mark_active(cx);
+                        }
+                    })
+                    .ok();
                 })
                 .detach();
             }

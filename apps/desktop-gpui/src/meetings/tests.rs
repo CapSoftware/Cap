@@ -2304,3 +2304,15 @@ fn a_late_label_keeps_a_summary_edit_still_being_saved(cx: &mut gpui::TestAppCon
     );
     assert!(!text.contains("Person 2"), "{text}");
 }
+
+#[test]
+fn a_refused_microphone_reads_as_access_off() {
+    // What the microphone feed reports when Windows refuses to reopen it
+    // after microphone access was turned off in Privacy settings.
+    assert!(super::mic_access_denied(
+        "BuildStream: A backend-specific error has occurred: Access is denied. (0x80070005)"
+    ));
+    assert!(!super::mic_access_denied(
+        "BuildStream: The requested device is no longer available. For example, it has been unplugged."
+    ));
+}
