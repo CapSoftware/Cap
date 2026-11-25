@@ -479,6 +479,7 @@ impl EditorWindow {
         Some(layer.into_any_element())
     }
 
+    #[cfg(feature = "redact-bench")]
     pub(crate) fn redact_running(&self) -> bool {
         matches!(
             self.redact.phase,
@@ -486,12 +487,12 @@ impl EditorWindow {
         )
     }
 
+    #[cfg(feature = "redact-bench")]
     pub(crate) fn redact_scanning(&self) -> bool {
         matches!(self.redact.phase, Some(JobPhase::Scanning))
     }
 
-    /// Harness only (`CAP_GPUI_AUTO_REDACT`): turns auto redact off and
-    /// deletes the saved scan, so turning it on again scans from scratch.
+    #[cfg(feature = "redact-bench")]
     pub(crate) fn forget_redact_scan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_redact_enabled(false, window, cx);
         if let Err(error) = std::fs::remove_file(Redactions::path_for(&self.project_path))
@@ -551,6 +552,7 @@ impl EditorWindow {
         }));
     }
 
+    #[cfg(feature = "redact-bench")]
     pub(super) fn close_redact_card(&mut self, cx: &mut Context<Self>) {
         self.redact.card_task = None;
         if self.redact.card_open {

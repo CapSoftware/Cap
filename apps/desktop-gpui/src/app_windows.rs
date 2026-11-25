@@ -6218,6 +6218,7 @@ fn load_editor_project_candidate(
 
         drive_auto_sidebar(handle, cx).await;
         drive_auto_playback(path, handle, cx).await;
+        #[cfg(feature = "redact-bench")]
         crate::editor_window::redact_bench::run(handle, cx).await;
         crate::editor_bench::run(handle, cx).await;
         crate::transcript::automation::run(handle, cx).await;

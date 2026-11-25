@@ -1,4 +1,4 @@
-//! Harness only, like every other `CAP_GPUI_AUTO_*` hook: measures auto
+//! Harness only, built with `--features redact-bench`: measures auto
 //! redact in a real editor session.
 //!
 //! - `CAP_GPUI_AUTO_REDACT=soak:<n>` scans the open project n times from

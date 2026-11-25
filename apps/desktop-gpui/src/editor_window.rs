@@ -85,6 +85,7 @@ mod frame;
 mod loading;
 mod markers;
 mod redact;
+#[cfg(feature = "redact-bench")]
 pub(crate) mod redact_bench;
 mod scenes;
 mod snap;

@@ -185,6 +185,9 @@ dunce = "1.0.5"
 # shipped, so model files it downloaded keep loading identically.
 whisper-rs = "0.11.0"
 
+[features]
+redact-bench = []
+
 [build-dependencies]
 cap-i18n-build = { path = "i18n-build" }
 cc = "1.4"
