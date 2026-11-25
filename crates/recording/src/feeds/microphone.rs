@@ -2750,12 +2750,17 @@ impl MicrophoneFeed {
                 } else {
                     ready_future
                 };
+                // Asked once per rebuild, so the recording's health and the
+                // failed-rebuild report below agree while devices change.
+                #[cfg(target_os = "linux")]
+                let present = {
+                    let label = label.clone();
+                    let answer = Arc::new(std::sync::OnceLock::new());
+                    move || *answer.get_or_init(|| Self::is_connected(&label))
+                };
                 #[cfg(target_os = "linux")]
                 let ready_future = if let Some(health) = &self.recording_health {
-                    let label = label.clone();
-                    health.observe_ready(generation, new_id, ready_future, move || {
-                        Self::is_connected(&label)
-                    })
+                    health.observe_ready(generation, new_id, ready_future, present.clone())
                 } else {
                     ready_future
                 };
@@ -2794,6 +2799,8 @@ impl MicrophoneFeed {
                     let actor = actor_ref;
                     let done_tx = done_tx.clone();
                     let label = label.clone();
+                    #[cfg(target_os = "linux")]
+                    let present = present.clone();
                     async move {
                         match ready.await {
                             Ok((config, buffer_size_frames)) => {
@@ -2825,9 +2832,7 @@ impl MicrophoneFeed {
                                     .tell(SystemReconnectFailed {
                                         id: new_id,
                                         generation,
-                                        device_gone: rebuild_lost_device(&_error, || {
-                                            Self::is_connected(&label)
-                                        }),
+                                        device_gone: rebuild_lost_device(&_error, present),
                                     })
                                     .await;
                             }
