@@ -15,10 +15,12 @@ import { serverEnv } from "@cap/env";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import {
 	type AssignableOrganizationRole,
 	normalizeAssignableOrganizationRole,
 } from "@/lib/permissions/roles";
+import { sharesInviterCompanyDomain } from "@/lib/public-email-domains";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { requireOrganizationSettingsManager } from "./authorization";
 
@@ -92,6 +94,7 @@ export async function sendOrganizationInvites(
 			success: true,
 			failedEmails: [] as string[],
 			skippedEmails: [] as string[],
+			pendingEmails: [] as string[],
 		};
 	}
 
@@ -110,7 +113,32 @@ export async function sendOrganizationInvites(
 		}
 	};
 
+	const sendEmailNotifications = options.sendEmailNotifications !== false;
+	if (!sendEmailNotifications) await assertInviteLimit();
+
+	const directInvites = sendEmailNotifications
+		? []
+		: validInvites.filter((invite) =>
+				sharesInviterCompanyDomain(user.email, invite.email),
+			);
+	const recordInvites = validInvites.filter(
+		(invite) => !directInvites.includes(invite),
+	);
+	const recordEmails = recordInvites.map((invite) => invite.email);
+
+	const provisionResults = await Promise.allSettled(
+		directInvites.map((invite) =>
+			provisionOrganizationInvitee({
+				organizationId,
+				email: invite.email,
+				invitedByUserId: user.id,
+				role: invite.role,
+			}),
+		),
+	);
+
 	const inviteRecords = await db().transaction(async (tx) => {
+		if (recordInvites.length === 0) return [];
 		const [existingInvites, existingMembers] = await Promise.all([
 			tx
 				.select({ invitedEmail: organizationInvites.invitedEmail })
@@ -118,7 +146,7 @@ export async function sendOrganizationInvites(
 				.where(
 					and(
 						eq(organizationInvites.organizationId, organizationId),
-						inArray(organizationInvites.invitedEmail, validEmails),
+						inArray(organizationInvites.invitedEmail, recordEmails),
 					),
 				),
 			tx
@@ -128,7 +156,7 @@ export async function sendOrganizationInvites(
 				.where(
 					and(
 						eq(organizationMembers.organizationId, organizationId),
-						inArray(users.email, validEmails),
+						inArray(users.email, recordEmails),
 					),
 				),
 		]);
@@ -141,14 +169,14 @@ export async function sendOrganizationInvites(
 			existingMembers.map((m) => m.email.toLowerCase()),
 		);
 
-		const invitesToSend = validInvites.filter(
+		const invitesToSend = recordInvites.filter(
 			(invite) =>
 				!existingInviteEmails.has(invite.email) &&
 				!existingMemberEmails.has(invite.email),
 		);
 		if (invitesToSend.length === 0) return [];
 
-		await assertInviteLimit();
+		if (sendEmailNotifications) await assertInviteLimit();
 
 		const records = invitesToSend.map((invite) => ({
 			id: nanoId(),
@@ -171,12 +199,18 @@ export async function sendOrganizationInvites(
 		return records;
 	});
 
-	if (options.sendEmailNotifications === false) {
+	if (!sendEmailNotifications) {
+		const failedEmails = directInvites
+			.filter((_, index) => provisionResults[index]?.status === "rejected")
+			.map((invite) => invite.email);
+
 		revalidatePath("/dashboard/settings/organization");
+
 		return {
 			success: true,
-			failedEmails: [] as string[],
+			failedEmails,
 			skippedEmails: [] as string[],
+			pendingEmails: inviteRecords.map((record) => record.email),
 		};
 	}
 
@@ -236,5 +270,10 @@ export async function sendOrganizationInvites(
 
 	revalidatePath("/dashboard/settings/organization");
 
-	return { success: true, failedEmails, skippedEmails };
+	return {
+		success: true,
+		failedEmails,
+		skippedEmails,
+		pendingEmails: [] as string[],
+	};
 }

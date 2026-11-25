@@ -22,7 +22,7 @@ vi.mock("@/lib/rate-limit", async (importOriginal) => ({
 }));
 
 vi.mock("@cap/database/auth/session", () => ({
-	getCurrentUser: async () => ({ id: "user-1" }),
+	getCurrentUser: async () => ({ id: "user-1", email: "admin@acme.dev" }),
 }));
 vi.mock("@cap/database/emails/config", () => ({ sendEmail: mocks.sendEmail }));
 vi.mock("@cap/database/emails/organization-invite", () => ({
@@ -173,9 +173,9 @@ describe("organization invite delivery", () => {
 		expect(provisionOrganizationInvitee).not.toHaveBeenCalled();
 	});
 
-	it("records a pending invite without enrolling the address when email is off", async () => {
+	it("adds addresses on the inviter's company domain straight away when email is off", async () => {
 		const result = await sendOrganizationInvites(
-			["future@example.com"],
+			["teammate@acme.dev"],
 			Organisation.OrganisationId.make("org-1"),
 			"member",
 			{ sendEmailNotifications: false },
@@ -184,33 +184,86 @@ describe("organization invite delivery", () => {
 			success: true,
 			failedEmails: [],
 			skippedEmails: [],
+			pendingEmails: [],
 		});
-		expect(provisionOrganizationInvitee).not.toHaveBeenCalled();
+		expect(provisionOrganizationInvitee).toHaveBeenCalledTimes(1);
+		expect(provisionOrganizationInvitee).toHaveBeenCalledWith({
+			organizationId: "org-1",
+			email: "teammate@acme.dev",
+			invitedByUserId: "user-1",
+			role: "member",
+		});
+		expect(mocks.insert).not.toHaveBeenCalled();
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
+	});
+
+	it("creates pending invites for other addresses when email is off", async () => {
+		const result = await sendOrganizationInvites(
+			[
+				{ email: "teammate@acme.dev", role: "admin" },
+				{ email: "someone@elsewhere.dev", role: "member" },
+				{ email: "person@gmail.com", role: "admin" },
+			],
+			Organisation.OrganisationId.make("org-1"),
+			"member",
+			{ sendEmailNotifications: false },
+		);
+		expect(result).toEqual({
+			success: true,
+			failedEmails: [],
+			skippedEmails: [],
+			pendingEmails: ["someone@elsewhere.dev", "person@gmail.com"],
+		});
+		expect(provisionOrganizationInvitee).toHaveBeenCalledTimes(1);
+		expect(provisionOrganizationInvitee).toHaveBeenCalledWith(
+			expect.objectContaining({ email: "teammate@acme.dev", role: "admin" }),
+		);
 		expect(mocks.insert).toHaveBeenCalledWith([
 			expect.objectContaining({
-				id: "invite-1",
 				organizationId: "org-1",
-				invitedEmail: "future@example.com",
+				invitedEmail: "someone@elsewhere.dev",
+				invitedByUserId: "user-1",
 				role: "member",
+			}),
+			expect.objectContaining({
+				invitedEmail: "person@gmail.com",
+				role: "admin",
 			}),
 		]);
 		expect(mocks.sendEmail).not.toHaveBeenCalled();
 	});
 
-	it("skips addresses already invited or already members when email is off", async () => {
-		mocks.existingInviteEmails = ["pending@example.com"];
-		mocks.existingMemberEmails = ["member@example.com"];
-		await sendOrganizationInvites(
-			["pending@example.com", "member@example.com", "new@example.com"],
+	it("skips other addresses already invited or already members when email is off", async () => {
+		mocks.existingInviteEmails = ["pending@elsewhere.dev"];
+		mocks.existingMemberEmails = ["member@elsewhere.dev"];
+		const result = await sendOrganizationInvites(
+			["pending@elsewhere.dev", "member@elsewhere.dev", "new@elsewhere.dev"],
 			Organisation.OrganisationId.make("org-1"),
 			"member",
 			{ sendEmailNotifications: false },
 		);
+		expect(result.pendingEmails).toEqual(["new@elsewhere.dev"]);
 		expect(provisionOrganizationInvitee).not.toHaveBeenCalled();
 		expect(mocks.insert).toHaveBeenCalledWith([
-			expect.objectContaining({ invitedEmail: "new@example.com" }),
+			expect.objectContaining({ invitedEmail: "new@elsewhere.dev" }),
 		]);
 		expect(mocks.sendEmail).not.toHaveBeenCalled();
+	});
+
+	it("reports teammates whose direct add failed when email is off", async () => {
+		vi.mocked(provisionOrganizationInvitee).mockRejectedValueOnce(
+			new Error("failed"),
+		);
+		const result = await sendOrganizationInvites(
+			["teammate@acme.dev"],
+			Organisation.OrganisationId.make("org-1"),
+			"member",
+			{ sendEmailNotifications: false },
+		);
+		expect(result).toMatchObject({
+			failedEmails: ["teammate@acme.dev"],
+			pendingEmails: [],
+		});
 	});
 
 	it("does not consult the limit when no address is valid", async () => {
@@ -251,6 +304,7 @@ describe("organization invite delivery", () => {
 			success: true,
 			failedEmails: [],
 			skippedEmails: [],
+			pendingEmails: [],
 		});
 		expect(mocks.isRateLimited).not.toHaveBeenCalled();
 		expect(mocks.insert).not.toHaveBeenCalled();

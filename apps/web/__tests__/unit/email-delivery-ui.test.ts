@@ -118,6 +118,7 @@ describe("invitation email delivery messages", () => {
 				success: true,
 				failedEmails: hasFailures ? ["failed@example.com"] : [],
 				skippedEmails: ["skipped@example.com"],
+				pendingEmails: [],
 			});
 			await render(
 				createElement(InviteDialog, { isOpen: true, setIsOpen: mocks.close }),
@@ -156,4 +157,43 @@ describe("invitation email delivery messages", () => {
 			expect(mocks.refresh).toHaveBeenCalledOnce();
 		},
 	);
+
+	it("says which people still need to accept when adding without email", async () => {
+		mocks.invites.mockResolvedValue({
+			success: true,
+			failedEmails: [],
+			skippedEmails: [],
+			pendingEmails: ["someone@elsewhere.dev"],
+		});
+		await render(
+			createElement(InviteDialog, { isOpen: true, setIsOpen: mocks.close }),
+		);
+		const toggle = document.querySelector<HTMLButtonElement>(
+			"button[role='switch']",
+		);
+		if (!toggle) throw new Error("Missing invite email switch");
+		await act(async () => toggle.click());
+		const input = document.querySelector<HTMLInputElement>(
+			"input[placeholder='name@company.com']",
+		);
+		if (!input) throw new Error("Missing invitation email input");
+		await act(async () => {
+			Object.getOwnPropertyDescriptor(
+				HTMLInputElement.prototype,
+				"value",
+			)?.set?.call(input, "teammate@acme.dev, someone@elsewhere.dev");
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		await clickButton("Add Users");
+		expect(mocks.invites).toHaveBeenCalledWith(
+			expect.any(Array),
+			expect.anything(),
+			"member",
+			{ sendEmailNotifications: false },
+		);
+		expect(mocks.toast.success).toHaveBeenCalledExactlyOnceWith(
+			"Users added. Invites created for someone@elsewhere.dev, who join after they sign in and accept.",
+		);
+		expect(mocks.toast.warning).not.toHaveBeenCalled();
+	});
 });

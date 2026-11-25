@@ -113,7 +113,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 				{ sendEmailNotifications },
 			);
 		},
-		onSuccess: (result) => {
+		onSuccess: (result, emails) => {
 			if (result.skippedEmails.length > 0) {
 				toast.warning(
 					`Invites created but not emailed because email is not configured. Share the invite links with: ${result.skippedEmails.join(", ")}`,
@@ -121,13 +121,26 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 			}
 			if (result.failedEmails.length > 0) {
 				toast.warning(
-					`Invite email delivery failed for: ${result.failedEmails.join(", ")}`,
+					sendEmailNotifications
+						? `Invite email delivery failed for: ${result.failedEmails.join(", ")}`
+						: `Users added, but provisioning failed for: ${result.failedEmails.join(", ")}`,
 				);
-			} else if (result.skippedEmails.length === 0) {
+			}
+			if (result.pendingEmails.length > 0) {
+				const pendingList = result.pendingEmails.join(", ");
+				toast.success(
+					emails.length > result.pendingEmails.length
+						? `Users added. Invites created for ${pendingList}, who join after they sign in and accept.`
+						: `Invites created for ${pendingList}. They join after they sign in and accept.`,
+				);
+			} else if (
+				result.failedEmails.length === 0 &&
+				result.skippedEmails.length === 0
+			) {
 				toast.success(
 					sendEmailNotifications
 						? "Invites sent successfully"
-						: "Invites created. People join after they sign in and accept.",
+						: "Users added successfully",
 				);
 			}
 			setIsOpen(false);
@@ -235,8 +248,8 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 								Send invite email
 							</p>
 							<p className="mt-1 text-xs text-gray-10">
-								Turn off to skip the email. People join after they sign in and
-								accept the invite.
+								Turn off to add users on your email domain without emailing
+								them. Anyone else gets an invite to accept when they sign in.
 							</p>
 						</div>
 						<Switch
@@ -266,7 +279,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 						data-invite-submit="true"
 						onClick={handleSendInvites}
 					>
-						{sendEmailNotifications ? "Send Invites" : "Create Invites"}
+						{sendEmailNotifications ? "Send Invites" : "Add Users"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
