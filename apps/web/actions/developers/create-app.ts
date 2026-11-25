@@ -20,6 +20,10 @@ import {
 import { hashKey } from "@/lib/developer-key-hash";
 import { canUseInfra } from "@/lib/infra-access";
 import { actionFailure } from "@/lib/infra-action-result";
+import {
+	shouldRefuseTorExit,
+	TOR_EXIT_REFUSAL_MESSAGE,
+} from "@/lib/tor-exit-gate";
 
 export async function createDeveloperApp(data: {
 	name: string;
@@ -32,6 +36,9 @@ export async function createDeveloperApp(data: {
 	if (!named.ok) return actionFailure(named.message);
 	const chosen = developerAppEnvironment(data.environment);
 	if (!chosen.ok) return actionFailure(chosen.message);
+	if (await shouldRefuseTorExit("developer-app")) {
+		return actionFailure(TOR_EXIT_REFUSAL_MESSAGE);
+	}
 	if (await developerAppCreationLimited(user.id)) {
 		return actionFailure(DEVELOPER_APP_RATE_MESSAGE);
 	}
