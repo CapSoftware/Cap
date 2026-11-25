@@ -26,9 +26,10 @@ use crate::{
     motion::{ChangeMap, TILE, diff_tiles, mean_difference},
 };
 
-/// Mechanisms that `CAP_REDACT_OFF=name,...` turns off, to measure what each
-/// one is worth.
-#[derive(Clone, Copy, Debug)]
+/// The scan's mechanisms. All are on in every normal build; a build with the
+/// `ablation` feature reads `CAP_REDACT_OFF=name,...` to turn some off and
+/// measure what each one is worth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Switches {
     /// Reuse the reading of a line whose pixels were read before.
     pub cache: bool,
@@ -53,8 +54,22 @@ pub struct Switches {
 }
 
 impl Switches {
+    #[cfg(not(feature = "ablation"))]
+    pub fn all_on() -> Self {
+        Self::with_off("")
+    }
+
+    #[cfg(feature = "ablation")]
     pub fn from_env() -> Self {
-        let off = std::env::var("CAP_REDACT_OFF").unwrap_or_default();
+        Self::with_off(&std::env::var("CAP_REDACT_OFF").unwrap_or_default())
+    }
+
+    #[cfg(not(feature = "ablation"))]
+    pub fn from_env() -> Self {
+        Self::all_on()
+    }
+
+    fn with_off(off: &str) -> Self {
         let on = |name: &str| !off.split(',').any(|item| item.trim() == name);
         Self {
             cache: on("cache"),
@@ -1379,8 +1394,7 @@ mod tests {
         assert_eq!(edge_span(&chars("key: sk"), &known, false, true), None);
     }
 
-    #[test]
-    fn a_held_frame_keeps_its_mask_until_the_next_frame() {
+    fn held_frame_scan() -> Scan {
         let mut scan = Scan::new(0, 1000, 500, 960);
         scan.fps_estimate = 30.0;
         scan.end_time = Some(5.0);
@@ -1411,6 +1425,35 @@ mod tests {
         };
         identity.runs = vec![run(0.0, 0.03, 100.0), run(2.0, 2.03, 300.0)];
         scan.identities.push(identity);
+        scan
+    }
+
+    #[cfg(not(feature = "ablation"))]
+    #[test]
+    fn environment_variables_change_nothing_in_a_normal_build() {
+        let before = held_frame_scan().regions();
+        // SAFETY: only this test writes these variables, and a normal build
+        // never reads them.
+        unsafe {
+            std::env::set_var(
+                "CAP_REDACT_OFF",
+                "cache,tiles,propagate,pad,strips,rowmerge,known,alternatives",
+            );
+            std::env::set_var("CAP_REDACT_DUMP", "1");
+        }
+        let scan = held_frame_scan();
+        assert_eq!(scan.switches, Switches::all_on());
+        assert_eq!(Switches::from_env(), Switches::all_on());
+        let after = held_frame_scan().regions();
+        assert_eq!(
+            serde_json::to_string(&before).unwrap(),
+            serde_json::to_string(&after).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_held_frame_keeps_its_mask_until_the_next_frame() {
+        let mut scan = held_frame_scan();
         let regions = scan.regions();
         assert_eq!(regions.len(), 1, "{regions:?}");
         let region = &regions[0];

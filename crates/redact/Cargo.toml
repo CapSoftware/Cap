@@ -10,6 +10,11 @@ workspace = true
 name = "cap-redact"
 path = "src/main.rs"
 
+[features]
+# Reads CAP_REDACT_OFF to turn scan mechanisms off for measurement. Never
+# enabled by the app.
+ablation = []
+
 [dependencies]
 anyhow.workspace = true
 bytemuck = { version = "1.7", features = ["derive"] }
