@@ -72,6 +72,7 @@ export default async function DashboardLayout({
 	}
 
 	let organizationSelect: Organization[] = [];
+	let activeOrganizationId: string | null = null;
 	let userCapsCount: number | null = 0;
 	let organizationSettings: OrganizationSettings | null = null;
 	let spacesData: Spaces[] = [];
@@ -80,6 +81,7 @@ export default async function DashboardLayout({
 	try {
 		const dashboardData = await dashboardDataPromise;
 		organizationSelect = dashboardData.organizationSelect;
+		activeOrganizationId = dashboardData.activeOrganizationId;
 		userCapsCount = dashboardData.userCapsCount;
 		organizationSettings = dashboardData.organizationSettings;
 		userPreferences = dashboardData.userPreferences?.preferences || null;
@@ -100,7 +102,8 @@ export default async function DashboardLayout({
 
 	let activeOrganization = organizationSelect.find(
 		(organization) =>
-			organization.organization.id === user.activeOrganizationId,
+			organization.organization.id ===
+			(activeOrganizationId ?? user.activeOrganizationId),
 	);
 
 	if (!activeOrganization && organizationSelect.length > 0) {

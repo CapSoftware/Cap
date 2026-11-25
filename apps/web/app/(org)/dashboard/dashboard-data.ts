@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import type { userSelectProps } from "@cap/database/auth/session";
+import { resolveActiveOrganization as resolveStoredActiveOrganization } from "@cap/database/organization-pointer";
 import {
 	notifications,
 	organizationInvites,
@@ -120,7 +121,7 @@ async function loadUserOrganizations(user: typeof userSelectProps) {
 	return mergeUserOrganizations(ownedOrganizations, memberOrganizations);
 }
 
-function resolveActiveOrganization(
+async function resolveActiveOrganization(
 	user: typeof userSelectProps,
 	userOrganizations: OrganizationRow[],
 ) {
@@ -130,8 +131,13 @@ function resolveActiveOrganization(
 		(orgId) => orgId === user.activeOrganizationId,
 	);
 
+	// Recordings and spaces are created in the stored active organization, so
+	// it has to match the one this page shows.
 	if (!activeOrganizationId && organizationIds.length > 0) {
-		activeOrganizationId = organizationIds[0];
+		const fallback = await resolveStoredActiveOrganization(db(), user);
+		activeOrganizationId =
+			organizationIds.find((orgId) => orgId === fallback?.id) ??
+			organizationIds[0];
 	}
 
 	if (!activeOrganizationId) return null;
@@ -309,7 +315,7 @@ async function loadDashboardSpacesData(
 	user: typeof userSelectProps,
 ): Promise<Spaces[]> {
 	const userOrganizations = await loadUserOrganizations(user);
-	const active = resolveActiveOrganization(user, userOrganizations);
+	const active = await resolveActiveOrganization(user, userOrganizations);
 	if (!active) return [];
 
 	const currentOrganizationRole = loadActiveOrganizationRole(
@@ -335,7 +341,7 @@ async function loadActiveOrganizationData(
 	{
 		activeOrganizationId,
 		activeOrgInfo,
-	}: NonNullable<ReturnType<typeof resolveActiveOrganization>>,
+	}: NonNullable<Awaited<ReturnType<typeof resolveActiveOrganization>>>,
 ) {
 	const currentOrganizationRole = loadActiveOrganizationRole(
 		user,
@@ -387,7 +393,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 	try {
 		const userOrganizations = await loadUserOrganizations(user);
 		const organizationIds = userOrganizations.map((org) => org.id);
-		const active = resolveActiveOrganization(user, userOrganizations);
+		const active = await resolveActiveOrganization(user, userOrganizations);
 
 		const organizationInvitesPromise =
 			organizationIds.length > 0
@@ -609,6 +615,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 		const userPreferences = { preferences: user.preferences };
 
 		return {
+			activeOrganizationId: activeOrganizationId ?? null,
 			organizationSelect,
 			organizationSettings,
 			spacesData,
@@ -619,6 +626,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 	} catch (error) {
 		console.error("Failed to fetch dashboard data", error);
 		return {
+			activeOrganizationId: null,
 			organizationSelect: [],
 			spacesData: [],
 			userCapsCount: null,
