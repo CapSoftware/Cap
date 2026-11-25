@@ -1431,8 +1431,7 @@ fn redact_place_map(theme: &Theme, rect: cap_project::redaction::RedactRect) -> 
     const W: f32 = 44.;
     const H: f32 = 27.;
     let editor = theme.editor;
-    let mark_w = (rect.w * W).max(6.);
-    let mark_h = (rect.h * H).max(4.);
+    let (left, top, mark_w, mark_h) = place_mark(rect, W, H);
     div()
         .flex_none()
         .relative()
@@ -1446,13 +1445,21 @@ fn redact_place_map(theme: &Theme, rect: cap_project::redaction::RedactRect) -> 
         .child(
             div()
                 .absolute()
-                .left(px((rect.x * W).clamp(0., W - mark_w)))
-                .top(px((rect.y * H).clamp(0., H - mark_h)))
+                .left(px(left))
+                .top(px(top))
                 .w(px(mark_w))
                 .h(px(mark_h))
                 .rounded(px(1.5))
                 .bg(Hsla::from(editor.accent_fill)),
         )
+}
+
+fn place_mark(rect: cap_project::redaction::RedactRect, w: f32, h: f32) -> (f32, f32, f32, f32) {
+    let mark_w = (rect.w.clamp(0., 1.) * w).clamp(6., w);
+    let mark_h = (rect.h.clamp(0., 1.) * h).clamp(4., h);
+    let left = (rect.x * w).clamp(0., w - mark_w);
+    let top = (rect.y * h).clamp(0., h - mark_h);
+    (left, top, mark_w, mark_h)
 }
 
 /// Whether two builds of the redact lane draw the same spans, so a snapshot
@@ -1516,6 +1523,19 @@ mod tests {
     /// Rows join detections of one category over the same time and read top
     /// to bottom, left to right, so a panel of identical time ranges becomes a
     /// few rows that can be told apart by place.
+    #[test]
+    fn place_mark_stays_inside_the_map_for_boxes_past_the_frame() {
+        let rect = cap_project::redaction::RedactRect {
+            x: -0.05,
+            y: 0.9,
+            w: 1.2,
+            h: 0.3,
+        };
+        let (left, top, w, h) = place_mark(rect, 44., 27.);
+        assert_eq!((left, w), (0., 44.));
+        assert!(top >= 0. && top + h <= 27.);
+    }
+
     #[test]
     fn hidden_here_rows_group_by_time_and_sort_by_place() {
         let regions = vec![
