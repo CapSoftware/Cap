@@ -537,7 +537,12 @@ impl SegmentedVideoEncoder {
         if write_behind {
             let budget = super::write_behind::video_budget_bytes(instance.encoder.bit_rate());
             match instance.mux.enable_write_behind("video", budget) {
-                Ok(()) => tracing::debug!(budget_bytes = budget, "Video write-behind enabled"),
+                Ok(()) => {
+                    tracing::debug!(budget_bytes = budget, "Video write-behind enabled");
+                    if let Some(written) = instance.mux.written_packets_counter() {
+                        instance.packets_written = written;
+                    }
+                }
                 Err(error) => {
                     tracing::warn!(%error, "Video write-behind unavailable, muxing inline");
                 }
@@ -597,11 +602,14 @@ impl SegmentedVideoEncoder {
         // anchors pts at the first frame, so capture gaps (static content,
         // stream restarts, dropped frames) stay in the timeline instead of
         // compressing it and drifting video ahead of audio.
+        let inline = !self.mux.is_write_behind();
         let mut sink = SinkProbe::new(&mut self.mux);
         let result = self.encoder.queue_frame_to(frame, timestamp, &mut sink);
         let sink_failed = sink.failed;
-        self.packets_written
-            .fetch_add(sink.written, std::sync::atomic::Ordering::Relaxed);
+        if inline {
+            self.packets_written
+                .fetch_add(sink.written, std::sync::atomic::Ordering::Relaxed);
+        }
         match result {
             Ok(()) => self.codec_failures.record(false),
             Err(EncodeError::Encode(error)) if !sink_failed => {
@@ -696,9 +704,12 @@ impl SegmentedVideoEncoder {
         let packets_written = self.packets_written.clone();
         let finished = self.mux.finish(
             |mux| {
+                let inline = !mux.is_write_behind();
                 let mut sink = SinkProbe::new(mux);
                 let result = encoder.flush_to(&mut sink);
-                packets_written.fetch_add(sink.written, std::sync::atomic::Ordering::Relaxed);
+                if inline {
+                    packets_written.fetch_add(sink.written, std::sync::atomic::Ordering::Relaxed);
+                }
                 match result {
                     Err(error) if tolerate_codec_flush_failure && !sink.failed => {
                         tracing::warn!(
@@ -1302,6 +1313,41 @@ mod tests {
             segment.as_object_mut().unwrap().remove("file_size");
         }
         (names, mpd, manifest)
+    }
+
+    #[test]
+    fn write_behind_counts_the_packets_the_writer_put_in_the_file() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let mut encoder = SegmentedVideoEncoder::init_write_behind(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+            false,
+        )
+        .unwrap();
+        assert!(encoder.mux.is_write_behind());
+        let counter = encoder.packets_written_counter();
+        for i in 0..120u64 {
+            encoder
+                .queue_frame(
+                    create_test_frame(320, 240),
+                    Duration::from_micros(i * 33_333),
+                )
+                .unwrap();
+        }
+        encoder
+            .finish_with_timestamp(Duration::from_secs(4))
+            .unwrap();
+        let decoded = decode_every_packet(&recorded_track(&base_path));
+        assert!(decoded.frames >= 119);
+        assert_eq!(encoder.packets_written(), decoded.frames as u64);
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::Relaxed),
+            decoded.frames as u64,
+            "a counter taken before recording follows the writer"
+        );
     }
 
     #[test]
