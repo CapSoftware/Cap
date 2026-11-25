@@ -23,7 +23,7 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..0a7938d 100644
+index c02bd16..cf81fca 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -997,6 +997,13 @@ pub trait InteractiveElement: Sized {
@@ -151,7 +151,7 @@ index c02bd16..0a7938d 100644
              window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                  if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
                      let mut scroll_offset = scroll_offset.borrow_mut();
-@@ -3120,8 +3201,89 @@ impl Interactivity {
+@@ -3120,8 +3201,92 @@ impl Interactivity {
                              delta_x = Pixels::ZERO;
                          }
                      }
@@ -229,6 +229,9 @@ index c02bd16..0a7938d 100644
 +                            rb.momentum_bounced = false;
 +                        }
 +                        if (gesture_ended || momentum_ended) && rb.start_springs(now, &config) {
++                            if gesture_ended {
++                                rb.momentum_bounced = true;
++                            }
 +                            cx.notify(current_view);
 +                        }
 +                    } else {
@@ -243,7 +246,7 @@ index c02bd16..0a7938d 100644
                      if *scroll_offset != old_scroll_offset {
                          cx.notify(current_view);
                      }
-@@ -3360,6 +3522,8 @@ pub struct InteractiveElementState {
+@@ -3360,6 +3525,8 @@ pub struct InteractiveElementState {
      /// blur). `None` means no activation key is pending.
      pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
