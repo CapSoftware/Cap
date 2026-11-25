@@ -56,6 +56,8 @@ pub enum Banner {
     Inactivity,
     Resume,
     Stopping,
+    /// The call went on through a sleep and so did the meeting.
+    Resumed,
 }
 
 pub fn banner(active: &ActiveMeeting) -> Option<Banner> {
@@ -64,6 +66,7 @@ pub fn banner(active: &ActiveMeeting) -> Option<Banner> {
         (ActiveState::Stopping, _) => Some(Banner::Stopping),
         (_, Some(MeetingWarning::Ending { .. })) => Some(Banner::Ending),
         (_, Some(MeetingWarning::Inactivity { .. })) => Some(Banner::Inactivity),
+        (ActiveState::Recording, None) if active.resumed_after_sleep => Some(Banner::Resumed),
         _ => None,
     }
 }
@@ -127,6 +130,7 @@ pub fn banner_title(banner: Banner) -> &'static str {
         Banner::Ending => tr::meeting::live::call_ended(),
         Banner::Inactivity => tr::meeting::live::still_there(),
         Banner::Resume | Banner::Stopping => tr::meeting::live::stopped(),
+        Banner::Resumed => tr::meeting::live::resumed(),
     }
 }
 
@@ -721,6 +725,16 @@ impl Indicator {
                         .into_any_element(),
                     ],
                     Banner::Stopping => Vec::new(),
+                    Banner::Resumed => vec![
+                        self.small_button(
+                            "indicator-stop",
+                            tr::meeting::live::stop(),
+                            true,
+                            |cx| super::stop(StopReason::UserFromIndicator, cx),
+                            cx,
+                        )
+                        .into_any_element(),
+                    ],
                 };
                 // One calm row: what happened, the time left, the way out.
                 div()

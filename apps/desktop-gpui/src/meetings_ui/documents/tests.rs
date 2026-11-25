@@ -756,6 +756,7 @@ fn active(state: crate::meetings::ActiveState) -> crate::meetings::ActiveMeeting
         warning: None,
         resume_offer_until: None,
         slept: false,
+        resumed_after_sleep: false,
         app_name: None,
         event_id: None,
         health: Vec::new(),
@@ -803,6 +804,30 @@ fn the_banner_raises_one_problem_at_a_time_most_urgent_first() {
         banner_for(Some(&offered), &none, None, now),
         Some(Banner::ResumeOffer { slept: true })
     );
+}
+
+#[test]
+fn a_meeting_that_resumed_after_a_sleep_says_so_until_a_warning_matters_more() {
+    use crate::meetings::{ActiveState, MeetingWarning, StopReason};
+    let now = std::time::Instant::now();
+    let none = HashSet::new();
+    let mut live = active(ActiveState::Recording);
+    live.resumed_after_sleep = true;
+    assert_eq!(
+        banner_for(Some(&live), &none, Some("permission"), now),
+        Some(Banner::ResumedAfterSleep)
+    );
+    live.warning = Some(MeetingWarning::Ending {
+        stop_at: now + std::time::Duration::from_secs(10),
+        reason: StopReason::CallEnded,
+    });
+    assert!(matches!(
+        banner_for(Some(&live), &none, None, now),
+        Some(Banner::Ending(_))
+    ));
+    live.warning = None;
+    live.resumed_after_sleep = false;
+    assert_eq!(banner_for(Some(&live), &none, None, now), None);
 }
 
 #[test]

@@ -3564,6 +3564,7 @@ stop = "Stop"
 keep_recording = "Keep recording"
 resume = "Resume"
 still_there = "Still there?"
+resumed = "Resumed after sleep"
 untitled = { text = "Meeting", context = "Fallback title for a meeting without one." }
 open_notes = "Open notes"
 call_ended = { text = "Call ended", context = "Floating indicator after the call ends; the countdown to the automatic stop shows beside it." }
@@ -4183,6 +4184,7 @@ inactive = { text = "No one has spoken for a while. Stopping in {time}", context
 keep_recording = "Keep recording"
 stopped_quiet = "Stopped after a quiet spell"
 stopped_asleep = "Stopped while the computer was asleep"
+resumed_asleep = "Resumed after the computer slept"
 record_more = "Record more"
 set_up = "Set up"
 error_start = "Recording couldn't start."

@@ -60,6 +60,8 @@ pub enum Banner {
     Ending(u64),
     Inactive(u64),
     ResumeOffer { slept: bool },
+    /// The call went on through a sleep and so did the meeting.
+    ResumedAfterSleep,
     Issue(Issue),
     Permission(&'static str),
 }
@@ -88,6 +90,9 @@ pub fn banner_for(
             ));
         }
         None => {}
+    }
+    if active.resumed_after_sleep && active.state == ActiveState::Recording {
+        return Some(Banner::ResumedAfterSleep);
     }
     if let Some(line) = permission {
         return Some(Banner::Permission(line));
@@ -510,6 +515,11 @@ impl RecordingBar {
                         tr::documents::bar::stopped_quiet().to_string()
                     },
                     Vec::new(),
+                    false,
+                ),
+                Banner::ResumedAfterSleep => (
+                    tr::documents::bar::resumed_asleep().to_string(),
+                    vec![(tr::documents::bar::stop(), false, 1)],
                     false,
                 ),
                 Banner::Permission(line) => (line.to_string(), Vec::new(), true),
@@ -983,6 +993,7 @@ impl RecordingBar {
             warning: None,
             resume_offer_until: None,
             slept: false,
+            resumed_after_sleep: false,
             app_name: Some("Zoom".into()),
             event_id: None,
             health: Vec::new(),

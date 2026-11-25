@@ -88,6 +88,19 @@ pub fn listening_cue(
         && now.saturating_duration_since(line_at.unwrap_or(started)) >= CUE_AFTER
 }
 const RESUME_GAP_MS: u64 = 1_000;
+/// After a wake that offers Resume, when to look whether the meeting's call
+/// app is still on the microphone (each wait after the last look), all
+/// inside the session's `WAKE_CALL_WINDOW_MS`.
+const WAKE_LOOKS: [Duration; 6] = [
+    Duration::from_millis(250),
+    Duration::from_millis(750),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(2),
+    Duration::from_secs(2),
+];
+/// How long "Resumed after the computer slept" shows.
+const RESUMED_LINE: Duration = Duration::from_secs(20);
 /// Quitting waits this long for a stopped meeting's last words; what is left
 /// stays in its ledger and is finished at the next launch.
 const QUIT_DRAIN: Duration = Duration::from_secs(10);
@@ -189,6 +202,9 @@ pub struct ActiveMeeting {
     pub resume_offer_until: Option<Instant>,
     /// The Resume offer follows a system sleep (not a quiet spell).
     pub slept: bool,
+    /// The call went on through a sleep and the meeting resumed by itself
+    /// (said for a moment once it records again).
+    pub resumed_after_sleep: bool,
     pub app_name: Option<String>,
     pub event_id: Option<String>,
     /// What is worth saying about this meeting's health now, most urgent
@@ -582,6 +598,11 @@ pub struct Meetings {
     probing: HashSet<String>,
     /// Reads who the meeting app shows as speaking while a call records.
     speaking_watch: Option<Task<()>>,
+    /// Looks for the meeting's call app on the microphone just after a wake.
+    wake_look: Option<Task<()>>,
+    /// The next capture is the meeting resuming by itself after a sleep.
+    resuming_after_sleep: bool,
+    resumed_line: Option<Task<()>>,
     calendar: calendar::CalendarState,
     calendar_active: bool,
     calendar_next: Option<Millis>,
@@ -835,6 +856,9 @@ impl Meetings {
             latest_snapshot: None,
             probing: HashSet::new(),
             speaking_watch: None,
+            wake_look: None,
+            resuming_after_sleep: false,
+            resumed_line: None,
             calendar: calendar::CalendarState::default(),
             calendar_active: false,
             calendar_next: None,
@@ -893,6 +917,18 @@ impl Meetings {
 
     fn instant_at(&self, at: Millis) -> Instant {
         self.origin + Duration::from_millis(at.0)
+    }
+
+    /// A wall-clock time on the session's clock, as of now. That clock does
+    /// not count time asleep on every platform, so after a sleep this is
+    /// worked out again.
+    fn millis_at(&self, at: DateTime<Utc>) -> Millis {
+        let delta = (at - Utc::now()).num_milliseconds();
+        if delta > 0 {
+            self.now().plus(delta as u64)
+        } else {
+            Millis(self.now().0.saturating_sub(delta.unsigned_abs()))
+        }
     }
 
     fn detect_config(&self) -> DetectConfig {
@@ -1504,13 +1540,7 @@ impl Meetings {
         self.pending_start = Some(origin.clone());
         let actions = self.session.start(self.now(), origin.app_id.clone());
         if let Some(end) = event_end {
-            let delta = (end - Utc::now()).num_milliseconds();
-            let at = if delta > 0 {
-                self.now().plus(delta as u64)
-            } else {
-                Millis(self.now().0.saturating_sub(delta.unsigned_abs()))
-            };
-            self.session.set_linked_event_end(Some(at));
+            self.session.set_linked_event_end(Some(self.millis_at(end)));
         }
         self.apply_session_actions(actions, cx);
         self.pending_start = None;
@@ -2363,6 +2393,8 @@ impl Meetings {
     }
 
     fn begin_capture(&mut self, resume: bool, cx: &mut Context<Self>) {
+        let after_sleep = std::mem::take(&mut self.resuming_after_sleep) && resume;
+        self.resumed_line = None;
         let mut origin = self.pending_start.take().unwrap_or_default();
         if resume && origin.resume_doc.is_none() {
             origin.resume_doc = self.resume_doc.clone();
@@ -2590,6 +2622,7 @@ impl Meetings {
             warning: None,
             resume_offer_until: None,
             slept: false,
+            resumed_after_sleep: after_sleep,
             app_name: origin.app_name.clone(),
             event_id: origin.event_id.clone(),
             health: Vec::new(),
@@ -2645,6 +2678,20 @@ impl Meetings {
         });
         self.resume_doc = Some(doc_id.clone());
         self.session_doc = Some(doc_id.clone());
+        if after_sleep {
+            tracing::info!(doc_id, "the meeting resumed by itself after the sleep");
+            let shown = doc_id.clone();
+            self.resumed_line = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(RESUMED_LINE).await;
+                this.update(cx, |this, cx| {
+                    if let Some(active) = this.active.as_mut().filter(|a| a.doc_id == shown) {
+                        active.resumed_after_sleep = false;
+                        this.mark_active(cx);
+                    }
+                })
+                .ok();
+            }));
+        }
         let actions = self.session.on_capture_started(self.now());
         self.apply_session_actions(actions, cx);
         let actions = self.planner.set_recording(
@@ -4254,6 +4301,8 @@ impl Meetings {
     pub fn system_will_sleep(cx: &mut App) {
         if let Some(this) = Self::try_global(cx) {
             this.update(cx, |this, cx| {
+                this.wake_look = None;
+                this.resuming_after_sleep = false;
                 let actions = this.session.on_sleep(this.now());
                 this.apply_session_actions(actions, cx);
                 this.rearm(cx);
@@ -4264,14 +4313,85 @@ impl Meetings {
     pub fn system_did_wake(cx: &mut App) {
         if let Some(this) = Self::try_global(cx) {
             this.update(cx, |this, cx| {
+                if this.session.offers_resume_on_wake()
+                    && let Some(end) = this.offered_event_end()
+                {
+                    this.session.set_linked_event_end(Some(this.millis_at(end)));
+                }
                 let actions = this.session.on_wake(this.now());
                 this.apply_session_actions(actions, cx);
+                this.look_for_call_after_wake(cx);
                 if this.settings.enabled {
                     this.refresh_calendar(cx);
                 }
                 this.rearm(cx);
             });
         }
+    }
+
+    /// When the calendar event of the meeting a sleep stopped ends.
+    fn offered_event_end(&mut self) -> Option<DateTime<Utc>> {
+        let (doc_id, event_id) = self
+            .active
+            .as_ref()
+            .map(|a| (a.doc_id.clone(), a.event_id.clone()))?;
+        let id = event_id.or_else(|| {
+            let meta = self.library()?.load(&doc_id).ok()?;
+            meta.meeting?.event.map(|event| event.id)
+        })?;
+        self.calendar.find(&id).map(|event| event.end)
+    }
+
+    /// A sleep stopped the meeting while its call was on: a few looks at
+    /// the microphone just after the wake tell whether the call went on.
+    fn look_for_call_after_wake(&mut self, cx: &mut Context<Self>) {
+        self.wake_look = None;
+        let Some(app_id) = self
+            .session
+            .call_to_look_for_after_wake(self.now())
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        self.wake_look = Some(cx.spawn(async move |this, cx| {
+            for wait in WAKE_LOOKS {
+                cx.background_executor().timer(wait).await;
+                let snapshot = cx
+                    .background_executor()
+                    .spawn(async { cap_meeting_platform::snapshot_now() })
+                    .await;
+                match this.update(cx, |this, cx| this.on_wake_look(&app_id, &snapshot, cx)) {
+                    Ok(false) => {}
+                    _ => return,
+                }
+            }
+            tracing::info!(app_id, "the meeting's call was not on the microphone after the wake");
+        }));
+    }
+
+    /// One look after a wake; true once there is nothing left to look for.
+    fn on_wake_look(&mut self, app_id: &str, snapshot: &MicSnapshot, cx: &mut Context<Self>) -> bool {
+        if self.session.call_to_look_for_after_wake(self.now()) != Some(app_id) {
+            return true;
+        }
+        let clients: Vec<MicClient> = snapshot
+            .clients
+            .iter()
+            .map(|c| MicClient {
+                platform_id: c.id.clone(),
+                pid: c.pid,
+                device_uid: c.device_uid.clone(),
+            })
+            .collect();
+        if !snapshot.attributed || !self.detector.holds_mic(app_id, &clients) {
+            return false;
+        }
+        tracing::info!(app_id, "the call went on through the sleep: resuming the meeting");
+        self.resuming_after_sleep = true;
+        let actions = self.session.call_still_on_after_wake(self.now());
+        self.apply_session_actions(actions, cx);
+        self.rearm(cx);
+        true
     }
 
     fn on_quit(&mut self, cx: &mut Context<Self>) {
