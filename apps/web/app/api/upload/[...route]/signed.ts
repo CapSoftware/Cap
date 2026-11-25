@@ -19,10 +19,18 @@ import { isFromDesktopSemver, UPLOAD_PROGRESS_VERSION } from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { zValidator } from "@/utils/zod-validator";
 import { withAuth } from "../../utils";
-import { parseVideoIdOrFileKey } from "../utils";
+import {
+	hasDotSegment,
+	isSignedUploadKey,
+	parseVideoIdOrFileKey,
+} from "../utils";
 
 const decodeVideo = (video: typeof Db.videos.$inferSelect) =>
 	decodeStorageVideo(video);
+
+// Released desktop and CLI builds send no Content-Type, or send it twice, on
+// these PUTs, so a signature covering it would reject their uploads.
+const releasedClientPutSigning = { unsignedContentType: true } as const;
 
 function contentTypeForSubpath(subpath: string): string {
 	if (subpath.endsWith(".json")) return "application/json";
@@ -64,9 +72,10 @@ app.post(
 		const user = c.get("user");
 		const { videoId, subpaths } = c.req.valid("json");
 		if (
-			subpaths.some((subpath) =>
-				isNonMediaRawUploadKey(`${user.id}/${videoId}/${subpath}`),
-			)
+			subpaths.some((subpath) => {
+				const fileKey = `${user.id}/${videoId}/${subpath}`;
+				return isNonMediaRawUploadKey(fileKey) || !isSignedUploadKey(fileKey);
+			})
 		) {
 			return c.json({ error: nonMediaUploadMessage }, 400);
 		}
@@ -91,6 +100,7 @@ app.post(
 							.createUploadTarget(fileKey, {
 								contentType: contentTypeForSubpath(subpath),
 								method: "put",
+								...releasedClientPutSigning,
 							})
 							.pipe(Effect.map((upload) => [subpath, upload] as const));
 					}),
@@ -141,13 +151,13 @@ app.post(
 			c.req.valid("json");
 
 		const fileKey = parseVideoIdOrFileKey(user.id, body);
-		if (fileKey.split("/").some((part) => part === ".." || part === ".")) {
+		if (hasDotSegment(fileKey)) {
 			return c.json({ error: "Invalid file path" }, 400);
 		}
 		if (isInternalRecordingKey(fileKey)) {
 			return c.json({ error: "Recording snapshots are immutable" }, 403);
 		}
-		if (isNonMediaRawUploadKey(fileKey)) {
+		if (isNonMediaRawUploadKey(fileKey) || !isSignedUploadKey(fileKey)) {
 			return c.json({ error: nonMediaUploadMessage }, 400);
 		}
 		const videoIdFromKey = fileKey.split("/")[1];
@@ -196,6 +206,7 @@ app.post(
 					contentType,
 					fields: Fields,
 					method,
+					...releasedClientPutSigning,
 				});
 			}).pipe(runPromise);
 
