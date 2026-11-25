@@ -46,6 +46,21 @@ vi.mock("@cap/database", () => ({
 	db: () => mockDb,
 }));
 vi.mock("@cap/database/video-sharing-default", () => defaultSharing);
+// The row lock and re-checks are covered against MySQL in
+// organization-pointer-database.test.ts; here only the inserts are observed.
+vi.mock("@cap/database/organization-pointer", async (importOriginal) => {
+	const original =
+		await importOriginal<typeof import("@cap/database/organization-pointer")>();
+	return {
+		...original,
+		ensurePersonalOrganization: vi.fn(
+			async (database: typeof mockDb, userId: string) =>
+				database.transaction((tx: never) =>
+					original.insertPersonalOrganization(tx, userId as never),
+				),
+		),
+	};
+});
 
 vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: vi.fn(),

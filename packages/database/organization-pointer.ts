@@ -1,9 +1,19 @@
-import type { Organisation, User } from "@cap/web-domain";
+import { Organisation, type User } from "@cap/web-domain";
 import { and, asc, eq, isNull, ne, or } from "drizzle-orm";
-import type { db } from "./index.ts";
-import { organizationMembers, organizations, users } from "./schema.ts";
+import type { MySql2Database } from "drizzle-orm/mysql2";
+import { nanoId } from "./helpers.ts";
+import {
+	organizationInvites,
+	organizationMembers,
+	organizations,
+	users,
+} from "./schema.ts";
 
-type Client = Pick<ReturnType<typeof db>, "select" | "update">;
+type Database = MySql2Database;
+type Client = Pick<Database, "select" | "update">;
+type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+export const PERSONAL_ORGANIZATION_NAME = "My Organization";
 
 export type UsableOrganization = {
 	id: Organisation.OrganisationId;
@@ -111,4 +121,95 @@ export async function resolveActiveOrganization(
 			);
 	}
 	return fallback;
+}
+
+export async function insertPersonalOrganization(
+	tx: Transaction,
+	userId: User.UserId,
+): Promise<UsableOrganization> {
+	const organizationId = Organisation.OrganisationId.make(nanoId());
+	await tx.insert(organizations).values({
+		id: organizationId,
+		ownerId: userId,
+		name: PERSONAL_ORGANIZATION_NAME,
+	});
+	await tx.insert(organizationMembers).values({
+		id: nanoId(),
+		organizationId,
+		userId,
+		role: "owner",
+	});
+	await tx
+		.update(users)
+		.set({
+			activeOrganizationId: organizationId,
+			defaultOrgId: organizationId,
+		})
+		.where(eq(users.id, userId));
+	return { id: organizationId, name: PERSONAL_ORGANIZATION_NAME };
+}
+
+// Locking the user row first makes concurrent callers (two tabs, extension and
+// web at once) queue here, and the checks below then read what the first one
+// committed, so only one personal organization is created.
+export async function ensurePersonalOrganization(
+	database: Database,
+	userId: User.UserId,
+): Promise<UsableOrganization | null> {
+	return database.transaction(async (tx) => {
+		const [user] = await tx
+			.select({ activeOrganizationId: users.activeOrganizationId })
+			.from(users)
+			.where(eq(users.id, userId))
+			.for("update");
+		if (!user) return null;
+
+		const current = await findAccessibleOrganization(
+			tx,
+			userId,
+			user.activeOrganizationId,
+		);
+		if (current) return current;
+
+		const existing = await findFallbackOrganization(tx, userId);
+		if (existing) {
+			await tx
+				.update(users)
+				.set({ activeOrganizationId: existing.id })
+				.where(eq(users.id, userId));
+			return existing;
+		}
+
+		return insertPersonalOrganization(tx, userId);
+	});
+}
+
+export async function resolveOrCreateActiveOrganization(
+	database: Database,
+	user: {
+		id: User.UserId;
+		activeOrganizationId: Organisation.OrganisationId;
+	},
+): Promise<UsableOrganization | null> {
+	return (
+		(await resolveActiveOrganization(database, user)) ??
+		(await ensurePersonalOrganization(database, user.id))
+	);
+}
+
+export async function findPendingOrganizationInviteId(
+	database: Client,
+	email: string,
+): Promise<string | null> {
+	const [invite] = await database
+		.select({ id: organizationInvites.id })
+		.from(organizationInvites)
+		.where(
+			and(
+				eq(organizationInvites.invitedEmail, email.toLowerCase()),
+				eq(organizationInvites.status, "pending"),
+			),
+		)
+		.limit(1);
+	return invite?.id ?? null;
 }
