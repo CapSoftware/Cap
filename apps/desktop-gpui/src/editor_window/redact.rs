@@ -906,27 +906,29 @@ impl EditorWindow {
         );
     }
 
-    /// Keeps one detection visible (or hides it again).
     pub(crate) fn set_redact_kept(
         &mut self,
-        id: &str,
+        ids: &[String],
         kept: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let id = id.to_string();
+        let ids = ids.to_vec();
         self.edit_redact(
             move |config| {
-                let present = config.is_excluded(&id);
-                if kept == present {
-                    return false;
+                let mut changed = false;
+                for id in ids {
+                    if config.is_excluded(&id) == kept {
+                        continue;
+                    }
+                    changed = true;
+                    if kept {
+                        config.excluded.push(id);
+                    } else {
+                        config.excluded.retain(|other| *other != id);
+                    }
                 }
-                if kept {
-                    config.excluded.push(id);
-                } else {
-                    config.excluded.retain(|other| *other != id);
-                }
-                true
+                changed
             },
             window,
             cx,
@@ -1338,9 +1340,7 @@ impl EditorWindow {
                                 .hover(|style| style.bg(Hsla::from(editor.ctl_active)))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
-                                    for id in &ids {
-                                        this.set_redact_kept(id, !kept, window, cx);
-                                    }
+                                    this.set_redact_kept(&ids, !kept, window, cx);
                                 }))
                                 .child(
                                     svg()
