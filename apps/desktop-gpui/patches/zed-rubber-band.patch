@@ -23,7 +23,7 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..3151996 100644
+index c02bd16..f4eb17a 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -997,6 +997,13 @@ pub trait InteractiveElement: Sized {
@@ -227,7 +227,7 @@ index c02bd16..3151996 100644
 +                        if (gesture_ended || momentum_ended || momentum_overscroll_tail)
 +                            && rb.start_springs()
 +                        {
-+                            window.request_animation_frame();
++                            cx.notify(current_view);
 +                        }
 +                    } else {
 +                        scroll_offset.y += delta_y;
