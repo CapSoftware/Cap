@@ -352,6 +352,142 @@ fn auto_record_countdown_and_completion() {
     s.started("teams").quiet();
 }
 
+fn meet_tab(call: ActiveCall) -> ActiveCall {
+    ActiveCall {
+        web: Some(crate::detect::WebMeeting {
+            provider: crate::browser::WebProvider::GoogleMeet,
+            meeting_id: Some("abc-defg-hij".into()),
+            title: Some("Weekly".into()),
+        }),
+        ..call
+    }
+}
+
+fn detect(s: &mut Sim, event: DetectEvent) {
+    let actions = s.planner.on_detect(s.clock(), &event);
+    s.record(actions);
+}
+
+#[test]
+fn unrecognised_browser_microphone_is_offered_but_never_records_on_its_own() {
+    for detected_enabled in [true, false] {
+        let mut s = Sim::with(PromptConfig {
+            auto_record: AutoRecord::Both,
+            detected_enabled,
+            ..PromptConfig::default()
+        });
+        s.at(1_000).started("chrome");
+        let shown = s.take();
+        if detected_enabled {
+            assert_eq!(
+                shown,
+                vec![(
+                    1_000,
+                    "show #1 Detected Meeting detected | Google Chrome".to_string()
+                )]
+            );
+        } else {
+            assert!(shown.is_empty(), "{shown:?}");
+        }
+        s.at(10 * MIN);
+        let later = s.take();
+        assert!(
+            later.iter().all(|(_, a)| !a.starts_with("record")),
+            "{later:?}"
+        );
+        assert_eq!(s.planner.recording(), &RecordingState::Idle);
+    }
+}
+
+#[test]
+fn unrecognised_browser_records_on_its_own_during_a_calendar_meeting() {
+    for auto_record in [
+        AutoRecord::Detected,
+        AutoRecord::Scheduled,
+        AutoRecord::Both,
+    ] {
+        let mut s = Sim::with(PromptConfig {
+            auto_record,
+            scheduled_enabled: false,
+            ..PromptConfig::default()
+        });
+        s.events(vec![ev("e", "Standup", 0, 30 * MIN as i64, false)]);
+        s.take();
+        s.at(1_000).started("chrome");
+        s.at(10_000);
+        let log = s.take();
+        assert!(
+            log.iter()
+                .any(|(_, a)| a == "record call chrome Some(\"e\")"),
+            "{auto_record:?} {log:?}"
+        );
+    }
+}
+
+#[test]
+fn recognised_meeting_tab_records_on_its_own_as_before() {
+    let mut s = Sim::with(PromptConfig {
+        auto_record: AutoRecord::Detected,
+        ..PromptConfig::default()
+    });
+    s.at(1_000);
+    detect(
+        &mut s,
+        DetectEvent::CallStarted(meet_tab(call("chrome", 1_000))),
+    );
+    s.expect(&[(
+        1_000,
+        "show #1 Detected Meeting detected | Google Chrome countdown 6000",
+    )]);
+    s.at(6_000).expect(&[
+        (6_000, "record call chrome None"),
+        (6_000, "dismiss #1 RecordingStarted"),
+    ]);
+}
+
+#[test]
+fn meeting_tab_recognised_after_the_call_started_records_on_its_own() {
+    for detected_enabled in [true, false] {
+        let mut s = Sim::with(PromptConfig {
+            auto_record: AutoRecord::Detected,
+            detected_enabled,
+            ..PromptConfig::default()
+        });
+        s.at(1_000).started("chrome");
+        s.take();
+        s.at(2_000);
+        detect(
+            &mut s,
+            DetectEvent::CallUpdated(meet_tab(call("chrome", 1_000))),
+        );
+        s.at(7_000);
+        let log = s.take();
+        assert!(
+            log.iter()
+                .any(|(t, a)| *t <= 7_000 && a == "record call chrome None"),
+            "{detected_enabled} {log:?}"
+        );
+    }
+}
+
+#[test]
+fn native_call_apps_still_record_on_their_own() {
+    for app in ["zoom", "teams", "slack", "facetime"] {
+        let mut s = Sim::with(PromptConfig {
+            auto_record: AutoRecord::Detected,
+            ..PromptConfig::default()
+        });
+        s.at(1_000).started(app);
+        s.at(6_000);
+        let log = s.take();
+        assert!(
+            log.iter()
+                .any(|(t, a)| *t == 6_000 && a == &format!("record call {app} None")),
+            "{app} {log:?}"
+        );
+    }
+}
+
 #[test]
 fn auto_record_cancel_suppresses_for_call() {
     let mut s = Sim::with(PromptConfig {

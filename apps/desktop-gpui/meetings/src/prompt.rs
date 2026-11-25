@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::apps::CallNoun;
+use crate::apps::{AppKind, CallNoun};
 use crate::detect::{ActiveCall, DetectEvent};
 use crate::{Millis, Now};
 
@@ -349,7 +349,7 @@ impl PromptPlanner {
         let mut out = self.advance(now);
         match event {
             DetectEvent::CallStarted(call) => self.call_started(now, call, &mut out),
-            DetectEvent::CallUpdated(call) => self.call_updated(call, &mut out),
+            DetectEvent::CallUpdated(call) => self.call_updated(now, call, &mut out),
             DetectEvent::CallEnded { app_id, .. } => {
                 self.calls.retain(|c| &c.key.0 != app_id);
                 self.prompted_calls.retain(|k| &k.0 != app_id);
@@ -657,7 +657,12 @@ impl PromptPlanner {
             return;
         }
         let event = self.match_event(now);
-        let auto = self.config.auto_record.for_detected()
+        // A browser using the microphone on a page Cap can't tell is a meeting
+        // (tabs unreadable, or no meeting page among them) may be voice typing
+        // or a voice note: it can be offered, but it only records on its own
+        // when the calendar has a meeting now.
+        let recognised = call.kind != AppKind::Browser || call.web.is_some();
+        let auto = (self.config.auto_record.for_detected() && (recognised || event.is_some()))
             || (self.config.auto_record.for_scheduled() && event.is_some());
         if !self.config.detected_enabled && !auto {
             return;
@@ -726,15 +731,35 @@ impl PromptPlanner {
         }
     }
 
-    fn call_updated(&mut self, call: &ActiveCall, out: &mut Vec<PromptAction>) {
+    fn call_updated(&mut self, now: Now, call: &ActiveCall, out: &mut Vec<PromptAction>) {
         let key = (call.app_id.clone(), call.started_at);
         let title = call.web.as_ref().and_then(|w| w.title.clone());
         if let Some(info) = self.calls.iter_mut().find(|c| c.key == key) {
             info.web_title.clone_from(&title);
         }
+        // A browser call whose meeting page was recognised only after it
+        // started records on its own as a recognised one would have.
+        let late_auto = call.web.is_some()
+            && self.config.auto_record.for_detected()
+            && !self.recording.is_active();
+        if late_auto && !self.prompted_calls.contains(&key) {
+            self.call_started(now, call, out);
+            return;
+        }
+        let countdown = self.countdown(now);
         for slot in &mut self.slots {
-            if slot.call.as_ref() == Some(&key) && slot.prompt.detail != title {
+            if slot.call.as_ref() != Some(&key) {
+                continue;
+            }
+            let start = late_auto
+                && slot.prompt.kind == PromptKind::Detected
+                && slot.prompt.countdown.is_none()
+                && slot.prompt.event.is_none();
+            if slot.prompt.detail != title || start {
                 slot.prompt.detail.clone_from(&title);
+                if start {
+                    slot.prompt.countdown = Some(countdown);
+                }
                 out.push(PromptAction::Update(slot.prompt.clone()));
             }
         }
