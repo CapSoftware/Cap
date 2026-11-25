@@ -31,6 +31,7 @@ from English, and `cargo test -p cap-i18n-build` fails while any key is missing.
 | ja | です/ます in descriptions, plain form in labels | No spaces between Japanese and Latin text. Full-width `（）` and `「」`. |
 | zh-CN | 你 | One space between Chinese and Latin letters or digits (`10 秒`, `关于 Cap`). Full-width `（）`, `：` and `“”`. |
 | hi | आप | Devanagari with common English loanwords in Devanagari (रिकॉर्डिंग, स्क्रीनशॉट); product names stay in Latin script. |
+| ru | вы | Sentence case. «…» quotes, «ё» kept, no space before `…`. Product names stay in Latin script. |
 
 Menu bar items follow the wording macOS itself uses in each language, so they
 sit naturally next to the items AppKit adds. That is why the Japanese Window
@@ -58,58 +59,58 @@ goes into its table and the catalog together; the tests fail if the English
 in the code and in the table drift apart.
 
 Numbers inside a sentence go through `i18n::decimal`, which writes the decimal
-comma French, Spanish and German use (`1,5 GB`).
+comma French, Spanish, German and Russian use (`1,5 GB`).
 
 ## Terms
 
-| English | zh-CN | ja | fr | es | de | hi |
-| --- | --- | --- | --- | --- | --- | --- |
-| recording (noun) | 录制 | 録画 | enregistrement | grabación | Aufnahme | रिकॉर्डिंग |
-| record (verb) | 录制 | 録画する | enregistrer | grabar | aufnehmen | रिकॉर्ड करना |
-| screenshot | 截图 | スクリーンショット | capture d'écran | captura de pantalla | Bildschirmfoto | स्क्रीनशॉट |
-| display | 屏幕 / 显示器 | ディスプレイ | écran | pantalla | Bildschirm | डिस्प्ले |
-| window | 窗口 | ウィンドウ | fenêtre | ventana | Fenster | विंडो |
-| area | 区域 | 範囲 | zone | área | Bereich | क्षेत्र |
-| settings | 设置 | 設定 | paramètres | ajustes | Einstellungen | सेटिंग्स |
-| editor | 编辑器 | エディタ | éditeur | editor | Editor | एडिटर |
-| upload | 上传 | アップロード | mise en ligne / envoyer | subir | hochladen | अपलोड |
-| export | 导出 | 書き出し | exporter | exportar | exportieren | एक्सपोर्ट |
-| zoom segment | 缩放片段 | ズームセグメント | segment de zoom | segmento de zoom | Zoom-Segment | ज़ूम सेगमेंट |
-| microphone | 麦克风 | マイク | micro | micrófono | Mikrofon | माइक्रोफ़ोन |
-| camera | 摄像头 | カメラ | caméra | cámara | Kamera | कैमरा |
-| notch | 刘海 | ノッチ | encoche | muesca | Notch | नॉच |
-| dock | 程序坞 | Dock | Dock | Dock | Dock | Dock |
-| update channel | 更新渠道 | アップデートチャンネル | canal de mise à jour | canal de actualización | Update-Kanal | अपडेट चैनल |
-| telemetry | 遥测数据 | テレメトリ | télémétrie | telemetría | Telemetrie | टेलीमेट्री |
-| placeholder | 占位符 | プレースホルダ | variable | marcador | Platzhalter | प्लेसहोल्डर |
-| excluded windows | 排除的窗口 | 除外するウィンドウ | fenêtres exclues | ventanas excluidas | ausgeschlossene Fenster | बाहर रखी गई विंडो |
-| self-host | 自托管 | セルフホスト | auto-hébergement | alojamiento propio | selbst hosten | सेल्फ़-होस्ट |
-| System default | 跟随系统 | システムのデフォルト | langue du système | predeterminado del sistema | Systemstandard | सिस्टम डिफ़ॉल्ट |
-| Recommended | 推荐 | 推奨 | recommandé | recomendado | empfohlen | सुझाया गया |
-| Instant Mode | Instant 模式 | Instantモード | mode Instant | modo Instant | Instant-Modus | Instant मोड |
-| Screenshot Mode | 截图模式 | スクリーンショットモード | mode Capture d'écran | modo Captura de pantalla | Bildschirmfoto-Modus | स्क्रीनशॉट मोड |
-| System Settings (macOS app) | 系统设置 | システム設定 | Réglages Système | Ajustes del Sistema | Systemeinstellungen | सिस्टम सेटिंग्स |
-| Allow (macOS prompt button) | 允许 | 許可 | Autoriser | Permitir | Erlauben | अनुमति दें |
-| shareable link | 分享链接 | 共有リンク | lien de partage | enlace para compartir | Link zum Teilen | शेयर करने लायक लिंक |
-| clip | 片段 | クリップ | clip | clip | Clip | क्लिप |
-| segment (of a recording) | 分段 | セグメント | segment | segmento | Segment | सेगमेंट |
-| recover / discard | 恢复 / 丢弃 | 復元 / 破棄 | récupérer / supprimer | recuperar / descartar | wiederherstellen / verwerfen | रिकवर करें / हटाएँ |
-| shot (3D camera) | 镜头 | ショット | plan | toma | Einstellung | शॉट |
-| Personal / Commercial plan | 个人版 / 商业版 | 個人 / 商用 | Personnel / Commercial | Personal / Comercial | Privat / Kommerziell | पर्सनल / कमर्शियल |
-| caption (subtitle) | 字幕 | 字幕 | sous-titre | subtítulo | Untertitel | कैप्शन |
-| track (timeline) | 轨道 | トラック | piste | pista | Spur | ट्रैक |
-| preset | 预设 | プリセット | préréglage | preajuste | Vorlage | प्रीसेट |
-| video | 视频 | 動画 | vidéo | vídeo | Video | वीडियो |
-| audio | 音频 | 音声 | audio | audio | Audio | ऑडियो |
-| copy (to the clipboard) | 复制 | コピー | copier | copiar | kopieren | कॉपी करें |
-| transcription | 转写 | 文字起こし | transcription | transcripción | Transkription | ट्रांसक्रिप्शन |
-| click | 点击 | クリック | cliquer | hacer clic | klicken | क्लिक करें |
-| plan (paid tier) | 套餐 | プラン | offre | plan | Tarif | प्लान |
-| aspect ratio | 宽高比 | アスペクト比 | format d'image | relación de aspecto | Seitenverhältnis | आस्पेक्ट रेशियो |
-| shadow | 阴影 | 影 | ombre | sombra | Schatten | छाया |
-| frames per second | FPS | FPS | i/s | FPS | FPS | FPS |
-| key (on the keyboard, licence key) | 键 / 密钥 | キー | touche / clé | tecla / clave | Taste / Schlüssel | कुंजी |
-| restart / resume | 重新开始 / 继续 | やり直す / 再開 | recommencer / reprendre | reiniciar / reanudar | neu starten / fortsetzen | रीस्टार्ट करें / फिर से शुरू करें |
+| English | zh-CN | ja | fr | es | de | hi | ru |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| recording (noun) | 录制 | 録画 | enregistrement | grabación | Aufnahme | रिकॉर्डिंग | запись |
+| record (verb) | 录制 | 録画する | enregistrer | grabar | aufnehmen | रिकॉर्ड करना | записывать |
+| screenshot | 截图 | スクリーンショット | capture d'écran | captura de pantalla | Bildschirmfoto | स्क्रीनशॉट | скриншот |
+| display | 屏幕 / 显示器 | ディスプレイ | écran | pantalla | Bildschirm | डिस्प्ले | дисплей |
+| window | 窗口 | ウィンドウ | fenêtre | ventana | Fenster | विंडो | окно |
+| area | 区域 | 範囲 | zone | área | Bereich | क्षेत्र | область |
+| settings | 设置 | 設定 | paramètres | ajustes | Einstellungen | सेटिंग्स | настройки |
+| editor | 编辑器 | エディタ | éditeur | editor | Editor | एडिटर | редактор |
+| upload | 上传 | アップロード | mise en ligne / envoyer | subir | hochladen | अपलोड | загрузка / загрузить |
+| export | 导出 | 書き出し | exporter | exportar | exportieren | एक्सपोर्ट | экспорт |
+| zoom segment | 缩放片段 | ズームセグメント | segment de zoom | segmento de zoom | Zoom-Segment | ज़ूम सेगमेंट | сегмент масштаба |
+| microphone | 麦克风 | マイク | micro | micrófono | Mikrofon | माइक्रोफ़ोन | микрофон |
+| camera | 摄像头 | カメラ | caméra | cámara | Kamera | कैमरा | камера |
+| notch | 刘海 | ノッチ | encoche | muesca | Notch | नॉच | вырез |
+| dock | 程序坞 | Dock | Dock | Dock | Dock | Dock | Dock |
+| update channel | 更新渠道 | アップデートチャンネル | canal de mise à jour | canal de actualización | Update-Kanal | अपडेट चैनल | канал обновлений |
+| telemetry | 遥测数据 | テレメトリ | télémétrie | telemetría | Telemetrie | टेलीमेट्री | телеметрия |
+| placeholder | 占位符 | プレースホルダ | variable | marcador | Platzhalter | प्लेसहोल्डर | плейсхолдер |
+| excluded windows | 排除的窗口 | 除外するウィンドウ | fenêtres exclues | ventanas excluidas | ausgeschlossene Fenster | बाहर रखी गई विंडो | исключённые окна |
+| self-host | 自托管 | セルフホスト | auto-hébergement | alojamiento propio | selbst hosten | सेल्फ़-होस्ट | свой хостинг |
+| System default | 跟随系统 | システムのデフォルト | langue du système | predeterminado del sistema | Systemstandard | सिस्टम डिफ़ॉल्ट | системный |
+| Recommended | 推荐 | 推奨 | recommandé | recomendado | empfohlen | सुझाया गया | рекомендуется |
+| Instant Mode | Instant 模式 | Instantモード | mode Instant | modo Instant | Instant-Modus | Instant मोड | режим Instant |
+| Screenshot Mode | 截图模式 | スクリーンショットモード | mode Capture d'écran | modo Captura de pantalla | Bildschirmfoto-Modus | स्क्रीनशॉट मोड | режим скриншота |
+| System Settings (macOS app) | 系统设置 | システム設定 | Réglages Système | Ajustes del Sistema | Systemeinstellungen | सिस्टम सेटिंग्स | Системные настройки |
+| Allow (macOS prompt button) | 允许 | 許可 | Autoriser | Permitir | Erlauben | अनुमति दें | Разрешить |
+| shareable link | 分享链接 | 共有リンク | lien de partage | enlace para compartir | Link zum Teilen | शेयर करने लायक लिंक | ссылка общего доступа |
+| clip | 片段 | クリップ | clip | clip | Clip | क्लिप | клип |
+| segment (of a recording) | 分段 | セグメント | segment | segmento | Segment | सेगमेंट | сегмент |
+| recover / discard | 恢复 / 丢弃 | 復元 / 破棄 | récupérer / supprimer | recuperar / descartar | wiederherstellen / verwerfen | रिकवर करें / हटाएँ | восстановить / отбросить |
+| shot (3D camera) | 镜头 | ショット | plan | toma | Einstellung | शॉट | кадр |
+| Personal / Commercial plan | 个人版 / 商业版 | 個人 / 商用 | Personnel / Commercial | Personal / Comercial | Privat / Kommerziell | पर्सनल / कमर्शियल | личный / коммерческий |
+| caption (subtitle) | 字幕 | 字幕 | sous-titre | subtítulo | Untertitel | कैप्शन | субтитр |
+| track (timeline) | 轨道 | トラック | piste | pista | Spur | ट्रैक | дорожка |
+| preset | 预设 | プリセット | préréglage | preajuste | Vorlage | प्रीसेट | пресет |
+| video | 视频 | 動画 | vidéo | vídeo | Video | वीडियो | видео |
+| audio | 音频 | 音声 | audio | audio | Audio | ऑडियो | аудио |
+| copy (to the clipboard) | 复制 | コピー | copier | copiar | kopieren | कॉपी करें | копировать |
+| transcription | 转写 | 文字起こし | transcription | transcripción | Transkription | ट्रांसक्रिप्शन | транскрипция |
+| click | 点击 | クリック | cliquer | hacer clic | klicken | क्लिक करें | клик |
+| plan (paid tier) | 套餐 | プラン | offre | plan | Tarif | प्लान | тариф |
+| aspect ratio | 宽高比 | アスペクト比 | format d'image | relación de aspecto | Seitenverhältnis | आस्पेक्ट रेशियो | соотношение сторон |
+| shadow | 阴影 | 影 | ombre | sombra | Schatten | छाया | тень |
+| frames per second | FPS | FPS | i/s | FPS | FPS | FPS | FPS |
+| key (on the keyboard, licence key) | 键 / 密钥 | キー | touche / clé | tecla / clave | Taste / Schlüssel | कुंजी | клавиша / ключ |
+| restart / resume | 重新开始 / 继续 | やり直す / 再開 | recommencer / reprendre | reiniciar / reanudar | neu starten / fortsetzen | रीस्टार्ट करें / फिर से शुरू करें | перезапустить / продолжить |
 
 ## Fitting the UI
 
