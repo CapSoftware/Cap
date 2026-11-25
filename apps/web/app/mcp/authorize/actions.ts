@@ -4,6 +4,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { redirect } from "next/navigation";
 import {
 	createMcpAuthorizationCode,
+	MCP_AUTHORIZATION_PARAMS,
 	mcpIssuer,
 	validateMcpAuthorizationRequest,
 } from "@/lib/mcp-auth";
@@ -11,16 +12,7 @@ import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 export async function authorizeMcpClient(formData: FormData) {
 	const params = new URLSearchParams();
-	for (const key of [
-		"client_id",
-		"redirect_uri",
-		"response_type",
-		"state",
-		"code_challenge",
-		"code_challenge_method",
-		"scope",
-		"resource",
-	]) {
+	for (const key of MCP_AUTHORIZATION_PARAMS) {
 		const value = formData.get(key);
 		if (typeof value === "string") params.set(key, value);
 	}
@@ -35,8 +27,9 @@ export async function authorizeMcpClient(formData: FormData) {
 	)
 		throw new Error("Too many authorization attempts. Try again later.");
 	const callback = new URL(request.redirectUri);
-	const decision = formData.get("decision");
-	if (decision === "approve") {
+	const decisions = formData.getAll("decision");
+	const approved = decisions.length === 1 && decisions[0] === "approve";
+	if (approved) {
 		callback.searchParams.set(
 			"code",
 			await createMcpAuthorizationCode(user, request),
