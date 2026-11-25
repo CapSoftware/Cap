@@ -1993,6 +1993,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sysinfo 0.32.1",
  "tracing",
  "tracing-subscriber",
  "wgpu 25.0.2",
