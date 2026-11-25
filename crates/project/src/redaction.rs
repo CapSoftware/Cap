@@ -345,7 +345,6 @@ pub struct RedactionIndex {
 #[derive(Debug, Default)]
 struct SegmentIndex {
     segment: u32,
-    /// One frame of the display video, in seconds.
     frame: f64,
     regions: Vec<RedactionRegion>,
     buckets: Vec<Vec<u32>>,
