@@ -380,6 +380,13 @@ fn first_frame_fingerprint(path: &Path) -> anyhow::Result<String> {
 
 /// The saved scan when it already covers every segment as recorded now,
 /// with this model, so opening the editor needs no model at all.
+/// Whether a saved scan was made by this model and this scanner and covers
+/// its segments: a scanner revision changes whenever scanning or classifying
+/// changes, so a recording scanned by an older build is scanned again.
+fn saved_scan_current(previous: &Redactions, model: &str, scanner: u32) -> bool {
+    previous.model == model && previous.scanner == scanner && previous.is_complete()
+}
+
 fn reusable_scan(
     previous: Option<&Redactions>,
     sources: &[cap_redact::SegmentSource],
@@ -388,7 +395,7 @@ fn reusable_scan(
     let Some(previous) = previous else {
         return false;
     };
-    if previous.model != model || !previous.is_complete() || sources.is_empty() {
+    if !saved_scan_current(previous, model, cap_redact::SCAN_REVISION) || sources.is_empty() {
         return false;
     }
     sources.iter().all(|source| {
@@ -535,7 +542,7 @@ mod tests {
                 complete: true,
             }],
             regions: Vec::new(),
-            scanner: 0,
+            scanner: cap_redact::SCAN_REVISION,
         };
         assert!(complete.is_complete());
         assert!(!reusable_scan(None, &[], "m1"));
@@ -553,6 +560,43 @@ mod tests {
             Some(&complete),
             std::slice::from_ref(&source),
             "m2"
+        ));
+    }
+
+    /// A scan saved by an older scanner is not reused, even with the same
+    /// model and a complete record of every segment.
+    #[test]
+    fn saved_scan_from_an_older_scanner_is_scanned_again() {
+        let mut saved = Redactions {
+            version: cap_project::redaction::REDACTIONS_VERSION,
+            model: "m1".into(),
+            segments: vec![cap_project::redaction::RedactionSegment {
+                index: 0,
+                source_frames: 30,
+                fps: 30.0,
+                width: 1920,
+                height: 1080,
+                fingerprint: "1-2-3".into(),
+                complete: true,
+            }],
+            regions: Vec::new(),
+            scanner: cap_redact::SCAN_REVISION,
+        };
+        assert!(saved_scan_current(&saved, "m1", cap_redact::SCAN_REVISION));
+        saved.scanner = cap_redact::SCAN_REVISION - 1;
+        assert!(!saved_scan_current(&saved, "m1", cap_redact::SCAN_REVISION));
+        let written_before_revisions: Redactions = serde_json::from_value(serde_json::json!({
+            "version": cap_project::redaction::REDACTIONS_VERSION,
+            "model": "m1",
+            "segments": [],
+            "regions": []
+        }))
+        .unwrap();
+        assert_eq!(written_before_revisions.scanner, 0);
+        assert!(!saved_scan_current(
+            &written_before_revisions,
+            "m1",
+            cap_redact::SCAN_REVISION
         ));
     }
 }
