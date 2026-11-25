@@ -20,6 +20,10 @@ import {
 	isAgentScopeProfile,
 } from "@/lib/agent-auth";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import {
+	shouldRefuseTorExit,
+	TOR_EXIT_REFUSAL_MESSAGE,
+} from "@/lib/tor-exit-gate";
 
 export type CliApiKeySummary = {
 	id: string;
@@ -137,6 +141,10 @@ export async function createCliApiKey(input: {
 	}
 	if (!cliApiKeyExpiryDays.has(input.expiresInDays)) {
 		throw new Error("Unknown expiry");
+	}
+
+	if (await shouldRefuseTorExit("agent-key")) {
+		throw new Error(TOR_EXIT_REFUSAL_MESSAGE);
 	}
 
 	// Same bucket as the CLI OAuth authorize page: both mint agent credentials.

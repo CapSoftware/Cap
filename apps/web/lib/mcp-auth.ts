@@ -53,6 +53,17 @@ export const isMcpRedirectUri = (value: string) => {
 	}
 };
 
+export const MCP_AUTHORIZATION_PARAMS = [
+	"client_id",
+	"redirect_uri",
+	"response_type",
+	"state",
+	"code_challenge",
+	"code_challenge_method",
+	"scope",
+	"resource",
+] as const;
+
 export type McpAuthorizationRequest = {
 	clientId: string;
 	redirectUri: string;

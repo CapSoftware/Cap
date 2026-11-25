@@ -47,6 +47,7 @@ type UploadTargetInput = {
 	contentLength?: number;
 	fields?: Record<string, string>;
 	method?: "post" | "put";
+	unsignedContentType?: boolean;
 	videoTitle?: string;
 };
 
@@ -530,7 +531,12 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 					.getPresignedPutUrl(
 						key,
 						{ ContentType: input.contentType },
-						{ expiresIn: 1800 },
+						{
+							expiresIn: 1800,
+							...(input.unsignedContentType
+								? {}
+								: { signableHeaders: new Set(["content-type"]) }),
+						},
 					)
 					.pipe(mapStorageError);
 				return toPutUploadTarget(url, input.contentType);

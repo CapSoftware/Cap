@@ -1,7 +1,10 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { Logo } from "@cap/ui";
 import { redirect } from "next/navigation";
-import { validateMcpAuthorizationRequest } from "@/lib/mcp-auth";
+import {
+	MCP_AUTHORIZATION_PARAMS,
+	validateMcpAuthorizationRequest,
+} from "@/lib/mcp-auth";
 import { authorizeMcpClient } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +16,8 @@ export default async function McpAuthorizePage(props: {
 }) {
 	const searchParams = await props.searchParams;
 	const params = new URLSearchParams();
-	for (const [key, value] of Object.entries(searchParams)) {
+	for (const key of MCP_AUTHORIZATION_PARAMS) {
+		const value = searchParams[key];
 		if (typeof value === "string") params.set(key, value);
 	}
 	const request = await validateMcpAuthorizationRequest(params);

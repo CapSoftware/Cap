@@ -208,6 +208,10 @@ import {
 	isDisallowedS3Endpoint,
 	publicOnlyS3Agents,
 } from "@/lib/s3-endpoint-policy";
+import {
+	shouldRefuseTorExit,
+	TOR_EXIT_REFUSAL_MESSAGE,
+} from "@/lib/tor-exit-gate";
 import { transcribeVideo } from "@/lib/transcribe";
 import { currentVideoDownloadAccess } from "@/lib/video-download-access";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
@@ -3972,6 +3976,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							admit: Effect.gen(function* () {
 								if (
 									yield* Effect.promise(() =>
+										shouldRefuseTorExit("developer-app", headers),
+									)
+								) {
+									return yield* forbidden(requestId, TOR_EXIT_REFUSAL_MESSAGE);
+								}
+								if (
+									yield* Effect.promise(() =>
 										developerAppCreationLimited(principal.id, headers),
 									)
 								) {
@@ -7370,6 +7381,9 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							{
 								contentType: "video/mp4",
 								method: "put",
+								// Agent keys are also used from scripts that may not send
+								// the returned headers on the PUT.
+								unsignedContentType: true,
 								fields: {
 									"Content-Type": "video/mp4",
 									"x-amz-meta-userid": principal.id,

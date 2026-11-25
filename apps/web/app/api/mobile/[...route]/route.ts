@@ -80,6 +80,7 @@ import {
 } from "@/lib/email-code-rate-limit";
 import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
 import { firstViewDecision } from "@/lib/free-plan-measure-probe";
+import { logNewAccountAddress } from "@/lib/ip-reputation";
 import {
 	describeLinkAccessChoice,
 	isLinkRestricted,
@@ -103,6 +104,7 @@ import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { playbackUrlValidity } from "@/lib/signed-url-validity";
 import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
+import { shouldRefuseTorExit, type TorExitSurface } from "@/lib/tor-exit-gate";
 import { userPreferencesObject } from "@/lib/user-preferences-sql";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
 import {
@@ -247,8 +249,12 @@ const getMobileRedirectUrl = (redirectUri: string) => {
 	}
 };
 
-const getEmailAuthAdapter = () => {
-	const adapter = authOptions().adapter;
+const getEmailAuthAdapter = (headers: Headers) => {
+	const adapter = authOptions(undefined, {
+		onUserCreated: () => {
+			logNewAccountAddress("mobile-email-session", headers);
+		},
+	}).adapter;
 	const { createUser, getUserByEmail, updateUser } = adapter ?? {};
 
 	if (!createUser || !getUserByEmail || !updateUser) {
@@ -258,8 +264,9 @@ const getEmailAuthAdapter = () => {
 	return { createUser, getUserByEmail, updateUser };
 };
 
-const createOrUpdateEmailUser = async (email: string) => {
-	const { createUser, getUserByEmail, updateUser } = getEmailAuthAdapter();
+const createOrUpdateEmailUser = async (email: string, headers: Headers) => {
+	const { createUser, getUserByEmail, updateUser } =
+		getEmailAuthAdapter(headers);
 	const existingUser = await getUserByEmail(email);
 
 	if (existingUser) {
@@ -489,6 +496,15 @@ const getMobileThumbnailUrl = Effect.fn("Mobile.getThumbnailUrl")(function* (
 	return yield* bucket.getSignedObjectUrl(thumbnailKey);
 });
 
+const ensureNotTorExit = Effect.fn("Mobile.ensureNotTorExit")(function* (
+	surface: TorExitSurface,
+	headers: Headers,
+) {
+	if (yield* Effect.promise(() => shouldRefuseTorExit(surface, headers))) {
+		return yield* Effect.fail(new HttpApiError.Forbidden());
+	}
+});
+
 const ensureEmailSignInAllowed = Effect.fn("Mobile.ensureEmailSignInAllowed")(
 	function* (email: string) {
 		if (!emailPattern.test(email)) {
@@ -581,6 +597,7 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 ) {
 	const email = normalizeSignInEmail(rawEmail);
 	if (!email) return yield* Effect.fail(new HttpApiError.BadRequest());
+	yield* ensureNotTorExit("mobile-email-session", headers);
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
 
@@ -639,6 +656,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 		return yield* Effect.fail(new HttpApiError.BadRequest());
 	}
 
+	yield* ensureNotTorExit("mobile-email-session", headers);
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
 
@@ -681,7 +699,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	}
 
 	const user = yield* Effect.tryPromise({
-		try: () => createOrUpdateEmailUser(email),
+		try: () => createOrUpdateEmailUser(email, headers),
 		catch: () => new HttpApiError.InternalServerError(),
 	});
 
@@ -3746,6 +3764,18 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					.handle("requestSession", ({ request, urlParams }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
+								if (
+									yield* Effect.promise(() =>
+										shouldRefuseTorExit(
+											"mobile-session",
+											toHeaders(request.headers),
+										),
+									)
+								) {
+									const blockedUrl = new URL("/login", getDeploymentOrigin());
+									blockedUrl.searchParams.set("error", "SignupBlocked");
+									return HttpServerResponse.redirect(blockedUrl.toString());
+								}
 								const user = yield* getCurrentUser;
 								if (Option.isNone(user) || urlParams.provider === "workos") {
 									const loginRedirectUrl =
