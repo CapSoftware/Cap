@@ -208,6 +208,10 @@ import {
 	isDisallowedS3Endpoint,
 	publicOnlyS3Agents,
 } from "@/lib/s3-endpoint-policy";
+import {
+	shouldRefuseTorExit,
+	TOR_EXIT_REFUSAL_MESSAGE,
+} from "@/lib/tor-exit-gate";
 import { transcribeVideo } from "@/lib/transcribe";
 import { currentVideoDownloadAccess } from "@/lib/video-download-access";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
@@ -3970,6 +3974,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const headers = yield* requestHeaders;
 						const result = yield* runAgentMutation({
 							admit: Effect.gen(function* () {
+								if (
+									yield* Effect.promise(() =>
+										shouldRefuseTorExit("developer-app", headers),
+									)
+								) {
+									return yield* forbidden(requestId, TOR_EXIT_REFUSAL_MESSAGE);
+								}
 								if (
 									yield* Effect.promise(() =>
 										developerAppCreationLimited(principal.id, headers),

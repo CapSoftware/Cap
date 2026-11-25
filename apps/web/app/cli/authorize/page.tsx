@@ -12,6 +12,7 @@ import {
 	parseAgentAuthorizationRequest,
 } from "@/lib/agent-auth";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { shouldRefuseTorExit } from "@/lib/tor-exit-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -94,6 +95,9 @@ export default async function CliAuthorizePage(props: {
 		const currentUser = await getCurrentUser();
 		if (!currentUser) {
 			redirect("/login");
+		}
+		if (await shouldRefuseTorExit("cli-authorize")) {
+			redirect("/login?error=SignupBlocked");
 		}
 		if (
 			await isRateLimited(RATE_LIMIT_IDS.AGENT_AUTHORIZATION, {
