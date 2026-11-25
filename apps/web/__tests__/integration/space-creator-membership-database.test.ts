@@ -244,6 +244,116 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(denied(await openSpace(outsider.userId, spaceId))).toBe(true);
 		});
 
+		const removeMember = (
+			org: Org,
+			member: { memberId: string; userId: User.UserId },
+		) =>
+			database().transaction((tx) =>
+				deleteOrganizationMembership(tx, org.orgId, {
+					id: member.memberId,
+					userId: member.userId,
+					hasProSeat: false,
+					email: `${member.userId}@example.com`,
+				}),
+			);
+
+		const createUser = async (
+			userId: User.UserId,
+			pointers: {
+				activeOrganizationId: Organisation.OrganisationId;
+				defaultOrgId: Organisation.OrganisationId | null;
+			},
+		) => {
+			await database()
+				.insert(Db.users)
+				.values({ id: userId, email: `${userId}@example.com`, ...pointers });
+		};
+
+		const pointersOf = async (userId: User.UserId) => {
+			const [user] = await database()
+				.select({
+					activeOrganizationId: Db.users.activeOrganizationId,
+					defaultOrgId: Db.users.defaultOrgId,
+				})
+				.from(Db.users)
+				.where(eq(Db.users.id, userId));
+			return user;
+		};
+
+		it("moves a removed member's organization pointers to an organization they keep", async () => {
+			const org = await createOrganization();
+			const member = await addOrganizationMember(org, "member");
+			const ownOrgId = id() as Organisation.OrganisationId;
+			await database()
+				.insert(Db.organizations)
+				.values({ id: ownOrgId, name: "Own", ownerId: member.userId });
+			await createUser(member.userId, {
+				activeOrganizationId: org.orgId,
+				defaultOrgId: org.orgId,
+			});
+
+			await removeMember(org, member);
+
+			expect(await pointersOf(member.userId)).toEqual({
+				activeOrganizationId: ownOrgId,
+				defaultOrgId: ownOrgId,
+			});
+		});
+
+		it("falls back to another membership and skips deleted organizations", async () => {
+			const org = await createOrganization();
+			const deleted = await createOrganization({ tombstoned: true });
+			const other = await createOrganization();
+			const member = await addOrganizationMember(org, "member");
+			await addOrganizationMember(deleted, "member", member.userId);
+			await addOrganizationMember(other, "member", member.userId);
+			await createUser(member.userId, {
+				activeOrganizationId: org.orgId,
+				defaultOrgId: null,
+			});
+
+			await removeMember(org, member);
+
+			expect(await pointersOf(member.userId)).toEqual({
+				activeOrganizationId: other.orgId,
+				defaultOrgId: null,
+			});
+		});
+
+		it("clears the pointers when no other organization remains", async () => {
+			const org = await createOrganization();
+			const member = await addOrganizationMember(org, "member");
+			await createUser(member.userId, {
+				activeOrganizationId: org.orgId,
+				defaultOrgId: org.orgId,
+			});
+
+			await removeMember(org, member);
+
+			expect(await pointersOf(member.userId)).toEqual({
+				activeOrganizationId: "",
+				defaultOrgId: null,
+			});
+		});
+
+		it("leaves pointers that name another organization unchanged", async () => {
+			const org = await createOrganization();
+			const other = await createOrganization();
+			const member = await addOrganizationMember(org, "member");
+			await addOrganizationMember(other, "member", member.userId);
+			await createUser(member.userId, {
+				activeOrganizationId: other.orgId,
+				defaultOrgId: other.orgId,
+			});
+
+			await removeMember(org, member);
+
+			expect(await pointersOf(member.userId)).toEqual({
+				activeOrganizationId: other.orgId,
+				defaultOrgId: other.orgId,
+			});
+		});
+
 		it("does not grant creator access inside a deleted organization", async () => {
 			const org = await createOrganization({ tombstoned: true });
 			const creator = await addOrganizationMember(org, "member");

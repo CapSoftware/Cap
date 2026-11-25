@@ -187,6 +187,7 @@ describe("backfillLoomImport", () => {
 			email: "zephy@greenprojecttech.com",
 			invitedByUserId: "lukeaaaaaaaaaaa",
 			role: "member",
+			operatorApproved: true,
 		});
 		expect(mocks.reassign).toHaveBeenCalledWith(
 			expect.objectContaining({ toUserId: "newaaaaaaaaaaaa" }),
