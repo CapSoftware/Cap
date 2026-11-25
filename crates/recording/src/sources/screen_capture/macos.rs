@@ -321,17 +321,17 @@ impl output_pipeline::VideoFrame for VideoFrame {
 
 struct CaptureLossTracker {
     gaps: CaptureGapCounter,
-    pending: FrameLossCarry,
+    accounting: Arc<ScreenFrameAccounting>,
     tick_numer: u64,
     tick_denom: u64,
 }
 
 impl CaptureLossTracker {
-    fn new(slot_ns: u64) -> Self {
+    fn new(slot_ns: u64, accounting: Arc<ScreenFrameAccounting>) -> Self {
         let timebase = cidre::mach::TimeBaseInfo::new();
         Self {
             gaps: CaptureGapCounter::new(slot_ns),
-            pending: FrameLossCarry::default(),
+            accounting,
             tick_numer: u64::from(timebase.numer.max(1)),
             tick_denom: u64::from(timebase.denom.max(1)),
         }
@@ -342,10 +342,9 @@ impl CaptureLossTracker {
     }
 
     fn frame(&mut self, frame: &scap_screencapturekit::VideoFrame) -> FrameLossCarry {
-        let skipped = self.skipped_before(frame, true);
-        let mut carry = std::mem::take(&mut self.pending);
-        carry.capture_skipped += skipped;
-        carry
+        FrameLossCarry {
+            capture_skipped: self.skipped_before(frame, true),
+        }
     }
 
     fn skipped_before(
@@ -377,9 +376,8 @@ impl CaptureLossTracker {
         }
     }
 
-    fn dropped(&mut self, carry: FrameLossCarry) {
-        self.pending.capture_skipped += carry.capture_skipped;
-        self.pending.callback_dropped += carry.callback_dropped + 1;
+    fn dropped(&self, carry: FrameLossCarry) {
+        self.accounting.record_callback_dropped(carry);
     }
 }
 
@@ -505,6 +503,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             scaled_frame_count: scaled_frame_count.clone(),
             stall_health_tx: stall_health_tx.clone(),
             capture_slot_ns,
+            frame_accounting: frame_accounting.clone(),
         });
 
         let builder = scap_screencapturekit::Capturer::builder(content_filter, settings)
@@ -515,7 +514,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 let sys_audio_drop_counter = system_audio_drop_counter.clone();
                 let sys_audio_frame_counter = system_audio_frame_counter.clone();
                 let stall_health_tx = stall_health_tx.clone();
-                let mut loss = CaptureLossTracker::new(capture_slot_ns);
+                let mut loss = CaptureLossTracker::new(capture_slot_ns, frame_accounting.clone());
                 move |frame| {
                     let sample_buffer = frame.sample_buf();
 
@@ -1248,6 +1247,7 @@ struct CapturerRebuildParams {
     scaled_frame_count: Arc<AtomicU64>,
     stall_health_tx: output_pipeline::HealthSender,
     capture_slot_ns: u64,
+    frame_accounting: Arc<ScreenFrameAccounting>,
 }
 
 unsafe impl Send for CapturerRebuildParams {}
@@ -1329,7 +1329,8 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
             let sys_audio_drop_counter = params.system_audio_drop_counter.clone();
             let sys_audio_frame_counter = params.system_audio_frame_counter.clone();
             let stall_health_tx = params.stall_health_tx.clone();
-            let mut loss = CaptureLossTracker::new(params.capture_slot_ns);
+            let mut loss =
+                CaptureLossTracker::new(params.capture_slot_ns, params.frame_accounting.clone());
             move |frame| {
                 let sample_buffer = frame.sample_buf();
 

@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -190,23 +191,27 @@ impl ScreenFrameTotals {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FrameLossCarry {
     pub capture_skipped: u64,
-    pub callback_dropped: u64,
 }
 
 /// Per-segment counts for the screen track. A frame only counts once the
 /// muxer accepts it for the recording, so frames before the start, while
-/// paused or after stop are neither displayed nor lost.
+/// paused or after stop are neither displayed nor lost. Written frames are
+/// the encoder's output packets, so frames a failing encoder drops after
+/// taking them count as lost in the encoder.
 #[derive(Debug, Default)]
 pub struct ScreenFrameAccounting {
     attached: AtomicBool,
+    recording: AtomicBool,
+    finished: AtomicBool,
     delivered: AtomicU64,
     lost_in_capture: AtomicU64,
     callback_dropped: AtomicU64,
     handed_to_encoder: AtomicU64,
     muxer_dropped: AtomicU64,
-    repeats_handed: AtomicU64,
-    written: AtomicU64,
-    encoder_dropped: AtomicU64,
+    encoder_failed: AtomicU64,
+    repeats_encoded: AtomicU64,
+    packets_written: AtomicU64,
+    repeat_flags: Mutex<VecDeque<bool>>,
 }
 
 impl ScreenFrameAccounting {
@@ -223,46 +228,93 @@ impl ScreenFrameAccounting {
         if !first {
             self.lost_in_capture
                 .fetch_add(carry.capture_skipped, Ordering::Relaxed);
-            self.callback_dropped
-                .fetch_add(carry.callback_dropped, Ordering::Relaxed);
         }
+        self.recording.store(true, Ordering::Relaxed);
+    }
+
+    pub fn record_callback_dropped(&self, carry: FrameLossCarry) {
+        if self.recording.load(Ordering::Relaxed) && !self.finished.load(Ordering::Relaxed) {
+            self.callback_dropped.fetch_add(1, Ordering::Relaxed);
+            self.lost_in_capture
+                .fetch_add(carry.capture_skipped, Ordering::Relaxed);
+        }
+    }
+
+    pub fn before_handing_to_encoder(&self, repeat: bool) {
+        self.flags().push_back(repeat);
     }
 
     pub fn record_handed_to_encoder(&self, repeat: bool) {
-        self.handed_to_encoder.fetch_add(1, Ordering::Relaxed);
-        if repeat {
-            self.repeats_handed.fetch_add(1, Ordering::Relaxed);
+        if !repeat {
+            self.handed_to_encoder.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    pub fn record_muxer_dropped(&self) {
-        self.muxer_dropped.fetch_add(1, Ordering::Relaxed);
+    pub fn record_muxer_dropped(&self, repeat: bool) {
+        self.flags().pop_back();
+        if !repeat {
+            self.muxer_dropped.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
-    pub fn record_written(&self) {
-        self.written.fetch_add(1, Ordering::Relaxed);
+    pub fn next_is_repeat(&self) -> bool {
+        self.flags().pop_front().unwrap_or(false)
     }
 
-    pub fn record_encoder_dropped(&self) {
-        self.encoder_dropped.fetch_add(1, Ordering::Relaxed);
+    pub fn record_encoded(&self, repeat: bool, encoded: bool, packets_written: Option<u64>) {
+        match (repeat, encoded) {
+            (true, true) => {
+                self.repeats_encoded.fetch_add(1, Ordering::Relaxed);
+            }
+            (false, false) => {
+                self.encoder_failed.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+        if let Some(packets_written) = packets_written {
+            self.packets_written
+                .store(packets_written, Ordering::Relaxed);
+        }
+    }
+
+    pub fn record_finished(&self, packets_written: Option<u64>) {
+        if let Some(packets_written) = packets_written {
+            self.packets_written
+                .store(packets_written, Ordering::Relaxed);
+        }
+        self.finished.store(true, Ordering::Relaxed);
+    }
+
+    fn flags(&self) -> std::sync::MutexGuard<'_, VecDeque<bool>> {
+        self.repeat_flags
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     pub fn totals(&self) -> ScreenFrameTotals {
         let delivered = self.delivered.load(Ordering::Relaxed);
         let lost_in_capture = self.lost_in_capture.load(Ordering::Relaxed);
         let callback_dropped = self.callback_dropped.load(Ordering::Relaxed);
-        let repeats = self.repeats_handed.load(Ordering::Relaxed);
+        let handed_to_encoder = self.handed_to_encoder.load(Ordering::Relaxed);
+        let written = self
+            .packets_written
+            .load(Ordering::Relaxed)
+            .saturating_sub(self.repeats_encoded.load(Ordering::Relaxed))
+            .min(handed_to_encoder);
+        let encoder_failed = self.encoder_failed.load(Ordering::Relaxed);
+        let lost_in_encoder = if self.finished.load(Ordering::Relaxed) {
+            handed_to_encoder.saturating_sub(written)
+        } else {
+            encoder_failed
+        };
         ScreenFrameTotals {
             displayed: delivered + callback_dropped + lost_in_capture,
             delivered: delivered + callback_dropped,
-            handed_to_encoder: self
-                .handed_to_encoder
-                .load(Ordering::Relaxed)
-                .saturating_sub(repeats),
-            written: self.written.load(Ordering::Relaxed).saturating_sub(repeats),
+            handed_to_encoder,
+            written,
             lost_in_capture,
             lost_before_encoder: callback_dropped + self.muxer_dropped.load(Ordering::Relaxed),
-            lost_in_encoder: self.encoder_dropped.load(Ordering::Relaxed),
+            lost_in_encoder,
         }
     }
 }
@@ -511,59 +563,115 @@ mod tests {
         assert_eq!(feed.frames(&[2]), 1);
     }
 
+    fn hand(accounting: &ScreenFrameAccounting, repeat: bool) {
+        accounting.before_handing_to_encoder(repeat);
+        accounting.record_handed_to_encoder(repeat);
+    }
+
     #[test]
     fn totals_split_losses_by_stage_and_skip_the_first_gap() {
         let accounting = ScreenFrameAccounting::default();
+        accounting.record_callback_dropped(FrameLossCarry { capture_skipped: 9 });
         accounting.record_accepted(
             FrameLossCarry {
                 capture_skipped: 40,
-                callback_dropped: 2,
             },
             true,
         );
-        accounting.record_handed_to_encoder(false);
-        accounting.record_written();
+        hand(&accounting, false);
+        let mut packets = 0;
+        let mut encode = |encoded: bool| {
+            let repeat = accounting.next_is_repeat();
+            packets += u64::from(encoded);
+            accounting.record_encoded(repeat, encoded, Some(packets));
+        };
+        encode(true);
         for i in 0..10u64 {
+            if i == 3 {
+                accounting.record_callback_dropped(FrameLossCarry { capture_skipped: 1 });
+            }
             accounting.record_accepted(
                 FrameLossCarry {
                     capture_skipped: i % 2,
-                    callback_dropped: u64::from(i == 3),
                 },
                 false,
             );
             if i == 7 {
-                accounting.record_muxer_dropped();
+                accounting.before_handing_to_encoder(false);
+                accounting.record_muxer_dropped(false);
                 continue;
             }
-            accounting.record_handed_to_encoder(false);
-            if i == 8 {
-                accounting.record_encoder_dropped();
-            } else {
-                accounting.record_written();
-            }
+            hand(&accounting, false);
+            encode(i != 8);
         }
-        accounting.record_handed_to_encoder(true);
-        accounting.record_written();
+        hand(&accounting, true);
+        encode(true);
 
+        let live = accounting.totals();
+        assert_eq!(
+            live.lost_in_encoder, 1,
+            "a failed encode counts while recording"
+        );
+        accounting.record_finished(Some(packets - 1));
         let totals = accounting.totals();
         assert_eq!(
             totals,
             ScreenFrameTotals {
-                displayed: 11 + 1 + 5,
+                displayed: 12 + 6,
                 delivered: 12,
                 handed_to_encoder: 10,
-                written: 9,
-                lost_in_capture: 5,
+                written: 8,
+                lost_in_capture: 6,
                 lost_before_encoder: 2,
-                lost_in_encoder: 1,
+                lost_in_encoder: 2,
             }
         );
-        assert_eq!(totals.lost(), 8);
         assert_eq!(
             totals.displayed,
             totals.written + totals.lost(),
             "every displayed frame is either written or lost at one stage"
         );
+        accounting.record_callback_dropped(FrameLossCarry { capture_skipped: 5 });
+        assert_eq!(
+            accounting.totals(),
+            totals,
+            "drops after stop are not counted"
+        );
+    }
+
+    #[test]
+    fn repeat_flags_follow_the_frames_through_the_encoder_queue() {
+        let accounting = ScreenFrameAccounting::default();
+        hand(&accounting, false);
+        accounting.before_handing_to_encoder(true);
+        accounting.record_muxer_dropped(true);
+        hand(&accounting, true);
+        hand(&accounting, false);
+        assert!(!accounting.next_is_repeat());
+        assert!(accounting.next_is_repeat());
+        assert!(!accounting.next_is_repeat());
+        assert!(
+            !accounting.next_is_repeat(),
+            "an empty queue is a fresh frame"
+        );
+        assert_eq!(accounting.totals().handed_to_encoder, 2);
+        assert_eq!(accounting.totals().lost_before_encoder, 0);
+    }
+
+    #[test]
+    fn a_failed_repeat_is_not_a_lost_frame() {
+        let accounting = ScreenFrameAccounting::default();
+        accounting.record_accepted(FrameLossCarry::default(), true);
+        hand(&accounting, false);
+        let repeat = accounting.next_is_repeat();
+        accounting.record_encoded(repeat, true, Some(1));
+        hand(&accounting, true);
+        let repeat = accounting.next_is_repeat();
+        accounting.record_encoded(repeat, false, None);
+        accounting.record_finished(Some(1));
+        let totals = accounting.totals();
+        assert_eq!(totals.written, 1);
+        assert_eq!(totals.lost(), 0);
     }
 
     #[test]
@@ -594,7 +702,6 @@ mod tests {
             t += VSYNC_120;
             let carry = FrameLossCarry {
                 capture_skipped: counter.complete(t),
-                ..Default::default()
             };
             if !(60..180).contains(&i) {
                 accounting.record_accepted(carry, i == 0);
@@ -618,7 +725,6 @@ mod tests {
             segment.record_accepted(
                 FrameLossCarry {
                     capture_skipped: skipped,
-                    ..Default::default()
                 },
                 false,
             );

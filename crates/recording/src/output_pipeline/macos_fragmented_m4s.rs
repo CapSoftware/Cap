@@ -152,11 +152,14 @@ fn handle_encode_result(
     Ok(())
 }
 
-fn record_encode(accounting: Option<&ScreenFrameAccounting>, result: &anyhow::Result<()>) {
-    match (accounting, result) {
-        (Some(accounting), Ok(())) => accounting.record_written(),
-        (Some(accounting), Err(_)) => accounting.record_encoder_dropped(),
-        (None, _) => {}
+fn record_encode(
+    accounting: Option<&ScreenFrameAccounting>,
+    repeat: bool,
+    encoded: bool,
+    encoder: &SegmentedVideoEncoder,
+) {
+    if let Some(accounting) = accounting {
+        accounting.record_encoded(repeat, encoded, Some(encoder.packets_written()));
     }
 }
 
@@ -395,6 +398,7 @@ impl Muxer for MacOSFragmentedM4SMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        let encoder = self.state.as_ref().map(|state| state.encoder.clone());
         let result = match self.state.take() {
             Some(state) => finish_segmented_encoder(
                 state,
@@ -406,6 +410,12 @@ impl Muxer for MacOSFragmentedM4SMuxer {
             None => Ok(()),
         };
         if let Some(accounting) = &self.frame_accounting {
+            accounting.record_finished(
+                encoder
+                    .as_ref()
+                    .and_then(|encoder| encoder.lock().ok())
+                    .map(|encoder| encoder.packets_written()),
+            );
             log_frame_totals(accounting, &self.base_path);
         }
 
@@ -487,6 +497,9 @@ impl MacOSFragmentedM4SMuxer {
                 let slow_threshold_ms = frame_timing_log_threshold_ms(&video_config);
 
                 while let Ok(Some((sample_buf, timestamp))) = video_rx.recv() {
+                    let repeat = frame_accounting
+                        .as_deref()
+                        .is_some_and(ScreenFrameAccounting::next_is_repeat);
                     if matches!(
                         disk_monitor.poll(&base_path, &health_tx),
                         super::core::DiskSpacePollResult::Exhausted { .. }
@@ -496,7 +509,7 @@ impl MacOSFragmentedM4SMuxer {
                     }
                     if disk_exhausted {
                         if let Some(accounting) = &frame_accounting {
-                            accounting.record_encoder_dropped();
+                            accounting.record_encoded(repeat, false, None);
                         }
                         continue;
                     }
@@ -529,7 +542,12 @@ impl MacOSFragmentedM4SMuxer {
                                         let result = encoder
                                             .queue_frame(owned_frame, timestamp)
                                             .map_err(anyhow::Error::from);
-                                        record_encode(frame_accounting.as_deref(), &result);
+                                        record_encode(
+                                            frame_accounting.as_deref(),
+                                            repeat,
+                                            result.is_ok(),
+                                            &encoder,
+                                        );
                                         handle_encode_result(
                                             &mut encoder,
                                             result,
@@ -562,7 +580,7 @@ impl MacOSFragmentedM4SMuxer {
                             }
                             Err(e) => {
                                 if let Some(accounting) = &frame_accounting {
-                                    accounting.record_encoder_dropped();
+                                    accounting.record_encoded(repeat, false, None);
                                 }
                                 warn!("Failed to convert frame: {e:?}");
                             }
@@ -582,7 +600,12 @@ impl MacOSFragmentedM4SMuxer {
                                     }
                                     None => Err(anyhow!("sample buffer has no image buffer")),
                                 };
-                                record_encode(frame_accounting.as_deref(), &result);
+                                record_encode(
+                                    frame_accounting.as_deref(),
+                                    repeat,
+                                    result.is_ok(),
+                                    &encoder,
+                                );
                                 handle_encode_result(
                                     &mut encoder,
                                     result,
@@ -680,6 +703,9 @@ impl VideoMuxer for MacOSFragmentedM4SMuxer {
         }
 
         if let Some(state) = &self.state {
+            if let Some(accounting) = accounting {
+                accounting.before_handing_to_encoder(repeat);
+            }
             match state
                 .video_tx
                 .try_send(Some((frame.sample_buf, adjusted_timestamp)))
@@ -693,10 +719,8 @@ impl VideoMuxer for MacOSFragmentedM4SMuxer {
                 Err(e) => match e {
                     std::sync::mpsc::TrySendError::Full(_) => {
                         self.frame_drops.record_drop();
-                        if let Some(accounting) = accounting
-                            && !repeat
-                        {
-                            accounting.record_muxer_dropped();
+                        if let Some(accounting) = accounting {
+                            accounting.record_muxer_dropped(repeat);
                         }
                     }
                     std::sync::mpsc::TrySendError::Disconnected(_) => {
