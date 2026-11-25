@@ -2746,31 +2746,26 @@ impl EditorWindow {
 
         // Block, not a flex column: its one child lays out the same, without
         // the extra layout pass a flex column spends sizing it on every rebuild.
-        crate::apply_redesign!(
-            div()
-                .id("sidebar-scroll")
-                .block()
-                .flex_1()
-                .min_h_0()
-                .overflow_x_hidden()
-                .overflow_y_scroll()
-                .track_scroll(&self.sidebar.scroll)
-                .text_size(px(13.))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(14.))
-                        .pt(px(14.))
-                        .px(px(16.))
-                        .pb(px(16.))
-                        .child(content),
-                ),
-            crate::experimental::is_desktop_redesign_enabled_cached(),
-            feature = "gpui-rubber-band",
-            |el: gpui::Stateful<gpui::Div>| el.scroll_rubber_band(true)
-        )
-        .into_any_element()
+        div()
+            .id("sidebar-scroll")
+            .block()
+            .flex_1()
+            .min_h_0()
+            .overflow_x_hidden()
+            .overflow_y_scroll()
+            .track_scroll(&self.sidebar.scroll)
+            .text_size(px(13.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .pt(px(14.))
+                    .px(px(16.))
+                    .pb(px(16.))
+                    .child(content),
+            )
+            .into_any_element()
     }
 
     /// The selection panel region (`:1077-1093`): `custom-scroll p-4 top-16

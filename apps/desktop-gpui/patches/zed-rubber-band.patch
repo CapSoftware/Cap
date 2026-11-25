@@ -23,17 +23,17 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..f75023a 100644
+index c02bd16..3151996 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -997,6 +997,13 @@ pub trait InteractiveElement: Sized {
          self.interactivity().capture_pinch(listener);
          self
      }
-+    /// Enable macOS-style rubber-band overscroll on this scrollable element.
++    /// Enable or disable macOS-style rubber-band overscroll on this scrollable element.
 +    #[cfg(feature = "rubber-band")]
 +    fn scroll_rubber_band(mut self, enabled: bool) -> Self {
-+        self.interactivity().scroll_rubber_band = enabled;
++        self.interactivity().disable_scroll_rubber_band = !enabled;
 +        self
 +    }
 +
@@ -45,29 +45,33 @@ index c02bd16..f75023a 100644
      pub(crate) scroll_anchor: Option<ScrollAnchor>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
 +    #[cfg(feature = "rubber-band")]
-+    pub(crate) scroll_rubber_band: bool,
++    pub(crate) disable_scroll_rubber_band: bool,
 +    #[cfg(feature = "rubber-band")]
 +    pub(crate) rubber_band_state: Option<Rc<RefCell<crate::RubberBandScrollState>>>,
      pub(crate) group: Option<SharedString>,
      /// The base style of the element, before any modifications are applied
      /// by focus, active, etc.
-@@ -2095,6 +2106,15 @@ impl Interactivity {
-                             .get_or_insert_with(Rc::default)
-                             .clone(),
+@@ -2097,6 +2108,19 @@ impl Interactivity {
                      );
-+                    #[cfg(feature = "rubber-band")]
-+                    if self.scroll_rubber_band {
-+                        self.rubber_band_state = Some(
-+                            element_state
-+                                .rubber_band
-+                                .get_or_insert_with(Rc::default)
-+                                .clone(),
-+                        );
-+                    }
                  }
  
++                #[cfg(feature = "rubber-band")]
++                if self.scroll_offset.is_some()
++                    && !self.disable_scroll_rubber_band
++                    && let Some(element_state) = element_state.as_mut()
++                {
++                    self.rubber_band_state = Some(
++                        element_state
++                            .rubber_band
++                            .get_or_insert_with(Rc::default)
++                            .clone(),
++                    );
++                }
++
                  let style = self.compute_style_internal(None, element_state.as_mut(), window, cx);
-@@ -2271,11 +2291,72 @@ impl Interactivity {
+                 let layout_id = f(style, window, cx);
+                 (layout_id, element_state)
+@@ -2271,11 +2295,72 @@ impl Interactivity {
              // were removed or the bounds became larger).
              let mut scroll_offset = scroll_offset.borrow_mut();
  
@@ -144,7 +148,7 @@ index c02bd16..f75023a 100644
              }
  
              if let Some(mut scroll_handle_state) = tracked_scroll_handle {
-@@ -3091,6 +3172,8 @@ impl Interactivity {
+@@ -3091,6 +3176,8 @@ impl Interactivity {
              let line_height = window.line_height();
              let hitbox = hitbox.clone();
              let current_view = window.current_view();
@@ -153,7 +157,7 @@ index c02bd16..f75023a 100644
              window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                  if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
                      let mut scroll_offset = scroll_offset.borrow_mut();
-@@ -3120,8 +3203,73 @@ impl Interactivity {
+@@ -3120,8 +3207,81 @@ impl Interactivity {
                              delta_x = Pixels::ZERO;
                          }
                      }
@@ -181,30 +185,32 @@ index c02bd16..f75023a 100644
 +                        let dx: f32 = delta_x.into();
 +                        let dy: f32 = delta_y.into();
 +
-+                        let mut x_axis = rb.x;
-+                        let mut y_axis = rb.y;
-+                        crate::apply_scroll_delta(
-+                            &mut x_axis,
-+                            &mut ox,
-+                            max_x,
-+                            dx,
-+                            w,
-+                            is_momentum,
-+                            &config,
-+                        );
-+                        crate::apply_scroll_delta(
-+                            &mut y_axis,
-+                            &mut oy,
-+                            max_y,
-+                            dy,
-+                            h,
-+                            is_momentum,
-+                            &config,
-+                        );
-+                        rb.x = x_axis;
-+                        rb.y = y_axis;
-+                        scroll_offset.x = px(ox);
-+                        scroll_offset.y = px(oy);
++                        if !(is_momentum && rb.is_springing()) {
++                            let mut x_axis = rb.x;
++                            let mut y_axis = rb.y;
++                            crate::apply_scroll_delta(
++                                &mut x_axis,
++                                &mut ox,
++                                max_x,
++                                dx,
++                                w,
++                                is_momentum,
++                                &config,
++                            );
++                            crate::apply_scroll_delta(
++                                &mut y_axis,
++                                &mut oy,
++                                max_y,
++                                dy,
++                                h,
++                                is_momentum,
++                                &config,
++                            );
++                            rb.x = x_axis;
++                            rb.y = y_axis;
++                            scroll_offset.x = px(ox);
++                            scroll_offset.y = px(oy);
++                        }
 +
 +                        let gesture_ended = matches!(
 +                            event.scroll_phase,
@@ -214,7 +220,13 @@ index c02bd16..f75023a 100644
 +                            event.momentum_phase,
 +                            crate::ScrollPhase::Ended | crate::ScrollPhase::Cancelled
 +                        );
-+                        if (gesture_ended || momentum_ended) && rb.start_springs() {
++                        let momentum_overscroll_tail = is_momentum
++                            && (rb.x.raw_overscroll != 0.0 || rb.y.raw_overscroll != 0.0)
++                            && dx.abs() < 2.0
++                            && dy.abs() < 2.0;
++                        if (gesture_ended || momentum_ended || momentum_overscroll_tail)
++                            && rb.start_springs()
++                        {
 +                            window.request_animation_frame();
 +                        }
 +                    } else {
@@ -229,7 +241,7 @@ index c02bd16..f75023a 100644
                      if *scroll_offset != old_scroll_offset {
                          cx.notify(current_view);
                      }
-@@ -3360,6 +3508,8 @@ pub struct InteractiveElementState {
+@@ -3360,6 +3520,8 @@ pub struct InteractiveElementState {
      /// blur). `None` means no activation key is pending.
      pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,

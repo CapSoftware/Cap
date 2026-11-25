@@ -3022,7 +3022,7 @@ impl SettingsWindow {
             );
         }
         #[cfg(feature = "gpui-rubber-band")]
-        if crate::experimental::is_desktop_redesign_enabled(&self.settings) {
+        if crate::experimental::is_desktop_redesign_unlocked() {
             let cfg = gpui::rubber_band_config();
             let theme = self.theme;
             let stepper =

@@ -208,8 +208,8 @@ cap-verify = { path = "../../crates/verify" }
 tempfile = "3"
 
 [features]
-default = []
-experimental-redesign = ["gpui-rubber-band"]
+default = ["gpui-rubber-band"]
+experimental-redesign = []
 gpui-rubber-band = ["gpui/rubber-band"]
 
 [target.'cfg(unix)'.dependencies]

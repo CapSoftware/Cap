@@ -4203,25 +4203,20 @@ impl MainWindow {
         // the full body, exactly as `!activeMenu() && ...` does in index.tsx.
         match self.panel {
             Some(panel) => root.child(self.render_panel(panel, cx)),
-            None => root
-                .child(self.render_logo_row(cx))
-                .child(crate::apply_redesign!(
-                    div()
-                        .id("home-scroll")
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h_0()
-                        .w_full()
-                        .pb(px(4.))
-                        .gap(px(8.))
-                        .overflow_y_scroll()
-                        .child(self.render_targets(cx))
-                        .child(self.render_base_controls(cx)),
-                    crate::experimental::is_desktop_redesign_enabled_cached(),
-                    feature = "gpui-rubber-band",
-                    |el: gpui::Stateful<gpui::Div>| el.scroll_rubber_band(true)
-                )),
+            None => root.child(self.render_logo_row(cx)).child(
+                div()
+                    .id("home-scroll")
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .pb(px(4.))
+                    .gap(px(8.))
+                    .overflow_y_scroll()
+                    .child(self.render_targets(cx))
+                    .child(self.render_base_controls(cx)),
+            ),
         }
     }
 
@@ -4452,7 +4447,7 @@ impl MainWindow {
                     .min_h_0()
                     .pt(px(16.))
                     .overflow_hidden()
-                    .child(crate::apply_redesign!(
+                    .child(
                         div()
                             .id("panel-body")
                             .flex()
@@ -4474,10 +4469,7 @@ impl MainWindow {
                                     self.render_library_grid(kind, cx).into_any_element()
                                 }
                             }),
-                        crate::experimental::is_desktop_redesign_enabled_cached(),
-                        feature = "gpui-rubber-band",
-                        |el: gpui::Stateful<gpui::Div>| el.scroll_rubber_band(true)
-                    )),
+                    ),
             )
     }
 
