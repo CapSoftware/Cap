@@ -48,9 +48,7 @@ const submit = async (decisions: string[]) => {
 	for (const [key, value] of Object.entries(oauthParams))
 		form.append(key, value);
 	for (const decision of decisions) form.append("decision", decision);
-	const outcome = await authorizeMcpClient(form).catch(
-		(error: Error) => error,
-	);
+	const outcome = await authorizeMcpClient(form).catch((error: Error) => error);
 	expect(outcome).toBeInstanceOf(Error);
 	const message = (outcome as Error).message;
 	expect(message.startsWith("REDIRECT:")).toBe(true);
