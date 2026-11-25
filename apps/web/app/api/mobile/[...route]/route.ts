@@ -101,6 +101,7 @@ import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { playbackUrlValidity } from "@/lib/signed-url-validity";
 import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
+import { shouldRefuseTorExit, type TorExitSurface } from "@/lib/tor-exit-gate";
 import { userPreferencesObject } from "@/lib/user-preferences-sql";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
 import {
@@ -487,6 +488,15 @@ const getMobileThumbnailUrl = Effect.fn("Mobile.getThumbnailUrl")(function* (
 	return yield* bucket.getSignedObjectUrl(thumbnailKey);
 });
 
+const ensureNotTorExit = Effect.fn("Mobile.ensureNotTorExit")(function* (
+	surface: TorExitSurface,
+	headers: Headers,
+) {
+	if (yield* Effect.promise(() => shouldRefuseTorExit(surface, headers))) {
+		return yield* Effect.fail(new HttpApiError.Forbidden());
+	}
+});
+
 const ensureEmailSignInAllowed = Effect.fn("Mobile.ensureEmailSignInAllowed")(
 	function* (email: string) {
 		if (!emailPattern.test(email)) {
@@ -579,6 +589,7 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 ) {
 	const email = normalizeSignInEmail(rawEmail);
 	if (!email) return yield* Effect.fail(new HttpApiError.BadRequest());
+	yield* ensureNotTorExit("mobile-email-session", headers);
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
 
@@ -637,6 +648,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 		return yield* Effect.fail(new HttpApiError.BadRequest());
 	}
 
+	yield* ensureNotTorExit("mobile-email-session", headers);
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
 
@@ -3718,6 +3730,18 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					.handle("requestSession", ({ request, urlParams }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
+								if (
+									yield* Effect.promise(() =>
+										shouldRefuseTorExit(
+											"mobile-session",
+											toHeaders(request.headers),
+										),
+									)
+								) {
+									const blockedUrl = new URL("/login", getDeploymentOrigin());
+									blockedUrl.searchParams.set("error", "SignupBlocked");
+									return HttpServerResponse.redirect(blockedUrl.toString());
+								}
 								const user = yield* getCurrentUser;
 								if (Option.isNone(user) || urlParams.provider === "workos") {
 									const loginRedirectUrl =
