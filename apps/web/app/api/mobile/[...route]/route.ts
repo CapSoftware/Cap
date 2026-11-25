@@ -16,6 +16,7 @@ import {
 import { getEmailDeliveryStatus, sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
+import { resolveOrCreateActiveOrganization } from "@cap/database/organization-pointer";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, serverEnv } from "@cap/env";
@@ -1584,11 +1585,28 @@ const getBootstrap = Effect.fn("Mobile.getBootstrap")(function* () {
 	const user = yield* CurrentUser;
 	const mobileUser = yield* getMobileUser();
 
-	const organizations = yield* getAccessibleOrganizations(user.id);
-	const activeOrganization =
+	let organizations = yield* getAccessibleOrganizations(user.id);
+	let activeOrganization =
 		organizations.find((org) => org.id === mobileUser.activeOrganizationId) ??
-		organizations[0] ??
 		null;
+	// Folder, analytics and import routes use the stored active organization,
+	// so it has to match the one the app shows. An account with no
+	// organization gets a personal one, as signup and desktop uploads do.
+	if (!activeOrganization) {
+		const database = yield* Database;
+		const fallback = yield* database.use((db) =>
+			resolveOrCreateActiveOrganization(db, {
+				id: user.id,
+				activeOrganizationId: mobileUser.activeOrganizationId,
+			}),
+		);
+		if (organizations.length === 0 && fallback)
+			organizations = yield* getAccessibleOrganizations(user.id);
+		activeOrganization =
+			organizations.find((org) => org.id === fallback?.id) ??
+			organizations[0] ??
+			null;
+	}
 	const activeOrganizationId = activeOrganization?.id ?? null;
 	const [rootFolders, spaces] = activeOrganization
 		? yield* Effect.all([

@@ -222,6 +222,17 @@ describe("video creation with upload progress", () => {
 		expect(mocks.revalidatePath).not.toHaveBeenCalled();
 	});
 
+	it("refuses a requested id outside the video id format", async () => {
+		for (const id of ["ab\\", "a'b", "../other", "a/b", "a".repeat(16)]) {
+			await expect(
+				createVideoAndGetUploadUrl({ orgId, videoId: Video.VideoId.make(id) }),
+			).rejects.toThrow("Invalid video id");
+		}
+		expect(mocks.store.videos.size).toBe(0);
+		expect(mocks.transactionCalls).toBe(0);
+		expect(mocks.createUploadTargetForUser).not.toHaveBeenCalled();
+	});
+
 	it("rolls back a recording when the progress insert fails", async () => {
 		mocks.rejectUpload = true;
 		await expect(

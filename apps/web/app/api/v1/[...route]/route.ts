@@ -186,7 +186,10 @@ import {
 import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
-import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
+import {
+	InviteeRequiresAcceptanceError,
+	provisionOrganizationInvitee,
+} from "@/lib/organization-provisioning";
 import { organizationSettingsKeepingRowOwnedKeys } from "@/lib/organization-settings-write";
 import {
 	canChangeOrganizationMemberRole,
@@ -2573,11 +2576,16 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 									invitedByUserId: principal.id,
 									role: "member",
 								}),
-							catch: () =>
-								temporarilyUnavailable(
-									input.requestId,
-									"The Loom import owner could not be provisioned",
-								),
+							catch: (error) =>
+								error instanceof InviteeRequiresAcceptanceError
+									? forbidden(
+											input.requestId,
+											"The Loom import owner must accept an invite to this organization first",
+										)
+									: temporarilyUnavailable(
+											input.requestId,
+											"The Loom import owner could not be provisioned",
+										),
 						});
 						ownerId = provisioned.userId;
 					}
