@@ -679,15 +679,18 @@ async fn wait_for_studio_finish(
 
 /// Keeps waiting for a Studio stop the app stopped waiting for, finalizes it
 /// the way an on-time stop is finalized when `finalize` is given, and
-/// refreshes the library.
+/// refreshes the library. `in_progress` keeps the library from deleting the
+/// folder until then.
 #[cfg(windows)]
 fn finish_studio_in_background(
     finishing: studio_recording::StudioFinishing,
     finalize: Option<(ScreenCaptureTarget, Option<StudioCameraSnapshot>)>,
+    in_progress: Arc<crate::library::RecordingInProgress>,
 ) {
     let path = finishing.project_path().to_path_buf();
     tracing::warn!(path = %path.display(), "Studio recording is still saving; finishing it in the background");
     drop(tokio::spawn(async move {
+        let _in_progress = in_progress;
         let outcome = finishing.wait().await;
         match (outcome.result, finalize) {
             (Ok(completed), Some((capture_target, camera_snapshot))) => {
@@ -1143,6 +1146,8 @@ impl ActiveRecording {
             return None;
         };
         let handle = handle.clone();
+        #[cfg(windows)]
+        let in_progress = self._in_progress.clone();
         Some(Box::pin(async move {
             let capture_target = handle.capture_target.clone();
             #[cfg(windows)]
@@ -1157,6 +1162,7 @@ impl ActiveRecording {
                             finish_studio_in_background(
                                 finishing,
                                 Some((background_target, camera_snapshot)),
+                                in_progress,
                             );
                             return (true, Err(anyhow::Error::new(StudioStillSaving)));
                         }
@@ -1283,13 +1289,15 @@ impl ActiveRecording {
         {
             Handle::Studio(handle) => {
                 let handle = handle.clone();
+                #[cfg(windows)]
+                let in_progress = self._in_progress.clone();
                 return Box::pin(async move {
                     let outcome = handle.stop_with_outcome().await;
                     #[cfg(windows)]
                     let outcome = match wait_for_studio_finish(outcome).await {
                         Ok(outcome) => outcome,
                         Err(finishing) => {
-                            finish_studio_in_background(finishing, None);
+                            finish_studio_in_background(finishing, None, in_progress);
                             return (
                                 true,
                                 Err(anyhow!("Recording pipeline failed; local files preserved")),
