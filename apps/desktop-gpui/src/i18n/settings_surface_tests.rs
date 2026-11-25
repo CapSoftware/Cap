@@ -29,6 +29,7 @@ pub(super) fn is_settings_surface_key(key: &str) -> bool {
 }
 
 const FORMATTED: &[&str] = &[
+    "settings.quality.studio.bitrate_value",
     "settings.quality.studio.resolution_up_to",
     "settings.sidebar.downloading",
     "settings.sidebar.downloading_progress",
@@ -192,6 +193,16 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (
             tr::settings::quality::studio::ultra_description(),
             "Keeps the most detail for heavy editing. Uses the most disk space.",
+        ),
+        (tr::settings::quality::studio::custom(), "Custom"),
+        (
+            tr::settings::quality::studio::custom_description(),
+            "Set the screen recording bitrate yourself.",
+        ),
+        (tr::settings::quality::studio::bitrate(), "Bitrate"),
+        (
+            tr::settings::quality::studio::bitrate_description(),
+            "Higher keeps more detail and makes larger files. Very high values can be more than your computer's encoder delivers.",
         ),
         (tr::settings::quality::instant::title(), "Instant Mode"),
         (
@@ -1531,6 +1542,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         plain_keys,
         "every plain key has a literal above"
     );
+    assert_eq!(tr::settings::quality::studio::bitrate_value(45), "45 Mbps");
     for key in FORMATTED {
         assert!(KEYS.contains(key), "{key}");
     }

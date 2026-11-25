@@ -48,6 +48,8 @@ pub(crate) fn settings_fixture(
         placeholders_task: None,
         slider_track: Rc::new(Cell::new(None)),
         slider_dragging: false,
+        bitrate_slider_track: Rc::new(Cell::new(None)),
+        bitrate_slider_dragging: false,
         windows: Vec::new(),
         focus: cx.focus_handle(),
         _sign_in_subscriptions: std::array::from_fn(|_| gpui::Subscription::new(|| {})),
