@@ -211,7 +211,8 @@ impl Detector {
     pub fn holds_mic(&self, app_id: &str, clients: &[MicClient]) -> bool {
         clients.iter().any(|client| {
             !self.ignored(client)
-                && apps::classify(self.platform, &client.platform_id).is_some_and(|a| a.id == app_id)
+                && apps::classify(self.platform, &client.platform_id)
+                    .is_some_and(|a| a.id == app_id)
         })
     }
 

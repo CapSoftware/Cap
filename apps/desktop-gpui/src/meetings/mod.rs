@@ -4415,7 +4415,12 @@ impl Meetings {
     }
 
     /// One look after a wake; true once there is nothing left to look for.
-    fn on_wake_look(&mut self, app_id: &str, snapshot: &MicSnapshot, cx: &mut Context<Self>) -> bool {
+    fn on_wake_look(
+        &mut self,
+        app_id: &str,
+        snapshot: &MicSnapshot,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.session.call_to_look_for_after_wake(self.now()) != Some(app_id) {
             return true;
         }
