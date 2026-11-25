@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
 	keysToday: 0,
 	countedSince: null as string | null,
+	countLock: null as string | null,
 	consumed: 0,
 	minted: 0,
 }));
@@ -39,7 +40,12 @@ const tx = {
 			where: (condition: SQL) => {
 				if (fields && "total" in fields) {
 					state.countedSince = String(dialect.sqlToQuery(condition).params[1]);
-					return Promise.resolve([{ total: state.keysToday }]);
+					return {
+						for: async (strength: string) => {
+							state.countLock = strength;
+							return [{ total: state.keysToday }];
+						},
+					};
 				}
 				return {
 					limit: () =>
@@ -96,6 +102,7 @@ const exchange = () =>
 beforeEach(() => {
 	state.keysToday = 0;
 	state.countedSince = null;
+	state.countLock = null;
 	state.consumed = 0;
 	state.minted = 0;
 });
@@ -107,6 +114,7 @@ describe("CLI sign-in keys per account", () => {
 
 		expect(Exit.isSuccess(await exchange())).toBe(true);
 		expect(state.minted).toBe(1);
+		expect(state.countLock).toBe("update");
 		const since = Date.parse(`${state.countedSince?.replace(" ", "T")}Z`);
 		expect(before - since).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 1000);
 		expect(before - since).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 1000);

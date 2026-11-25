@@ -116,7 +116,8 @@ export const exchangeAgentAuthorizationCode = Effect.fn(
 							new Date(now.getTime() - AGENT_KEY_WINDOW_MS),
 						),
 					),
-				);
+				)
+				.for("update");
 			if (Number(minted?.total ?? 0) >= AGENT_KEYS_PER_ACCOUNT_PER_DAY) {
 				return { state: "limited" as const };
 			}

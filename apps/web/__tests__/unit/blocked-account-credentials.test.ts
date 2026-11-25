@@ -53,6 +53,7 @@ const mocks = vi.hoisted(() => {
 	});
 	const rows = () =>
 		Object.assign(Promise.resolve([keyRow()]), {
+			for: async () => [{ total: 0 }],
 			limit: () =>
 				Object.assign(Promise.resolve([keyRow()]), {
 					for: async () => [userRow()],
