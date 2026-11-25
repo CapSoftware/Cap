@@ -795,6 +795,12 @@ jobs:
             fi
             bsdtar -xf "$RPM" -C "$WORK/rpm"
             test "$(cat "$WORK/rpm/usr/lib/cap/package-format")" = rpm
+            test -s "$WORK/rpm/usr/lib/cap/alsa-lib/libasound_module_pcm_pulse.so"
+            grep -qx "<confdir:alsa.conf>" "$WORK/rpm/usr/lib/cap/alsa-pulse.conf"
+            if rpm -qpR "$RPM" | grep -q 'alsa-plugins'; then
+              echo "::error::The Cap RPM must carry its ALSA pulse plugin instead of requiring one that conflicts with pipewire-alsa."
+              exit 1
+            fi
             verify_root "$WORK/rpm" Cap cap-muxer cap-cli
             verify_glibc_floor "$WORK/rpm"
           fi

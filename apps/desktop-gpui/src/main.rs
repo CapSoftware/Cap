@@ -326,7 +326,7 @@ fn main() {
     }
 
     #[cfg(target_os = "linux")]
-    if let Some(config) = cap_utils::linux_package::appimage_alsa_config_path() {
+    if let Some(config) = cap_utils::linux_package::bundled_alsa_config_path() {
         // Logging starts a worker thread, so configure the process environment first.
         unsafe {
             std::env::set_var("ALSA_CONFIG_PATH", config);
