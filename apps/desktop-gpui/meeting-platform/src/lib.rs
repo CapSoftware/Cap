@@ -17,7 +17,9 @@ use macos as platform;
 use windows as platform;
 
 #[cfg(target_os = "macos")]
-pub use macos::system_tap::{SystemAudioTap, TapChunk, TapError, TapStats, system_tap_supported};
+pub use macos::system_tap::{
+    SystemAudioTap, TapChunk, TapError, TapStats, system_tap_supported, warm_screen_reader_lookup,
+};
 #[cfg(target_os = "macos")]
 pub use macos::tcc::{
     AudioCapturePermission, audio_capture_permission, request_audio_capture_permission,

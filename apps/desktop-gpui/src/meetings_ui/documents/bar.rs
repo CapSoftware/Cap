@@ -903,11 +903,11 @@ impl RecordingBar {
                 .child(
                     self.segment("bar-panel")
                         .aria_label(tr::documents::export::transcript())
-                    .aria_description(if self.panel_open {
-                        tr::documents::a11y::expanded()
-                    } else {
-                        tr::documents::a11y::collapsed()
-                    })
+                        .aria_description(if self.panel_open {
+                            tr::documents::a11y::expanded()
+                        } else {
+                            tr::documents::a11y::collapsed()
+                        })
                         .child(glyph(palette.muted))
                         .child(chevron)
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(BarEvent::TogglePanel))),

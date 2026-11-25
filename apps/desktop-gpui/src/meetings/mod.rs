@@ -805,6 +805,15 @@ impl Meetings {
             return;
         }
         let settings = persist::load_settings();
+        // The meeting's tap looks for a running screen reader before it
+        // starts; the first such look in a process is slow, so it is made
+        // here, off the main thread.
+        #[cfg(target_os = "macos")]
+        if settings.enabled {
+            cx.background_executor()
+                .spawn(async { cap_meeting_platform::warm_screen_reader_lookup() })
+                .detach();
+        }
         let entity = cx.new(|cx| {
             let mut this = Self::new(settings);
             this.start_recovery(cx);
