@@ -119,6 +119,8 @@ const SHORT_LINE: usize = 32;
 /// Box height in frame pixels from which the row merge accepts uneven boxes.
 const LARGE_TEXT: f32 = 28.0;
 const KNOWN_MIN_SHARED: usize = 10;
+/// Share of a known string a run from its middle must cover to match.
+const KNOWN_MOST: f32 = 0.6;
 /// Frame pixels from the left or right edge within which a line is cut by it.
 const EDGE: f32 = 3.0;
 /// Characters of a known string that a line cut by the frame's edge must show
@@ -1214,9 +1216,6 @@ fn whole_words(text: &[char], known: &[char]) -> Option<(usize, usize)> {
     })
 }
 
-/// The span of `text` around its longest run of characters shared with
-/// `known`, widened to whole tokens, when that run is long enough: the whole
-/// of a short known string, or [`KNOWN_MIN_SHARED`] characters of a long one.
 /// The part of a line cut by the frame's edge that is the start of `known`
 /// (cut on the right: the line ends with it) or its end (cut on the left: the
 /// line starts with it), at least [`EDGE_MIN_SHARED`] characters, grown to
@@ -1256,24 +1255,33 @@ fn edge_span(
     None
 }
 
+/// The span of `text` around its longest run of characters shared with
+/// `known`, widened to whole tokens, when that run is long enough (the whole
+/// of a short known string, or [`KNOWN_MIN_SHARED`] characters of a long one)
+/// and is one of the string's ends (the rest cut off or hidden) or most of it
+/// ([`KNOWN_MOST`]), not a run from its middle.
 fn shared_span(text: &[char], known: &[char]) -> Option<(usize, usize)> {
     if text.is_empty() || known.is_empty() {
         return None;
     }
-    let mut best = (0usize, 0usize);
+    let mut best = (0usize, 0usize, 0usize);
     let mut previous = vec![0usize; known.len() + 1];
     let mut current = vec![0usize; known.len() + 1];
     for (i, a) in text.iter().enumerate() {
         for (j, b) in known.iter().enumerate() {
             current[j + 1] = if a == b { previous[j] + 1 } else { 0 };
             if current[j + 1] > best.0 {
-                best = (current[j + 1], i + 1);
+                best = (current[j + 1], i + 1, j + 1);
             }
         }
         std::mem::swap(&mut previous, &mut current);
     }
-    let (length, end) = best;
+    let (length, end, known_end) = best;
     if length < KNOWN_MIN_SHARED.min(known.len()) {
+        return None;
+    }
+    let one_end = known_end == length || known_end == known.len();
+    if !one_end && (length as f32) < known.len() as f32 * KNOWN_MOST {
         return None;
     }
     let mut start = end - length;
@@ -1571,6 +1579,8 @@ mod tests {
         assert_eq!(shared_span(&tail, &known), Some((7, 25)));
         let other = "https://example.com/settings".chars().collect::<Vec<_>>();
         assert_eq!(shared_span(&other, &known), None);
+        let middle = "ref AgEIcHlwaS5vcm ok".chars().collect::<Vec<_>>();
+        assert_eq!(shared_span(&middle, &known), None);
     }
 
     #[test]
