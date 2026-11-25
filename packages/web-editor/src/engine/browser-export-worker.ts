@@ -306,7 +306,7 @@ async function loadModule(): Promise<RendererModule> {
 
 async function fetchBytes(url: string) {
 	const response = await fetch(url, { credentials: "same-origin" });
-	if (response.status === 404) throw new Error(MISSING_EDITOR_IMAGE);
+	if (response.status === 410) throw new Error(MISSING_EDITOR_IMAGE);
 	if (!response.ok) throw new Error("Export asset could not load");
 	return new Uint8Array(await response.arrayBuffer());
 }

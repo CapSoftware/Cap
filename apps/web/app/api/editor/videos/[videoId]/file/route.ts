@@ -39,6 +39,7 @@ class Api extends HttpApi.make("WebEditorBrowserFileApi").add(
 				}),
 			)
 			.addError(HttpApiError.NotFound)
+			.addError(HttpApiError.Gone)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.ServiceUnavailable)
 			.addError(HttpApiError.InternalServerError)
@@ -84,7 +85,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							Effect.catchTag("StorageError", (error) =>
 								Effect.fail(
 									isStorageObjectNotFound(error)
-										? new HttpApiError.NotFound()
+										? new HttpApiError.Gone()
 										: new HttpApiError.ServiceUnavailable(),
 								),
 							),

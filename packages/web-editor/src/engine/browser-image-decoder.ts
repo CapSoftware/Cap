@@ -183,7 +183,7 @@ export class BrowserImageDecoder {
 				cache: "default",
 				credentials: "same-origin",
 			});
-			if (response.status === 404) throw new Error(MISSING_EDITOR_IMAGE);
+			if (response.status === 410) throw new Error(MISSING_EDITOR_IMAGE);
 			if (!response.ok) throw new Error("Editor image could not load");
 			return this.decode(await response.arrayBuffer());
 		}
