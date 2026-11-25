@@ -298,6 +298,7 @@ async function importConciergeCsvRows({
 			actorId: request.ownerId,
 			migrationRequestId: requestId,
 			migrationLeaseToken: leaseToken,
+			operatorApproved: true,
 		});
 		revalidatePath("/dashboard/import/loom");
 		revalidatePath("/dashboard/admin/loom-migrations");
@@ -624,6 +625,7 @@ async function prepareConciergeLoomFileUpload({
 				email: normalizedEmail,
 				invitedByUserId: request.ownerId,
 				role: "member",
+				operatorApproved: true,
 			});
 			member = { userId: provisioned.userId, email: normalizedEmail };
 		}

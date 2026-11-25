@@ -1086,9 +1086,10 @@ describe("importFromLoom", () => {
 		expect(valuesMock).not.toHaveBeenCalled();
 	});
 
-	it("provisions missing CSV users and starts imports for them", async () => {
+	it("provisions missing CSV users on the importer's domain and starts imports for them", async () => {
 		whereMock
 			.mockReturnValueOnce(withLimit([]))
+			.mockReturnValueOnce(withLimit([{ email: "admin@example.com" }]))
 			.mockReturnValueOnce(withLimit([]))
 			.mockReturnValueOnce(withLimit([]))
 			.mockReturnValueOnce(withLimit([]))
@@ -1185,6 +1186,44 @@ describe("importFromLoom", () => {
 			"video-123",
 			"org-1",
 		);
+	});
+
+	it("asks for an invite first when a CSV owner is outside the importer's domain", async () => {
+		whereMock
+			.mockReturnValueOnce(withLimit([]))
+			.mockReturnValueOnce(withLimit([{ email: "admin@example.com" }]))
+			.mockReturnValueOnce(withLimit([]));
+
+		const fetchMock = vi.mocked(fetch);
+		const { importFromLoomCsv } = await import("@/actions/loom");
+
+		const result = await importFromLoomCsv({
+			orgId: "org-1" as never,
+			rows: [
+				{
+					rowNumber: 2,
+					loomUrl: "https://www.loom.com/share/loom-abc1234567",
+					userEmail: "someone@elsewhere.dev",
+				},
+			],
+		});
+
+		expect(result).toMatchObject({
+			importedCount: 0,
+			failedCount: 1,
+			results: [
+				{
+					rowNumber: 2,
+					userEmail: "someone@elsewhere.dev",
+					success: false,
+					error:
+						"Invite this person to the organization first. Their videos can be imported once they accept.",
+				},
+			],
+		});
+		expect(valuesMock).not.toHaveBeenCalled();
+		expect(mockDb.update).not.toHaveBeenCalled();
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("imports a CSV row without calling the Vercel firewall", async () => {
