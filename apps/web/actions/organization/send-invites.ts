@@ -126,16 +126,25 @@ export async function sendOrganizationInvites(
 	);
 	const recordEmails = recordInvites.map((invite) => invite.email);
 
-	const provisionResults = await Promise.allSettled(
-		directInvites.map((invite) =>
-			provisionOrganizationInvitee({
-				organizationId,
-				email: invite.email,
-				invitedByUserId: user.id,
-				role: invite.role,
-			}),
-		),
-	);
+	// One at a time, so each add sees the seats the previous one took.
+	const provisionResults: PromiseSettledResult<
+		Awaited<ReturnType<typeof provisionOrganizationInvitee>>
+	>[] = [];
+	for (const invite of directInvites) {
+		try {
+			provisionResults.push({
+				status: "fulfilled",
+				value: await provisionOrganizationInvitee({
+					organizationId,
+					email: invite.email,
+					invitedByUserId: user.id,
+					role: invite.role,
+				}),
+			});
+		} catch (reason) {
+			provisionResults.push({ status: "rejected", reason });
+		}
+	}
 
 	const inviteRecords = await db().transaction(async (tx) => {
 		if (recordInvites.length === 0) return [];
