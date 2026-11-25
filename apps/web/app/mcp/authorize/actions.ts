@@ -4,6 +4,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { redirect } from "next/navigation";
 import {
 	createMcpAuthorizationCode,
+	MCP_AUTHORIZATION_PARAMS,
 	mcpIssuer,
 	validateMcpAuthorizationRequest,
 } from "@/lib/mcp-auth";
@@ -12,16 +13,7 @@ import { shouldRefuseTorExit } from "@/lib/tor-exit-gate";
 
 export async function authorizeMcpClient(formData: FormData) {
 	const params = new URLSearchParams();
-	for (const key of [
-		"client_id",
-		"redirect_uri",
-		"response_type",
-		"state",
-		"code_challenge",
-		"code_challenge_method",
-		"scope",
-		"resource",
-	]) {
+	for (const key of MCP_AUTHORIZATION_PARAMS) {
 		const value = formData.get(key);
 		if (typeof value === "string") params.set(key, value);
 	}
@@ -29,8 +21,9 @@ export async function authorizeMcpClient(formData: FormData) {
 	if (!request) throw new Error("Invalid authorization request");
 	const user = await getCurrentUser();
 	if (!user) redirect("/login");
-	const decision = formData.get("decision");
-	if (decision === "approve" && (await shouldRefuseTorExit("mcp-authorize")))
+	const decisions = formData.getAll("decision");
+	const approved = decisions.length === 1 && decisions[0] === "approve";
+	if (approved && (await shouldRefuseTorExit("mcp-authorize")))
 		redirect("/login?error=SignupBlocked");
 	if (
 		await isRateLimited(RATE_LIMIT_IDS.AGENT_AUTHORIZATION, {
@@ -39,7 +32,7 @@ export async function authorizeMcpClient(formData: FormData) {
 	)
 		throw new Error("Too many authorization attempts. Try again later.");
 	const callback = new URL(request.redirectUri);
-	if (decision === "approve") {
+	if (approved) {
 		callback.searchParams.set(
 			"code",
 			await createMcpAuthorizationCode(user, request),
