@@ -23,7 +23,7 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..e691c04 100644
+index c02bd16..ca45e8e 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -997,6 +997,13 @@ pub trait InteractiveElement: Sized {
@@ -157,7 +157,7 @@ index c02bd16..e691c04 100644
              window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                  if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
                      let mut scroll_offset = scroll_offset.borrow_mut();
-@@ -3120,8 +3207,81 @@ impl Interactivity {
+@@ -3120,8 +3207,87 @@ impl Interactivity {
                              delta_x = Pixels::ZERO;
                          }
                      }
@@ -186,7 +186,7 @@ index c02bd16..e691c04 100644
 +                        let dy: f32 = delta_y.into();
 +
 +                        let was_springing = rb.is_springing();
-+                        if !(is_momentum && was_springing) {
++                        if !(is_momentum && (was_springing || rb.momentum_bounced)) {
 +                            let mut x_axis = rb.x;
 +                            let mut y_axis = rb.y;
 +                            crate::apply_scroll_delta(
@@ -214,6 +214,9 @@ index c02bd16..e691c04 100644
 +                        }
 +
 +                        if !was_springing && rb.is_springing() {
++                            if is_momentum {
++                                rb.momentum_bounced = true;
++                            }
 +                            rb.last_frame = Some(std::time::Instant::now());
 +                            cx.notify(current_view);
 +                        }
@@ -226,6 +229,9 @@ index c02bd16..e691c04 100644
 +                            event.momentum_phase,
 +                            crate::ScrollPhase::Ended | crate::ScrollPhase::Cancelled
 +                        );
++                        if momentum_ended {
++                            rb.momentum_bounced = false;
++                        }
 +                        if (gesture_ended || momentum_ended) && rb.start_springs() {
 +                            cx.notify(current_view);
 +                        }
@@ -241,7 +247,7 @@ index c02bd16..e691c04 100644
                      if *scroll_offset != old_scroll_offset {
                          cx.notify(current_view);
                      }
-@@ -3360,6 +3520,8 @@ pub struct InteractiveElementState {
+@@ -3360,6 +3526,8 @@ pub struct InteractiveElementState {
      /// blur). `None` means no activation key is pending.
      pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
@@ -325,10 +331,10 @@ index 1feee49..1c95a05 100644
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..d61e1ca
+index 0000000..214aebe
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,251 @@
 +use std::sync::RwLock;
 +use std::time::Instant;
 +
@@ -348,7 +354,7 @@ index 0000000..d61e1ca
 +    pub const DEFAULT: Self = Self {
 +        resistance: 0.55,
 +        spring_stiffness: 220.0,
-+        spring_damping: 28.0,
++        spring_damping: 30.0,
 +        momentum_carry: 0.35,
 +        max_overscroll_ratio: 0.50,
 +        settle_epsilon: 0.25,
@@ -411,12 +417,17 @@ index 0000000..d61e1ca
 +            return false;
 +        }
 +        let dt = dt.clamp(0.0, 1.0 / 30.0);
++        let prev = self.raw_overscroll;
 +        let accel =
 +            -config.spring_stiffness * self.raw_overscroll - config.spring_damping * self.velocity;
 +        self.velocity += accel * dt;
 +        self.raw_overscroll += self.velocity * dt;
 +
-+        if self.raw_overscroll.abs() < config.settle_epsilon && self.velocity.abs() < 1.0 {
++        let crossed_zero =
++            (prev > 0.0 && self.raw_overscroll <= 0.0) || (prev < 0.0 && self.raw_overscroll >= 0.0);
++        if crossed_zero
++            || (self.raw_overscroll.abs() < config.settle_epsilon && self.velocity.abs() < 1.0)
++        {
 +            self.raw_overscroll = 0.0;
 +            self.velocity = 0.0;
 +            self.springing = false;
@@ -434,6 +445,7 @@ index 0000000..d61e1ca
 +    pub last_frame: Option<Instant>,
 +    pub scroll_max: Point<Pixels>,
 +    pub bounds_size: Size<Pixels>,
++    pub momentum_bounced: bool,
 +}
 +
 +impl RubberBandScrollState {
@@ -441,6 +453,7 @@ index 0000000..d61e1ca
 +        self.x.cancel_spring();
 +        self.y.cancel_spring();
 +        self.last_frame = None;
++        self.momentum_bounced = false;
 +    }
 +
 +    pub fn start_springs(&mut self) -> bool {
