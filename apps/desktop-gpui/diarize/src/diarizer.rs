@@ -1587,6 +1587,7 @@ impl MeetingDiarizer {
                 *s = None;
             }
         }
+        self.keep_the_user_over_the_call(&mut scores);
         let mut leaked: Vec<bool> = scores
             .iter()
             .map(|s| *s >= Some(self.config.leak))
@@ -1893,6 +1894,37 @@ impl MeetingDiarizer {
         );
         for (&o, &i) in owner.iter().zip(&members) {
             assignment[i] = Some(FinalLabel::Speaker(base + o).into());
+        }
+    }
+
+    /// A microphone stretch that rises and falls with the call but sounds
+    /// like the user more than like anyone the call has then is the user
+    /// talking over the call (music on it makes the microphone follow its
+    /// loudness), never the call heard in the room. Where the call holds only
+    /// the user sent back, the stretch keeps its score: that is the room
+    /// playing them back.
+    fn keep_the_user_over_the_call(&self, scores: &mut [Option<f32>]) {
+        let Some(user) = self
+            .user
+            .and_then(|u| self.clusters.iter().find(|c| c.id == u))
+        else {
+            return;
+        };
+        for (piece, score) in self.pieces.iter().zip(scores.iter_mut()) {
+            if piece.track != Track::Mic || *score < Some(self.config.leak) {
+                continue;
+            }
+            let Some(e) = piece.embedding.as_deref() else {
+                continue;
+            };
+            let own = user.centroid.similarity(e);
+            if own >= self.config.assign
+                && self
+                    .best_overlapping(Track::System, e, piece.start_ms, piece.end_ms)
+                    .is_some_and(|(_, call)| own > call)
+            {
+                *score = None;
+            }
         }
     }
 

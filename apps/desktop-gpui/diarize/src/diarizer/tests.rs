@@ -312,6 +312,43 @@ fn the_user_echoed_on_the_system_track_is_not_a_new_person() {
 }
 
 #[test]
+fn the_user_talking_over_music_on_the_call_is_never_the_call_in_the_room() {
+    let mut d = diarizer(speakers(4));
+    let user = only(&push_samples(
+        &mut d,
+        Track::Mic,
+        0,
+        &spoken(1, 0, 6_000, 3, 0, 1.0),
+    ));
+    let remote = only(&push(&mut d, Track::System, 7_000, &[(2, 3_000)]));
+    // Music on the call; the laptop microphone hears it and the user talks
+    // over it, so the microphone rises and falls with the call.
+    push_samples(
+        &mut d,
+        Track::System,
+        11_000,
+        &spoken(3, 11_000, 5_000, 9, 0, 1.0),
+    );
+    push_samples(
+        &mut d,
+        Track::Mic,
+        11_000,
+        &spoken(1, 11_000, 5_000, 9, 2, 1.0),
+    );
+    let pass = d.finish();
+    let mine = pass
+        .segments
+        .iter()
+        .find(|s| s.track == Track::Mic && s.key == 11_000)
+        .unwrap();
+    assert!(
+        mine.spans.iter().all(|s| !s.echo && s.speaker == user),
+        "{mine:?}"
+    );
+    assert!(pass.speakers.iter().any(|s| s.id == remote));
+}
+
+#[test]
 fn the_user_sent_back_without_their_rhythm_still_folds_into_them_at_the_end() {
     // A far end that reshapes its audio: the call holds the user's voice but
     // its loudness no longer lines up with the microphone's.
