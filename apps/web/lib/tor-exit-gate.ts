@@ -145,6 +145,10 @@ export async function getTorExitList(
 	return (await waitAtMost(loading, waitMs))?.addresses ?? null;
 }
 
+export function pendingTorExitListLoad(): Promise<unknown> {
+	return pendingLoad ?? Promise.resolve();
+}
+
 export function resetTorExitListCache() {
 	loadedList = null;
 	pendingLoad = null;

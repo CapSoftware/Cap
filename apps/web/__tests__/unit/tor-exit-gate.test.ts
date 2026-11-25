@@ -3,6 +3,7 @@ import {
 	getTorExitList,
 	normalizeIpAddress,
 	parseTorExitList,
+	pendingTorExitListLoad,
 	resetTorExitListCache,
 	shouldRefuseTorExit,
 	TOR_EXIT_LIST_URL,
@@ -161,9 +162,8 @@ describe("getTorExitList cache", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 
 		release(listResponse(exitList(UNLISTED)));
-		await vi.waitFor(async () => {
-			expect((await getTorExitList())?.has(UNLISTED)).toBe(true);
-		});
+		await pendingTorExitListLoad();
+		expect((await getTorExitList())?.has(UNLISTED)).toBe(true);
 	});
 
 	it("stops using a list that could not be refreshed for a day", async () => {
@@ -172,7 +172,11 @@ describe("getTorExitList cache", () => {
 		fetchMock.mockRejectedValue(new Error("offline"));
 
 		await getTorExitList(now + 11 * 60_000);
-		await vi.waitFor(() => expect(console.warn).toHaveBeenCalled());
+		await pendingTorExitListLoad();
+		expect(console.warn).toHaveBeenCalledWith(
+			"[tor-exit] List unavailable, allowing requests",
+			{ error: "offline" },
+		);
 		expect(await getTorExitList(now + 25 * 60 * 60_000)).toBeNull();
 	});
 
@@ -218,9 +222,8 @@ describe("getTorExitList cache", () => {
 		expect(await lookup).toBeNull();
 
 		release(listResponse());
-		await vi.waitFor(async () => {
-			expect((await getTorExitList())?.has(LISTED)).toBe(true);
-		});
+		await pendingTorExitListLoad();
+		expect((await getTorExitList())?.has(LISTED)).toBe(true);
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
