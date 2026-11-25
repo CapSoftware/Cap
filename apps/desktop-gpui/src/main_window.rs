@@ -1236,15 +1236,31 @@ impl MainWindow {
                                 )
                             })
                         })
-                        .or_else(|| {
-                            session.recording_still_saving.then(|| {
-                                (
-                                    tr::dialog::saving::title(),
-                                    tr::dialog::saving::in_background().into(),
+                };
+                let still_saving = notice.is_none() && session.read(cx).recording_still_saving;
+                if still_saving {
+                    // Shown in the window: a native dialog can stall the
+                    // window while the earlier recording is still being written.
+                    let main = cx.global::<app_windows::AppWindows>().main;
+                    cx.spawn(async move |_, cx| {
+                        let response = cx.update(|cx| {
+                            app_windows::show_main_window(cx);
+                            cx.activate(true);
+                            main.update(cx, |_, window, cx| {
+                                crate::editor_modal::informational_alert(
+                                    &tr::dialog::saving::title(),
+                                    &tr::dialog::saving::in_background(),
+                                    window,
+                                    cx,
                                 )
                             })
-                        })
-                };
+                        });
+                        if let Ok(response) = response {
+                            let _ = response.await;
+                        }
+                    })
+                    .detach();
+                }
                 if let Some((title, notice)) = notice {
                     let main = cx.global::<app_windows::AppWindows>().main;
                     cx.spawn(async move |_, cx| {
