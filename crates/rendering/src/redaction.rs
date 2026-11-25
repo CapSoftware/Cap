@@ -204,14 +204,21 @@ struct GpuParams {
 
 const MAX_REGIONS: usize = 512;
 
+/// How far a mask reaches past its detected box, as a share of the box's
+/// height above and below, so glyph edges at the box border are covered.
+const GROW_Y: f32 = 0.1;
+
 fn gpu_regions(frame: &RedactionFrame, width: u32, height: u32) -> (Vec<GpuRegion>, u32) {
     let mut regions = Vec::with_capacity(frame.rects.len().min(MAX_REGIONS));
     let mut offset = 0u32;
     for rect in frame.rects.iter().take(MAX_REGIONS) {
-        let x0 = (rect.x * width as f32).floor().max(0.0) as u32;
-        let y0 = (rect.y * height as f32).floor().max(0.0) as u32;
-        let x1 = ((rect.x + rect.w) * width as f32).ceil().min(width as f32) as u32;
-        let y1 = ((rect.y + rect.h) * height as f32)
+        let grow_y = (rect.h * height as f32 * GROW_Y).max(1.0);
+        let x0 = (rect.x * width as f32 - 1.0).floor().max(0.0) as u32;
+        let y0 = (rect.y * height as f32 - grow_y).floor().max(0.0) as u32;
+        let x1 = ((rect.x + rect.w) * width as f32 + 1.0)
+            .ceil()
+            .min(width as f32) as u32;
+        let y1 = ((rect.y + rect.h) * height as f32 + grow_y)
             .ceil()
             .min(height as f32) as u32;
         if x1 <= x0 || y1 <= y0 {
@@ -555,6 +562,18 @@ mod tests {
                 "{height} -> {block}"
             );
         }
+    }
+
+    #[test]
+    fn masks_reach_past_the_detected_box() {
+        let frame = frame(&[(0.1, 0.1, 0.2, 0.02)], RedactStyle::Pixelate);
+        let (regions, _) = gpu_regions(&frame, 1920, 1080);
+        let region = &regions[0];
+        let (bx0, by0, bx1, by1) = (192.0, 108.0, 576.0, 129.6);
+        assert!(region.origin[0] as f32 <= bx0 - 1.0);
+        assert!(region.origin[1] as f32 <= by0 - 2.0);
+        assert!((region.origin[0] + region.size[0]) as f32 >= bx1 + 1.0);
+        assert!((region.origin[1] + region.size[1]) as f32 >= by1 + 2.0);
     }
 
     #[test]

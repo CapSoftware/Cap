@@ -208,8 +208,8 @@ async fn pixelation_covers_the_region_and_nothing_else() {
         1.0,
     )
     .await;
-    let (x0, y0, x1, y1) = (80, 45, 240, 81);
-    let block = crate::redaction::block_size(36.0, 0.5, RedactStyle::Pixelate);
+    let (x0, y0, x1, y1) = (79, 41, 241, 85);
+    let block = crate::redaction::block_size((y1 - y0) as f32, 0.5, RedactStyle::Pixelate);
     let mut changed_outside = 0;
     let mut changed_inside = 0;
     for y in 0..size.y {
