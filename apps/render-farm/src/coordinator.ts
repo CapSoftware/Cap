@@ -836,30 +836,26 @@ async function planJob(job: Job) {
 	const request = job.request;
 	const prefix = request.recording.replace(/\/$/, "");
 	if (request.prepare) {
-		await prepareRecording(
-			prefix,
-			request.prepare,
-			join(WORK_DIR, `${job.id}-prepare`),
-			{
-				getBounded,
-				put: (key, body, contentType) => s3.put(key, body, contentType),
-				presignGet: (key) => s3.presignFresh("GET", key, 6 * 3600),
-				inScope: (key) =>
-					isKey(key) &&
-					(key.startsWith(`${prefix}/`) ||
-						(request.sourceRoot !== undefined &&
-							key.startsWith(request.sourceRoot))),
-				engine: (op, body) => probeEngine.request(body, op),
-				onManifest: (manifest) => {
-					checkManifest(manifest as Manifest, prefix, request.sourceRoot);
-					for (const file of (manifest as Manifest).files) {
-						if (file.transcodeFrom !== undefined && file.key !== undefined) {
-							warmSource(file.transcodeFrom, file.key);
-						}
+		const prepareDir = join(WORK_DIR, `${job.id}-prepare`);
+		await prepareRecording(prefix, request.prepare, prepareDir, {
+			getBounded,
+			put: (key, body, contentType) => s3.put(key, body, contentType),
+			presignGet: (key) => s3.presignFresh("GET", key, 6 * 3600),
+			inScope: (key) =>
+				isKey(key) &&
+				(key.startsWith(`${prefix}/`) ||
+					(request.sourceRoot !== undefined &&
+						key.startsWith(request.sourceRoot))),
+			engine: (op, body) => probeEngine.request(body, op),
+			onManifest: (manifest) => {
+				checkManifest(manifest as Manifest, prefix, request.sourceRoot);
+				for (const file of (manifest as Manifest).files) {
+					if (file.transcodeFrom !== undefined && file.key !== undefined) {
+						warmSource(file.transcodeFrom, file.key);
 					}
-				},
+				}
 			},
-		);
+		}).finally(() => rmSync(prepareDir, { recursive: true, force: true }));
 		job.t.prepared = now();
 	}
 	const probeDir = join(WORK_DIR, job.id);
