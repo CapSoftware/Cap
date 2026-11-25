@@ -4,6 +4,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     time::{Duration, Instant},
 };
@@ -77,6 +78,8 @@ pub struct Stats {
     pub track: Duration,
     pub classify: Duration,
     pub compile: Duration,
+    /// Time the analysis waited for the decoding thread.
+    pub frame_wait: Duration,
     pub total: Duration,
     pub source_seconds: f64,
     pub hardware_decode: bool,
@@ -92,6 +95,25 @@ pub struct Progress<'a> {
 /// Frames prepared ahead of the one being finished, so their detection runs
 /// on the GPU while the CPU works.
 const LOOKAHEAD: usize = 3;
+/// Decoded frames queued ahead of the analysis.
+const DECODE_AHEAD: usize = 1;
+
+/// A frame from the decoding thread, with its tracking-size luma and what
+/// producing them took.
+struct Decoded {
+    frame: frames::Frame,
+    gray: crate::image::GrayImage,
+    decode: Duration,
+    gray_time: Duration,
+}
+
+fn join_decoder(
+    decoder: std::thread::ScopedJoinHandle<'_, anyhow::Result<bool>>,
+) -> anyhow::Result<bool> {
+    decoder
+        .join()
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("decoder thread panicked")))
+}
 
 pub struct Analyzer<'a> {
     pub model: &'a mut OcrModel,
@@ -170,58 +192,113 @@ impl<'a> Analyzer<'a> {
         mut progress: impl FnMut(f64, &[RedactionRegion], &RedactionSegment),
     ) -> anyhow::Result<(RedactionSegment, Vec<RedactionRegion>)> {
         let started = Instant::now();
-        let mut frames = FrameSource::open(&source.path)?;
-        let (width, height) = (frames.width, frames.height);
-        let mut scan = Scan::new(source.index, width, height, frames.track_width);
-        scan.end_time = frames.duration;
-        let mut last_progress = Instant::now();
-        let mut decode_mark = Instant::now();
         let cancel = self.cancel.clone();
         let model = &mut *self.model;
-        let mut segment_info = RedactionSegment {
-            index: source.index,
-            source_frames: 0,
-            fps: 0.0,
-            width,
-            height,
-            fingerprint: fingerprint.clone(),
-            complete: false,
-        };
-        stats.hardware_decode = frames.is_hardware_accelerated();
-        let mut in_flight = VecDeque::new();
-        frames.for_each(|frames, frame| {
-            stats.decode += decode_mark.elapsed();
-            if cancel.load(Ordering::Relaxed) {
-                anyhow::bail!("cancelled");
-            }
-            let gray_started = Instant::now();
-            let gray = Arc::new(frames.gray(&frame.video)?);
-            stats.gray += gray_started.elapsed();
-            let time = frame.time;
-            let prepared = scan.prepare(model, frames, frame, gray, stats)?;
-            in_flight.push_back(prepared);
-            while in_flight.len() > LOOKAHEAD {
-                if let Some(oldest) = in_flight.pop_front() {
-                    scan.finish(model, frames, oldest, stats)?;
+        let mut convert = frames::Convert::default();
+        let (opened_tx, opened_rx) = mpsc::sync_channel(1);
+        let (frame_tx, frame_rx) = mpsc::sync_channel::<Decoded>(DECODE_AHEAD);
+        let path = source.path.clone();
+        let decode_cancel = cancel.clone();
+        let (mut scan, mut segment_info) = std::thread::scope(|scope| -> anyhow::Result<_> {
+            // Decoding and the tracking-size luma run here while the frames
+            // before are analysed; the channel keeps their order.
+            let decoder = scope.spawn(move || -> anyhow::Result<bool> {
+                let mut frames = match FrameSource::open(&path) {
+                    Ok(frames) => frames,
+                    Err(error) => {
+                        let _ = opened_tx.send(None);
+                        return Err(error);
+                    }
+                };
+                let _ = opened_tx.send(Some((
+                    frames.width,
+                    frames.height,
+                    frames.track_width,
+                    frames.duration,
+                    frames.is_hardware_accelerated(),
+                )));
+                let mut decode_mark = Instant::now();
+                frames.for_each(|frames, frame| {
+                    let decode = decode_mark.elapsed();
+                    if decode_cancel.load(Ordering::Relaxed) {
+                        return Ok(false);
+                    }
+                    let gray_started = Instant::now();
+                    let gray = frames.gray(&frame.video)?;
+                    let sent = frame_tx
+                        .send(Decoded {
+                            frame,
+                            gray,
+                            decode,
+                            gray_time: gray_started.elapsed(),
+                        })
+                        .is_ok();
+                    decode_mark = Instant::now();
+                    Ok(sent)
+                })?;
+                Ok(frames.is_hardware_accelerated())
+            });
+            let Ok(Some((width, height, track_width, duration, hardware))) = opened_rx.recv()
+            else {
+                return Err(join_decoder(decoder)
+                    .err()
+                    .unwrap_or_else(|| anyhow::anyhow!("decoder stopped")));
+            };
+            let mut scan = Scan::new(source.index, width, height, track_width);
+            scan.end_time = duration;
+            let mut last_progress = Instant::now();
+            let mut segment_info = RedactionSegment {
+                index: source.index,
+                source_frames: 0,
+                fps: 0.0,
+                width,
+                height,
+                fingerprint,
+                complete: false,
+            };
+            stats.hardware_decode = hardware;
+            let mut in_flight = VecDeque::new();
+            let mut wait_mark = Instant::now();
+            for decoded in frame_rx.iter() {
+                stats.frame_wait += wait_mark.elapsed();
+                stats.decode += decoded.decode;
+                stats.gray += decoded.gray_time;
+                if cancel.load(Ordering::Relaxed) {
+                    anyhow::bail!("cancelled");
                 }
+                let time = decoded.frame.time;
+                let prepared = scan.prepare(
+                    model,
+                    &mut convert,
+                    decoded.frame,
+                    Arc::new(decoded.gray),
+                    stats,
+                )?;
+                in_flight.push_back(prepared);
+                while in_flight.len() > LOOKAHEAD {
+                    if let Some(oldest) = in_flight.pop_front() {
+                        scan.finish(model, &mut convert, oldest, stats)?;
+                    }
+                }
+                stats.frames += 1;
+                if last_progress.elapsed() >= Duration::from_millis(500) {
+                    last_progress = Instant::now();
+                    segment_info.source_frames = scan.frame_count;
+                    segment_info.fps = scan.fps_estimate;
+                    let compile_started = Instant::now();
+                    let partial = scan.regions();
+                    stats.compile += compile_started.elapsed();
+                    progress(time, &partial, &segment_info);
+                }
+                wait_mark = Instant::now();
             }
-            stats.frames += 1;
-            if last_progress.elapsed() >= Duration::from_millis(500) {
-                last_progress = Instant::now();
-                segment_info.source_frames = scan.frame_count;
-                segment_info.fps = scan.fps_estimate;
-                let compile_started = Instant::now();
-                let partial = scan.regions();
-                stats.compile += compile_started.elapsed();
-                progress(time, &partial, &segment_info);
+            drop(frame_rx);
+            stats.hardware_decode |= join_decoder(decoder)?;
+            while let Some(oldest) = in_flight.pop_front() {
+                scan.finish(model, &mut convert, oldest, stats)?;
             }
-            decode_mark = Instant::now();
-            Ok(true)
+            Ok((scan, segment_info))
         })?;
-        while let Some(oldest) = in_flight.pop_front() {
-            scan.finish(model, &mut frames, oldest, stats)?;
-        }
-        stats.hardware_decode |= frames.is_hardware_accelerated();
         let fps = scan.fps_estimate;
         stats.source_seconds += scan.last_time - scan.first_time.unwrap_or(0.0) + 1.0 / fps;
         let compile_started = Instant::now();

@@ -166,7 +166,7 @@ fn analyze(args: &[String]) -> anyhow::Result<()> {
             stats.hardware_decode
         );
         eprintln!(
-            "decode {:.2}s gray {:.2}s rgb {:.2}s change {:.2}s detect {:.2}s recognize {:.2}s classify {:.2}s compile {:.2}s",
+            "decode {:.2}s gray {:.2}s rgb {:.2}s change {:.2}s detect {:.2}s recognize {:.2}s classify {:.2}s compile {:.2}s frame_wait {:.2}s",
             stats.decode.as_secs_f64(),
             stats.gray.as_secs_f64(),
             stats.rgb.as_secs_f64(),
@@ -174,7 +174,8 @@ fn analyze(args: &[String]) -> anyhow::Result<()> {
             stats.detect.as_secs_f64(),
             stats.recognize.as_secs_f64(),
             stats.classify.as_secs_f64(),
-            stats.compile.as_secs_f64()
+            stats.compile.as_secs_f64(),
+            stats.frame_wait.as_secs_f64()
         );
         eprintln!("regions {} -> {}", redactions.regions.len(), out.display());
     }

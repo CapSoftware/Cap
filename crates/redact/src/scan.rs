@@ -20,7 +20,7 @@ use crate::{
     classify::{
         Finding, LineContext, classify_frame_with, classify_line, classify_line_with_alternatives,
     },
-    frames::{self, FrameSource},
+    frames::{self, Convert},
     image::{GrayImage, Rect, RgbImage},
     model::{OcrModel, PendingDetect},
     motion::{ChangeMap, TILE, diff_tiles, mean_difference},
@@ -357,7 +357,7 @@ impl Scan {
     pub fn prepare(
         &mut self,
         model: &mut OcrModel,
-        frames: &mut FrameSource,
+        frames: &mut Convert,
         frame: frames::Frame,
         gray: Arc<GrayImage>,
         stats: &mut Stats,
@@ -470,7 +470,7 @@ impl Scan {
     pub fn finish(
         &mut self,
         model: &mut OcrModel,
-        frames: &mut FrameSource,
+        frames: &mut Convert,
         prepared: Prepared,
         stats: &mut Stats,
     ) -> anyhow::Result<()> {

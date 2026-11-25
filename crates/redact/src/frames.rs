@@ -23,11 +23,7 @@ pub struct FrameSource {
     pub track_width: u32,
     pub track_height: u32,
     gray_scaler: Option<(Pixel, Scaler)>,
-    rgb_scaler: Option<(Pixel, Scaler)>,
-    luma_scaler: Option<(Pixel, Scaler)>,
     gray_frame: Video,
-    luma_frame: Video,
-    rgb_frame: Video,
     last_pts: f64,
     /// The video stream's length from its first frame, if the file says.
     pub duration: Option<f64>,
@@ -96,11 +92,7 @@ impl FrameSource {
             track_width,
             track_height,
             gray_scaler: None,
-            rgb_scaler: None,
-            luma_scaler: None,
             gray_frame: Video::empty(),
-            luma_frame: Video::empty(),
-            rgb_frame: Video::empty(),
             last_pts: -1.0,
             duration,
         })
@@ -166,7 +158,29 @@ impl FrameSource {
         }
         Ok(out)
     }
+}
 
+/// Converts decoded frames to full-resolution luma and RGB, apart from the
+/// decoder so frames can be decoded on another thread.
+pub struct Convert {
+    rgb_scaler: Option<(Pixel, Scaler)>,
+    luma_scaler: Option<(Pixel, Scaler)>,
+    luma_frame: Video,
+    rgb_frame: Video,
+}
+
+impl Default for Convert {
+    fn default() -> Self {
+        Self {
+            rgb_scaler: None,
+            luma_scaler: None,
+            luma_frame: Video::empty(),
+            rgb_frame: Video::empty(),
+        }
+    }
+}
+
+impl Convert {
     /// Full-resolution luma: the frame's Y plane when it has one, otherwise
     /// a conversion.
     pub fn luma(&mut self, frame: &Video) -> anyhow::Result<GrayImage> {
