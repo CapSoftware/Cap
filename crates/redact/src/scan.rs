@@ -122,10 +122,13 @@ const HOLD: f64 = 1e-4;
 const SHORT_LINE: usize = 32;
 /// Box height in frame pixels from which the row merge accepts uneven boxes.
 const LARGE_TEXT: f32 = 28.0;
+const KNOWN_MIN_SHARED: usize = 10;
 /// A re-read line starts a new identity only when the recogniser is at least
 /// this sure of its new text and the text has at least this many characters.
 const NEW_TEXT_CONFIDENCE: f32 = 0.9;
 const NEW_TEXT_MIN_CHARS: usize = 4;
+/// Share of a known string a run from its middle must cover to match.
+const KNOWN_MOST: f32 = 0.6;
 /// Frame pixels from the left or right edge within which a line is cut by it.
 const EDGE: f32 = 3.0;
 /// Characters of a known string that a line cut by the frame's edge must show
@@ -989,7 +992,7 @@ impl Scan {
                 let span = if *category == RedactCategory::Name {
                     whole_words(&text, known)
                 } else {
-                    whole_span(&text, known)
+                    shared_span(&text, known)
                         .filter(|&(start, end)| {
                             *category != RedactCategory::Email || text[start..end].contains(&'@')
                         })
@@ -1418,16 +1421,37 @@ fn edge_span(
     None
 }
 
-/// Where the whole of `known` appears in `text`, widened to whole tokens.
-/// Only the whole string counts (or, through [`edge_span`], its start or end
-/// cut off by the frame's edge): a run of characters shared with part of it
-/// matches unrelated text too often.
-fn whole_span(text: &[char], known: &[char]) -> Option<(usize, usize)> {
-    if known.is_empty() || text.len() < known.len() {
+/// The span of `text` around its longest run of characters shared with
+/// `known`, widened to whole tokens, when that run is long enough (the whole
+/// of a short known string, or [`KNOWN_MIN_SHARED`] characters of a long one)
+/// and is one of the string's ends (the rest cut off or hidden) or most of it
+/// ([`KNOWN_MOST`]), not a run from its middle.
+fn shared_span(text: &[char], known: &[char]) -> Option<(usize, usize)> {
+    if text.is_empty() || known.is_empty() {
         return None;
     }
-    let mut start = (0..=text.len() - known.len()).find(|&i| text[i..i + known.len()] == *known)?;
-    let mut end = start + known.len();
+    let mut best = (0usize, 0usize, 0usize);
+    let mut previous = vec![0usize; known.len() + 1];
+    let mut current = vec![0usize; known.len() + 1];
+    for (i, a) in text.iter().enumerate() {
+        for (j, b) in known.iter().enumerate() {
+            current[j + 1] = if a == b { previous[j] + 1 } else { 0 };
+            if current[j + 1] > best.0 {
+                best = (current[j + 1], i + 1, j + 1);
+            }
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    let (length, end, known_end) = best;
+    if length < KNOWN_MIN_SHARED.min(known.len()) {
+        return None;
+    }
+    let one_end = known_end == length || known_end == known.len();
+    if !one_end && (length as f32) < known.len() as f32 * KNOWN_MOST {
+        return None;
+    }
+    let mut start = end - length;
+    let mut end = end;
     while start > 0 && !text[start - 1].is_whitespace() {
         start -= 1;
     }
@@ -1862,19 +1886,16 @@ mod tests {
     }
 
     #[test]
-    fn a_known_key_matches_only_whole_or_cut_by_the_frame() {
+    fn the_visible_tail_of_a_known_key_is_found() {
         let known = "pypi-AgEIcHlwaS5vcmcEHDxIQCpcjVXDKwS7Xt0"
             .chars()
             .collect::<Vec<_>>();
-        let whole = "token: pypi-AgEIcHlwaS5vcmcEHDxIQCpcjVXDKwS7Xt0, ok"
-            .chars()
-            .collect::<Vec<_>>();
-        assert_eq!(whole_span(&whole, &known), Some((7, 48)));
         let tail = "token: CpcjVXDKwS7Xt0eiHw".chars().collect::<Vec<_>>();
-        assert_eq!(whole_span(&tail, &known), None);
-        let cut = "pypi-AgEIcHlwaS5vcm".chars().collect::<Vec<_>>();
-        assert_eq!(edge_span(&cut, &known, false, true), Some((0, 19)));
-        assert_eq!(edge_span(&cut, &known, false, false), None);
+        assert_eq!(shared_span(&tail, &known), Some((7, 25)));
+        let other = "https://example.com/settings".chars().collect::<Vec<_>>();
+        assert_eq!(shared_span(&other, &known), None);
+        let middle = "ref AgEIcHlwaS5vcm ok".chars().collect::<Vec<_>>();
+        assert_eq!(shared_span(&middle, &known), None);
     }
 
     #[test]
