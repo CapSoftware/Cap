@@ -37,12 +37,39 @@ fn appimage_alsa_config_path() -> Option<OsString> {
     {
         return None;
     }
+    appimage_alsa_config(
+        &appdir,
+        env::var_os("ALSA_CONFIG_PATH").as_deref(),
+        |path| path.is_file(),
+    )
+}
+
+/// The AppImage's ALSA configuration. With no `ALSA_CONFIG_PATH` of the
+/// user's it is one file that includes the distribution's `alsa.conf`
+/// itself, because openSUSE's alsa-lib ignores an `ALSA_CONFIG_PATH` that is
+/// a list of files; a user's own list keeps Cap's plugin appended to it.
+fn appimage_alsa_config(
+    appdir: &Path,
+    existing: Option<&OsStr>,
+    is_file: impl Fn(&Path) -> bool,
+) -> Option<OsString> {
     let config = appdir.join("usr/lib/cap/alsa-pulse.conf");
+    let standalone = appdir.join("usr/lib/cap/alsa-pulse-appimage.conf");
     let plugin = appdir.join("usr/lib/alsa-lib/libasound_module_pcm_pulse.so");
-    if !config.is_file() || !plugin.is_file() {
+    if !is_file(&plugin) {
         return None;
     }
-    append_alsa_config(&config, env::var_os("ALSA_CONFIG_PATH").as_deref())
+    let existing = existing.filter(|value| !value.is_empty());
+    if existing.is_none()
+        && is_file(&standalone)
+        && !standalone.as_os_str().as_encoded_bytes().contains(&b':')
+    {
+        return Some(standalone.into_os_string());
+    }
+    if !is_file(&config) {
+        return None;
+    }
+    append_alsa_config(&config, existing)
 }
 
 const PULSE_PLUGIN: &str = "libasound_module_pcm_pulse.so";
@@ -197,6 +224,41 @@ mod tests {
         );
         assert!(append_alsa_config(config, Some(&combined)).is_none());
         assert!(append_alsa_config(Path::new("/tmp/invalid:path/alsa.conf"), None).is_none());
+    }
+
+    #[test]
+    fn appimage_sets_one_alsa_config_file_unless_the_user_has_a_list() {
+        let appdir = Path::new("/tmp/.mount_cap");
+        let standalone = appdir.join("usr/lib/cap/alsa-pulse-appimage.conf");
+        let listed = appdir.join("usr/lib/cap/alsa-pulse.conf");
+        let after = |existing: &str| {
+            let mut paths = OsString::from(existing);
+            paths.push(":");
+            paths.push(&listed);
+            paths
+        };
+        let bundled = |path: &Path| path.starts_with(appdir);
+        for existing in [None, Some(OsStr::new(""))] {
+            assert_eq!(
+                appimage_alsa_config(appdir, existing, bundled),
+                Some(standalone.clone().into_os_string())
+            );
+        }
+        assert_eq!(
+            appimage_alsa_config(appdir, Some(OsStr::new("/home/user/audio.conf")), bundled),
+            Some(after("/home/user/audio.conf"))
+        );
+        let without_standalone = |path: &Path| bundled(path) && path != standalone;
+        assert_eq!(
+            appimage_alsa_config(appdir, None, without_standalone),
+            Some(after("/usr/share/alsa/alsa.conf"))
+        );
+        let without_plugin = |path: &Path| bundled(path) && !path.ends_with(PULSE_PLUGIN);
+        assert_eq!(appimage_alsa_config(appdir, None, without_plugin), None);
+        assert_eq!(
+            appimage_alsa_config(Path::new("/tmp/a:b"), None, |_| true),
+            None
+        );
     }
 
     #[test]

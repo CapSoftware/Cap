@@ -63,6 +63,8 @@ export function createLinuxBundleConfig(libraryNames, debDependencies = []) {
 						"/usr/bin/pactl": "/usr/bin/pactl",
 						"/usr/lib/alsa-lib/libasound_module_pcm_pulse.so": `${root}/target/native-deps/cap-appimage-libs/libasound_module_pcm_pulse.so`,
 						"/usr/lib/cap/alsa-pulse.conf": `${root}/packaging/linux/alsa-pulse.conf`,
+						// Set alone as ALSA_CONFIG_PATH: openSUSE's alsa-lib ignores a list of files.
+						"/usr/lib/cap/alsa-pulse-appimage.conf": `${root}/packaging/linux/alsa-pulse-appimage.conf`,
 						"/usr/lib/cap/package-format": `${root}/packaging/linux/appimage`,
 					},
 				},
