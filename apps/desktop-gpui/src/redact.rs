@@ -95,9 +95,21 @@ fn sha256_file(path: &Path) -> std::io::Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+/// One model download at a time: scans for different recordings share the
+/// staging and target folders.
+static MODEL_DOWNLOAD: Mutex<()> = Mutex::new(());
+
 /// Downloads the model into the app's data folder, checking every file,
-/// and returns its folder.
+/// and returns its folder. A scan that waited on another scan's download
+/// uses that copy.
 fn download_model(cancel: &AtomicBool) -> anyhow::Result<PathBuf> {
+    let _download = MODEL_DOWNLOAD.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(dir) = installed_model_dir() {
+        return Ok(dir);
+    }
+    if cancel.load(Ordering::Relaxed) {
+        anyhow::bail!("cancelled");
+    }
     let root = models_root();
     let target = root.join(MODEL_VERSION);
     let staging = root.join(format!(".{MODEL_VERSION}-download"));
