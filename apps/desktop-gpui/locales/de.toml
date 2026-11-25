@@ -4256,6 +4256,10 @@ error_rejected = "Die Anmeldung hat nicht geklappt. Versuchen Sie es erneut."
 engine = "Transkribieren"
 setup = "Einrichtung"
 setup_description = "Berechtigungen, Transkription und Kalender noch einmal durchgehen."
+[documents.a11y]
+collapsed = "Eingeklappt"
+expanded = "Ausgeklappt"
+
 [documents.home]
 clear_search = "Suche löschen"
 trash_count = "Papierkorb · {count}"

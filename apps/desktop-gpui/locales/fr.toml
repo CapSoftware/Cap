@@ -4256,6 +4256,10 @@ error_rejected = "La connexion n'a pas abouti. Réessayez."
 engine = "Transcrire"
 setup = "Configuration"
 setup_description = "Revoir les autorisations, la transcription et les calendriers."
+[documents.a11y]
+collapsed = "Réduit"
+expanded = "Développé"
+
 [documents.home]
 clear_search = "Effacer la recherche"
 trash_count = "Corbeille · {count}"

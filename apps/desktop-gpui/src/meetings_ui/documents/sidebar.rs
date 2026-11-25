@@ -371,6 +371,8 @@ impl Render for Sidebar {
                 tr::documents::home::title().into(),
                 is(&Scope::All),
             )
+            .role(gpui::Role::ListItem)
+            .aria_selected(is(&Scope::All))
             .on_click(show(Scope::All)),
         );
         if pinned || is(&Scope::Pinned) {
@@ -381,6 +383,8 @@ impl Render for Sidebar {
                     tr::documents::sidebar::pinned().into(),
                     is(&Scope::Pinned),
                 )
+                .role(gpui::Role::ListItem)
+                .aria_selected(is(&Scope::Pinned))
                 .on_click(show(Scope::Pinned)),
             );
         }
@@ -411,7 +415,8 @@ impl Render for Sidebar {
                     let id = row.id.clone();
                     div()
                         .id(SharedString::from(format!("recent-{}", row.id)))
-                        .role(gpui::Role::Button)
+                        .role(gpui::Role::ListItem)
+                        .aria_selected(active)
                         .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                         .aria_label(row.title.clone())
                         .mx(px(10.))
@@ -484,6 +489,8 @@ impl Render for Sidebar {
                     folder.name.clone().into(),
                     is(&target),
                 )
+                .role(gpui::Role::ListItem)
+                .aria_selected(is(&target))
                 .on_click(show(target.clone()))
                 .on_mouse_down(
                     MouseButton::Right,
@@ -561,6 +568,7 @@ impl Render for Sidebar {
             .child(
                 div()
                     .id("documents-nav")
+                    .role(gpui::Role::List)
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
@@ -571,23 +579,30 @@ impl Render for Sidebar {
                     .child(folder_list),
             )
             .child(
-                div().pt(px(6.)).pb(px(12.)).child(
-                    self.item(
-                        "nav-trash".into(),
-                        "icons/trash.svg",
-                        tr::documents::sidebar::trash().into(),
-                        is(&Scope::Trash),
-                    )
-                    .when(trashed > 0, |el| {
-                        el.child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(palette.faint)
-                                .child(trashed.to_string()),
+                div()
+                    .id("documents-nav-end")
+                    .role(gpui::Role::List)
+                    .pt(px(6.))
+                    .pb(px(12.))
+                    .child(
+                        self.item(
+                            "nav-trash".into(),
+                            "icons/trash.svg",
+                            tr::documents::sidebar::trash().into(),
+                            is(&Scope::Trash),
                         )
-                    })
-                    .on_click(show(Scope::Trash)),
-                ),
+                        .role(gpui::Role::ListItem)
+                        .aria_selected(is(&Scope::Trash))
+                        .when(trashed > 0, |el| {
+                            el.child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(palette.faint)
+                                    .child(trashed.to_string()),
+                            )
+                        })
+                        .on_click(show(Scope::Trash)),
+                    ),
             )
             .children(menu)
     }

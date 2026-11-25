@@ -4256,6 +4256,10 @@ error_rejected = "El inicio de sesión no se completó. Vuelve a intentarlo."
 engine = "Transcribir"
 setup = "Configuración"
 setup_description = "Repasa de nuevo los permisos, la transcripción y los calendarios."
+[documents.a11y]
+collapsed = "Contraído"
+expanded = "Expandido"
+
 [documents.home]
 clear_search = "Borrar búsqueda"
 trash_count = "Papelera · {count}"

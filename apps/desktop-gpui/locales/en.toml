@@ -4258,6 +4258,10 @@ error_rejected = "The sign-in did not go through. Try again."
 engine = "Transcribe"
 setup = "Setup"
 setup_description = "Go through permissions, transcription and calendars again."
+[documents.a11y]
+collapsed = "Collapsed"
+expanded = "Expanded"
+
 [documents.home]
 clear_search = "Clear search"
 trash_count = { text = "Trash · {count}", context = "Link at the bottom of the notes list. {count} is how many notes are in the trash." }

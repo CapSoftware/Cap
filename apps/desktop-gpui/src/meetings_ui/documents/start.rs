@@ -399,6 +399,11 @@ impl Render for StartButton {
                     .role(gpui::Role::Button)
                     .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                     .aria_label(tr::documents::start::more())
+                    .aria_description(if self.menu.is_some() {
+                        tr::documents::a11y::expanded()
+                    } else {
+                        tr::documents::a11y::collapsed()
+                    })
                     .h_full()
                     .pl(px(8.))
                     .pr(px(11.))

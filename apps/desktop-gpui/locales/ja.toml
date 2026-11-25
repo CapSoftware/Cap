@@ -4256,6 +4256,10 @@ error_rejected = "サインインが完了しませんでした。もう一度�
 engine = "文字起こし"
 setup = "セットアップ"
 setup_description = "権限、文字起こし、カレンダーをもう一度設定します。"
+[documents.a11y]
+collapsed = "折りたたみ"
+expanded = "展開"
+
 [documents.home]
 clear_search = "検索をクリア"
 trash_count = "ゴミ箱・{count}"

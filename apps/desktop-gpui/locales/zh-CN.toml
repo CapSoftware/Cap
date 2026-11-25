@@ -4256,6 +4256,10 @@ error_rejected = "登录没有完成。请重试。"
 engine = "转写"
 setup = "设置向导"
 setup_description = "重新设置权限、转写和日历。"
+[documents.a11y]
+collapsed = "已折叠"
+expanded = "已展开"
+
 [documents.home]
 clear_search = "清除搜索"
 trash_count = "废纸篓 · {count}"
