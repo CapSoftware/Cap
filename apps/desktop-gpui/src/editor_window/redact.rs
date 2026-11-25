@@ -417,7 +417,7 @@ impl EditorWindow {
         let top = timeline::PLAYHEAD_TOP_OFFSET
             + timeline::TIMELINE_HEADER_GAP
             + row as f32 * (timeline::TRACK_HEIGHT + TRACK_ROW_GAP)
-            - f32::from(self.timeline_scroll.offset().y);
+            + f32::from(self.timeline_scroll.offset().y);
         if top < timeline::PLAYHEAD_TOP_OFFSET - 0.5 {
             return None;
         }
