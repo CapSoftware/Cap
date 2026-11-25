@@ -1156,7 +1156,9 @@ fn record_known(
             known.push((category, value));
         }
     };
-    if KNOWN_CATEGORIES.contains(&category) && text.len() >= KNOWN_MIN_LEN {
+    let digits_are_dates = matches!(category, RedactCategory::Phone | RedactCategory::Card)
+        && crate::classify::date_not_number(&text.iter().collect::<String>());
+    if KNOWN_CATEGORIES.contains(&category) && text.len() >= KNOWN_MIN_LEN && !digits_are_dates {
         add(category, text.to_vec());
     }
     if category == RedactCategory::Name {

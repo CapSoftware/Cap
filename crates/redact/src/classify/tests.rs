@@ -635,6 +635,7 @@ fn numbers_and_keys_cut_by_the_frame_edge_are_found() {
     let dates = [
         at("Due 2026-11-24", 0.8, 0.2),
         at("2026-11-24 to 2026-12-01", 0.0, 0.3),
+        at("Updated 2026-11-14 15", 0.8, 0.2),
     ];
     let own = dates.iter().map(|l| classify_line(l.text)).collect();
     let found = classify_frame_with(&dates, own);
@@ -651,5 +652,69 @@ fn numbers_and_keys_cut_by_the_frame_edge_are_found() {
     assert_eq!(
         classify_frame_with(&inside, own),
         vec![classify_line(inside[0].text)]
+    );
+}
+
+#[test]
+fn timestamps_next_to_phone_or_account_words_are_not_numbers() {
+    for text in [
+        "Account 2026-11-14 15:37:28",
+        "Acct 2026-09-28",
+        "2026-11-20 17:39:51 phone",
+        "Phone: 2026-11-20 17:39:51",
+    ] {
+        let found = classify_line(text);
+        assert!(
+            found
+                .iter()
+                .all(|f| f.category != Card && f.category != Phone),
+            "{text}: {found:?}"
+        );
+    }
+    let found = classify_line("2026-11-20 17:39:51 acct 99351227");
+    assert_eq!(
+        found
+            .iter()
+            .filter(|f| f.category == Card)
+            .map(|f| f.start)
+            .collect::<Vec<_>>(),
+        vec![20],
+        "{found:?}"
+    );
+    let column = [
+        LineContext {
+            text: "2026-11-19 11:06:00",
+            x: 0.38,
+            y: 0.47,
+            w: 0.11,
+            h: 0.015,
+        },
+        LineContext {
+            text: "2026-11-14 15:21:40",
+            x: 0.38,
+            y: 0.49,
+            w: 0.11,
+            h: 0.015,
+        },
+    ];
+    let own = column.iter().map(|l| classify_line(l.text)).collect();
+    let found = classify_frame_with(&column, own);
+    assert!(
+        found
+            .iter()
+            .flatten()
+            .all(|f| f.category != Phone && f.category != Card),
+        "{found:?}"
+    );
+    assert!(date_not_number("2026-11-14 15:21"));
+    assert!(date_not_number("2026-11-20 17:39:51.123"));
+    assert!(date_not_number("2026-11-"));
+    assert!(!date_not_number("+44 7700 900140"));
+    assert!(!date_not_number("+1 (436)"));
+    assert!(!date_not_number("06-12-34-56 78"));
+    let found = classify_line("2026-11-20 17:39:51 call from +44 7700 900140");
+    assert!(
+        found.iter().any(|f| f.category == Phone && f.start == 30),
+        "{found:?}"
     );
 }

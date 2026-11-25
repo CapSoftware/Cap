@@ -87,10 +87,6 @@ static DATE_LIKE: LazyLock<Regex> = LazyLock::new(|| {
         r"^(?:[0-9]{4}[\-/.][0-9]{1,2}[\-/.][0-9]{1,2}|[0-9]{1,2}[\-/.][0-9]{1,2}[\-/.][0-9]{2,4})(?:[ T][0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)?$",
     )
 });
-/// A date in a run of digits: a run made only of dates is not a number.
-static DATE_IN_RUN: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"[0-9]{4}[\-/.][0-9]{1,2}[\-/.][0-9]{1,2}|[0-9]{1,2}[\-/.][0-9]{1,2}[\-/.][0-9]{2,4}")
-});
 static NANP: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:\+?1[ .\-]?)?(?:\([2-9][0-9]{2}\) ?|[2-9][0-9]{2}([ .\-]))[0-9]{3}[ .\-][0-9]{4}$")
 });
@@ -103,6 +99,16 @@ static PHONE_CONTEXT: LazyLock<Regex> = LazyLock::new(|| {
         r"(?i)\b(?:phone|tel|telephone|mobile|mob|cell|fax|call|whatsapp|sms|contact|ph|t)\s*[.:#]|\b(?:phone|telephone|mobile|cell|whatsapp)\b",
     )
 });
+/// A date, with the time after it when there is one (a log or table
+/// timestamp, its seconds or minutes possibly cut off), or a clock time.
+static DATE_TIME: LazyLock<Regex> = LazyLock::new(|| {
+    re(
+        r"(?:[0-9]{4}[\-/.][0-9]{1,2}[\-/.][0-9]{1,2}|[0-9]{1,2}[\-/.][0-9]{1,2}[\-/.][0-9]{2,4})(?:[ T][0-9]{1,2}(?::[0-9]{2}(?::[0-9]{2}(?:[.,][0-9]{1,6})?)?)?)?|[0-9]{1,2}:[0-9]{2}(?::[0-9]{2}(?:[.,][0-9]{1,6})?)?",
+    )
+});
+/// A year and month alone, the start of a cut-off date ("2026-11-").
+static YEAR_MONTH: LazyLock<Regex> =
+    LazyLock::new(|| re(r"^\s*(?:19|20)[0-9]{2}[\-/.](?:0?[1-9]|1[0-2])[\-/.]?\s*$"));
 static ACCOUNT_CONTEXT: LazyLock<Regex> = LazyLock::new(|| {
     re(r"(?i)\b(?:account|acct|a/c|routing|sort\s*code|bsb|aba|swift|bic|iban|bank)")
 });
@@ -568,18 +574,7 @@ fn cut_by_the_frame(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
             .next();
         let Some(found) = found else { continue };
         let value = found.as_str();
-        let in_dates = DATE_IN_RUN
-            .find_iter(value)
-            .filter(|date| {
-                !value[..date.start()].ends_with(|c: char| c.is_ascii_digit())
-                    && !value[date.end()..].starts_with(|c: char| c.is_ascii_digit())
-            })
-            .map(|date| date.as_str().chars().filter(char::is_ascii_digit).count())
-            .sum::<usize>();
-        let digits = value.chars().filter(char::is_ascii_digit).count();
-        if digits > 0 && in_dates == digits {
-            continue;
-        }
+        let digits = digits_outside_dates(value, 0, value.len());
         let token = value.len() >= 20
             && value.chars().any(|c| c.is_ascii_uppercase())
             && value.chars().any(|c| c.is_ascii_lowercase());
@@ -587,7 +582,9 @@ fn cut_by_the_frame(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
             RedactCategory::Card
         } else if token && digits > 0 {
             RedactCategory::Secret
-        } else if value.chars().take(2).all(|c| c.is_ascii_uppercase()) && digits >= 6 {
+        } else if value.chars().take(2).all(|c| c.is_ascii_uppercase())
+            && value.chars().filter(char::is_ascii_digit).count() >= 6
+        {
             RedactCategory::Card
         } else {
             continue;
@@ -1286,10 +1283,12 @@ fn cards_and_banks(text: &str, normalized: &str, index: &CharIndex, findings: &m
         for found in DIGIT_RUN.find_iter(normalized) {
             let run = found.as_str();
             let digits = digits_of(run);
-            if run.contains(['.', '/', '(', ')', '+']) {
+            let sort_code = digits.len() == 6 && run.matches('-').count() == 2;
+            if run.contains(['.', '/', '(', ')', '+'])
+                || !sort_code && digits_outside_dates(normalized, found.start(), found.end()) < 6
+            {
                 continue;
             }
-            let sort_code = digits.len() == 6 && run.matches('-').count() == 2;
             if (6..=17).contains(&digits.len()) || sort_code || aba_valid(&digits) {
                 // The label right before the number goes with it ("Account
                 // 4899325039"): what the number is matters as much.
@@ -1319,6 +1318,47 @@ fn cards_and_banks(text: &str, normalized: &str, index: &CharIndex, findings: &m
             }
         }
     }
+}
+
+/// Digits in `start..end` of `text` that are not part of a date, timestamp
+/// or clock time there (a run can span two timestamps, like a log column
+/// joined across lines). A short day-month-year shape that runs on into more
+/// digit groups ("06-12-34-56") is a number, not a date.
+fn digits_outside_dates(text: &str, start: usize, end: usize) -> usize {
+    let bytes = text.as_bytes();
+    let digit = |i: Option<usize>| i.and_then(|i| bytes.get(i)).is_some_and(u8::is_ascii_digit);
+    let separator = |i: Option<usize>| {
+        i.and_then(|i| bytes.get(i))
+            .is_some_and(|c| matches!(c, b'-' | b'/' | b'.' | b':'))
+    };
+    let runs_on_before = |at: usize| {
+        digit(at.checked_sub(1)) || separator(at.checked_sub(1)) && digit(at.checked_sub(2))
+    };
+    let runs_on_after = |at: usize| digit(Some(at)) || separator(Some(at)) && digit(Some(at + 1));
+    let dates = DATE_TIME
+        .find_iter(text)
+        .filter(|m| {
+            let shape = m.as_str();
+            let iso_or_time =
+                shape.contains(':') || shape.as_bytes()[..4].iter().all(u8::is_ascii_digit);
+            iso_or_time || !runs_on_before(m.start()) && !runs_on_after(m.end())
+        })
+        .map(|m| m.range())
+        .collect::<Vec<_>>();
+    text[start..end]
+        .char_indices()
+        .filter(|(i, c)| c.is_ascii_digit() && !dates.iter().any(|d| d.contains(&(start + i))))
+        .count()
+}
+
+/// Whether a phone or card finding is really a date: a year-month fragment
+/// ("2026-11-"), or a string with digits inside dates or times and fewer than
+/// seven outside them (a timestamp). A number with no date in it (the first
+/// half of a wrapped phone, "+1 (436)") is not one.
+pub(crate) fn date_not_number(text: &str) -> bool {
+    let all = text.chars().filter(char::is_ascii_digit).count();
+    let outside = digits_outside_dates(text, 0, text.len());
+    YEAR_MONTH.is_match(text) || all > outside && outside < 7
 }
 
 fn is_phone(run: &str, context: bool) -> bool {
@@ -1392,7 +1432,11 @@ fn phones(text: &str, normalized: &str, index: &CharIndex, findings: &mut Vec<Fi
                             .chars()
                             .next()
                             .is_some_and(|c| c.is_ascii_digit());
-                if !boxed_in && digits_of(piece).len() >= 7 && is_phone(piece, context) {
+                if !boxed_in
+                    && digits_of(piece).len() >= 7
+                    && digits_outside_dates(normalized, start, end) >= 7
+                    && is_phone(piece, context)
+                {
                     matched = Some((start, end, last));
                     break;
                 }
