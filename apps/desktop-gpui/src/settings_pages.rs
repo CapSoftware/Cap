@@ -3908,7 +3908,7 @@ impl SettingsWindow {
             .map(|el| {
                 #[cfg(feature = "gpui-rubber-band")]
                 {
-                    el.overscroll_behavior(gpui::OverscrollBehavior::WhenScrollable)
+                    el.overscroll_behavior(gpui::OverscrollBehavior::Chain)
                 }
                 #[cfg(not(feature = "gpui-rubber-band"))]
                 {

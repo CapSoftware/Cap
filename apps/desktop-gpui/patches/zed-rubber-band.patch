@@ -23,7 +23,7 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..1476371 100644
+index c02bd16..1186d1c 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -997,6 +997,56 @@ pub trait InteractiveElement: Sized {
@@ -213,7 +213,7 @@ index c02bd16..1476371 100644
                              delta_x = delta.y;
                          }
                      }
-@@ -3109,21 +3240,137 @@ impl Interactivity {
+@@ -3109,21 +3240,175 @@ impl Interactivity {
                      if overflow.y == Overflow::Scroll {
                          if !delta.y.is_zero() {
                              delta_y = delta.y;
@@ -262,7 +262,9 @@ index c02bd16..1476371 100644
 +                            crate::ScrollPhase::Began | crate::ScrollPhase::MayBegin
 +                        ) {
 +                            rb.catch_springs(now, &config);
-                         }
++                            rb.chain_to_parent_x = None;
++                            rb.chain_to_parent_y = None;
++                        }
 +                        let is_momentum = event.momentum_phase != crate::ScrollPhase::None;
 +                        let mut ox: f32 = scroll_offset.x.into();
 +                        let mut oy: f32 = scroll_offset.y.into();
@@ -270,8 +272,35 @@ index c02bd16..1476371 100644
 +                        let max_y: f32 = rb.scroll_max.y.into();
 +                        let w: f32 = rb.bounds_size.width.into();
 +                        let h: f32 = rb.bounds_size.height.into();
-+                        let dx: f32 = delta_x.into();
-+                        let dy: f32 = delta_y.into();
++                        let mut dx: f32 = delta_x.into();
++                        let mut dy: f32 = delta_y.into();
++
++                        if overscroll_behavior.x == crate::OverscrollBehavior::Chain {
++                            if dx != 0.0 && rb.chain_to_parent_x.is_none() {
++                                let can_scroll = rb.x.raw_overscroll != 0.0
++                                    || rb.x.spring.is_some()
++                                    || (max_x > 0.0
++                                        && ((dx > 0.0 && ox < -0.5)
++                                            || (dx < 0.0 && ox > -max_x + 0.5)));
++                                rb.chain_to_parent_x = Some(!can_scroll);
++                            }
++                            if rb.chain_to_parent_x == Some(true) {
++                                dx = 0.0;
++                            }
+                         }
++                        if overscroll_behavior.y == crate::OverscrollBehavior::Chain {
++                            if dy != 0.0 && rb.chain_to_parent_y.is_none() {
++                                let can_scroll = rb.y.raw_overscroll != 0.0
++                                    || rb.y.spring.is_some()
++                                    || (max_y > 0.0
++                                        && ((dy > 0.0 && oy < -0.5)
++                                            || (dy < 0.0 && oy > -max_y + 0.5)));
++                                rb.chain_to_parent_y = Some(!can_scroll);
++                            }
++                            if rb.chain_to_parent_y == Some(true) {
++                                dy = 0.0;
++                            }
++                        }
 +
 +                        let was_springing = rb.is_springing();
 +                        if !(is_momentum && (was_springing || rb.momentum_bounced)) {
@@ -279,12 +308,14 @@ index c02bd16..1476371 100644
 +                            let mut y_axis = rb.y;
 +                            let allow_overscroll_x = match overscroll_behavior.x {
 +                                crate::OverscrollBehavior::Auto => true,
-+                                crate::OverscrollBehavior::WhenScrollable => max_x > 0.0,
++                                crate::OverscrollBehavior::WhenScrollable
++                                | crate::OverscrollBehavior::Chain => max_x > 0.0,
 +                                crate::OverscrollBehavior::None => false,
 +                            };
 +                            let allow_overscroll_y = match overscroll_behavior.y {
 +                                crate::OverscrollBehavior::Auto => true,
-+                                crate::OverscrollBehavior::WhenScrollable => max_y > 0.0,
++                                crate::OverscrollBehavior::WhenScrollable
++                                | crate::OverscrollBehavior::Chain => max_y > 0.0,
 +                                crate::OverscrollBehavior::None => false,
 +                            };
 +                            crate::apply_scroll_delta(
@@ -334,12 +365,19 @@ index c02bd16..1476371 100644
 +                        );
 +                        if momentum_ended {
 +                            rb.momentum_bounced = false;
++                            rb.chain_to_parent_x = None;
++                            rb.chain_to_parent_y = None;
 +                        }
 +                        if (gesture_ended || momentum_ended) && rb.start_springs(now, &config) {
 +                            if gesture_ended {
 +                                rb.momentum_bounced = true;
 +                            }
 +                            cx.notify(current_view);
++                        }
++                        if (rb.chain_to_parent_x == Some(false) && !delta_x.is_zero())
++                            || (rb.chain_to_parent_y == Some(false) && !delta_y.is_zero())
++                        {
++                            cx.stop_propagation();
 +                        }
 +                    } else {
 +                        scroll_offset.y += delta_y;
@@ -359,7 +397,7 @@ index c02bd16..1476371 100644
                      }
                  }
              });
-@@ -3360,6 +3607,8 @@ pub struct InteractiveElementState {
+@@ -3360,6 +3645,8 @@ pub struct InteractiveElementState {
      /// blur). `None` means no activation key is pending.
      pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
@@ -477,10 +515,10 @@ index 1feee49..1c95a05 100644
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..e19ffbc
+index 0000000..cc81dbf
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,345 @@
+@@ -0,0 +1,352 @@
 +use std::f32::consts::PI;
 +use std::sync::RwLock;
 +use std::time::Instant;
@@ -495,6 +533,11 @@ index 0000000..e19ffbc
 +    Auto,
 +    /// Only allow rubber-band overscroll when the content actually overflows on that axis.
 +    WhenScrollable,
++    /// Browser-style scroll chaining: if a gesture starts while this container can
++    /// scroll in the gesture direction, it owns the gesture and overscrolls once at
++    /// the boundary without scrolling ancestors; if the gesture starts already at the
++    /// boundary (or content does not overflow), it chains directly to the parent.
++    Chain,
 +    /// Disable rubber-band overscroll on this container.
 +    None,
 +}
@@ -694,6 +737,8 @@ index 0000000..e19ffbc
 +    pub(crate) bounds_size: Size<Pixels>,
 +    pub(crate) momentum_bounced: bool,
 +    pub(crate) last_event_at: Option<Instant>,
++    pub(crate) chain_to_parent_x: Option<bool>,
++    pub(crate) chain_to_parent_y: Option<bool>,
 +}
 +
 +impl RubberBandScrollState {
