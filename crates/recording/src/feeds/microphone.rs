@@ -143,7 +143,7 @@ struct SteadyDeliveryClock {
     window_earliest: Option<Instant>,
     /// How far behind the anchor arrivals settled once the stream had.
     settled_lag: Option<Duration>,
-    /// The last window's lag behind the anchor.
+    /// Before the stream settles, the lag a loss is measured back to.
     last_lag: Option<Duration>,
     /// After a loss: until when, and the lag arrivals had before it.
     recovery: Option<(Instant, Duration)>,
@@ -164,6 +164,9 @@ impl SteadyDeliveryClock {
     const MAX_DRIFT_STEP: Duration = Duration::from_millis(2);
     /// How long after a loss the anchor follows the arrivals' lag back.
     const RECOVERY: Duration = Duration::from_secs(15);
+    /// The most latency a stream settles at: PipeWire 1.0's ramp tops out
+    /// near 200 ms. Lag past this (plus LOSS) is lost audio.
+    const SETTLED_LAG_MAX: Duration = Duration::from_millis(300);
 
     fn timestamp(&mut self, received: Instant, frame_count: usize, rate: u32) -> Timestamp {
         if rate == 0 {
@@ -218,6 +221,18 @@ impl SteadyDeliveryClock {
             self.settle_at = Some(received + Self::RECOVERY);
         }
         self.recent.push_back((received, implied));
+        // Losses too short to stand out one by one have added up: even the
+        // earliest recent arrival lags far more than once the stream settled.
+        if let Some(settled) = self.settled_lag
+            && let Some(floor) = self.recent.iter().map(|(_, implied)| *implied).min()
+            && floor.saturating_duration_since(anchor) > settled + Self::LOSS
+        {
+            anchor += floor
+                .saturating_duration_since(anchor)
+                .saturating_sub(settled);
+            self.window_earliest = None;
+            self.window_started = Some(received);
+        }
         self.window_earliest = Some(
             self.window_earliest
                 .map_or(implied, |earliest| earliest.min(implied)),
@@ -238,9 +253,11 @@ impl SteadyDeliveryClock {
                 // lost frames, or less was lost than the arrivals showed.
                 (Some((until, before)), _) if received < until => {
                     if lag > before {
-                        anchor += lag - before;
+                        anchor += lag.saturating_sub(before);
                     } else {
-                        anchor = anchor.checked_sub(before - lag).unwrap_or(anchor);
+                        anchor = anchor
+                            .checked_sub(before.saturating_sub(lag))
+                            .unwrap_or(anchor);
                     }
                 }
                 // The window's arrivals lag the anchor by more than once the
@@ -248,15 +265,21 @@ impl SteadyDeliveryClock {
                 // runs fast): follow, a little per window.
                 (_, Some(settled)) => {
                     if lag > settled {
-                        anchor += (lag - settled).min(Self::MAX_DRIFT_STEP);
+                        anchor += lag.saturating_sub(settled).min(Self::MAX_DRIFT_STEP);
                     } else {
-                        let step = (settled - lag).min(Self::MAX_DRIFT_STEP);
+                        let step = settled.saturating_sub(lag).min(Self::MAX_DRIFT_STEP);
                         anchor = anchor.checked_sub(step).unwrap_or(anchor);
                     }
                 }
                 (_, None) if self.settle_at.is_some_and(|at| received >= at) => {
-                    self.settled_lag = Some(lag);
+                    let settled = lag.min(Self::SETTLED_LAG_MAX);
+                    anchor += lag.saturating_sub(settled);
+                    self.settled_lag = Some(settled);
                     self.recovery = None;
+                }
+                // Still settling: more lag than any latency ramp is lost audio.
+                (_, None) if lag > Self::SETTLED_LAG_MAX + Self::LOSS => {
+                    anchor += lag.saturating_sub(Self::SETTLED_LAG_MAX);
                 }
                 _ => {}
             }
@@ -6086,6 +6109,34 @@ mod steady_delivery_clock_tests {
             }
         }
         assert!(worst_after < Duration::from_millis(15), "{worst_after:?}");
+    }
+
+    #[test]
+    fn repeated_short_losses_are_caught_up() {
+        // From 40 s on, 100 ms of audio is lost every second: no single loss
+        // stands out, but the stamps must keep their place against the
+        // capture times instead of running ever earlier.
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let mut lost = Duration::ZERO;
+        let mut before_losses = None;
+        let mut worst = Duration::ZERO;
+        for buffer in 1..=6_000u32 {
+            let captured = period() * buffer + lost;
+            let received = start + captured + Duration::from_millis(20);
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            let off = apart(stamped, start + captured);
+            if captured < Duration::from_secs(40) {
+                before_losses = Some(off);
+            } else {
+                worst = worst.max(off.abs_diff(before_losses.unwrap()));
+                if buffer % 40 == 0 {
+                    lost += Duration::from_millis(100);
+                }
+            }
+        }
+        // At most the loss threshold plus the loss that crossed it.
+        assert!(worst < Duration::from_millis(300), "{worst:?}");
     }
 
     #[test]
