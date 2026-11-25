@@ -2873,6 +2873,16 @@ impl Render for OnboardingWindow {
                                 .min_h_0()
                                 .w_full()
                                 .overflow_y_scroll()
+                                .map(|el| {
+                                    #[cfg(feature = "gpui-rubber-band")]
+                                    {
+                                        el.overscroll_none()
+                                    }
+                                    #[cfg(not(feature = "gpui-rubber-band"))]
+                                    {
+                                        el
+                                    }
+                                })
                                 .child(content),
                         )
                         .child(self.render_navigation(cx)),
