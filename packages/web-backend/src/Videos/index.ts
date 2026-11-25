@@ -1,4 +1,8 @@
 import { nanoId } from "@cap/database/helpers";
+import {
+	findAccessibleOrganization,
+	resolveOrCreateActiveOrganization,
+} from "@cap/database/organization-pointer";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
@@ -7,6 +11,7 @@ import {
 	CurrentUser,
 	DatabaseError,
 	type Folder,
+	type Organisation,
 	Policy,
 	Storage as StorageDomain,
 	Video,
@@ -26,7 +31,8 @@ import type { CreateVideoInput as RepoCreateVideoInput } from "./VideosRepo.ts";
 import { VideosRepo } from "./VideosRepo.ts";
 
 const DEFAULT_ANALYTICS_RANGE_DAYS = 90;
-const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
+const escapeSqlLiteral = (value: string) =>
+	value.replace(/\\/g, "\\\\").replace(/'/g, "''");
 const formatDate = (date: Date) => date.toISOString().slice(0, 10);
 const formatDateTime = (date: Date) =>
 	date.toISOString().slice(0, 19).replace("T", " ");
@@ -659,8 +665,46 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				function* (input: InstantRecordingCreateInput) {
 					const user = yield* CurrentUser;
 
-					if (user.activeOrganizationId !== input.orgId)
-						return yield* Effect.fail(new Policy.PolicyDeniedError());
+					// Clients keep sending an organization they were removed from
+					// (the extension caches it), so that records into the user's
+					// usable active organization instead, creating a personal one
+					// when none is left. A usable pointer must still match a
+					// requested organization the user can use.
+					const requested = yield* db.use((db) =>
+						findAccessibleOrganization(db, user.id, input.orgId),
+					);
+					const active = yield* db.use((db) =>
+						findAccessibleOrganization(db, user.id, user.activeOrganizationId),
+					);
+					let orgId: Organisation.OrganisationId;
+					if (active) {
+						if (requested && active.id !== requested.id)
+							return yield* Effect.fail(new Policy.PolicyDeniedError());
+						orgId = active.id;
+					} else if (requested) {
+						orgId = requested.id;
+						yield* db.use((db) =>
+							db
+								.update(Db.users)
+								.set({ activeOrganizationId: requested.id })
+								.where(
+									Dz.and(
+										Dz.eq(Db.users.id, user.id),
+										Dz.eq(
+											Db.users.activeOrganizationId,
+											user.activeOrganizationId,
+										),
+									),
+								),
+						);
+					} else {
+						const resolved = yield* db.use((db) =>
+							resolveOrCreateActiveOrganization(db, user),
+						);
+						if (!resolved)
+							return yield* Effect.fail(new Policy.PolicyDeniedError());
+						orgId = resolved.id;
+					}
 
 					const folderId: RepoCreateVideoInput["folderId"] =
 						input.folderId ?? Option.none<Folder.FolderId>();
@@ -673,7 +717,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 								.where(
 									Dz.and(
 										Dz.eq(Db.folders.id, requestedFolderId),
-										Dz.eq(Db.folders.organizationId, input.orgId),
+										Dz.eq(Db.folders.organizationId, orgId),
 										Dz.eq(Db.folders.createdById, user.id),
 										Dz.isNull(Db.folders.spaceId),
 									),
@@ -686,7 +730,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 					const writable = yield* storage.getWritableAccessForUser(
 						user.id,
-						input.orgId,
+						orgId,
 					);
 					const bucketId: RepoCreateVideoInput["bucketId"] = writable.bucketId;
 					const storageIntegrationId: RepoCreateVideoInput["storageIntegrationId"] =
@@ -710,10 +754,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 					const createData: RepoCreateVideoInput = {
 						ownerId: user.id,
-						orgId: input.orgId,
+						orgId,
 						name: `Cap Recording - ${formattedDate}`,
 						public: yield* Effect.tryPromise({
-							try: () => getNewVideoPublic(input.orgId),
+							try: () => getNewVideoPublic(orgId),
 							catch: (cause) => new DatabaseError({ cause }),
 						}),
 						source: { type: "webMP4" },
@@ -756,7 +800,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 									domainVerified: Db.organizations.domainVerified,
 								})
 								.from(Db.organizations)
-								.where(Dz.eq(Db.organizations.id, input.orgId))
+								.where(Dz.eq(Db.organizations.id, orgId))
 								.limit(1),
 						)
 						.pipe(

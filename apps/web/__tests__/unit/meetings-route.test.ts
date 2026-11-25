@@ -568,10 +568,10 @@ describe("POST /transcribe gates", () => {
 		expect(response.status).toBe(429);
 		expect(response.headers.get("retry-after")).toBe("4321");
 		expect(await response.json()).toEqual({
-			error: "rate_limited",
+			error: "daily_audio_limit",
 			retryAfterSeconds: 4_321,
 		});
-		expect(mocks.daily).toHaveBeenCalledWith(user.id, 3, 3_600);
+		expect(mocks.daily).toHaveBeenCalledWith(user.id, 3, 5_760);
 		expect(mocks.upload).not.toHaveBeenCalled();
 	});
 

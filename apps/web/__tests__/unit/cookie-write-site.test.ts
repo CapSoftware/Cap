@@ -1,4 +1,7 @@
-import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
+import {
+	isCrossSiteCookieWrite,
+	isCrossSiteRequest,
+} from "@cap/database/auth/request-site";
 import {
 	Database,
 	getCurrentUser,
@@ -113,6 +116,21 @@ beforeEach(() => {
 	mocks.webUrl = "https://cap.so";
 	mocks.getServerSession.mockClear();
 	mocks.getSessionUser.mockClear();
+});
+
+describe("isCrossSiteRequest", () => {
+	it("flags a cross-site GET that the write check lets through", () => {
+		expect(isCrossSiteCookieWrite(request("GET", crossSite))).toBe(false);
+		expect(isCrossSiteRequest(request("GET", crossSite))).toBe(true);
+	});
+
+	it.each([
+		["same-origin", sameOrigin],
+		["user-initiated", { "sec-fetch-site": "none" }],
+		["a native client", {}],
+	])("allows a GET from %s", (_label, headers) => {
+		expect(isCrossSiteRequest(request("GET", headers))).toBe(false);
+	});
 });
 
 describe("isCrossSiteCookieWrite", () => {
