@@ -1139,6 +1139,31 @@ impl EditorWindow {
         }
         found
     }
+
+    fn redact_occurrences_in(
+        &self,
+        spans: &[(f64, f64)],
+    ) -> Vec<(f64, f64, cap_project::redaction::RedactionRegion)> {
+        let Some(redactions) = self.redact.redactions.as_deref() else {
+            return Vec::new();
+        };
+        let config = &self.project.auto_redact;
+        let video_offsets = self.redact_video_offsets();
+        let mut found: Vec<(f64, f64, cap_project::redaction::RedactionRegion)> = Vec::new();
+        for (start, end, region) in
+            crate::editor_timeline::redact_region_spans(&self.project, redactions, &video_offsets)
+        {
+            if spans.iter().any(|(from, to)| end > *from && start < *to)
+                && config.has_category(region.category)
+                && !found
+                    .iter()
+                    .any(|(at, _, other)| *at == start && other.id == region.id)
+            {
+                found.push((start, end, region.clone()));
+            }
+        }
+        found
+    }
 }
 
 impl EditorWindow {
@@ -1183,19 +1208,6 @@ impl EditorWindow {
         self.publish_project();
     }
 
-    /// Where a detection first plays on the timeline.
-    fn redact_region_output_start(&self, id: &str) -> Option<f64> {
-        let redactions = self.redact.redactions.as_deref()?;
-        crate::editor_timeline::redact_region_spans(
-            &self.project,
-            redactions,
-            &self.redact_video_offsets(),
-        )
-        .into_iter()
-        .find(|(_, _, region)| region.id == id)
-        .map(|(start, _, _)| start)
-    }
-
     fn set_redact_hover(&mut self, ids: Option<Vec<String>>, cx: &mut Context<Self>) {
         if self.redact.hover_ids == ids {
             return;
@@ -1224,21 +1236,13 @@ impl EditorWindow {
             SharedString::from(tr::editor::redact::panel_title()),
         )
         .on_done(cx.listener(|this, _, _window, cx| this.set_selection(None, cx)));
-        let mut regions = Vec::new();
-        for index in &selection.indices {
-            let Some(segment) = self.timeline.redact.get(*index) else {
-                continue;
-            };
-            for region in self.redact_regions_between(segment.start, segment.end) {
-                if !regions
-                    .iter()
-                    .any(|r: &cap_project::redaction::RedactionRegion| r.id == region.id)
-                {
-                    regions.push(region);
-                }
-            }
-        }
-        let groups = redact_panel_groups(&regions);
+        let spans = selection
+            .indices
+            .iter()
+            .filter_map(|index| self.timeline.redact.get(*index))
+            .map(|segment| (segment.start, segment.end))
+            .collect::<Vec<_>>();
+        let groups = redact_panel_groups(&self.redact_occurrences_in(&spans));
         let mut body = div().flex().flex_col().gap(px(14.)).child(header);
         if groups.is_empty() {
             return body
@@ -1278,17 +1282,21 @@ impl EditorWindow {
                     )
                     .child(redact_switch(&theme, enabled)),
             );
-            for group in groups.iter().filter(|g| g.category == category) {
+            for (row, group) in groups
+                .iter()
+                .enumerate()
+                .filter(|(_, g)| g.category == category)
+            {
                 let kept = group.ids.iter().all(|id| config.is_excluded(id));
                 let ids = group.ids.clone();
                 let hover_ids = group.ids.clone();
-                let first = group.ids[0].clone();
+                let seek = group.start;
                 let span = format!(
                     "{}\u{2013}{}",
                     format_redact_time(group.start),
                     format_redact_time(group.end)
                 );
-                let row_id = SharedString::from(format!("redact-row-{}", group.ids[0]));
+                let row_id = SharedString::from(format!("redact-row-{row}"));
                 group_el = group_el.child(
                     div()
                         .id(row_id)
@@ -1307,9 +1315,7 @@ impl EditorWindow {
                             this.set_redact_hover(ids, cx);
                         }))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(time) = this.redact_region_output_start(&first) {
-                                this.seek_to_time(time, cx);
-                            }
+                            this.seek_to_time(seek, cx);
                         }))
                         .child(redact_place_map(&theme, group.rect))
                         .child(
@@ -1330,7 +1336,7 @@ impl EditorWindow {
                         })
                         .child(
                             div()
-                                .id(SharedString::from(format!("redact-keep-{}", group.ids[0])))
+                                .id(SharedString::from(format!("redact-keep-{row}")))
                                 .flex()
                                 .items_center()
                                 .gap(px(5.))
@@ -1376,7 +1382,8 @@ impl EditorWindow {
     }
 }
 
-/// One "Hidden here" row: detections of one category over the same time.
+/// One "Hidden here" row: detections of one category over the same time on
+/// the timeline.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RedactPanelGroup {
     pub category: RedactCategory,
@@ -1387,30 +1394,32 @@ pub(crate) struct RedactPanelGroup {
     pub ids: Vec<String>,
 }
 
-/// Groups detections by category and time range (to the tenth of a second,
-/// as the row shows it), ordered by category, then top to bottom and left to
-/// right on screen.
+/// Groups detections by category and timeline range (to the tenth of a
+/// second, as the row shows it), ordered by category, then top to bottom and
+/// left to right on screen.
 pub(crate) fn redact_panel_groups(
-    regions: &[cap_project::redaction::RedactionRegion],
+    occurrences: &[(f64, f64, cap_project::redaction::RedactionRegion)],
 ) -> Vec<RedactPanelGroup> {
     let tenth = |t: f64| (t * 10.).round() as i64;
     let mut groups: Vec<RedactPanelGroup> = Vec::new();
-    for region in regions {
+    for (start, end, region) in occurrences {
         let Some(rect) = region.rect_at(region.start) else {
             continue;
         };
         if let Some(group) = groups.iter_mut().find(|g| {
             g.category == region.category
-                && tenth(g.start) == tenth(region.start)
-                && tenth(g.end) == tenth(region.end)
+                && tenth(g.start) == tenth(*start)
+                && tenth(g.end) == tenth(*end)
         }) {
-            group.ids.push(region.id.clone());
+            if !group.ids.contains(&region.id) {
+                group.ids.push(region.id.clone());
+            }
             continue;
         }
         groups.push(RedactPanelGroup {
             category: region.category,
-            start: region.start,
-            end: region.end,
+            start: *start,
+            end: *end,
             rect,
             ids: vec![region.id.clone()],
         });
@@ -1503,8 +1512,8 @@ mod tests {
         end: f64,
         x: f32,
         y: f32,
-    ) -> RedactionRegion {
-        RedactionRegion {
+    ) -> (f64, f64, RedactionRegion) {
+        let region = RedactionRegion {
             id: id.into(),
             segment: 0,
             category,
@@ -1517,7 +1526,8 @@ mod tests {
                 w: 0.1,
                 h: 0.02,
             }],
-        }
+        };
+        (start, end, region)
     }
 
     /// Rows join detections of one category over the same time and read top
@@ -1563,6 +1573,24 @@ mod tests {
                     ]
                 ),
                 (RedactCategory::Card, vec!["card".to_string()]),
+            ]
+        );
+    }
+    #[test]
+    fn hidden_here_rows_keep_takes_at_different_timeline_times_apart() {
+        let (_, _, first) = region("first", RedactCategory::Email, 0.0, 5.0, 0.2, 0.2);
+        let (_, _, mut second) = region("second", RedactCategory::Email, 0.0, 5.0, 0.2, 0.2);
+        second.segment = 1;
+        let groups = redact_panel_groups(&[(0.0, 5.0, first), (12.0, 17.0, second)]);
+        let rows = groups
+            .iter()
+            .map(|g| (g.start, g.ids.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            vec![
+                (0.0, vec!["first".to_string()]),
+                (12.0, vec!["second".to_string()]),
             ]
         );
     }
