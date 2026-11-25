@@ -4,7 +4,7 @@
 
 use std::sync::{LazyLock, OnceLock};
 
-use regex::{Regex, RegexBuilder};
+use regex::{Regex, RegexBuilder, RegexSet, RegexSetBuilder};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -52,12 +52,17 @@ struct Allow {
 
 struct Rule {
     def: RuleDef,
+    /// This rule's keywords, as indices into [`Rules::keywords`].
+    keyword_ids: Vec<usize>,
     compiled: OnceLock<Option<(Regex, Vec<Allow>)>>,
 }
 
 struct Rules {
     global: Allow,
     rules: Vec<Rule>,
+    /// Every rule's keywords as literals, so one pass over a line tells
+    /// which of them it contains.
+    keywords: RegexSet,
 }
 
 fn compile(pattern: &str) -> Option<Regex> {
@@ -88,16 +93,34 @@ fn allow(def: &AllowDef) -> Allow {
 static RULES: LazyLock<Rules> = LazyLock::new(|| {
     let file: RulesFile = serde_json::from_str(include_str!("../assets/gitleaks-rules.json"))
         .expect("bundled gitleaks rules parse");
+    let mut literals = Vec::new();
+    let rules = file
+        .rules
+        .into_iter()
+        .map(|def| {
+            let keyword_ids = def
+                .keywords
+                .iter()
+                .map(|keyword| {
+                    literals.push(regex::escape(keyword));
+                    literals.len() - 1
+                })
+                .collect();
+            Rule {
+                def,
+                keyword_ids,
+                compiled: OnceLock::new(),
+            }
+        })
+        .collect();
     Rules {
         global: allow(&file.allowlist),
-        rules: file
-            .rules
-            .into_iter()
-            .map(|def| Rule {
-                def,
-                compiled: OnceLock::new(),
-            })
-            .collect(),
+        rules,
+        keywords: RegexSetBuilder::new(&literals)
+            .size_limit(64 << 20)
+            .dfa_size_limit(64 << 20)
+            .build()
+            .expect("gitleaks keywords compile"),
     }
 });
 
@@ -140,15 +163,10 @@ fn shannon_entropy(text: &str) -> f64 {
 pub fn find(text: &str) -> Vec<(usize, usize)> {
     let rules = &*RULES;
     let lower = text.to_lowercase();
+    let present = rules.keywords.matches(&lower);
     let mut found = Vec::new();
     for rule in &rules.rules {
-        if !rule.def.keywords.is_empty()
-            && !rule
-                .def
-                .keywords
-                .iter()
-                .any(|keyword| lower.contains(keyword.as_str()))
-        {
+        if !rule.keyword_ids.is_empty() && !rule.keyword_ids.iter().any(|id| present.matched(*id)) {
             continue;
         }
         let Some((regex, allowlists)) = rule
@@ -209,6 +227,36 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(rules.rules.len() > 200);
         assert!(failed.len() <= 3, "rules that do not compile: {failed:?}");
+    }
+
+    #[test]
+    fn keyword_set_agrees_with_substring_search() {
+        let rules = &*RULES;
+        let mut lines = vec![
+            "the quick brown fox".to_string(),
+            "export SLACK=xoxb-1".to_string(),
+            String::new(),
+        ];
+        for (i, rule) in rules.rules.iter().enumerate() {
+            for keyword in &rule.def.keywords {
+                lines.push(format!("x{keyword}y {i}"));
+                lines.push(keyword.chars().skip(1).collect());
+                lines.push(keyword.to_uppercase());
+            }
+        }
+        for line in &lines {
+            let lower = line.to_lowercase();
+            let present = rules.keywords.matches(&lower);
+            for rule in &rules.rules {
+                for (keyword, id) in rule.def.keywords.iter().zip(&rule.keyword_ids) {
+                    assert_eq!(
+                        present.matched(*id),
+                        lower.contains(keyword.as_str()),
+                        "{keyword:?} in {line:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
