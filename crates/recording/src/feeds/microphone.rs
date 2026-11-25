@@ -1984,6 +1984,37 @@ impl MicrophoneFeed {
                 let route_required = input_route.is_some();
                 #[cfg(target_os = "linux")]
                 let routed_at = Arc::new(std::sync::OnceLock::<cap_timestamp::Timestamps>::new());
+                #[cfg(target_os = "linux")]
+                enum PreparedLinuxInput {
+                    Route(crate::sources::screen_capture::PulseInputRoute),
+                    Direct(crate::sources::screen_capture::PendingSystemAudioOutput),
+                    Open,
+                }
+                #[cfg(target_os = "linux")]
+                let prepared_input = {
+                    use crate::sources::screen_capture::{
+                        PendingSystemAudioOutput, SystemAudioStartupAttach,
+                        system_audio_startup_attach,
+                    };
+                    match (
+                        system_audio_startup_attach(pulse_input_role, input_route.is_some()),
+                        input_route,
+                    ) {
+                        (Some(SystemAudioStartupAttach::WatchDirectOutput), _) => {
+                            match PendingSystemAudioOutput::snapshot() {
+                                Ok(pending) => PreparedLinuxInput::Direct(pending),
+                                Err(error) => {
+                                    let _ = ready_tx.send(Err(SetInputError::BuildStream(format!(
+                                        "Could not inspect the Linux system-audio input: {error}"
+                                    ))));
+                                    return;
+                                }
+                            }
+                        }
+                        (_, Some(route)) => PreparedLinuxInput::Route(route),
+                        (_, None) => PreparedLinuxInput::Open,
+                    }
+                };
 
                 if setup_cancel.is_cancelled() || ready_tx.is_canceled() {
                     return;
@@ -2212,37 +2243,64 @@ impl MicrophoneFeed {
                 }
 
                 #[cfg(target_os = "linux")]
-                if let Some(route) = input_route {
-                    match route.apply(&input_callback_observed, &system_stream_cancel) {
-                        Ok(source_output)
-                            if pulse_input_role
-                                == crate::sources::screen_capture::PulseInputRole::SystemAudio =>
-                        {
-                            *system_capture_route.lock().unwrap() =
-                                Some(crate::sources::screen_capture::SystemAudioCaptureRoute {
-                                    stream_id: id,
-                                    source_output,
-                                });
-                            if let Some(staging) = system_audio_staging.clone() {
-                                staging.lock().unwrap().note_attached(Instant::now());
-                                // The startup observer waits for a released sample.
-                                // Lock is what used to start these checks, and it
-                                // runs only after that wait, so the watcher has to
-                                // be running before the stream reports ready.
-                                route_watch.ensure_started(
-                                    actor_ref.clone(),
-                                    staging,
-                                    system_capture_route.clone(),
-                                    dropped_message_count.clone(),
-                                );
+                {
+                    use crate::sources::screen_capture::SystemAudioStartupAttach;
+                    let source_output = match prepared_input {
+                        PreparedLinuxInput::Route(route) => {
+                            match route.apply(&input_callback_observed, &system_stream_cancel) {
+                                Ok(source_output)
+                                    if crate::sources::screen_capture::system_audio_startup_attach(
+                                        pulse_input_role,
+                                        true,
+                                    ) == Some(SystemAudioStartupAttach::FollowPreparedRoute) =>
+                                {
+                                    Some(source_output)
+                                }
+                                Ok(_) => None,
+                                Err(error) => {
+                                    let _ =
+                                        ready_tx.send(Err(SetInputError::BuildStream(format!(
+                                            "Could not confirm the Linux audio input route: {error}"
+                                        ))));
+                                    return;
+                                }
                             }
                         }
-                        Ok(_) => {}
-                        Err(error) => {
-                            let _ = ready_tx.send(Err(SetInputError::BuildStream(format!(
-                                "Could not confirm the Linux audio input route: {error}"
-                            ))));
-                            return;
+                        PreparedLinuxInput::Direct(pending) => {
+                            match pending
+                                .started_output(&input_callback_observed, &system_stream_cancel)
+                            {
+                                Ok(source_output) => Some(source_output),
+                                Err(error) => {
+                                    let _ =
+                                        ready_tx.send(Err(SetInputError::BuildStream(format!(
+                                            "Could not confirm the Linux system-audio input: {error}"
+                                        ))));
+                                    return;
+                                }
+                            }
+                        }
+                        PreparedLinuxInput::Open => None,
+                    };
+                    if let Some(source_output) = source_output {
+                        *system_capture_route.lock().unwrap() =
+                            Some(crate::sources::screen_capture::SystemAudioCaptureRoute {
+                                stream_id: id,
+                                source_output,
+                            });
+                        if let Some(staging) = system_audio_staging.clone() {
+                            staging.lock().unwrap().note_attached(Instant::now());
+                            // The startup observer waits for a released sample.
+                            // Lock is what used to start these checks, and it
+                            // runs only after that wait, so the watcher has to
+                            // be running before the stream reports ready. A
+                            // named monitor never builds a PulseInputRoute.
+                            route_watch.ensure_started(
+                                actor_ref.clone(),
+                                staging,
+                                system_capture_route.clone(),
+                                dropped_message_count.clone(),
+                            );
                         }
                     }
                 }

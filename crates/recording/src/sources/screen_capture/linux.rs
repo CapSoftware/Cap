@@ -1960,6 +1960,59 @@ fn uses_default_pulse_input(device_name: &str) -> bool {
     device_name.eq_ignore_ascii_case("default") || device_name.eq_ignore_ascii_case("pulse")
 }
 
+/// How system audio learns its Pulse source-output before the stream is
+/// reported ready.
+///
+/// `PulseInputRoute` is only built for the `default` and `pulse` device
+/// names. A monitor that cpal already lists by name never takes that path,
+/// but its samples are still held until a later source-output check. That
+/// check has to be running before startup waits for a released sample.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SystemAudioStartupAttach {
+    FollowPreparedRoute,
+    WatchDirectOutput,
+}
+
+pub(crate) fn system_audio_startup_attach(
+    role: PulseInputRole,
+    prepared_route: bool,
+) -> Option<SystemAudioStartupAttach> {
+    if role != PulseInputRole::SystemAudio {
+        return None;
+    }
+    Some(if prepared_route {
+        SystemAudioStartupAttach::FollowPreparedRoute
+    } else {
+        SystemAudioStartupAttach::WatchDirectOutput
+    })
+}
+
+pub(crate) struct PendingSystemAudioOutput {
+    previous: Vec<PactlSourceOutput>,
+}
+
+impl PendingSystemAudioOutput {
+    pub(crate) fn snapshot() -> anyhow::Result<Self> {
+        Ok(Self {
+            previous: current_process_source_outputs()?,
+        })
+    }
+
+    pub(crate) fn started_output(
+        self,
+        input_callback_observed: &AtomicBool,
+        cancel: &CancellationToken,
+    ) -> anyhow::Result<u32> {
+        wait_for_started_source_output(
+            &self.previous,
+            input_callback_observed,
+            cancel,
+            current_process_source_outputs,
+        )
+        .map(|output| output.id)
+    }
+}
+
 /// The ALSA input to open for the microphone the user selected, when it is
 /// not the selection itself.
 ///
@@ -3953,13 +4006,14 @@ fn x11_source_pixel(
 mod system_audio_tests {
     use super::{
         OwnedSystemAudioFeed, PactlSourceOutput, PulseInputRole, SystemAudioRouteCheck,
-        SystemAudioRoutePlan, SystemAudioStaging, newly_created_source_output,
-        pactl_monitor_preference, pactl_source_index, plan_system_audio_route,
-        preferred_system_audio_device, previous_source_destination, process_source_output_ids,
-        pulse_input_route_destination, retry_system_audio_connection, route_watch_after_disconnect,
-        routes_default_microphone_through_server, source_output_needs_move,
-        source_output_route_matches, started_input_source_output, uses_default_pulse_input,
-        wait_for_audio_after_route, wait_for_started_source_output,
+        SystemAudioRoutePlan, SystemAudioStaging, SystemAudioStartupAttach,
+        newly_created_source_output, pactl_monitor_preference, pactl_source_index,
+        plan_system_audio_route, preferred_system_audio_device, previous_source_destination,
+        process_source_output_ids, pulse_input_route_destination, retry_system_audio_connection,
+        route_watch_after_disconnect, routes_default_microphone_through_server,
+        source_output_needs_move, source_output_route_matches, started_input_source_output,
+        system_audio_startup_attach, uses_default_pulse_input, wait_for_audio_after_route,
+        wait_for_started_source_output,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -4610,6 +4664,39 @@ mod system_audio_tests {
                 || panic!("a named input never asks the sound server"),
             ));
         }
+    }
+
+    #[test]
+    fn named_monitor_input_watches_its_own_output_before_ready() {
+        assert_eq!(
+            system_audio_startup_attach(PulseInputRole::SystemAudio, false),
+            Some(SystemAudioStartupAttach::WatchDirectOutput)
+        );
+        assert_eq!(
+            system_audio_startup_attach(PulseInputRole::SystemAudio, true),
+            Some(SystemAudioStartupAttach::FollowPreparedRoute)
+        );
+        assert_eq!(
+            system_audio_startup_attach(PulseInputRole::Microphone, false),
+            None
+        );
+        assert!(!uses_default_pulse_input(
+            "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor"
+        ));
+        let previous = [PactlSourceOutput { id: 1, source: 2 }];
+        let started = wait_for_started_source_output(
+            &previous,
+            &std::sync::atomic::AtomicBool::new(true),
+            &CancellationToken::new(),
+            || {
+                Ok(vec![
+                    PactlSourceOutput { id: 1, source: 2 },
+                    PactlSourceOutput { id: 9, source: 4 },
+                ])
+            },
+        )
+        .unwrap();
+        assert_eq!(started.id, 9);
     }
 
     #[test]
