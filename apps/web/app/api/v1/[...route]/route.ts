@@ -7381,6 +7381,9 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							{
 								contentType: "video/mp4",
 								method: "put",
+								// Agent keys are also used from scripts that may not send
+								// the returned headers on the PUT.
+								unsignedContentType: true,
 								fields: {
 									"Content-Type": "video/mp4",
 									"x-amz-meta-userid": principal.id,
