@@ -162,6 +162,7 @@ impl<'a> Analyzer<'a> {
         let mut result = Redactions {
             version: REDACTIONS_VERSION,
             model: self.model.version().to_string(),
+            scanner: crate::SCAN_REVISION,
             segments: Vec::new(),
             regions: Vec::new(),
         };
@@ -171,7 +172,7 @@ impl<'a> Analyzer<'a> {
             }
             let fingerprint = first_frame_fingerprint(&source.path)?;
             if let Some(previous) = previous
-                && previous.model == result.model
+                && same_scanner(previous, &result)
                 && let Some(segment) = previous.segment(source.index)
                 && segment.complete
                 && segment.fingerprint == fingerprint
@@ -369,6 +370,12 @@ impl<'a> Analyzer<'a> {
         segment_info.complete = true;
         Ok((segment_info, regions))
     }
+}
+
+/// Whether `previous` was written by the same model and scanner revision as
+/// `result`, so its complete segments can be reused.
+fn same_scanner(previous: &Redactions, result: &Redactions) -> bool {
+    previous.model == result.model && previous.scanner == result.scanner
 }
 
 fn first_frame_fingerprint(path: &Path) -> anyhow::Result<String> {
@@ -737,6 +744,32 @@ mod tests {
             let text = serde_json::to_string(&rounded).unwrap();
             let back: RedactionRegion = serde_json::from_str(&text).unwrap();
             assert_eq!(back.keys[0], key);
+        }
+    }
+
+    #[test]
+    fn a_scan_by_another_scanner_revision_is_not_reused() {
+        let current = Redactions {
+            model: "m".into(),
+            scanner: crate::SCAN_REVISION,
+            ..Default::default()
+        };
+        assert!(same_scanner(&current.clone(), &current));
+        for previous in [
+            Redactions {
+                scanner: 0,
+                ..current.clone()
+            },
+            Redactions {
+                scanner: crate::SCAN_REVISION + 1,
+                ..current.clone()
+            },
+            Redactions {
+                model: "other".into(),
+                ..current.clone()
+            },
+        ] {
+            assert!(!same_scanner(&previous, &current));
         }
     }
 

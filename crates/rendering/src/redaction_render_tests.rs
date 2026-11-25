@@ -153,6 +153,7 @@ fn redactions(regions: Vec<RedactionRegion>) -> Arc<Redactions> {
     Arc::new(Redactions {
         version: REDACTIONS_VERSION,
         model: "test".into(),
+        scanner: 0,
         segments: Vec::new(),
         regions,
     })

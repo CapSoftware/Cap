@@ -121,6 +121,11 @@ pub struct Redactions {
     pub version: u32,
     #[serde(default)]
     pub model: String,
+    /// The scanner revision that wrote the regions (0: written before
+    /// revisions were recorded). A saved scan is reused only by the same
+    /// revision.
+    #[serde(default)]
+    pub scanner: u32,
     #[serde(default)]
     pub segments: Vec<RedactionSegment>,
     #[serde(default)]
@@ -440,6 +445,7 @@ mod tests {
         let redactions = Redactions {
             version: REDACTIONS_VERSION,
             model: "test".into(),
+            scanner: 0,
             segments: Vec::new(),
             regions: vec![
                 region("a", RedactCategory::Email, 0.0, 2.0),
@@ -475,10 +481,19 @@ mod tests {
     }
 
     #[test]
+    fn a_file_without_a_scanner_revision_reads_as_revision_zero() {
+        let parsed: Redactions =
+            serde_json::from_str(r#"{"version":1,"model":"m","segments":[],"regions":[]}"#)
+                .unwrap();
+        assert_eq!(parsed.scanner, 0);
+    }
+
+    #[test]
     fn sidecar_round_trips_in_camel_case() {
         let redactions = Redactions {
             version: REDACTIONS_VERSION,
             model: "m".into(),
+            scanner: 3,
             segments: vec![RedactionSegment {
                 index: 0,
                 source_frames: 10,
@@ -492,6 +507,7 @@ mod tests {
         };
         let json = serde_json::to_string(&redactions).unwrap();
         assert!(json.contains("\"sourceFrames\":10"));
+        assert!(json.contains("\"scanner\":3"));
         assert!(json.contains("\"category\":\"card\""));
         let dir = tempfile::tempdir().unwrap();
         redactions.save(dir.path()).unwrap();

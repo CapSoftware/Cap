@@ -18,3 +18,8 @@ mod wdet;
 pub use analyze::{Analyzer, Progress, SegmentSource, Stats, segment_sources};
 pub use classify::{Finding, LineContext, classify_frame, classify_frame_with, classify_line};
 pub use model::OcrModel;
+
+/// The revision of what a scan finds: raised by every change to the scan or
+/// the classifier that changes the regions it writes, so a project scanned
+/// by an earlier build is scanned again instead of keeping its old masks.
+pub const SCAN_REVISION: u32 = 1;
