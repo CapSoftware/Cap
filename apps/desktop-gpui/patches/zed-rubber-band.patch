@@ -23,7 +23,7 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..227f47e 100644
+index c02bd16..1476371 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -997,6 +997,56 @@ pub trait InteractiveElement: Sized {
@@ -213,7 +213,7 @@ index c02bd16..227f47e 100644
                              delta_x = delta.y;
                          }
                      }
-@@ -3109,19 +3240,133 @@ impl Interactivity {
+@@ -3109,21 +3240,137 @@ impl Interactivity {
                      if overflow.y == Overflow::Scroll {
                          if !delta.y.is_zero() {
                              delta_y = delta.y;
@@ -354,8 +354,12 @@ index c02bd16..227f47e 100644
 -                    scroll_offset.x += delta_x;
                      if *scroll_offset != old_scroll_offset {
                          cx.notify(current_view);
++                        #[cfg(feature = "rubber-band")]
++                        cx.stop_propagation();
                      }
-@@ -3360,6 +3605,8 @@ pub struct InteractiveElementState {
+                 }
+             });
+@@ -3360,6 +3607,8 @@ pub struct InteractiveElementState {
      /// blur). `None` means no activation key is pending.
      pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,

@@ -1152,7 +1152,6 @@ pub struct GeneralSettings {
     /// `!!settings.outOfProcessMuxer` in experimental.tsx).
     pub enable_native_camera_preview: bool,
     pub out_of_process_muxer: bool,
-    pub experimental_desktop_redesign: bool,
     /// Not part of `general_settings` at all: the mic-confirmation toggle
     /// lives in the store's own `recording_start_safety` section
     /// (`RECORDING_START_SAFETY_DEFAULTS`), and the page renders it in the
@@ -1626,7 +1625,6 @@ impl GeneralSettings {
             editor_preview_enhance: bool_at(general, EDITOR_PREVIEW_ENHANCE_KEY, false),
             enable_native_camera_preview: bool_at(general, "enableNativeCameraPreview", false),
             out_of_process_muxer: bool_at(general, "outOfProcessMuxer", false),
-            experimental_desktop_redesign: bool_at(general, "experimentalDesktopRedesign", false),
             confirm_without_microphone: bool_at(
                 safety,
                 "confirmBeforeRecordingWithoutMicrophone",

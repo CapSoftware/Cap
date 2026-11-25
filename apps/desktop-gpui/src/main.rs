@@ -51,7 +51,6 @@ mod editor_voice_eq;
 mod editor_timeline;
 mod editor_window;
 mod encoder_recovery;
-mod experimental;
 mod feeds;
 mod focus_border;
 mod hotkeys;

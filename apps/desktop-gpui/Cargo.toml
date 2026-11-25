@@ -209,7 +209,6 @@ tempfile = "3"
 
 [features]
 default = ["gpui-rubber-band"]
-experimental-redesign = []
 gpui-rubber-band = ["gpui/rubber-band"]
 
 [target.'cfg(unix)'.dependencies]
@@ -277,7 +276,6 @@ objc2-foundation = { version = "0.3.2", features = [
     "NSNotification",
     "NSOperation",
     "NSString",
-    "NSUserDefaults",
     "block2",
 ] }
 block2 = "0.6"
