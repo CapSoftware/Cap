@@ -323,8 +323,13 @@ save_failed = "No se pudieron guardar tus ajustes de grabación. Inténtalo de n
 [settings.quality.studio]
 balanced = "Equilibrado"
 balanced_description = "Detalle nítido con un tamaño de archivo razonable. Ideal para la mayoría de grabaciones."
+bitrate = "Tasa de bits"
+bitrate_description = "Un valor más alto conserva más detalle y genera archivos más grandes. Es posible que el codificador de tu ordenador no alcance valores muy altos."
+bitrate_value = "{value} Mbps"
 compatibility = "Archivos más pequeños"
 compatibility_description = "Ahorra espacio en disco. Los detalles finos pueden suavizarse, sobre todo en la cámara."
+custom = "Personalizado"
+custom_description = "Elige tú la tasa de bits de la grabación de pantalla."
 description = "Graba tu pantalla a resolución completa, hasta 4K, con la máxima calidad, y la guarda en tu ordenador para editarla. El tamaño de exportación lo eliges después, en el editor."
 recommended = "Recomendado"
 resolution = "Resolución"

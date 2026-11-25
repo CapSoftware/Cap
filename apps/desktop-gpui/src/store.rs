@@ -1141,6 +1141,8 @@ pub struct GeneralSettings {
     /// way in [`Self::post_instant_behaviour`].
     pub show_main_window_after_instant: Option<bool>,
     pub studio_recording_quality: StudioQuality,
+    pub studio_custom_video_bitrate: bool,
+    pub studio_video_bitrate_mbps: Option<u32>,
     pub recording_countdown: Option<u32>,
     pub main_window_recording_start_behaviour: MainWindowStartBehaviour,
     pub window_capture_style: WindowCaptureStyle,
@@ -1238,6 +1240,52 @@ pub fn set_studio_frame_rate(rate: StudioFrameRate) -> bool {
                     Value::from(cap_recording::MAX_STUDIO_FPS),
                 );
                 general.insert(MAX_FPS_MATCH_DISPLAY_KEY.to_string(), Value::Bool(true));
+            }
+        }
+        true
+    })
+}
+
+pub const STUDIO_CUSTOM_VIDEO_BITRATE_KEY: &str = "studioCustomVideoBitrate";
+pub const STUDIO_VIDEO_BITRATE_MBPS_KEY: &str = "studioVideoBitrateMbps";
+
+pub const MIN_STUDIO_VIDEO_BITRATE_MBPS: u32 = cap_recording::MIN_STUDIO_VIDEO_BITRATE / 1_000_000;
+pub const MAX_STUDIO_VIDEO_BITRATE_MBPS: u32 = cap_recording::MAX_STUDIO_VIDEO_BITRATE / 1_000_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StudioQualityChoice {
+    Tier(StudioQuality),
+    Custom { mbps: u32 },
+}
+
+/// Custom is stored as the Balanced tier plus its own keys, so versions that
+/// only read `studioRecordingQuality` record at Balanced. If one of them later
+/// picks another tier, the leftover keys no longer apply.
+pub fn set_studio_quality_choice(choice: StudioQualityChoice) -> bool {
+    update_store_section(GENERAL_SETTINGS, |general| {
+        match choice {
+            StudioQualityChoice::Tier(quality) => {
+                general.insert(
+                    "studioRecordingQuality".to_string(),
+                    Value::String(quality.as_json().to_string()),
+                );
+                general.remove(STUDIO_CUSTOM_VIDEO_BITRATE_KEY);
+            }
+            StudioQualityChoice::Custom { mbps } => {
+                general.insert(
+                    "studioRecordingQuality".to_string(),
+                    Value::String(StudioQuality::Balanced.as_json().to_string()),
+                );
+                general.insert(
+                    STUDIO_CUSTOM_VIDEO_BITRATE_KEY.to_string(),
+                    Value::Bool(true),
+                );
+                general.insert(
+                    STUDIO_VIDEO_BITRATE_MBPS_KEY.to_string(),
+                    Value::from(
+                        mbps.clamp(MIN_STUDIO_VIDEO_BITRATE_MBPS, MAX_STUDIO_VIDEO_BITRATE_MBPS),
+                    ),
+                );
             }
         }
         true
@@ -1590,6 +1638,27 @@ impl GeneralSettings {
         }
     }
 
+    pub fn studio_quality_choice(&self) -> StudioQualityChoice {
+        match self.studio_video_bitrate_mbps {
+            Some(mbps)
+                if self.studio_custom_video_bitrate
+                    && self.studio_recording_quality == StudioQuality::Balanced =>
+            {
+                StudioQualityChoice::Custom {
+                    mbps: mbps.clamp(MIN_STUDIO_VIDEO_BITRATE_MBPS, MAX_STUDIO_VIDEO_BITRATE_MBPS),
+                }
+            }
+            _ => StudioQualityChoice::Tier(self.studio_recording_quality),
+        }
+    }
+
+    pub fn studio_video_bitrate(&self) -> Option<u32> {
+        match self.studio_quality_choice() {
+            StudioQualityChoice::Custom { mbps } => Some(mbps * 1_000_000),
+            StudioQualityChoice::Tier(_) => None,
+        }
+    }
+
     pub fn post_instant_behaviour(&self) -> PostInstantBehaviour {
         if !self.disable_auto_open_links {
             PostInstantBehaviour::OpenLink
@@ -1648,6 +1717,8 @@ impl GeneralSettings {
                 .get(SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY)
                 .and_then(Value::as_bool),
             studio_recording_quality: enum_at(general, "studioRecordingQuality"),
+            studio_custom_video_bitrate: bool_at(general, STUDIO_CUSTOM_VIDEO_BITRATE_KEY, false),
+            studio_video_bitrate_mbps: opt_u32_at(general, STUDIO_VIDEO_BITRATE_MBPS_KEY),
             recording_countdown: opt_u32_at(general, "recordingCountdown"),
             main_window_recording_start_behaviour: enum_at(
                 general,
@@ -3492,6 +3563,34 @@ mod tests {
     }
 
     #[test]
+    fn studio_quality_saved_by_earlier_versions_loads_unchanged() {
+        for (stored, expected) in [
+            (None, StudioQuality::Balanced),
+            (Some("balanced"), StudioQuality::Balanced),
+            (Some("compatibility"), StudioQuality::Compatibility),
+            (Some("ultra"), StudioQuality::Ultra),
+        ] {
+            let contents = match stored {
+                Some(quality) => {
+                    format!(r#"{{"general_settings":{{"studioRecordingQuality":"{quality}"}}}}"#)
+                }
+                None => r#"{"general_settings":{"theme":"dark"}}"#.to_string(),
+            };
+            let _store = TempStore::new(
+                &format!("studio-quality-{}", expected.as_json()),
+                Some(&contents),
+            );
+            let settings = GeneralSettings::load();
+            assert_eq!(settings.studio_recording_quality, expected);
+            assert_eq!(
+                settings.studio_quality_choice(),
+                StudioQualityChoice::Tier(expected)
+            );
+            assert_eq!(settings.studio_video_bitrate(), None);
+        }
+    }
+
+    #[test]
     fn match_display_round_trips_and_stays_readable_by_earlier_versions() {
         let store = TempStore::new(
             "frame-rate-match-display",
@@ -3532,6 +3631,67 @@ mod tests {
         let settings = GeneralSettings::load();
         assert_eq!(settings.max_fps, 144);
         assert_eq!(settings.studio_frame_rate(), StudioFrameRate::Fixed(144));
+    }
+
+    #[test]
+    fn custom_bitrate_round_trips_and_stays_readable_by_earlier_versions() {
+        let store = TempStore::new(
+            "studio-custom-bitrate",
+            Some(r#"{"general_settings":{"studioRecordingQuality":"ultra","future":true}}"#),
+        );
+
+        assert!(set_studio_quality_choice(StudioQualityChoice::Custom {
+            mbps: 45
+        }));
+        let general = &store.read()[GENERAL_SETTINGS];
+        assert_eq!(general["studioRecordingQuality"], "balanced");
+        assert_eq!(general[STUDIO_CUSTOM_VIDEO_BITRATE_KEY], true);
+        assert_eq!(general[STUDIO_VIDEO_BITRATE_MBPS_KEY], 45);
+        assert_eq!(general["future"], true);
+        let settings = GeneralSettings::load();
+        assert_eq!(
+            settings.studio_quality_choice(),
+            StudioQualityChoice::Custom { mbps: 45 }
+        );
+        assert_eq!(settings.studio_video_bitrate(), Some(45_000_000));
+
+        assert!(set_store_setting(
+            GENERAL_SETTINGS,
+            "studioRecordingQuality",
+            Value::from("ultra")
+        ));
+        let settings = GeneralSettings::load();
+        assert_eq!(
+            settings.studio_quality_choice(),
+            StudioQualityChoice::Tier(StudioQuality::Ultra)
+        );
+        assert_eq!(settings.studio_video_bitrate(), None);
+
+        assert!(set_studio_quality_choice(StudioQualityChoice::Tier(
+            StudioQuality::Balanced
+        )));
+        let general = &store.read()[GENERAL_SETTINGS];
+        assert!(general.get(STUDIO_CUSTOM_VIDEO_BITRATE_KEY).is_none());
+        assert_eq!(general[STUDIO_VIDEO_BITRATE_MBPS_KEY], 45);
+        assert_eq!(GeneralSettings::load().studio_video_bitrate(), None);
+
+        for (stored, expected) in [
+            (9999, MAX_STUDIO_VIDEO_BITRATE_MBPS),
+            (0, MIN_STUDIO_VIDEO_BITRATE_MBPS),
+        ] {
+            assert!(set_studio_quality_choice(StudioQualityChoice::Custom {
+                mbps: 30
+            }));
+            assert!(set_store_setting(
+                GENERAL_SETTINGS,
+                STUDIO_VIDEO_BITRATE_MBPS_KEY,
+                Value::from(stored)
+            ));
+            assert_eq!(
+                GeneralSettings::load().studio_video_bitrate(),
+                Some(expected * 1_000_000)
+            );
+        }
     }
 
     /// Every value the page can read back has to survive the round trip, and

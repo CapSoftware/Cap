@@ -11,6 +11,8 @@ pub const DEFAULT_CUSTOM_CURSOR_CAPTURE: bool = true;
 pub const DEFAULT_CAPTURE_KEYBOARD_EVENTS: bool = true;
 pub const DEFAULT_CRASH_RECOVERY_RECORDING: bool = true;
 pub const DEFAULT_OUT_OF_PROCESS_MUXER: bool = false;
+pub const MIN_STUDIO_VIDEO_BITRATE: u32 = 2_000_000;
+pub const MAX_STUDIO_VIDEO_BITRATE: u32 = 400_000_000;
 
 const COMPATIBILITY_MEMORY_THRESHOLD_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 
@@ -24,6 +26,7 @@ pub struct RecordingDefaults {
     pub crash_recovery_recording: bool,
     pub max_fps: u32,
     pub studio_recording_quality: StudioQuality,
+    pub studio_video_bitrate: Option<u32>,
     pub out_of_process_muxer: bool,
     pub instant_mode_max_resolution: u32,
 }
@@ -36,6 +39,7 @@ impl Default for RecordingDefaults {
             crash_recovery_recording: DEFAULT_CRASH_RECOVERY_RECORDING,
             max_fps: DEFAULT_STUDIO_MAX_FPS,
             studio_recording_quality: default_studio_recording_quality(),
+            studio_video_bitrate: None,
             out_of_process_muxer: DEFAULT_OUT_OF_PROCESS_MUXER,
             instant_mode_max_resolution: DEFAULT_INSTANT_MODE_MAX_RESOLUTION,
         }
@@ -65,7 +69,34 @@ impl RecordingDefaults {
             .with_out_of_process_muxer(self.out_of_process_muxer)
             .with_max_fps(self.studio_max_fps(camera_active, override_fps))
             .with_quality(self.studio_recording_quality)
+            .with_video_bitrate(self.studio_video_bitrate)
     }
+}
+
+pub fn balanced_studio_video_bitrate_for_display(
+    display: &scap_targets::Display,
+    max_fps: u32,
+) -> u32 {
+    let (width, height) = display
+        .physical_size()
+        .map(|size| (size.width() as u32, size.height() as u32))
+        .unwrap_or((1920, 1080));
+    let fps = crate::sources::screen_capture::capture_fps(max_fps, display.refresh_rate());
+    balanced_studio_video_bitrate(width, height, fps)
+}
+
+pub fn balanced_studio_video_bitrate(width: u32, height: u32, fps: u32) -> u32 {
+    let (width, height) =
+        crate::calculate_gpu_compatible_size(width, height, crate::H264_MAX_DIMENSION)
+            .unwrap_or((width, height));
+    let bitrate = cap_enc_ffmpeg::h264::H264EncoderBuilder::bitrate_for(
+        width,
+        height,
+        fps as f32,
+        cap_enc_ffmpeg::h264::H264EncoderBuilder::QUALITY_BPP,
+    );
+    let mbps = ((bitrate as f64) / 1_000_000.0).round() as u32;
+    (mbps * 1_000_000).clamp(MIN_STUDIO_VIDEO_BITRATE, MAX_STUDIO_VIDEO_BITRATE)
 }
 
 fn detect_total_memory_bytes() -> Option<u64> {

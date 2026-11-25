@@ -323,8 +323,13 @@ save_failed = "Ihre Aufnahmeeinstellungen konnten nicht gespeichert werden. Bitt
 [settings.quality.studio]
 balanced = "Ausgewogen"
 balanced_description = "Scharfe Details bei vernünftiger Dateigröße. Die richtige Wahl für die meisten Aufnahmen."
+bitrate = "Bitrate"
+bitrate_description = "Höhere Werte behalten mehr Details und ergeben größere Dateien. Sehr hohe Werte liefert der Encoder Ihres Computers unter Umständen nicht."
+bitrate_value = "{value} Mbit/s"
 compatibility = "Kleinere Dateien"
 compatibility_description = "Spart Speicherplatz. Feine Details können weicher werden, vor allem bei der Kamera."
+custom = "Eigene"
+custom_description = "Legen Sie die Bitrate der Bildschirmaufnahme selbst fest."
 description = "Nimmt Ihren Bildschirm in voller Auflösung bis 4K und in höchster Qualität auf und speichert ihn zum Bearbeiten auf Ihrem Computer. Die Exportgröße wählen Sie später im Editor."
 recommended = "Empfohlen"
 resolution = "Auflösung"

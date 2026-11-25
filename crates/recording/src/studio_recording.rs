@@ -2454,6 +2454,7 @@ pub struct ActorBuilder {
     use_oop_muxer: bool,
     max_fps: u32,
     quality: crate::StudioQuality,
+    video_bitrate: Option<u32>,
     #[cfg(target_os = "macos")]
     excluded_windows: Vec<scap_targets::WindowId>,
     start_gate: Option<RecordingStartGate>,
@@ -2480,6 +2481,7 @@ impl ActorBuilder {
             use_oop_muxer: false,
             max_fps: 60,
             quality: crate::StudioQuality::Balanced,
+            video_bitrate: None,
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
             start_gate: None,
@@ -2546,6 +2548,16 @@ impl ActorBuilder {
         self
     }
 
+    pub fn with_video_bitrate(mut self, video_bitrate: Option<u32>) -> Self {
+        self.video_bitrate = video_bitrate.map(|bitrate| {
+            bitrate.clamp(
+                crate::defaults::MIN_STUDIO_VIDEO_BITRATE,
+                crate::defaults::MAX_STUDIO_VIDEO_BITRATE,
+            )
+        });
+        self
+    }
+
     /// The project name to store in the recording's metadata. Without one,
     /// the recording is named after the date and time it stopped.
     pub fn with_pretty_name(mut self, pretty_name: impl Into<String>) -> Self {
@@ -2601,6 +2613,7 @@ impl ActorBuilder {
             self.use_oop_muxer && !audio_only,
             self.max_fps,
             self.quality,
+            self.video_bitrate,
             self.pretty_name,
         );
         #[cfg(windows)]
@@ -2661,6 +2674,7 @@ async fn spawn_studio_recording_actor(
     use_oop_muxer: bool,
     max_fps: u32,
     quality: crate::StudioQuality,
+    video_bitrate: Option<u32>,
     pretty_name: Option<String>,
 ) -> anyhow::Result<ActorHandle> {
     use cap_utils::operation_diagnostics::{Field, Operation};
@@ -2672,6 +2686,7 @@ async fn spawn_studio_recording_actor(
                 cap_utils::operation_diagnostics::resource_id(&recording_dir),
             ),
             Field::number("requested_fps", max_fps as u64),
+            Field::number("video_bitrate", video_bitrate.unwrap_or(0) as u64),
             Field::flag("system_audio", base_inputs.capture_system_audio),
             Field::flag("microphone", base_inputs.mic_feed.is_some()),
             Field::flag("camera", base_inputs.camera_feed.is_some()),
@@ -2739,6 +2754,7 @@ async fn spawn_studio_recording_actor(
         use_oop_muxer,
         max_fps,
         quality,
+        video_bitrate,
         completion_tx.clone(),
     );
 
@@ -3413,6 +3429,7 @@ struct SegmentPipelineFactory {
     use_oop_muxer: bool,
     max_fps: u32,
     quality: crate::StudioQuality,
+    video_bitrate: Option<u32>,
     index: u32,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     #[cfg(windows)]
@@ -3439,6 +3456,7 @@ impl SegmentPipelineFactory {
         use_oop_muxer: bool,
         max_fps: u32,
         quality: crate::StudioQuality,
+        video_bitrate: Option<u32>,
         completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     ) -> Self {
         Self {
@@ -3453,6 +3471,7 @@ impl SegmentPipelineFactory {
             use_oop_muxer,
             max_fps,
             quality,
+            video_bitrate,
             index: 0,
             completion_tx,
             #[cfg(windows)]
@@ -3498,6 +3517,7 @@ impl SegmentPipelineFactory {
             self.use_oop_muxer,
             self.max_fps,
             self.quality,
+            self.video_bitrate,
             segment_start_time,
             #[cfg(windows)]
             self.encoder_preferences.clone(),
@@ -3538,6 +3558,7 @@ impl SegmentPipelineFactory {
                 self.use_oop_muxer,
                 self.max_fps,
                 self.quality,
+                self.video_bitrate,
                 Timestamps::now(),
                 #[cfg(windows)]
                 self.encoder_preferences.clone(),
@@ -3684,6 +3705,7 @@ async fn create_segment_pipeline(
     use_oop_muxer: bool,
     max_fps: u32,
     quality: crate::StudioQuality,
+    video_bitrate: Option<u32>,
     start_time: Timestamps,
     #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 ) -> anyhow::Result<Pipeline> {
@@ -3891,6 +3913,7 @@ async fn create_segment_pipeline(
             shared_pause_state.clone(),
             output_size,
             quality,
+            video_bitrate,
             #[cfg(windows)]
             encoder_preferences.clone(),
         )
@@ -4552,6 +4575,7 @@ mod tests {
                     false,
                     30,
                     crate::StudioQuality::Balanced,
+                    None,
                     completion_tx.clone(),
                 );
                 let timestamps = Timestamps::now();
@@ -4669,6 +4693,7 @@ mod tests {
             false,
             30,
             crate::StudioQuality::Balanced,
+            None,
             completion_tx.clone(),
         );
         let timestamps = Timestamps::now();
@@ -4750,6 +4775,7 @@ mod tests {
             false,
             30,
             crate::StudioQuality::Balanced,
+            None,
             completion_tx.clone(),
         );
         let mut actor = Actor {
@@ -4936,6 +4962,7 @@ mod tests {
             false,
             30,
             crate::StudioQuality::Balanced,
+            None,
             completion_tx.clone(),
         );
         let actor_ref = Actor::spawn(Actor {
@@ -5023,6 +5050,7 @@ mod tests {
             false,
             30,
             crate::StudioQuality::Balanced,
+            None,
             completion_tx.clone(),
         );
         let timestamps = Timestamps::now();
@@ -5140,6 +5168,7 @@ mod tests {
             false,
             30,
             crate::StudioQuality::Balanced,
+            None,
             completion_tx,
         );
         drop(factory.next_camera_input());
@@ -5206,6 +5235,7 @@ mod tests {
                 false,
                 30,
                 crate::StudioQuality::Balanced,
+                None,
                 completion_tx.clone(),
             );
             factory.prepare_override = Some(prepare);
@@ -5564,6 +5594,7 @@ mod tests {
                 false,
                 30,
                 crate::StudioQuality::Balanced,
+                None,
                 completion_tx.clone(),
             );
             factory.index = 1;
@@ -7020,6 +7051,60 @@ mod tests {
     }
 
     #[test]
+    fn video_bitrate_is_absent_by_default_and_clamped_when_set() {
+        let builder = || {
+            ActorBuilder::new(
+                PathBuf::from("unused.cap"),
+                screen_capture::ScreenCaptureTarget::CameraOnly,
+            )
+        };
+        assert_eq!(builder().video_bitrate, None);
+        let defaults = crate::RecordingDefaults::default();
+        assert_eq!(defaults.studio_video_bitrate, None);
+        for camera_active in [false, true] {
+            assert_eq!(
+                defaults
+                    .apply_to_studio_builder(builder(), camera_active, None)
+                    .video_bitrate,
+                None
+            );
+        }
+        let set = |bitrate| builder().with_video_bitrate(Some(bitrate)).video_bitrate;
+        assert_eq!(set(30_000_000), Some(30_000_000));
+        assert_eq!(set(1), Some(crate::defaults::MIN_STUDIO_VIDEO_BITRATE));
+        assert_eq!(
+            set(u32::MAX),
+            Some(crate::defaults::MAX_STUDIO_VIDEO_BITRATE)
+        );
+        assert_eq!(
+            builder()
+                .with_video_bitrate(Some(30_000_000))
+                .with_video_bitrate(None)
+                .video_bitrate,
+            None
+        );
+    }
+
+    #[test]
+    fn balanced_bitrate_matches_the_default_studio_encoder_target() {
+        for (width, height, fps, expected_mbps) in [
+            (1920, 1080, 60, 30),
+            (1920, 1080, 30, 19),
+            (1920, 1080, 240, 97),
+            (3840, 2160, 60, 119),
+            (5120, 2880, 60, 136),
+            (640, 480, 30, 3),
+            (320, 240, 24, 2),
+        ] {
+            assert_eq!(
+                crate::balanced_studio_video_bitrate(width, height, fps),
+                expected_mbps * 1_000_000,
+                "{width}x{height}@{fps}"
+            );
+        }
+    }
+
+    #[test]
     fn camera_active_capture_size_leaves_non_compatibility_native() {
         for quality in [crate::StudioQuality::Balanced, crate::StudioQuality::Ultra] {
             assert!(camera_active_max_capture_size(quality, true).is_none());
@@ -7528,6 +7613,7 @@ mod tests {
             false,
             30,
             crate::StudioQuality::Balanced,
+            None,
             completion_tx.clone(),
         );
         (
@@ -7898,6 +7984,7 @@ mod windows_cancel_tests {
             false,
             30,
             crate::StudioQuality::Balanced,
+            None,
             completion_tx.clone(),
         );
         Actor {

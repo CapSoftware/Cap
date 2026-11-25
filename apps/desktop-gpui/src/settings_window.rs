@@ -38,8 +38,8 @@ use crate::{
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, RECORDING_START_SAFETY,
-        SettingsEnum, StudioFrameRate, StudioQuality, UpdateChannel, UpdateDownloadPolicy,
-        WindowCaptureStyle, WindowExclusion,
+        SettingsEnum, StudioFrameRate, StudioQuality, StudioQualityChoice, UpdateChannel,
+        UpdateDownloadPolicy, WindowCaptureStyle, WindowExclusion,
     },
     theme::Theme,
     ui,
@@ -899,6 +899,8 @@ pub struct SettingsWindow {
     /// inside a resizable pane, so it cannot be computed.
     slider_track: Rc<Cell<Option<Bounds<Pixels>>>>,
     slider_dragging: bool,
+    bitrate_slider_track: Rc<Cell<Option<Bounds<Pixels>>>>,
+    bitrate_slider_dragging: bool,
     /// `commands.listCaptureWindows()`, for the excluded-windows menu.
     windows: Vec<WindowOption>,
     /// Key handling for Cmd-W lives on the root, which needs a focus handle of
@@ -1048,6 +1050,8 @@ impl SettingsWindow {
             placeholders_task: None,
             slider_track: Rc::new(Cell::new(None)),
             slider_dragging: false,
+            bitrate_slider_track: Rc::new(Cell::new(None)),
+            bitrate_slider_dragging: false,
             windows: Vec::new(),
             focus: cx.focus_handle(),
             _sign_in_subscriptions: sign_in_subscriptions,
@@ -2048,6 +2052,7 @@ impl Render for SettingsWindow {
             // the drag layer the zoom slider needs while the button is held.
             .children(self.render_menu(cx))
             .children(self.render_slider_drag_layer(cx))
+            .children(self.render_bitrate_drag_layer(cx))
             .children(crate::keylat::probe())
     }
 }
@@ -3734,14 +3739,20 @@ impl SettingsWindow {
         )
     }
 
-    fn select_studio_quality(&mut self, quality: StudioQuality, cx: &mut Context<Self>) {
-        self.studio_quality_save_failed = !store::set_store_setting(
-            GENERAL_SETTINGS,
-            "studioRecordingQuality",
-            Value::String(quality.as_json().to_string()),
-        );
+    fn select_studio_quality(&mut self, choice: StudioQualityChoice, cx: &mut Context<Self>) {
+        self.studio_quality_save_failed = !store::set_studio_quality_choice(choice);
         if !self.studio_quality_save_failed {
-            self.settings.studio_recording_quality = quality;
+            match choice {
+                StudioQualityChoice::Tier(quality) => {
+                    self.settings.studio_recording_quality = quality;
+                    self.settings.studio_custom_video_bitrate = false;
+                }
+                StudioQualityChoice::Custom { mbps } => {
+                    self.settings.studio_recording_quality = StudioQuality::Balanced;
+                    self.settings.studio_custom_video_bitrate = true;
+                    self.settings.studio_video_bitrate_mbps = Some(mbps);
+                }
+            }
         }
         cx.notify();
     }
@@ -3781,6 +3792,217 @@ impl SettingsWindow {
             self.select("max-fps", label, MenuKind::MaxFps, cx)
                 .into_any_element(),
         )
+    }
+
+    fn custom_bitrate_choice(&self) -> StudioQualityChoice {
+        StudioQualityChoice::Custom {
+            mbps: self.settings.studio_video_bitrate_mbps.unwrap_or_else(|| {
+                cap_recording::balanced_studio_video_bitrate_for_display(
+                    &scap_targets::Display::primary(),
+                    self.settings.max_fps,
+                ) / 1_000_000
+            }),
+        }
+    }
+
+    fn set_custom_bitrate(&mut self, mbps: u32, cx: &mut Context<Self>) {
+        let mbps = mbps.clamp(
+            store::MIN_STUDIO_VIDEO_BITRATE_MBPS,
+            store::MAX_STUDIO_VIDEO_BITRATE_MBPS,
+        );
+        if self.settings.studio_video_bitrate_mbps != Some(mbps) {
+            self.settings.studio_video_bitrate_mbps = Some(mbps);
+            cx.notify();
+        }
+    }
+
+    fn save_custom_bitrate(&mut self, cx: &mut Context<Self>) {
+        if let StudioQualityChoice::Custom { mbps } = self.settings.studio_quality_choice() {
+            self.select_studio_quality(StudioQualityChoice::Custom { mbps }, cx);
+        }
+    }
+
+    fn set_custom_bitrate_from(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(fraction) = self
+            .bitrate_slider_track
+            .get()
+            .and_then(|track| ui::fraction_from_x(position.x, track))
+        else {
+            return;
+        };
+        self.set_custom_bitrate(bitrate_mbps_at(fraction), cx);
+    }
+
+    fn render_bitrate_drag_layer(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if !self.bitrate_slider_dragging {
+            return None;
+        }
+        Some(
+            ui::Slider::drag_layer(
+                "bitrate-slider-drag",
+                cx.listener(|this, event: &gpui::MouseMoveEvent, _window, cx| {
+                    this.set_custom_bitrate_from(event.position, cx);
+                }),
+                cx.listener(|this, _, _window, cx| {
+                    this.bitrate_slider_dragging = false;
+                    this.save_custom_bitrate(cx);
+                }),
+            )
+            .into_any_element(),
+        )
+    }
+
+    fn render_studio_bitrate(&self, mbps: u32, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = self.theme;
+        let slider = ui::Slider::new(
+            "bitrate-slider",
+            bitrate_fraction(mbps),
+            self.bitrate_slider_track.clone(),
+        )
+        .flex()
+        .track(px(5.), theme.settings_fill())
+        .fill(Hsla::from(theme.blue_9))
+        .thumb(
+            px(16.),
+            if theme.is_dark() {
+                Hsla::from(theme.gray_12)
+            } else {
+                Hsla::from(theme.gray_1)
+            },
+            Some(theme.settings_border()),
+        )
+        .thumb_top(px(-6.))
+        .on_drag_start(
+            cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                this.bitrate_slider_dragging = true;
+                this.set_custom_bitrate_from(event.position, cx);
+            }),
+        );
+
+        self.setting_row(
+            tr::settings::quality::studio::bitrate(),
+            Some(tr::settings::quality::studio::bitrate_description()),
+            div()
+                .id("studio-bitrate")
+                .tab_index(0)
+                .aria_label(tr::settings::quality::studio::bitrate())
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.))
+                .w(px(220.))
+                .child(slider)
+                .child(
+                    div()
+                        .w(px(64.))
+                        .flex_none()
+                        .flex()
+                        .justify_end()
+                        .text_size(px(12.))
+                        .text_color(theme.settings_muted())
+                        .child(tr::settings::quality::studio::bitrate_value(mbps)),
+                )
+                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                    let step: i64 = if event.keystroke.modifiers.shift {
+                        10
+                    } else {
+                        1
+                    };
+                    let delta = match event.keystroke.key.as_str() {
+                        "left" | "down" => -step,
+                        "right" | "up" => step,
+                        _ => return,
+                    };
+                    if let StudioQualityChoice::Custom { mbps } =
+                        this.settings.studio_quality_choice()
+                    {
+                        let next = (i64::from(mbps) + delta).clamp(
+                            i64::from(store::MIN_STUDIO_VIDEO_BITRATE_MBPS),
+                            i64::from(store::MAX_STUDIO_VIDEO_BITRATE_MBPS),
+                        ) as u32;
+                        this.set_custom_bitrate(next, cx);
+                        this.save_custom_bitrate(cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .into_any_element(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_studio_quality_option(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        description: &'static str,
+        selected: bool,
+        recommended: bool,
+        choose: impl Fn(&Self) -> StudioQualityChoice + Clone + 'static,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = self.theme;
+        let choose_on_key = choose.clone();
+        div()
+            .id(SharedString::from(format!("studio-quality-{id}")))
+            .tab_index(0)
+            .aria_label(label)
+            .aria_description(description)
+            .aria_selected(selected)
+            .cursor_pointer()
+            .flex()
+            .items_start()
+            .gap(px(10.))
+            .p(px(12.))
+            .group("studio-quality-option")
+            .child(div().mt(px(1.)).child(self.radio_dot(selected)))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(div().text_size(px(13.)).child(label))
+                            .when(recommended, |this| {
+                                this.child(
+                                    div()
+                                        .px(px(6.))
+                                        .py(px(1.))
+                                        .rounded(px(4.))
+                                        .bg(theme.settings_fill())
+                                        .text_size(px(11.))
+                                        .text_color(theme.settings_muted())
+                                        .child(tr::settings::quality::studio::recommended()),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(theme.settings_muted())
+                            .child(description),
+                    ),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let choice = choose(&*this);
+                this.select_studio_quality(choice, cx);
+            }))
+            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                if event.keystroke.modifiers == Default::default()
+                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                {
+                    let choice = choose_on_key(&*this);
+                    this.select_studio_quality(choice, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .into_any_element()
     }
 
     fn radio_dot(&self, checked: bool) -> gpui::Div {
@@ -3861,81 +4083,35 @@ impl SettingsWindow {
 
     fn render_studio_quality(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let current = self.settings.studio_recording_quality;
+        let choice = self.settings.studio_quality_choice();
 
         let mut rows: Vec<gpui::AnyElement> = STUDIO_QUALITY_TIERS
             .iter()
             .copied()
             .map(|(quality, label, description)| {
-                let (label, description) = (label(), description());
-                let selected = current == quality;
-                div()
-                    .id(SharedString::from(format!(
-                        "studio-quality-{}",
-                        quality.as_json()
-                    )))
-                    .tab_index(0)
-                    .aria_label(label)
-                    .aria_description(description)
-                    .aria_selected(selected)
-                    .cursor_pointer()
-                    .flex()
-                    .items_start()
-                    .gap(px(10.))
-                    .p(px(12.))
-                    .group("studio-quality-option")
-                    .child(div().mt(px(1.)).child(self.radio_dot(selected)))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .child(div().text_size(px(13.)).child(label))
-                                    .when(quality == StudioQuality::Balanced, |this| {
-                                        this.child(
-                                                div()
-                                                    .px(px(6.))
-                                                    .py(px(1.))
-                                                    .rounded(px(4.))
-                                                    .bg(theme.settings_fill())
-                                                    .text_size(px(11.))
-                                                    .text_color(theme.settings_muted())
-                                                    .child(
-                                                        tr::settings::quality::studio::recommended(
-                                                        ),
-                                                    ),
-                                            )
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .line_height(px(16.))
-                                    .text_color(theme.settings_muted())
-                                    .child(description),
-                            ),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select_studio_quality(quality, cx);
-                    }))
-                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                        if event.keystroke.modifiers == Default::default()
-                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                        {
-                            this.select_studio_quality(quality, cx);
-                            cx.stop_propagation();
-                        }
-                    }))
-                    .into_any_element()
+                self.render_studio_quality_option(
+                    quality.as_json(),
+                    label(),
+                    description(),
+                    choice == StudioQualityChoice::Tier(quality),
+                    quality == StudioQuality::Balanced,
+                    move |_| StudioQualityChoice::Tier(quality),
+                    cx,
+                )
             })
             .collect();
+        rows.push(self.render_studio_quality_option(
+            "custom",
+            tr::settings::quality::studio::custom(),
+            tr::settings::quality::studio::custom_description(),
+            matches!(choice, StudioQualityChoice::Custom { .. }),
+            false,
+            Self::custom_bitrate_choice,
+            cx,
+        ));
+        if let StudioQualityChoice::Custom { mbps } = choice {
+            rows.push(self.render_studio_bitrate(mbps, cx));
+        }
         rows.push(self.render_studio_frame_rate(cx));
 
         rows.insert(0, self.render_studio_resolution());
@@ -5358,6 +5534,22 @@ fn format_project_name(template: &str) -> String {
 #[cfg(test)]
 mod server_change_tests;
 
+const BITRATE_SLIDER_MIN: f32 = store::MIN_STUDIO_VIDEO_BITRATE_MBPS as f32;
+const BITRATE_SLIDER_MAX: f32 = store::MAX_STUDIO_VIDEO_BITRATE_MBPS as f32;
+
+fn bitrate_fraction(mbps: u32) -> f32 {
+    ((mbps as f32 / BITRATE_SLIDER_MIN).ln() / (BITRATE_SLIDER_MAX / BITRATE_SLIDER_MIN).ln())
+        .clamp(0., 1.)
+}
+
+fn bitrate_mbps_at(fraction: f32) -> u32 {
+    let mbps = BITRATE_SLIDER_MIN * (BITRATE_SLIDER_MAX / BITRATE_SLIDER_MIN).powf(fraction);
+    (mbps.round() as u32).clamp(
+        store::MIN_STUDIO_VIDEO_BITRATE_MBPS,
+        store::MAX_STUDIO_VIDEO_BITRATE_MBPS,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5424,6 +5616,17 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
         store::set_test_tauri_store_path(None);
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn bitrate_slider_reaches_every_whole_mbps_and_both_ends() {
+        for mbps in store::MIN_STUDIO_VIDEO_BITRATE_MBPS..=store::MAX_STUDIO_VIDEO_BITRATE_MBPS {
+            assert_eq!(bitrate_mbps_at(bitrate_fraction(mbps)), mbps);
+        }
+        assert_eq!(bitrate_mbps_at(0.), store::MIN_STUDIO_VIDEO_BITRATE_MBPS);
+        assert_eq!(bitrate_mbps_at(1.), store::MAX_STUDIO_VIDEO_BITRATE_MBPS);
+        assert_eq!(bitrate_fraction(0), 0.);
+        assert_eq!(bitrate_fraction(9_999), 1.);
     }
 
     #[test]
