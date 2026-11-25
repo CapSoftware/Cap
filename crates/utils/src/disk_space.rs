@@ -9,7 +9,14 @@ pub const RECORDING_DISK_RESERVE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FinalizationKind {
+    /// A Studio recording saved at a clean stop, joined straight from its
+    /// fragments into the output.
     Studio,
+    /// A Studio save that writes a full-size intermediate before the output:
+    /// recovery, which joins the fragments into one file and then remuxes it,
+    /// or a recording whose display muxer restarted, whose groups are joined
+    /// separately and then concatenated.
+    StudioJoined,
     Instant,
 }
 
@@ -57,13 +64,19 @@ impl RecordingStorage {
 
 /// How many recording-sized files finalizing a recording at `path` writes
 /// beside it. Studio finalization stages a copy of the recording, which APFS
-/// clones for free, then writes the joined output. Instant finalization also
-/// writes the joined video before merging its audio into a second file.
+/// clones for free, then writes its output (and, for `StudioJoined`, an
+/// intermediate first). Instant finalization also writes the joined video
+/// before merging its audio into a second file.
 pub fn finalization_copies(path: &Path, kind: FinalizationKind) -> u64 {
-    match kind {
-        FinalizationKind::Instant => 3,
-        FinalizationKind::Studio if volume_clones_files(path) => 1,
-        FinalizationKind::Studio => 2,
+    let outputs = match kind {
+        FinalizationKind::Instant => return 3,
+        FinalizationKind::Studio => 1,
+        FinalizationKind::StudioJoined => 2,
+    };
+    if volume_clones_files(path) {
+        outputs
+    } else {
+        outputs + 1
     }
 }
 
@@ -513,10 +526,11 @@ mod tests {
             3
         );
         let studio = finalization_copies(directory.path(), FinalizationKind::Studio);
+        let joined = finalization_copies(directory.path(), FinalizationKind::StudioJoined);
         if cfg!(target_os = "macos") && volume_clones_files(directory.path()) {
-            assert_eq!(studio, 1);
+            assert_eq!((studio, joined), (1, 2));
         } else {
-            assert_eq!(studio, 2);
+            assert_eq!((studio, joined), (2, 3));
         }
         if cfg!(not(target_os = "macos")) {
             assert!(!volume_clones_files(directory.path()));
@@ -606,7 +620,11 @@ mod tests {
         let path = directory.path().join("segment_000.m4s");
         let file = std::fs::File::create(path).unwrap();
         file.set_len(GIB).unwrap();
-        for kind in [FinalizationKind::Studio, FinalizationKind::Instant] {
+        for kind in [
+            FinalizationKind::Studio,
+            FinalizationKind::StudioJoined,
+            FinalizationKind::Instant,
+        ] {
             let mut storage = RecordingStorageMonitor::new(kind)
                 .sample(directory.path())
                 .unwrap();
