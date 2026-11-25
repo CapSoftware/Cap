@@ -2382,6 +2382,16 @@ impl SettingsWindow {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .map(|el| {
+                        #[cfg(feature = "gpui-rubber-band")]
+                        {
+                            el.overscroll_behavior(gpui::OverscrollBehavior::Auto)
+                        }
+                        #[cfg(not(feature = "gpui-rubber-band"))]
+                        {
+                            el
+                        }
+                    })
                     .track_scroll(&self.page_scroll)
                     // `.cap-settings-page > .px-6 { max-width: none; padding:
                     //  18px var(--macos-settings-content-padding-x) 28px }`,
