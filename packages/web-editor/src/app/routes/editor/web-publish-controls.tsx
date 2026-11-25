@@ -11,8 +11,13 @@ import toast from "solid-toast";
 import Tooltip from "~/components/Tooltip";
 import IconLucideCheck from "~icons/lucide/check";
 import IconLucideDownload from "~icons/lucide/download";
-import { EditorChannel, hostCommand } from "../../../engine/editor-api";
+import {
+	commands,
+	EditorChannel,
+	hostCommand,
+} from "../../../engine/editor-api";
 import { useEditorContext } from "./context";
+import { getPreviewProjectConfig } from "./preview-config";
 import { EditorButton } from "./ui";
 import { shareLinkShowsProject } from "./web-save-state";
 
@@ -44,6 +49,8 @@ const publishOnOpen =
 
 export function WebPublishControls() {
 	const {
+		project,
+		editorState,
 		flushProjectConfig,
 		projectRevision,
 		exportState,
@@ -119,6 +126,17 @@ export function WebPublishControls() {
 	const saveInBrowser = async () => {
 		setStatus(null);
 		setBrowserSave({ stage: "rendering", progress: 0 });
+		// The browser render reads the project the preview holds, which the
+		// editor only hands over after the first edit. A save resumed from a
+		// stalled farm render can start before any edit, so hand it over here.
+		await commands
+			.updateProjectConfigInMemory(
+				getPreviewProjectConfig(project, editorState),
+				null,
+				null,
+				null,
+			)
+			.catch(() => undefined);
 		const channel = new EditorChannel<BrowserSaveProgress>((progress) => {
 			if (!disposed) setBrowserSave(progress);
 		});
