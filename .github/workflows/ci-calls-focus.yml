@@ -1,0 +1,89 @@
+name: Scratch call-client builds (builder CI)
+# Temporary branch (deleted after use): builds the real app for Linux and Windows so it can be run
+# next to real call clients on scratch VMs. Nothing here ships.
+
+on:
+  push:
+    branches: ['ci/ci-callsfocus*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/install-desktop-deps
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-meetings
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+      - run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui
+      - run: tar -czf "$RUNNER_TEMP/app.tgz" -C "$GITHUB_WORKSPACE" apps/desktop-gpui/target/release/cap-gpui target/native-deps
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-linux
+          path: ${{ runner.temp }}/app.tgz
+          retention-days: 2
+
+  windows:
+    runs-on: blacksmith-8vcpu-windows-2025
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+          prefix-key: v1-rust-meetings
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+      - shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - shell: bash
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui
+      - shell: bash
+        run: |
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage/gpui-windows-shaders"
+          cp apps/desktop-gpui/target/release/cap-gpui.exe "$stage/"
+          cp target/release/*.dll "$stage/" || true
+          ls target/native-deps 2>/dev/null | head
+          cp ../zed-cap/crates/gpui_windows/src/*.hlsl "$stage/gpui-windows-shaders/"
+          printf '%s' "$GITHUB_WORKSPACE" > "$stage/build-workspace.txt"
+          printf '%s' "$(cd ../zed-cap && pwd -W)" > "$stage/build-zed.txt"
+          ls -la "$stage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-windows
+          path: ${{ runner.temp }}/stage
+          retention-days: 2

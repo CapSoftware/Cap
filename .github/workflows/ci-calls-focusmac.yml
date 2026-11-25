@@ -1,0 +1,57 @@
+name: Scratch call-client macOS build (builder CI)
+# Temporary branch (deleted after use). Nothing here ships.
+
+on:
+  push:
+    branches: ['ci/ci-callsfocusmac*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: "true"
+
+jobs:
+  build-mac:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+      - run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage/bin/head" "$stage/Frameworks"
+          git rev-parse HEAD > "$stage/sha.txt"
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui
+          cp apps/desktop-gpui/target/release/cap-gpui "$stage/bin/head/cap-gpui"
+          cp -RL target/Frameworks/Spacedrive.framework "$stage/Frameworks/"
+          test -f "$stage/Frameworks/Spacedrive.framework/Libraries/libavcodec.61.19.100.dylib"
+          tar -C "$stage" -czf "$RUNNER_TEMP/app-mac.tgz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-mac
+          path: ${{ runner.temp }}/app-mac.tgz
+          retention-days: 2
+
