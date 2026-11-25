@@ -1,4 +1,7 @@
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::{Arc, Mutex, mpsc},
+};
 
 use anyhow::{Context, bail};
 use ort::{
@@ -106,18 +109,75 @@ const GPU_MIN_PIXELS: f32 = 150_000.0;
 
 /// Detection started by [`OcrModel::detect_begin`].
 pub enum PendingDetect {
-    Ready(Vec<Vec<DetectedLine>>),
+    /// One answer per region from the CPU detector threads.
+    Cpu(Vec<mpsc::Receiver<anyhow::Result<Vec<DetectedLine>>>>),
     Gpu(crate::gpu::Ticket),
+}
+
+/// A region resampled into the detector's input, waiting to be run.
+struct DetJob {
+    input: Vec<f32>,
+    in_w: usize,
+    in_h: usize,
+    out_w: usize,
+    out_h: usize,
+    roi: Rect,
+    frame: (u32, u32),
+    reply: mpsc::Sender<anyhow::Result<Vec<DetectedLine>>>,
+}
+
+/// Detector sessions on their own threads, so a frame's regions run side by
+/// side and the CPU detection of one frame overlaps the rest of the work on
+/// the frames before it.
+struct DetWorkers {
+    jobs: Option<mpsc::Sender<DetJob>>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl DetWorkers {
+    fn new(dir: &Path, meta: &DetMeta, count: usize) -> anyhow::Result<Self> {
+        let (sender, receiver) = mpsc::channel::<DetJob>();
+        let receiver = Arc::new(Mutex::new(receiver));
+        let mut threads = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut session = session(&dir.join("det.onnx"), detection_threads())?;
+            let receiver = receiver.clone();
+            let meta = meta.clone();
+            threads.push(std::thread::spawn(move || {
+                loop {
+                    let job = match receiver.lock() {
+                        Ok(receiver) => receiver.recv(),
+                        Err(_) => return,
+                    };
+                    let Ok(job) = job else { return };
+                    let result = run_detection(&mut session, &meta, &job);
+                    let _ = job.reply.send(result);
+                }
+            }));
+        }
+        Ok(Self {
+            jobs: Some(sender),
+            threads,
+        })
+    }
+}
+
+impl Drop for DetWorkers {
+    fn drop(&mut self) {
+        self.jobs = None;
+        for thread in self.threads.drain(..) {
+            let _ = thread.join();
+        }
+    }
 }
 
 pub struct OcrModel {
     pub meta: ModelMeta,
     charset: Vec<String>,
-    det: Session,
+    det: DetWorkers,
     /// Lines are read one at a time (batching costs several times more per
     /// line on CPU), spread over a few sessions in parallel.
     rec: Vec<Session>,
-    det_input: Vec<f32>,
     gpu: Option<crate::gpu::GpuDetector>,
 }
 
@@ -137,7 +197,6 @@ impl OcrModel {
             bail!("charset.txt is empty");
         }
         cap_camera_effects::initialize_onnx_runtime()?;
-        let det = session(&dir.join("det.onnx"), detection_threads())?;
         let rec = (0..recognition_sessions())
             .map(|_| session(&dir.join("rec.onnx"), 2))
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -149,12 +208,19 @@ impl OcrModel {
                 None
             })
         };
+        // With a GPU detector only the small regions run here, so one session
+        // is enough; the CPU-only path runs every region on these sessions.
+        let sessions = if gpu.is_some() {
+            1
+        } else {
+            cpu_detection_sessions()
+        };
+        let det = DetWorkers::new(dir, &meta.det, sessions)?;
         Ok(Self {
             meta,
             charset,
             det,
             rec,
-            det_input: Vec::new(),
             gpu,
         })
     }
@@ -192,13 +258,12 @@ impl OcrModel {
             .iter()
             .map(|roi| roi.clamp_to(frame.width, frame.height).area() * scale * scale)
             .sum();
-        if pixels >= GPU_MIN_PIXELS {
-            let pending = self.detect_begin(frame, rois, scale)?;
-            return self.detect_end(pending);
-        }
-        rois.iter()
-            .map(|roi| self.detect(frame, *roi, scale))
-            .collect()
+        let pending = if pixels >= GPU_MIN_PIXELS {
+            self.detect_begin(frame, rois, scale)?
+        } else {
+            self.detect_begin_cpu(frame, rois, scale)?
+        };
+        self.detect_end(pending)
     }
 
     /// Starts detecting several regions of one frame; on the GPU this
@@ -217,17 +282,44 @@ impl OcrModel {
                 &self.meta.det,
             )?));
         }
-        Ok(PendingDetect::Ready(
-            rois.iter()
-                .map(|roi| self.detect(frame, *roi, scale))
-                .collect::<anyhow::Result<_>>()?,
-        ))
+        self.detect_begin_cpu(frame, rois, scale)
+    }
+
+    /// Hands every region to the CPU detector threads.
+    fn detect_begin_cpu(
+        &mut self,
+        frame: &RgbImage,
+        rois: &[Rect],
+        scale: f32,
+    ) -> anyhow::Result<PendingDetect> {
+        let jobs = self.det.jobs.as_ref().context("detector threads stopped")?;
+        let mut replies = Vec::with_capacity(rois.len());
+        for roi in rois {
+            let (reply, answer) = mpsc::channel();
+            match self.detection_input(frame, *roi, scale, reply.clone()) {
+                Some(job) => jobs
+                    .send(job)
+                    .map_err(|_| anyhow::anyhow!("detector threads stopped"))?,
+                None => {
+                    let _ = reply.send(Ok(Vec::new()));
+                }
+            }
+            replies.push(answer);
+        }
+        Ok(PendingDetect::Cpu(replies))
     }
 
     /// The lines of a [`Self::detect_begin`], per region.
     pub fn detect_end(&mut self, pending: PendingDetect) -> anyhow::Result<Vec<Vec<DetectedLine>>> {
         match pending {
-            PendingDetect::Ready(lines) => Ok(lines),
+            PendingDetect::Cpu(replies) => replies
+                .into_iter()
+                .map(|answer| {
+                    answer
+                        .recv()
+                        .unwrap_or_else(|_| Err(anyhow::anyhow!("detector thread stopped")))
+                })
+                .collect(),
             PendingDetect::Gpu(ticket) => match &mut self.gpu {
                 Some(gpu) => gpu.collect(ticket, &self.meta.det),
                 None => anyhow::bail!("GPU detection without a GPU detector"),
@@ -235,17 +327,18 @@ impl OcrModel {
         }
     }
 
-    /// Detects text lines inside `roi` of `frame`, running the detector at
-    /// `scale` (frame pixels to detector pixels).
-    pub fn detect(
-        &mut self,
+    /// `roi` of `frame` resampled into the detector's input at `scale`
+    /// (frame pixels to detector pixels), or `None` when it is too small.
+    fn detection_input(
+        &self,
         frame: &RgbImage,
         roi: Rect,
         scale: f32,
-    ) -> anyhow::Result<Vec<DetectedLine>> {
+        reply: mpsc::Sender<anyhow::Result<Vec<DetectedLine>>>,
+    ) -> Option<DetJob> {
         let roi = roi.clamp_to(frame.width, frame.height);
         if roi.w < 8.0 || roi.h < 8.0 {
-            return Ok(Vec::new());
+            return None;
         }
         let multiple = self.meta.det.multiple.max(1) as usize;
         let max_side = self.meta.det.max_side.max(64) as f32;
@@ -255,13 +348,12 @@ impl OcrModel {
         let in_w = out_w.div_ceil(multiple) * multiple;
         let in_h = out_h.div_ceil(multiple) * multiple;
         let plane = in_w * in_h;
-        self.det_input.clear();
-        self.det_input.resize(3 * plane, 0.0);
         let mean = self.meta.det.mean;
         let std = self.meta.det.std;
         let pad = [-mean[0] / std[0], -mean[1] / std[1], -mean[2] / std[2]];
+        let mut input = vec![0.0f32; 3 * plane];
         for (channel, value) in pad.iter().enumerate() {
-            self.det_input[channel * plane..(channel + 1) * plane].fill(*value);
+            input[channel * plane..(channel + 1) * plane].fill(*value);
         }
         frame.resize_into_planes(
             roi,
@@ -269,53 +361,19 @@ impl OcrModel {
             out_h,
             in_w,
             plane,
-            &mut self.det_input,
+            &mut input,
             |channel, value| (value / 255.0 - mean[channel]) / std[channel],
         );
-        let input = TensorRef::from_array_view(([1usize, 3, in_h, in_w], &*self.det_input))
-            .context("det input")?;
-        let input_name = self.det.inputs()[0].name().to_string();
-        let output_name = self.det.outputs()[0].name().to_string();
-        let mut outputs = self
-            .det
-            .run(ort::inputs![input_name.as_str() => input])
-            .context("det inference")?;
-        let output: DynValue = outputs.remove(&output_name).context("det output")?;
-        let (shape, probs) = output.try_extract_tensor::<f32>().context("det tensor")?;
-        let (map_h, map_w) = match shape.len() {
-            4 => (shape[2] as usize, shape[3] as usize),
-            3 => (shape[1] as usize, shape[2] as usize),
-            _ => bail!("unexpected det output shape {shape:?}"),
-        };
-        // The map may be at the input's resolution or a fraction of it (a
-        // head that stops at half resolution): boxes are scaled by the ratio.
-        let (fx, fy) = (in_w as f32 / map_w as f32, in_h as f32 / map_h as f32);
-        let boxes = crate::db::boxes_from_probability(
-            probs,
-            map_w,
-            map_h,
-            ((out_w as f32 / fx).ceil() as usize).min(map_w),
-            ((out_h as f32 / fy).ceil() as usize).min(map_h),
-            self.meta.det.prob_threshold,
-            self.meta.det.box_threshold,
-            self.meta.det.unclip,
-        );
-        let sx = roi.w / out_w as f32 * fx;
-        let sy = roi.h / out_h as f32 * fy;
-        Ok(boxes
-            .into_iter()
-            .map(|(rect, score)| DetectedLine {
-                rect: Rect {
-                    x: roi.x + rect.x * sx,
-                    y: roi.y + rect.y * sy,
-                    w: rect.w * sx,
-                    h: rect.h * sy,
-                }
-                .clamp_to(frame.width, frame.height),
-                score,
-            })
-            .filter(|line| line.rect.w >= 4.0 && line.rect.h >= 4.0)
-            .collect())
+        Some(DetJob {
+            input,
+            in_w,
+            in_h,
+            out_w,
+            out_h,
+            roi,
+            frame: (frame.width, frame.height),
+            reply,
+        })
     }
 
     /// Reads every line crop. Long lines are cut at a gap between words so
@@ -426,6 +484,60 @@ impl OcrModel {
     }
 }
 
+/// Runs the detector on a prepared region and turns its probability map
+/// into line boxes in frame pixels.
+fn run_detection(
+    session: &mut Session,
+    meta: &DetMeta,
+    job: &DetJob,
+) -> anyhow::Result<Vec<DetectedLine>> {
+    let (in_w, in_h, out_w, out_h, roi) = (job.in_w, job.in_h, job.out_w, job.out_h, job.roi);
+    let input =
+        TensorRef::from_array_view(([1usize, 3, in_h, in_w], &*job.input)).context("det input")?;
+    let input_name = session.inputs()[0].name().to_string();
+    let output_name = session.outputs()[0].name().to_string();
+    let mut outputs = session
+        .run(ort::inputs![input_name.as_str() => input])
+        .context("det inference")?;
+    let output: DynValue = outputs.remove(&output_name).context("det output")?;
+    let (shape, probs) = output.try_extract_tensor::<f32>().context("det tensor")?;
+    let (map_h, map_w) = match shape.len() {
+        4 => (shape[2] as usize, shape[3] as usize),
+        3 => (shape[1] as usize, shape[2] as usize),
+        _ => bail!("unexpected det output shape {shape:?}"),
+    };
+    // The map may be at the input's resolution or a fraction of it (a
+    // head that stops at half resolution): boxes are scaled by the ratio.
+    let (fx, fy) = (in_w as f32 / map_w as f32, in_h as f32 / map_h as f32);
+    let boxes = crate::db::boxes_from_probability(
+        probs,
+        map_w,
+        map_h,
+        ((out_w as f32 / fx).ceil() as usize).min(map_w),
+        ((out_h as f32 / fy).ceil() as usize).min(map_h),
+        meta.prob_threshold,
+        meta.box_threshold,
+        meta.unclip,
+    );
+    let sx = roi.w / out_w as f32 * fx;
+    let sy = roi.h / out_h as f32 * fy;
+    let (fw, fh) = job.frame;
+    Ok(boxes
+        .into_iter()
+        .map(|(rect, score)| DetectedLine {
+            rect: Rect {
+                x: roi.x + rect.x * sx,
+                y: roi.y + rect.y * sy,
+                w: rect.w * sx,
+                h: rect.h * sy,
+            }
+            .clamp_to(fw, fh),
+            score,
+        })
+        .filter(|line| line.rect.w >= 4.0 && line.rect.h >= 4.0)
+        .collect())
+}
+
 struct Piece {
     line: usize,
     rect: Rect,
@@ -484,6 +596,25 @@ fn trim_trailing_empty(mut charset: Vec<String>) -> Vec<String> {
         charset.pop();
     }
     charset
+}
+
+/// CPU detector sessions, each on its own thread, on machines with room for
+/// a second one (each keeps its own working buffers).
+const DETECTION_SESSIONS: usize = 2;
+const SECOND_SESSION_CORES: usize = 8;
+const SECOND_SESSION_MEMORY: u64 = 15 << 30;
+
+fn cpu_detection_sessions() -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let memory = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::new().with_memory(sysinfo::MemoryRefreshKind::new().with_ram()),
+    )
+    .total_memory();
+    if cores >= SECOND_SESSION_CORES && memory >= SECOND_SESSION_MEMORY {
+        DETECTION_SESSIONS
+    } else {
+        1
+    }
 }
 
 fn detection_threads() -> usize {
