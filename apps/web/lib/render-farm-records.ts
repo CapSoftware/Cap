@@ -18,16 +18,28 @@ function affectedRows(result: unknown) {
 		: 0;
 }
 
+// Replaces only the save the request saw when it started, so of two Saves
+// racing from different tabs the first to record its render keeps it and the
+// other's render is never published.
 export async function recordRenderFarmSave(
 	videoId: Video.VideoId,
+	seenExportId: string | null,
 	save: RenderFarmSave,
 ) {
-	await db()
+	const result = await db()
 		.update(videos)
 		.set({
 			metadata: sql`JSON_REMOVE(JSON_SET(${videoMetadataObject()}, '$.renderFarmSave', CAST(${JSON.stringify(save)} AS JSON)), '$.webEditorBrowserSave')`,
 		})
-		.where(eq(videos.id, videoId));
+		.where(
+			and(
+				eq(videos.id, videoId),
+				seenExportId === null
+					? sql`JSON_EXTRACT(${videos.metadata}, '$.renderFarmSave.exportId') IS NULL`
+					: sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.renderFarmSave.exportId')) = ${seenExportId}`,
+			),
+		);
+	return affectedRows(result) === 1;
 }
 
 export async function recordPendingRecordingRender(

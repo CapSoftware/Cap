@@ -186,20 +186,25 @@ export const startRenderFarmSave = Effect.fn("startRenderFarmSave")(function* (
 		);
 		return yield* new HttpApiError.ServiceUnavailable();
 	}
-	yield* Effect.tryPromise({
+	const recorded = yield* Effect.tryPromise({
 		try: () =>
-			recordRenderFarmSave(video.id, {
-				version: 1,
-				exportId: started.exportId,
-				jobId: started.jobId,
-				status: "rendering",
-				projectSavedAt: video.metadata?.webEditorProject?.savedAt ?? null,
-				startedAt: new Date().toISOString(),
-				outputKey: started.target.outputKey,
-				hlsPrefix: started.target.hlsPrefix,
-			}),
+			recordRenderFarmSave(
+				video.id,
+				video.metadata?.renderFarmSave?.exportId ?? null,
+				{
+					version: 1,
+					exportId: started.exportId,
+					jobId: started.jobId,
+					status: "rendering",
+					projectSavedAt: video.metadata?.webEditorProject?.savedAt ?? null,
+					startedAt: new Date().toISOString(),
+					outputKey: started.target.outputKey,
+					hlsPrefix: started.target.hlsPrefix,
+				},
+			),
 		catch: () => new HttpApiError.InternalServerError(),
 	});
+	if (!recorded) return yield* new HttpApiError.Conflict();
 	return {
 		exportId: started.exportId,
 		jobId: started.jobId,
