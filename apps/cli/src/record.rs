@@ -805,12 +805,16 @@ async fn start_recording(
     }
 
     if let Some(mic_name) = params.mic.as_deref() {
-        let available = MicrophoneFeed::list();
-        if !available.contains_key(mic_name) {
-            let names: Vec<&str> = available.keys().map(String::as_str).collect();
-            return Err(format!(
-                "Microphone '{mic_name}' not found. Available: {names:?} (see `cap targets mics`)"
-            ));
+        // Listed devices keep their inputs open (on Linux the sound card itself),
+        // so the list goes before the microphone is opened.
+        {
+            let available = MicrophoneFeed::list();
+            if !available.contains_key(mic_name) {
+                let names: Vec<&str> = available.keys().map(String::as_str).collect();
+                return Err(format!(
+                    "Microphone '{mic_name}' not found. Available: {names:?} (see `cap targets mics`)"
+                ));
+            }
         }
 
         let (error_tx, _error_rx) = flume::bounded(16);

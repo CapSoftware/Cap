@@ -463,6 +463,15 @@ fn main() {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    if let Some(config) = cap_utils::linux_package::bundled_alsa_config_path() {
+        // The rpm's `cap` runs this binary directly; load Cap's ALSA pulse
+        // plugin before any thread starts, as the desktop app does.
+        unsafe {
+            std::env::set_var("ALSA_CONFIG_PATH", config);
+        }
+    }
+
     #[cfg(windows)]
     {
         use windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
