@@ -523,7 +523,7 @@ index 1feee49..1c95a05 100644
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..c6f0705
+index 0000000..ac11665
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
 @@ -0,0 +1,344 @@
@@ -537,9 +537,9 @@ index 0000000..c6f0705
 +#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 +pub enum OverscrollBehavior {
 +    /// Always allow rubber-band overscroll on scrollable axes.
-+    #[default]
 +    Auto,
 +    /// Only allow rubber-band overscroll when the content actually overflows on that axis.
++    #[default]
 +    WhenScrollable,
 +    /// Browser-style scroll chaining: if a gesture starts while this container can
 +    /// scroll in the gesture direction, it owns the gesture and overscrolls once at
