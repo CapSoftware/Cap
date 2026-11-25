@@ -196,8 +196,12 @@ pub struct FrameLossCarry {
 /// Per-segment counts for the screen track. A frame only counts once the
 /// muxer accepts it for the recording, so frames before the start, while
 /// paused or after stop are neither displayed nor lost. Written frames are
-/// the encoder's output packets, so frames a failing encoder drops after
-/// taking them count as lost in the encoder.
+/// the packets the muxer wrote (by the write-behind writer thread when it is
+/// on), so frames a failing encoder drops after taking them, and frames the
+/// writer discards or fails to write, count as lost in the encoder. Repeats
+/// of the last frame are only appended at stop, so a lost tail loses them
+/// first: only packets beyond the real frames that encoded count as written
+/// repeats.
 #[derive(Debug, Default)]
 pub struct ScreenFrameAccounting {
     attached: AtomicBool,
@@ -209,6 +213,7 @@ pub struct ScreenFrameAccounting {
     handed_to_encoder: AtomicU64,
     muxer_dropped: AtomicU64,
     encoder_failed: AtomicU64,
+    real_encoded: AtomicU64,
     repeats_encoded: AtomicU64,
     packets_written: AtomicU64,
     repeat_flags: Mutex<VecDeque<bool>>,
@@ -266,10 +271,13 @@ impl ScreenFrameAccounting {
             (true, true) => {
                 self.repeats_encoded.fetch_add(1, Ordering::Relaxed);
             }
+            (false, true) => {
+                self.real_encoded.fetch_add(1, Ordering::Relaxed);
+            }
             (false, false) => {
                 self.encoder_failed.fetch_add(1, Ordering::Relaxed);
             }
-            _ => {}
+            (true, false) => {}
         }
         if let Some(packets_written) = packets_written {
             self.packets_written
@@ -296,11 +304,11 @@ impl ScreenFrameAccounting {
         let lost_in_capture = self.lost_in_capture.load(Ordering::Relaxed);
         let callback_dropped = self.callback_dropped.load(Ordering::Relaxed);
         let handed_to_encoder = self.handed_to_encoder.load(Ordering::Relaxed);
-        let written = self
-            .packets_written
-            .load(Ordering::Relaxed)
-            .saturating_sub(self.repeats_encoded.load(Ordering::Relaxed))
-            .min(handed_to_encoder);
+        let packets = self.packets_written.load(Ordering::Relaxed);
+        let repeats_written = packets
+            .saturating_sub(self.real_encoded.load(Ordering::Relaxed))
+            .min(self.repeats_encoded.load(Ordering::Relaxed));
+        let written = (packets - repeats_written).min(handed_to_encoder);
         let encoder_failed = self.encoder_failed.load(Ordering::Relaxed);
         let lost_in_encoder = if self.finished.load(Ordering::Relaxed) {
             handed_to_encoder.saturating_sub(written)
@@ -612,7 +620,7 @@ mod tests {
             live.lost_in_encoder, 1,
             "a failed encode counts while recording"
         );
-        accounting.record_finished(Some(packets - 1));
+        accounting.record_finished(Some(packets - 2));
         let totals = accounting.totals();
         assert_eq!(
             totals,
@@ -624,7 +632,8 @@ mod tests {
                 lost_in_capture: 6,
                 lost_before_encoder: 2,
                 lost_in_encoder: 2,
-            }
+            },
+            "a lost tail of two takes the repeat and one real frame"
         );
         assert_eq!(
             totals.displayed,
@@ -656,6 +665,30 @@ mod tests {
         );
         assert_eq!(accounting.totals().handed_to_encoder, 2);
         assert_eq!(accounting.totals().lost_before_encoder, 0);
+    }
+
+    #[test]
+    fn a_repeat_lost_with_the_tail_is_not_a_lost_real_frame() {
+        let accounting = ScreenFrameAccounting::default();
+        accounting.record_accepted(FrameLossCarry::default(), true);
+        for repeat in [false, false, false, false, false, true, true] {
+            hand(&accounting, repeat);
+            let repeat = accounting.next_is_repeat();
+            accounting.record_encoded(repeat, true, None);
+        }
+        accounting.record_finished(Some(7));
+        assert_eq!(accounting.totals().written, 5);
+        assert_eq!(accounting.totals().lost_in_encoder, 0);
+        accounting.record_finished(Some(6));
+        assert_eq!(
+            accounting.totals().written,
+            5,
+            "the packet lost at the end was a repeat"
+        );
+        assert_eq!(accounting.totals().lost_in_encoder, 0);
+        accounting.record_finished(Some(3));
+        assert_eq!(accounting.totals().written, 3);
+        assert_eq!(accounting.totals().lost_in_encoder, 2);
     }
 
     #[test]
