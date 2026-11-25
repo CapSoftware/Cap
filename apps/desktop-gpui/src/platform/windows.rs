@@ -501,6 +501,15 @@ pub fn show_native(native: &NativeWindow) {
     }
 }
 
+/// [`show_native`] without activating the window: it is shown (restored if
+/// minimized) and put on top, and the app in use keeps the foreground.
+pub fn show_native_quietly(native: &NativeWindow) {
+    unsafe {
+        ShowWindowAsync(native.hwnd(), SW_SHOWNOACTIVATE);
+    }
+    order_front_native(native);
+}
+
 pub fn order_front_native(native: &NativeWindow) {
     unsafe {
         SetWindowPos(
