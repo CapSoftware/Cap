@@ -23,7 +23,7 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..625e64a 100644
+index c02bd16..e896daf 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -997,6 +997,56 @@ pub trait InteractiveElement: Sized {
@@ -115,8 +115,12 @@ index c02bd16..625e64a 100644
                  let style = self.compute_style_internal(None, element_state.as_mut(), window, cx);
                  let layout_id = f(style, window, cx);
                  (layout_id, element_state)
-@@ -2271,11 +2339,66 @@ impl Interactivity {
+@@ -2269,13 +2337,80 @@ impl Interactivity {
+                 .max(&Default::default());
+             // Clamp scroll offset in case scroll max is smaller now (e.g., if children
              // were removed or the bounds became larger).
++            #[cfg(feature = "rubber-band")]
++            let scroll_offset_ptr = Rc::as_ptr(scroll_offset) as usize;
              let mut scroll_offset = scroll_offset.borrow_mut();
  
 -            scroll_offset.x = scroll_offset.x.clamp(-scroll_max.x, px(0.));
@@ -125,6 +129,15 @@ index c02bd16..625e64a 100644
 +            #[cfg(feature = "rubber-band")]
 +            if let Some(rb_state) = self.rubber_band_state.as_ref() {
 +                let mut rb = rb_state.borrow_mut();
++                let handle_changed =
++                    rb.scroll_offset_ptr != 0 && rb.scroll_offset_ptr != scroll_offset_ptr;
++                let caller_changed = rb
++                    .last_applied_offset
++                    .is_some_and(|last| last != *scroll_offset);
++                if handle_changed || caller_changed {
++                    rb.reset_motion();
++                }
++                rb.scroll_offset_ptr = scroll_offset_ptr;
 +                rb.scroll_max = scroll_max;
 +                rb.bounds_size = bounds.size;
 +
@@ -165,6 +178,7 @@ index c02bd16..625e64a 100644
 +                    scroll_offset.x = scroll_offset.x.clamp(-scroll_max.x, px(0.));
 +                    scroll_offset.y = scroll_offset.y.clamp(-scroll_max.y, px(0.));
 +                }
++                rb.last_applied_offset = Some(*scroll_offset);
              } else {
 -                scroll_offset.y = scroll_offset.y.clamp(-scroll_max.y, px(0.));
 +                scroll_offset.x = scroll_offset.x.clamp(-scroll_max.x, px(0.));
@@ -186,7 +200,7 @@ index c02bd16..625e64a 100644
              }
  
              if let Some(mut scroll_handle_state) = tracked_scroll_handle {
-@@ -3091,17 +3214,25 @@ impl Interactivity {
+@@ -3091,17 +3226,25 @@ impl Interactivity {
              let line_height = window.line_height();
              let hitbox = hitbox.clone();
              let current_view = window.current_view();
@@ -213,7 +227,7 @@ index c02bd16..625e64a 100644
                              delta_x = delta.y;
                          }
                      }
-@@ -3109,21 +3240,183 @@ impl Interactivity {
+@@ -3109,21 +3252,191 @@ impl Interactivity {
                      if overflow.y == Overflow::Scroll {
                          if !delta.y.is_zero() {
                              delta_y = delta.y;
@@ -243,10 +257,8 @@ index c02bd16..625e64a 100644
 +                            } else {
 +                                delta_x = Pixels::ZERO;
 +                            }
-                         }
-                     }
--                    scroll_offset.y += delta_y;
--                    scroll_offset.x += delta_x;
++                        }
++                    }
 +                    #[cfg(feature = "rubber-band")]
 +                    if let Some(rb_state) = rubber_band_state.as_ref()
 +                        && event.is_precise_trackpad_scroll()
@@ -259,10 +271,11 @@ index c02bd16..625e64a 100644
 +                            .map(|last| now.saturating_duration_since(last).as_secs_f32())
 +                            .unwrap_or(1.0 / 60.0);
 +                        rb.last_event_at = Some(now);
++                        let scroll_phase = event.effective_scroll_phase();
 +                        let w: f32 = rb.bounds_size.width.into();
 +                        let h: f32 = rb.bounds_size.height.into();
 +                        if matches!(
-+                            event.scroll_phase,
++                            scroll_phase,
 +                            crate::ScrollPhase::Began | crate::ScrollPhase::MayBegin
 +                        ) {
 +                            if overscroll_behavior.x != crate::OverscrollBehavior::Chain {
@@ -366,7 +379,7 @@ index c02bd16..625e64a 100644
 +                        }
 +
 +                        let gesture_ended = matches!(
-+                            event.scroll_phase,
++                            scroll_phase,
 +                            crate::ScrollPhase::Ended | crate::ScrollPhase::Cancelled
 +                        ) && event.momentum_phase == crate::ScrollPhase::None;
 +                        let momentum_ended = matches!(
@@ -377,13 +390,14 @@ index c02bd16..625e64a 100644
 +                            rb.momentum_bounced = false;
 +                            rb.chain_to_parent_x = None;
 +                            rb.chain_to_parent_y = None;
-+                        }
+                         }
 +                        if (gesture_ended || momentum_ended) && rb.start_springs(now, &config) {
 +                            if gesture_ended {
 +                                rb.momentum_bounced = true;
 +                            }
 +                            cx.notify(current_view);
 +                        }
++                        rb.last_applied_offset = Some(*scroll_offset);
 +                        if (rb.chain_to_parent_x == Some(false) && !delta_x.is_zero())
 +                            || (rb.chain_to_parent_y == Some(false) && !delta_y.is_zero())
 +                        {
@@ -392,12 +406,20 @@ index c02bd16..625e64a 100644
 +                    } else {
 +                        scroll_offset.y += delta_y;
 +                        scroll_offset.x += delta_x;
++                        if let Some(rb_state) = rubber_band_state.as_ref() {
++                            let mut rb = rb_state.borrow_mut();
++                            scroll_offset.x = scroll_offset.x.clamp(-rb.scroll_max.x, px(0.));
++                            scroll_offset.y = scroll_offset.y.clamp(-rb.scroll_max.y, px(0.));
++                            rb.last_applied_offset = Some(*scroll_offset);
++                        }
 +                    }
 +                    #[cfg(not(feature = "rubber-band"))]
 +                    {
 +                        scroll_offset.y += delta_y;
 +                        scroll_offset.x += delta_x;
-+                    }
+                     }
+-                    scroll_offset.y += delta_y;
+-                    scroll_offset.x += delta_x;
                      if *scroll_offset != old_scroll_offset {
                          cx.notify(current_view);
 +                        #[cfg(feature = "rubber-band")]
@@ -405,7 +427,7 @@ index c02bd16..625e64a 100644
                      }
                  }
              });
-@@ -3360,6 +3653,8 @@ pub struct InteractiveElementState {
+@@ -3360,6 +3673,8 @@ pub struct InteractiveElementState {
      /// blur). `None` means no activation key is pending.
      pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
@@ -471,7 +493,7 @@ index a143fab..bbaac69 100644
  pub use keymap::*;
  pub use path_builder::*;
 diff --git a/crates/gpui/src/interactive.rs b/crates/gpui/src/interactive.rs
-index 1feee49..1c95a05 100644
+index 1feee49..f2b1ce4 100644
 --- a/crates/gpui/src/interactive.rs
 +++ b/crates/gpui/src/interactive.rs
 @@ -508,6 +508,24 @@ impl MouseMoveEvent {
@@ -499,7 +521,7 @@ index 1feee49..1c95a05 100644
  /// A mouse wheel event from the platform.
  #[derive(Clone, Debug, Default)]
  pub struct ScrollWheelEvent {
-@@ -522,6 +540,21 @@ pub struct ScrollWheelEvent {
+@@ -522,6 +540,39 @@ pub struct ScrollWheelEvent {
  
      /// The phase of the touch event.
      pub touch_phase: TouchPhase,
@@ -512,21 +534,39 @@ index 1feee49..1c95a05 100644
 +}
 +
 +impl ScrollWheelEvent {
++    /// Returns the effective scroll gesture phase, falling back to `touch_phase`
++    /// on non-macOS platforms where precise trackpad events report `TouchPhase`.
++    pub fn effective_scroll_phase(&self) -> ScrollPhase {
++        if self.scroll_phase != ScrollPhase::None || self.momentum_phase != ScrollPhase::None {
++            return self.scroll_phase;
++        }
++        #[cfg(not(target_os = "macos"))]
++        if matches!(self.delta, ScrollDelta::Pixels(_)) {
++            return match self.touch_phase {
++                TouchPhase::Started => ScrollPhase::Began,
++                TouchPhase::Moved => ScrollPhase::Changed,
++                TouchPhase::Ended => ScrollPhase::Ended,
++            };
++        }
++        ScrollPhase::None
++    }
++
 +    /// Returns true if this event originated from a precise trackpad gesture or momentum phase
 +    /// rather than a discrete mouse wheel.
 +    pub fn is_precise_trackpad_scroll(&self) -> bool {
 +        matches!(self.delta, ScrollDelta::Pixels(_))
-+            && (self.scroll_phase != ScrollPhase::None || self.momentum_phase != ScrollPhase::None)
++            && (self.effective_scroll_phase() != ScrollPhase::None
++                || self.momentum_phase != ScrollPhase::None)
 +    }
  }
  
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..ac11665
+index 0000000..8362276
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,344 @@
+@@ -0,0 +1,356 @@
 +use std::f32::consts::PI;
 +use std::sync::RwLock;
 +use std::time::Instant;
@@ -587,14 +627,14 @@ index 0000000..ac11665
 +
 +static RUBBER_BAND_CONFIG: RwLock<RubberBandConfig> = RwLock::new(RubberBandConfig::DEFAULT);
 +
-+/// Returns the active global [`RubberBandConfig`].
++/// Reads the process-wide rubber-band tuning parameters applied to all scroll views.
 +pub fn rubber_band_config() -> RubberBandConfig {
 +    *RUBBER_BAND_CONFIG
 +        .read()
 +        .unwrap_or_else(|poisoned| poisoned.into_inner())
 +}
 +
-+/// Updates the global [`RubberBandConfig`].
++/// Overrides the process-wide rubber-band tuning parameters at runtime for live calibration.
 +pub fn set_rubber_band_config(config: RubberBandConfig) {
 +    if let Ok(mut guard) = RUBBER_BAND_CONFIG.write() {
 +        *guard = config;
@@ -747,9 +787,21 @@ index 0000000..ac11665
 +    pub(crate) last_event_at: Option<Instant>,
 +    pub(crate) chain_to_parent_x: Option<bool>,
 +    pub(crate) chain_to_parent_y: Option<bool>,
++    pub(crate) scroll_offset_ptr: usize,
++    pub(crate) last_applied_offset: Option<Point<Pixels>>,
 +}
 +
 +impl RubberBandScrollState {
++    pub(crate) fn reset_motion(&mut self) {
++        self.x.raw_overscroll = 0.0;
++        self.x.spring = None;
++        self.y.raw_overscroll = 0.0;
++        self.y.spring = None;
++        self.momentum_bounced = false;
++        self.chain_to_parent_x = None;
++        self.chain_to_parent_y = None;
++    }
++
 +    pub(crate) fn start_springs(&mut self, now: Instant, config: &RubberBandConfig) -> bool {
 +        let x = self
 +            .x
