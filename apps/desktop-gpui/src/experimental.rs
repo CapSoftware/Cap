@@ -1,4 +1,6 @@
 use std::sync::OnceLock;
+#[cfg(feature = "experimental-redesign")]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const UNLOCK_DEFAULTS_KEY: &str = "_CapEnableExperimentalDesktopRedesignOption";
 pub const UNLOCK_ENV_VAR: &str = "CAP_EXPERIMENTAL_DESKTOP_REDESIGN";
@@ -26,6 +28,34 @@ pub fn is_desktop_redesign_unlocked() -> bool {
     *UNLOCKED.get_or_init(|| {
         env_var_enables(std::env::var(UNLOCK_ENV_VAR).ok().as_deref()) || defaults_unlocked()
     })
+}
+
+#[cfg(feature = "experimental-redesign")]
+fn cached_redesign_setting() -> &'static AtomicBool {
+    static ENABLED: OnceLock<AtomicBool> = OnceLock::new();
+    ENABLED.get_or_init(|| {
+        AtomicBool::new(crate::store::GeneralSettings::load().experimental_desktop_redesign)
+    })
+}
+
+#[cfg(feature = "experimental-redesign")]
+pub fn is_desktop_redesign_enabled_cached() -> bool {
+    is_desktop_redesign_unlocked() && cached_redesign_setting().load(Ordering::Relaxed)
+}
+
+#[cfg(not(feature = "experimental-redesign"))]
+pub fn is_desktop_redesign_enabled_cached() -> bool {
+    false
+}
+
+#[cfg(feature = "experimental-redesign")]
+pub fn set_desktop_redesign_enabled_cached(enabled: bool) {
+    cached_redesign_setting().store(enabled, Ordering::Relaxed);
+}
+
+#[cfg(not(feature = "experimental-redesign"))]
+pub fn set_desktop_redesign_enabled_cached(enabled: bool) {
+    let _ = enabled;
 }
 
 #[cfg(feature = "experimental-redesign")]
@@ -117,11 +147,7 @@ macro_rules! apply_redesign {
         #[cfg(all(feature = "experimental-redesign", feature = $feat))]
         {
             let el = $el;
-            if $enabled {
-                ($f)(el)
-            } else {
-                el
-            }
+            if $enabled { ($f)(el) } else { el }
         }
         #[cfg(not(all(feature = "experimental-redesign", feature = $feat)))]
         {
@@ -133,11 +159,7 @@ macro_rules! apply_redesign {
         #[cfg(feature = "experimental-redesign")]
         {
             let el = $el;
-            if $enabled {
-                ($f)(el)
-            } else {
-                el
-            }
+            if $enabled { ($f)(el) } else { el }
         }
         #[cfg(not(feature = "experimental-redesign"))]
         {

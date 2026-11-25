@@ -813,6 +813,7 @@ mod virtual_menu_tests {
             delta: ScrollDelta::Pixels(point(px(0.), px(delta))),
             modifiers: Modifiers::none(),
             touch_phase: TouchPhase::Moved,
+            ..Default::default()
         });
         for _ in 0..3 {
             draw_held_menu(cx, window);

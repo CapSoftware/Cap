@@ -2766,9 +2766,7 @@ impl EditorWindow {
                         .pb(px(16.))
                         .child(content),
                 ),
-            crate::experimental::is_desktop_redesign_enabled(
-                &crate::store::GeneralSettings::load(),
-            ),
+            crate::experimental::is_desktop_redesign_enabled_cached(),
             feature = "gpui-rubber-band",
             |el: gpui::Stateful<gpui::Div>| el.scroll_rubber_band(true)
         )

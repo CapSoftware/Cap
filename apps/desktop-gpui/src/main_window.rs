@@ -4218,9 +4218,7 @@ impl MainWindow {
                         .overflow_y_scroll()
                         .child(self.render_targets(cx))
                         .child(self.render_base_controls(cx)),
-                    crate::experimental::is_desktop_redesign_enabled(
-                        &crate::store::GeneralSettings::load()
-                    ),
+                    crate::experimental::is_desktop_redesign_enabled_cached(),
                     feature = "gpui-rubber-band",
                     |el: gpui::Stateful<gpui::Div>| el.scroll_rubber_band(true)
                 )),
@@ -4476,9 +4474,7 @@ impl MainWindow {
                                     self.render_library_grid(kind, cx).into_any_element()
                                 }
                             }),
-                        crate::experimental::is_desktop_redesign_enabled(
-                            &crate::store::GeneralSettings::load()
-                        ),
+                        crate::experimental::is_desktop_redesign_enabled_cached(),
                         feature = "gpui-rubber-band",
                         |el: gpui::Stateful<gpui::Div>| el.scroll_rubber_band(true)
                     )),

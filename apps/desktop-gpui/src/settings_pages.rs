@@ -3006,6 +3006,9 @@ impl SettingsWindow {
                                         this.settings.experimental_desktop_redesign =
                                             !this.settings.experimental_desktop_redesign;
                                         let value = this.settings.experimental_desktop_redesign;
+                                        crate::experimental::set_desktop_redesign_enabled_cached(
+                                            value,
+                                        );
                                         this.write_bool("experimentalDesktopRedesign", value, cx);
                                     },
                                 )
