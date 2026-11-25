@@ -2000,14 +2000,27 @@ impl Pipeline {
             ),
             Some((late_stop, recording_dir)) => {
                 let late = || late_stop.mark(recording_dir);
-                futures::join!(
-                    self.screen.stop_with_outcome_or_late(late),
-                    OptionFuture::from(self.microphone.map(|s| s.stop_with_outcome_or_late(late))),
-                    OptionFuture::from(self.camera.map(|s| s.stop_with_outcome_or_late(late))),
-                    OptionFuture::from(
-                        self.system_audio.map(|s| s.stop_with_outcome_or_late(late))
+                let (screen, microphone, camera, system_audio) =
+                    (self.screen, self.microphone, self.camera, self.system_audio);
+                let stops = async {
+                    futures::join!(
+                        screen.stop_with_outcome_or_late(late),
+                        OptionFuture::from(microphone.map(|s| s.stop_with_outcome_or_late(late))),
+                        OptionFuture::from(camera.map(|s| s.stop_with_outcome_or_late(late))),
+                        OptionFuture::from(system_audio.map(|s| s.stop_with_outcome_or_late(late)))
                     )
-                )
+                };
+                let mut stops = std::pin::pin!(stops);
+                tokio::select! {
+                    biased;
+                    stopped = &mut stops => stopped,
+                    () = late_stop.wait() => {
+                        if let Some(cursor) = self.cursor.as_mut() {
+                            cursor.actor.stop();
+                        }
+                        stops.await
+                    }
+                }
             }
         };
 
