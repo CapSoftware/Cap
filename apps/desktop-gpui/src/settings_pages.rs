@@ -3021,7 +3021,7 @@ impl SettingsWindow {
                 .into_any_element(),
             );
         }
-        #[cfg(feature = "gpui-rubber-band")]
+        #[cfg(all(debug_assertions, feature = "gpui-rubber-band"))]
         if crate::experimental::is_desktop_redesign_unlocked() {
             let cfg = gpui::rubber_band_config();
             let theme = self.theme;

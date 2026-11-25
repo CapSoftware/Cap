@@ -23,7 +23,7 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..f4eb17a 100644
+index c02bd16..e691c04 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -997,6 +997,13 @@ pub trait InteractiveElement: Sized {
@@ -185,7 +185,8 @@ index c02bd16..f4eb17a 100644
 +                        let dx: f32 = delta_x.into();
 +                        let dy: f32 = delta_y.into();
 +
-+                        if !(is_momentum && rb.is_springing()) {
++                        let was_springing = rb.is_springing();
++                        if !(is_momentum && was_springing) {
 +                            let mut x_axis = rb.x;
 +                            let mut y_axis = rb.y;
 +                            crate::apply_scroll_delta(
@@ -212,6 +213,11 @@ index c02bd16..f4eb17a 100644
 +                            scroll_offset.y = px(oy);
 +                        }
 +
++                        if !was_springing && rb.is_springing() {
++                            rb.last_frame = Some(std::time::Instant::now());
++                            cx.notify(current_view);
++                        }
++
 +                        let gesture_ended = matches!(
 +                            event.scroll_phase,
 +                            crate::ScrollPhase::Ended | crate::ScrollPhase::Cancelled
@@ -220,13 +226,7 @@ index c02bd16..f4eb17a 100644
 +                            event.momentum_phase,
 +                            crate::ScrollPhase::Ended | crate::ScrollPhase::Cancelled
 +                        );
-+                        let momentum_overscroll_tail = is_momentum
-+                            && (rb.x.raw_overscroll != 0.0 || rb.y.raw_overscroll != 0.0)
-+                            && dx.abs() < 2.0
-+                            && dy.abs() < 2.0;
-+                        if (gesture_ended || momentum_ended || momentum_overscroll_tail)
-+                            && rb.start_springs()
-+                        {
++                        if (gesture_ended || momentum_ended) && rb.start_springs() {
 +                            cx.notify(current_view);
 +                        }
 +                    } else {
@@ -325,10 +325,10 @@ index 1feee49..1c95a05 100644
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..6de0a73
+index 0000000..d61e1ca
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,244 @@
 +use std::sync::RwLock;
 +use std::time::Instant;
 +
@@ -478,20 +478,34 @@ index 0000000..6de0a73
 +        let next = *offset + delta;
 +        if next > max {
 +            let excess = next - max;
-+            axis.raw_overscroll = if is_momentum {
-+                excess * config.momentum_carry
++            if is_momentum {
++                if config.momentum_carry <= 0.001 {
++                    *offset = max;
++                } else {
++                    axis.raw_overscroll = excess * config.momentum_carry;
++                    axis.velocity = (delta * 60.0 * config.momentum_carry).clamp(-2400.0, 2400.0);
++                    axis.springing = true;
++                    *offset = max + rubber_band_offset(axis.raw_overscroll, dim, config);
++                }
 +            } else {
-+                excess
-+            };
-+            *offset = max + rubber_band_offset(axis.raw_overscroll, dim, config);
++                axis.raw_overscroll = excess;
++                *offset = max + rubber_band_offset(axis.raw_overscroll, dim, config);
++            }
 +        } else if next < min {
 +            let excess = next - min;
-+            axis.raw_overscroll = if is_momentum {
-+                excess * config.momentum_carry
++            if is_momentum {
++                if config.momentum_carry <= 0.001 {
++                    *offset = min;
++                } else {
++                    axis.raw_overscroll = excess * config.momentum_carry;
++                    axis.velocity = (delta * 60.0 * config.momentum_carry).clamp(-2400.0, 2400.0);
++                    axis.springing = true;
++                    *offset = min + rubber_band_offset(axis.raw_overscroll, dim, config);
++                }
 +            } else {
-+                excess
-+            };
-+            *offset = min + rubber_band_offset(axis.raw_overscroll, dim, config);
++                axis.raw_overscroll = excess;
++                *offset = min + rubber_band_offset(axis.raw_overscroll, dim, config);
++            }
 +        } else {
 +            *offset = next;
 +        }
