@@ -59,7 +59,7 @@ pub fn issues(active: &ActiveMeeting) -> Vec<Issue> {
 pub enum Banner {
     Ending(u64),
     Inactive(u64),
-    ResumeOffer,
+    ResumeOffer { slept: bool },
     Issue(Issue),
     Permission(&'static str),
 }
@@ -72,7 +72,9 @@ pub fn banner_for(
 ) -> Option<Banner> {
     let active = active?;
     if active.state == ActiveState::ResumeOffered {
-        return Some(Banner::ResumeOffer);
+        return Some(Banner::ResumeOffer {
+            slept: active.slept,
+        });
     }
     match active.warning {
         Some(MeetingWarning::Ending { stop_at, .. }) => {
@@ -501,8 +503,12 @@ impl RecordingBar {
                     ],
                     false,
                 ),
-                Banner::ResumeOffer => (
-                    tr::documents::bar::stopped_quiet().to_string(),
+                Banner::ResumeOffer { slept } => (
+                    if *slept {
+                        tr::documents::bar::stopped_asleep().to_string()
+                    } else {
+                        tr::documents::bar::stopped_quiet().to_string()
+                    },
                     Vec::new(),
                     false,
                 ),
@@ -976,6 +982,7 @@ impl RecordingBar {
             engine: EngineStatus::default(),
             warning: None,
             resume_offer_until: None,
+            slept: false,
             app_name: Some("Zoom".into()),
             event_id: None,
             health: Vec::new(),

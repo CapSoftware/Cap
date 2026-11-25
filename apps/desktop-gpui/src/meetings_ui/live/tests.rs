@@ -380,6 +380,7 @@ fn active(state: crate::meetings::ActiveState) -> crate::meetings::ActiveMeeting
         engine: Default::default(),
         warning: None,
         resume_offer_until: None,
+        slept: false,
         app_name: None,
         event_id: None,
         health: Vec::new(),

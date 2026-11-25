@@ -1156,6 +1156,7 @@ pub(crate) fn active_meeting() -> super::ActiveMeeting {
         engine: super::EngineStatus::default(),
         warning: None,
         resume_offer_until: None,
+        slept: false,
         app_name: None,
         event_id: None,
         health: Vec::new(),

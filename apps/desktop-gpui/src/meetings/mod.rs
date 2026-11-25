@@ -187,6 +187,8 @@ pub struct ActiveMeeting {
     pub engine: EngineStatus,
     pub warning: Option<MeetingWarning>,
     pub resume_offer_until: Option<Instant>,
+    /// The Resume offer follows a system sleep (not a quiet spell).
+    pub slept: bool,
     pub app_name: Option<String>,
     pub event_id: Option<String>,
     /// What is worth saying about this meeting's health now, most urgent
@@ -1583,9 +1585,11 @@ impl Meetings {
                 }
                 SessionAction::OfferResume { until } => {
                     let until = self.instant_at(until);
+                    let slept = self.session.last_stop_reason() == Some(StopReason::Sleep);
                     if let Some(active) = self.active.as_mut() {
                         active.state = ActiveState::ResumeOffered;
                         active.resume_offer_until = Some(until);
+                        active.slept = slept;
                     }
                     self.mark_active(cx);
                     cx.emit(MeetingEvent::WantsAttention {
@@ -2553,6 +2557,7 @@ impl Meetings {
             engine: EngineStatus::default(),
             warning: None,
             resume_offer_until: None,
+            slept: false,
             app_name: origin.app_name.clone(),
             event_id: origin.event_id.clone(),
             health: Vec::new(),

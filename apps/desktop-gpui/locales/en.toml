@@ -4182,6 +4182,7 @@ call_ended = { text = "Call ended. Stopping in {time}", context = "{time} is a c
 inactive = { text = "No one has spoken for a while. Stopping in {time}", context = "{time} is a countdown such as 0:45." }
 keep_recording = "Keep recording"
 stopped_quiet = "Stopped after a quiet spell"
+stopped_asleep = "Stopped while the computer was asleep"
 record_more = "Record more"
 set_up = "Set up"
 error_start = "Recording couldn't start."

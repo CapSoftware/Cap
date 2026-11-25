@@ -755,6 +755,7 @@ fn active(state: crate::meetings::ActiveState) -> crate::meetings::ActiveMeeting
         engine: crate::meetings::EngineStatus::default(),
         warning: None,
         resume_offer_until: None,
+        slept: false,
         app_name: None,
         event_id: None,
         health: Vec::new(),
@@ -792,10 +793,15 @@ fn the_banner_raises_one_problem_at_a_time_most_urgent_first() {
         banner_for(Some(&live), &none, None, now),
         Some(Banner::Inactive(29 | 30))
     ));
-    let offered = active(ActiveState::ResumeOffered);
+    let mut offered = active(ActiveState::ResumeOffered);
     assert_eq!(
         banner_for(Some(&offered), &none, None, now),
-        Some(Banner::ResumeOffer)
+        Some(Banner::ResumeOffer { slept: false })
+    );
+    offered.slept = true;
+    assert_eq!(
+        banner_for(Some(&offered), &none, None, now),
+        Some(Banner::ResumeOffer { slept: true })
     );
 }
 

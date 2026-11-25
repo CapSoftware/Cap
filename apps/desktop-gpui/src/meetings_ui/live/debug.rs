@@ -147,6 +147,7 @@ fn active_meeting(title: &str, you: f32, others: f32) -> ActiveMeeting {
         engine: EngineStatus::default(),
         warning: None,
         resume_offer_until: None,
+        slept: false,
         app_name: Some("Zoom".into()),
         event_id: None,
         health: Vec::new(),
