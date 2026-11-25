@@ -48,6 +48,7 @@ pub struct IncrementalCaptureOutputs {
     pub keyboard: Option<PathBuf>,
 }
 
+#[derive(Clone)]
 pub struct CursorCaptureTarget {
     pub crop_bounds: CursorCropBounds,
     pub display: scap_targets::Display,

@@ -449,6 +449,7 @@ impl Actor {
         tracing::info!("pipeline shutting down");
 
         let stopped = pipeline.stop().await;
+        self.segment_factory.stop_observations(index);
         #[cfg(windows)]
         let stopped = stopped.map_err(|error| self.preserve_windows_stop_failure(error));
         let PipelineStopOutcome {
@@ -2450,6 +2451,7 @@ pub struct ActorBuilder {
     excluded_windows: Vec<scap_targets::WindowId>,
     start_gate: Option<RecordingStartGate>,
     pretty_name: Option<String>,
+    segment_observers: crate::segment_observer::SegmentObservers,
 }
 
 impl ActorBuilder {
@@ -2476,6 +2478,7 @@ impl ActorBuilder {
             excluded_windows: Vec::new(),
             start_gate: None,
             pretty_name: None,
+            segment_observers: Vec::new(),
         }
     }
 
@@ -2545,6 +2548,15 @@ impl ActorBuilder {
         self
     }
 
+    /// Tells `observer` when each segment starts and stops.
+    pub fn with_segment_observer(
+        mut self,
+        observer: std::sync::Arc<dyn crate::segment_observer::SegmentObserver>,
+    ) -> Self {
+        self.segment_observers.push(observer);
+        self
+    }
+
     #[cfg(target_os = "macos")]
     pub fn with_excluded_windows(mut self, excluded_windows: Vec<scap_targets::WindowId>) -> Self {
         self.excluded_windows = excluded_windows;
@@ -2594,6 +2606,7 @@ impl ActorBuilder {
             self.max_fps,
             self.quality,
             self.pretty_name,
+            self.segment_observers,
         );
         #[cfg(windows)]
         {
@@ -2654,6 +2667,7 @@ async fn spawn_studio_recording_actor(
     max_fps: u32,
     quality: crate::StudioQuality,
     pretty_name: Option<String>,
+    segment_observers: crate::segment_observer::SegmentObservers,
 ) -> anyhow::Result<ActorHandle> {
     use cap_utils::operation_diagnostics::{Field, Operation};
     let mut diagnostic = Operation::start(
@@ -2732,7 +2746,8 @@ async fn spawn_studio_recording_actor(
         max_fps,
         quality,
         completion_tx.clone(),
-    );
+    )
+    .with_segment_observers(segment_observers);
 
     if fragmented || cfg!(any(target_os = "linux", windows)) {
         write_in_progress_meta_for(
@@ -3413,6 +3428,10 @@ struct SegmentPipelineFactory {
     /// The camera input of the segment built last, which a camera switch
     /// moves to another camera while that segment records.
     live_camera: Option<StudioCameraInput>,
+    segment_observers: crate::segment_observer::SegmentObservers,
+    observations: Arc<
+        std::sync::Mutex<Vec<(u32, Box<dyn crate::segment_observer::SegmentObservation>)>>,
+    >,
 }
 
 #[cfg(target_os = "linux")]
@@ -3451,6 +3470,63 @@ impl SegmentPipelineFactory {
             #[cfg(windows)]
             encoder_preferences: crate::capture_pipeline::EncoderPreferences::new(),
             live_camera: None,
+            segment_observers: Vec::new(),
+            observations: Default::default(),
+        }
+    }
+
+    fn with_segment_observers(mut self, observers: crate::segment_observer::SegmentObservers) -> Self {
+        self.segment_observers = observers;
+        self
+    }
+
+    /// Starts every observer's observation of the segment `pipeline` records.
+    fn observe_segment(&self, pipeline: &Pipeline) {
+        if self.segment_observers.is_empty() {
+            return;
+        }
+        let capture_target = &self.base_inputs.capture_target;
+        let target = capture_target
+            .cursor_crop()
+            .zip(capture_target.display())
+            .map(|(crop_bounds, display)| crate::cursor::CursorCaptureTarget {
+                crop_bounds,
+                display,
+                #[cfg(target_os = "linux")]
+                window: capture_target.window(),
+                #[cfg(not(target_os = "linux"))]
+                window: crate::window_only_target(capture_target, self.base_inputs.window_only),
+            });
+        let mut observations = self.observations.lock().unwrap_or_else(|e| e.into_inner());
+        for observer in &self.segment_observers {
+            let observation = observer.segment_started(crate::segment_observer::SegmentStart {
+                index: self.index,
+                dir: self.segments_dir.join(format!("segment-{}", self.index)),
+                clock: crate::segment_observer::SegmentClock::new(
+                    pipeline.start_time,
+                    pipeline.start_gate.clone(),
+                ),
+                target: target.clone(),
+            });
+            observations.push((self.index, observation));
+        }
+    }
+
+    /// Stops the observations of segment `index`.
+    fn stop_observations(&self, index: u32) {
+        if self.segment_observers.is_empty() {
+            return;
+        }
+        let stopped = {
+            let mut observations = self.observations.lock().unwrap_or_else(|e| e.into_inner());
+            let (stopped, kept) = std::mem::take(&mut *observations)
+                .into_iter()
+                .partition::<Vec<_>, _>(|(segment, _)| *segment == index);
+            *observations = kept;
+            stopped
+        };
+        for (_, observation) in stopped {
+            observation.stop();
         }
     }
 
@@ -3500,6 +3576,7 @@ impl SegmentPipelineFactory {
 
     #[cfg(target_os = "linux")]
     fn commit_next(&mut self, pipeline: &mut Pipeline) {
+        self.observe_segment(pipeline);
         self.index += 1;
         pipeline.spawn_watcher(self.completion_tx.clone());
         pipeline.spawn_start_time_persister();
@@ -3547,6 +3624,7 @@ impl SegmentPipelineFactory {
             crate::output_pipeline::finish_pipeline_startup(&scope, startup).await?
         };
 
+        self.observe_segment(&pipeline);
         self.index += 1;
 
         pipeline.spawn_watcher(self.completion_tx.clone());
