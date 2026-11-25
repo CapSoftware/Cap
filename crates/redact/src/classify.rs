@@ -769,13 +769,17 @@ fn join_wrapped_lines(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
     }
 }
 
+/// A labelled value is one token of at least this many characters.
+const MIN_VALUE_CHARS: usize = 6;
+
+/// Whether the line under or beside a secret's label holds its value: a
+/// masked field, or one token of at least [`MIN_VALUE_CHARS`] characters
+/// mixing two kinds of character (letters and digits, cases, symbols). Words
+/// and phrases are never a value, whatever label is near them.
 fn looks_like_value(text: &str) -> bool {
     let trimmed = text.trim();
-    if trimmed.contains(' ') && trimmed.split_whitespace().count() > 3 {
-        return false;
-    }
     let lower = trimmed.to_ascii_lowercase();
-    !matches!(
+    if matches!(
         lower.as_str(),
         "show"
             | "hide"
@@ -790,9 +794,26 @@ fn looks_like_value(text: &str) -> bool {
             | "edit"
             | "save"
             | "cancel"
-    ) && !lower.starts_with("enter ")
-        && !lower.starts_with("must ")
-        && !lower.starts_with("at least")
+    ) || lower.starts_with("enter ")
+        || lower.starts_with("must ")
+        || lower.starts_with("at least")
+    {
+        return false;
+    }
+    let masked =
+        trimmed.chars().count() >= 4 && trimmed.chars().all(|c| matches!(c, '•' | '●' | '*' | '·'));
+    if masked {
+        return true;
+    }
+    let classes = [
+        trimmed.chars().any(|c| c.is_lowercase()),
+        trimmed.chars().any(|c| c.is_uppercase()),
+        trimmed.chars().any(|c| c.is_ascii_digit()),
+        trimmed.chars().any(|c| !c.is_alphanumeric()),
+    ];
+    !trimmed.contains(char::is_whitespace)
+        && trimmed.chars().count() >= MIN_VALUE_CHARS
+        && classes.iter().filter(|c| **c).count() >= 2
 }
 
 struct CharIndex {

@@ -289,8 +289,7 @@ fn label_on_the_line_above() {
         },
     ]);
     assert_eq!(beside[1].len(), 1);
-    assert_eq!(results[1].len(), 1);
-    assert_eq!(results[1][0].category, Secret);
+    assert!(results[1].is_empty(), "{results:?}");
     assert!(results[2].is_empty());
 }
 
@@ -746,4 +745,50 @@ fn a_card_read_short_in_a_card_column_is_still_a_card() {
     assert!(found[1].iter().any(|f| f.category == Card), "{found:?}");
     assert!(found[3].iter().all(|f| f.category != Card), "{found:?}");
     assert!(found[4].iter().all(|f| f.category != Card), "{found:?}");
+}
+
+#[test]
+fn words_near_the_word_password_are_not_a_password() {
+    let line = |text, y| LineContext {
+        text,
+        x: 0.2,
+        y,
+        w: 0.3,
+        h: 0.02,
+    };
+    let suggestions = [
+        line("this is my password", 0.10),
+        line("this is my password in a game", 0.13),
+        line("this is your password", 0.16),
+        line("this is my mail password", 0.19),
+        line("Passwords", 0.22),
+        line("Saved logins", 0.25),
+    ];
+    let own = suggestions.iter().map(|l| classify_line(l.text)).collect();
+    let found = classify_frame_with(&suggestions, own);
+    assert!(
+        found.iter().flatten().all(|f| f.category != Secret),
+        "{found:?}"
+    );
+    let form = [line("Password", 0.40), line("hunter2xQ9", 0.43)];
+    let own = form.iter().map(|l| classify_line(l.text)).collect();
+    let found = classify_frame_with(&form, own);
+    assert!(found[1].iter().any(|f| f.category == Secret), "{found:?}");
+    let row = [
+        line("Webhook signing secret", 0.40),
+        LineContext {
+            text: "Falcon$1458Q",
+            x: 0.55,
+            y: 0.40,
+            w: 0.1,
+            h: 0.02,
+        },
+    ];
+    let own = row.iter().map(|l| classify_line(l.text)).collect();
+    let found = classify_frame_with(&row, own);
+    assert!(found[1].iter().any(|f| f.category == Secret), "{found:?}");
+    let masked = [line("Password", 0.40), line("••••••••", 0.43)];
+    let own = masked.iter().map(|l| classify_line(l.text)).collect();
+    let found = classify_frame_with(&masked, own);
+    assert!(found[1].iter().any(|f| f.category == Secret), "{found:?}");
 }
