@@ -111,6 +111,7 @@ export async function backfillLoomImport(
 				email,
 				invitedByUserId: video.orgOwnerId,
 				role: "member",
+				operatorApproved: true,
 			}).then((provisioned) => ({ userId: provisioned.userId, email })));
 		if (!member)
 			return result("failed", {
