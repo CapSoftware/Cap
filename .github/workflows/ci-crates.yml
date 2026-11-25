@@ -1,0 +1,39 @@
+name: Scratch crate tests (builder CI)
+# Temporary branch (deleted after use). Nothing here ships.
+on:
+  push:
+    branches: ['ci/ci-crates2*']
+permissions:
+  contents: read
+jobs:
+  red-green:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/install-desktop-deps
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-meetings
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+      - run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - name: Green on the head (cap-diarize, cap-meetings)
+        run: |
+          set -o pipefail
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked -p cap-diarize --lib 2>&1 | grep -E "test result|FAILED|panicked" 
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked -p cap-meetings --lib 2>&1 | grep -E "test result|FAILED|panicked|prompt::tests::(detected_prompt_stays|a_live_calls|a_dismissed_live|two_calls|hover_never|detected_call_upgrades|detected_attach|auto_record_countdown)"
+      - name: Red on the base prompt code with the new prompt tests
+        continue-on-error: true
+        run: |
+          git fetch -q --depth=1 origin 63c2c09f8e811a387149fa87b73e776a67991d0e && git checkout -q FETCH_HEAD -- apps/desktop-gpui/meetings/src/prompt.rs
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked -p cap-meetings --lib prompt:: 2>&1 | grep -E "test result|FAILED|panicked|left|right" | head -40
