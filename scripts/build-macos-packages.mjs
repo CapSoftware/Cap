@@ -78,6 +78,7 @@ function validateArguments(target, args, platform) {
 			valid =
 				/^--(?:config|bundles)=.+/.test(argument) ||
 				argument === "--verbose" ||
+				argument === "--debug" ||
 				/^-v{1,2}$/.test(argument);
 		}
 	}
@@ -150,6 +151,7 @@ export async function buildMacosPackages(
 	args = [],
 	{
 		platform = process.platform,
+		platformConfig = null,
 		env = process.env,
 		signal,
 		execute = executeMacosCommand,
@@ -177,6 +179,9 @@ export async function buildMacosPackages(
 			},
 		}),
 	);
+	if (platformConfig) {
+		commandArguments.push("--config", JSON.stringify(platformConfig));
+	}
 	for (let attempt = 0; ; attempt++) {
 		signal?.throwIfAborted();
 		let outputTail = "";
