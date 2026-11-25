@@ -328,10 +328,6 @@ export async function checkNewAccountAddress(
 	}
 }
 
-/**
- * Logs when a newly created account comes from a listed datacenter or VPN
- * range. Never blocks: the lookup runs after the response is sent.
- */
 export function logNewAccountAddress(
 	surface: NewAccountSurface,
 	headers: Headers,
