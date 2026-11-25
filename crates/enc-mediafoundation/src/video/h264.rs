@@ -722,9 +722,47 @@ fn calculate_bitrate(width: u32, height: u32, fps: u32, multiplier: f32) -> u32 
     (width as f32 * height as f32 * frame_rate_factor * multiplier) as u32
 }
 
+pub fn bitrate_multiplier_for(width: u32, height: u32, fps: u32, bitrate: u32) -> f32 {
+    let frame_rate_factor = (fps as f64 - 30.0).max(0.0) / 2.0 + 30.0;
+    let pixels_per_second = width as f64 * height as f64 * frame_rate_factor;
+    if pixels_per_second <= 0.0 {
+        return 0.0;
+    }
+    let mut multiplier = (bitrate as f64 / pixels_per_second) as f32;
+    for _ in 0..64 {
+        if calculate_bitrate(width, height, fps, multiplier) >= bitrate {
+            break;
+        }
+        multiplier = multiplier.next_up();
+    }
+    multiplier
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bitrate_multiplier_reproduces_the_requested_bitrate() {
+        for (width, height) in [(1280, 720), (1920, 1080), (2560, 1440), (3840, 2160)] {
+            for fps in [30, 60, 144, 240] {
+                for bitrate in [
+                    2_000_000u32,
+                    8_000_000,
+                    30_000_000,
+                    100_000_000,
+                    400_000_000,
+                ] {
+                    let multiplier = bitrate_multiplier_for(width, height, fps, bitrate);
+                    let actual = calculate_bitrate(width, height, fps, multiplier);
+                    assert!(
+                        actual >= bitrate && actual - bitrate <= bitrate / 1_000_000 + 64,
+                        "{width}x{height}@{fps}: {actual} for {bitrate}"
+                    );
+                }
+            }
+        }
+    }
     use windows::Win32::{
         Foundation::E_FAIL,
         Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM,

@@ -2955,6 +2955,7 @@ async fn start_attempt_with_upload(
         crash_recovery_recording: settings.crash_recovery_recording,
         max_fps: settings.max_fps,
         studio_recording_quality: settings.studio_recording_quality.into(),
+        studio_video_bitrate: settings.studio_video_bitrate(),
         out_of_process_muxer: settings.out_of_process_muxer,
         instant_mode_max_resolution: cap_recording::DEFAULT_INSTANT_MODE_MAX_RESOLUTION,
     };

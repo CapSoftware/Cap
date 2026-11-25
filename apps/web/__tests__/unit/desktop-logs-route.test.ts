@@ -70,7 +70,10 @@ vi.mock("@/lib/server-analytics", () => ({ trackServerEvent: vi.fn() }));
 vi.mock("@/lib/mobile-checkout", () => ({ getCheckoutRedirectUrls: vi.fn() }));
 
 vi.mock("@/lib/rate-limit", () => ({
-	RATE_LIMIT_IDS: { DESKTOP_LOGS: "rl_desktop_logs" },
+	RATE_LIMIT_IDS: {
+		DESKTOP_LOGS: "rl_desktop_logs",
+		DESKTOP_FEEDBACK: "rl_desktop_feedback",
+	},
 	isRateLimited: vi.fn(
 		async (ruleId: string, opts?: { key?: string; headers?: Headers }) => {
 			mocks.rateLimitCalls.push({ ruleId, key: opts?.key });
@@ -219,6 +222,70 @@ describe("POST /api/desktop/logs", () => {
 		expect(response.headers.get("access-control-allow-origin")).toBe(
 			"tauri://localhost",
 		);
+		expect(mocks.rateLimitCalls).toEqual([]);
+	});
+});
+
+const sendFeedback = (feedback: string, token: string | null = API_KEY) => {
+	const form = new FormData();
+	form.append("feedback", feedback);
+	form.append("os", "macos");
+	return app.request("https://cap.so/api/desktop/feedback", {
+		method: "POST",
+		body: form,
+		headers: {
+			"x-real-ip": "203.0.113.1",
+			origin: "tauri://localhost",
+			...(token ? { authorization: `Bearer ${token}` } : {}),
+		},
+	});
+};
+
+describe("POST /api/desktop/feedback", () => {
+	beforeEach(async () => {
+		mocks.requestsPerKey.clear();
+		mocks.rateLimitCalls = [];
+		const { sendEmail } = await import("@cap/database/emails/config");
+		vi.mocked(sendEmail)
+			.mockReset()
+			.mockResolvedValue(undefined as never);
+	});
+
+	it("sends feedback for a signed-in user", async () => {
+		const { sendEmail } = await import("@cap/database/emails/config");
+
+		const response = await sendFeedback("The editor is great");
+
+		expect(response.status).toBe(200);
+		expect(sendEmail).toHaveBeenCalledTimes(1);
+		expect(mocks.rateLimitCalls).toEqual([
+			{ ruleId: "rl_desktop_feedback", key: "desktop-feedback:user-1" },
+		]);
+	});
+
+	it("stops sending email once a user passes the limit", async () => {
+		const { sendEmail } = await import("@cap/database/emails/config");
+		for (let index = 0; index < REQUESTS_PER_KEY_LIMIT; index++) {
+			const response = await sendFeedback(`feedback ${index}`);
+			expect(response.status).toBe(200);
+		}
+
+		const limited = await sendFeedback("one more");
+
+		expect(limited.status).toBe(429);
+		expect(limited.headers.get("access-control-allow-origin")).toBe(
+			"tauri://localhost",
+		);
+		expect(sendEmail).toHaveBeenCalledTimes(REQUESTS_PER_KEY_LIMIT);
+	});
+
+	it("still requires a signed-in user", async () => {
+		const { sendEmail } = await import("@cap/database/emails/config");
+
+		const response = await sendFeedback("anonymous", null);
+
+		expect(response.status).toBe(401);
+		expect(sendEmail).not.toHaveBeenCalled();
 		expect(mocks.rateLimitCalls).toEqual([]);
 	});
 });

@@ -104,6 +104,9 @@ jobs:
       - name: Encoder selection and isolated self-test tests
         run: cargo test --locked -p cap-media-info --lib intel_h264_mft && cargo test --locked -p cap-enc-ffmpeg --lib self_test -- --nocapture
 
+      - name: Explicit video bitrate tests
+        run: cargo test --locked -p cap-enc-mediafoundation --lib bitrate_multiplier && cargo test --locked -p cap-enc-ffmpeg --lib video_bitrate -- --nocapture
+
       # The fault runs wherever the self-test runs: in a child it fails only
       # the child, in this process it would end the test with 0xc0000005.
       - name: Media Foundation self-test fault falls back (access violation)

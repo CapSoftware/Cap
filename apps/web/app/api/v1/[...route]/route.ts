@@ -186,7 +186,10 @@ import {
 import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
-import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
+import {
+	InviteeRequiresAcceptanceError,
+	provisionOrganizationInvitee,
+} from "@/lib/organization-provisioning";
 import { organizationSettingsKeepingRowOwnedKeys } from "@/lib/organization-settings-write";
 import {
 	canChangeOrganizationMemberRole,
@@ -205,6 +208,10 @@ import {
 	isDisallowedS3Endpoint,
 	publicOnlyS3Agents,
 } from "@/lib/s3-endpoint-policy";
+import {
+	shouldRefuseTorExit,
+	TOR_EXIT_REFUSAL_MESSAGE,
+} from "@/lib/tor-exit-gate";
 import { transcribeVideo } from "@/lib/transcribe";
 import { currentVideoDownloadAccess } from "@/lib/video-download-access";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
@@ -2569,11 +2576,16 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 									invitedByUserId: principal.id,
 									role: "member",
 								}),
-							catch: () =>
-								temporarilyUnavailable(
-									input.requestId,
-									"The Loom import owner could not be provisioned",
-								),
+							catch: (error) =>
+								error instanceof InviteeRequiresAcceptanceError
+									? forbidden(
+											input.requestId,
+											"The Loom import owner must accept an invite to this organization first",
+										)
+									: temporarilyUnavailable(
+											input.requestId,
+											"The Loom import owner could not be provisioned",
+										),
 						});
 						ownerId = provisioned.userId;
 					}
@@ -3962,6 +3974,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const headers = yield* requestHeaders;
 						const result = yield* runAgentMutation({
 							admit: Effect.gen(function* () {
+								if (
+									yield* Effect.promise(() =>
+										shouldRefuseTorExit("developer-app", headers),
+									)
+								) {
+									return yield* forbidden(requestId, TOR_EXIT_REFUSAL_MESSAGE);
+								}
 								if (
 									yield* Effect.promise(() =>
 										developerAppCreationLimited(principal.id, headers),
@@ -7362,6 +7381,9 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							{
 								contentType: "video/mp4",
 								method: "put",
+								// Agent keys are also used from scripts that may not send
+								// the returned headers on the PUT.
+								unsignedContentType: true,
 								fields: {
 									"Content-Type": "video/mp4",
 									"x-amz-meta-userid": principal.id,

@@ -5,8 +5,9 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 	developerVideos,
+	users,
 } from "@cap/database/schema";
-import type { User } from "@cap/web-domain";
+import { Organisation, type User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { Effect } from "effect";
@@ -242,6 +243,13 @@ describe.runIf(Boolean(databaseUrl))(
 				value: async () => countStatements(await getConnection()),
 			});
 			fixture.database = drizzle(pool);
+			await database()
+				.insert(users)
+				.values({
+					id: ownerId,
+					email: `${ownerId}@example.com`,
+					activeOrganizationId: Organisation.OrganisationId.make(`rt${id()}`),
+				});
 			await database().insert(developerApps).values({
 				id: appId,
 				ownerId,
@@ -283,6 +291,7 @@ describe.runIf(Boolean(databaseUrl))(
 				.delete(developerCreditAccounts)
 				.where(eq(developerCreditAccounts.appId, appId));
 			await database().delete(developerApps).where(eq(developerApps.id, appId));
+			await database().delete(users).where(eq(users.id, ownerId));
 			await pool.end();
 		});
 

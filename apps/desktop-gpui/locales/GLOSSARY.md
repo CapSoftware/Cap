@@ -100,6 +100,7 @@ comma French, Spanish and German use (`1,5 GB`).
 | track (timeline) | 轨道 | トラック | piste | pista | Spur | ट्रैक |
 | preset | 预设 | プリセット | préréglage | preajuste | Vorlage | प्रीसेट |
 | video | 视频 | 動画 | vidéo | vídeo | Video | वीडियो |
+| bitrate | 码率 | ビットレート | débit | tasa de bits | Bitrate | बिटरेट |
 | audio | 音频 | 音声 | audio | audio | Audio | ऑडियो |
 | copy (to the clipboard) | 复制 | コピー | copier | copiar | kopieren | कॉपी करें |
 | transcription | 转写 | 文字起こし | transcription | transcripción | Transkription | ट्रांसक्रिप्शन |

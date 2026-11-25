@@ -665,6 +665,7 @@ fn settings_snapshot() -> Value {
         "maxFps": settings.max_fps,
         "instantModeMaxResolution": settings.instant_mode_max_resolution,
         "studioRecordingQuality": settings.studio_recording_quality.as_json(),
+        "studioVideoBitrate": settings.studio_video_bitrate(),
         "customCursorCapture": settings.custom_cursor_capture,
         "outOfProcessMuxer": settings.out_of_process_muxer,
         "crashRecoveryRecording": settings.crash_recovery_recording,
