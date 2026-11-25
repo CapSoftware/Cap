@@ -5421,6 +5421,7 @@ mod tests {
             false,
             30,
             crate::StudioQuality::Balanced,
+            None,
             completion_tx.clone(),
         );
         let late_stop = LateStop::default();
