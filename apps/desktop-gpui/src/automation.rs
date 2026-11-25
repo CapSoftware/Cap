@@ -113,6 +113,11 @@ fn handle_ui_request(request: UiRequest, cx: &mut App) -> UiOutcome {
     }
 }
 
+#[cfg(windows)]
+pub(crate) async fn refresh_library() -> Result<(), String> {
+    ui(UiRequest::LibraryChanged).await
+}
+
 async fn ui(request: UiRequest) -> Result<(), String> {
     let runtime = RUNTIME
         .get()

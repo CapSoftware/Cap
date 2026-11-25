@@ -1236,6 +1236,14 @@ impl MainWindow {
                                 )
                             })
                         })
+                        .or_else(|| {
+                            session.recording_still_saving.then(|| {
+                                (
+                                    tr::dialog::saving::title(),
+                                    tr::dialog::saving::in_background().into(),
+                                )
+                            })
+                        })
                 };
                 if let Some((title, notice)) = notice {
                     let main = cx.global::<app_windows::AppWindows>().main;

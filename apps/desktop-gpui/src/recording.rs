@@ -643,6 +643,77 @@ where
     }
 }
 
+/// How long Stop stays in its stopping state while Studio tracks are still
+/// finishing after the stop limit. Late finishes measured 12 to 37 s past the
+/// limit; after this the app is handed back and the recording keeps saving.
+#[cfg(windows)]
+const STUDIO_FINISH_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Stop handed the app back while the recording was still saving.
+#[cfg(windows)]
+#[derive(Debug)]
+pub(crate) struct StudioStillSaving;
+
+#[cfg(windows)]
+impl std::fmt::Display for StudioStillSaving {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("The recording is still saving")
+    }
+}
+
+#[cfg(windows)]
+impl std::error::Error for StudioStillSaving {}
+
+#[cfg(windows)]
+async fn wait_for_studio_finish(
+    outcome: studio_recording::StudioStopOutcome,
+) -> Result<studio_recording::StudioStopOutcome, studio_recording::StudioFinishing> {
+    let Some(finishing) = outcome.finishing.clone() else {
+        return Ok(outcome);
+    };
+    match tokio::time::timeout(STUDIO_FINISH_WAIT, finishing.wait()).await {
+        Ok(outcome) => Ok(outcome),
+        Err(_) => Err(finishing),
+    }
+}
+
+/// Keeps waiting for a Studio stop the app stopped waiting for, finalizes it
+/// the way an on-time stop is finalized when `finalize` is given, and
+/// refreshes the library.
+#[cfg(windows)]
+fn finish_studio_in_background(
+    finishing: studio_recording::StudioFinishing,
+    finalize: Option<(ScreenCaptureTarget, Option<StudioCameraSnapshot>)>,
+) {
+    let path = finishing.project_path().to_path_buf();
+    tracing::warn!(path = %path.display(), "Studio recording is still saving; finishing it in the background");
+    drop(tokio::spawn(async move {
+        let outcome = finishing.wait().await;
+        match (outcome.result, finalize) {
+            (Ok(completed), Some((capture_target, camera_snapshot))) => {
+                match finalize_studio(completed, capture_target, None, camera_snapshot).await {
+                    Ok(project_dir) => {
+                        tracing::info!(path = %project_dir.display(), "Studio recording finished saving in the background");
+                        crate::automation::studio_recording_finished(project_dir);
+                    }
+                    Err(error) => {
+                        tracing::error!(path = %path.display(), "Studio recording could not be finalized after saving: {error:#}");
+                    }
+                }
+            }
+            (Ok(_), None) => {
+                tracing::info!(path = %path.display(), "Studio recording finished saving in the background");
+            }
+            (Err(error), _) => {
+                tracing::error!(path = %path.display(), "Studio recording failed after saving in the background: {error}");
+            }
+        }
+        if let Err(error) = crate::automation::refresh_library().await {
+            tracing::warn!("Could not refresh the library after a background save: {error}");
+        }
+    }));
+}
+
 pub(crate) type CaptureStopFuture =
     std::pin::Pin<Box<dyn Future<Output = (bool, anyhow::Result<PathBuf>)> + Send>>;
 
@@ -1074,13 +1145,21 @@ impl ActiveRecording {
         let handle = handle.clone();
         Some(Box::pin(async move {
             let capture_target = handle.capture_target.clone();
+            #[cfg(windows)]
+            let background_target = capture_target.clone();
             let result = finish_after_capture_stop(
                 async move {
                     let outcome = handle.stop_with_outcome().await;
                     #[cfg(windows)]
-                    let outcome = match outcome.finishing.clone() {
-                        Some(finishing) => finishing.wait().await,
-                        None => outcome,
+                    let outcome = match wait_for_studio_finish(outcome).await {
+                        Ok(outcome) => outcome,
+                        Err(finishing) => {
+                            finish_studio_in_background(
+                                finishing,
+                                Some((background_target, camera_snapshot)),
+                            );
+                            return (true, Err(anyhow::Error::new(StudioStillSaving)));
+                        }
                     };
                     (
                         outcome.capture_stopped,
@@ -1207,9 +1286,15 @@ impl ActiveRecording {
                 return Box::pin(async move {
                     let outcome = handle.stop_with_outcome().await;
                     #[cfg(windows)]
-                    let outcome = match outcome.finishing.clone() {
-                        Some(finishing) => finishing.wait().await,
-                        None => outcome,
+                    let outcome = match wait_for_studio_finish(outcome).await {
+                        Ok(outcome) => outcome,
+                        Err(finishing) => {
+                            finish_studio_in_background(finishing, None);
+                            return (
+                                true,
+                                Err(anyhow!("Recording pipeline failed; local files preserved")),
+                            );
+                        }
                     };
                     (
                         outcome.capture_stopped,
