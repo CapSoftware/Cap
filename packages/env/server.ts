@@ -151,6 +151,12 @@ function createServerEnv() {
 				.describe(
 					"off, log or deny: how sign-in and key creation treat Tor exit addresses. Defaults to log on cap.so and off elsewhere",
 				),
+			CAP_IP_REPUTATION_LOG: z
+				.string()
+				.optional()
+				.describe(
+					"off or log: whether new accounts from listed datacenter or VPN ranges are logged. Defaults to log on cap.so and off elsewhere",
+				),
 
 			/// AI providers
 			ASSEMBLY_API_KEY: z.string().optional().describe("Audio transcription"),

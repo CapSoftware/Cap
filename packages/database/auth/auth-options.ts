@@ -133,7 +133,12 @@ type OidcClaims = {
 	picture?: string;
 };
 
-export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
+export type AuthHooks = { onUserCreated?: () => void };
+
+export const authOptions = (
+	ssoContext?: SsoAuthContext,
+	hooks?: AuthHooks,
+): NextAuthOptions => {
 	let _adapter: Adapter | undefined;
 	let _providers: Provider[] | undefined;
 	let validatedSsoIdentity: ValidatedSsoIdentity | null = null;
@@ -143,6 +148,7 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 			if (_adapter) return _adapter;
 			_adapter = DrizzleAdapter(db(), {
 				getSsoIdentity: () => validatedSsoIdentity,
+				onUserCreated: hooks?.onUserCreated,
 			});
 			return _adapter;
 		},
