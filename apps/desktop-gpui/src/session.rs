@@ -2361,18 +2361,16 @@ mod storage_check_tests {
     }
 
     #[test]
-    fn a_studio_recording_that_clones_runs_past_the_old_stop_point() {
+    fn a_studio_recording_runs_past_the_old_stop_point() {
         let recording_bytes = 30 * GIB;
         let old_stop = 3 * recording_bytes + RECORDING_DISK_RESERVE_BYTES;
         assert_eq!(check(old_stop, recording_bytes, 3), StorageCheck::Stop);
-        assert_eq!(
-            check(old_stop, recording_bytes, 1),
-            StorageCheck::Continue { warning: false }
-        );
-        assert_eq!(
-            check(old_stop, recording_bytes, 2),
-            StorageCheck::Continue { warning: true }
-        );
+        for copies in [1, 2] {
+            assert_eq!(
+                check(old_stop, recording_bytes, copies),
+                StorageCheck::Continue { warning: false }
+            );
+        }
     }
 
     #[test]
