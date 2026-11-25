@@ -121,6 +121,10 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 			}) {
 				const user = yield* CurrentUser;
 
+				yield* policy.canCreateInOrganization(
+					Organisation.OrganisationId.make(user.activeOrganizationId),
+				);
+
 				if (data.public === true)
 					yield* requireOwnerPro(
 						Organisation.OrganisationId.make(user.activeOrganizationId),
