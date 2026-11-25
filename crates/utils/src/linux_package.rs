@@ -60,6 +60,16 @@ fn appimage_alsa_config(
         return None;
     }
     let existing = existing.filter(|value| !value.is_empty());
+    // Already set to the AppImage's own file (the CLI Cap starts inherits it):
+    // appending to it would make the list openSUSE ignores.
+    if existing.is_some_and(|value| {
+        value
+            .as_encoded_bytes()
+            .split(|byte| *byte == b':')
+            .any(|path| path == standalone.as_os_str().as_encoded_bytes())
+    }) {
+        return None;
+    }
     if existing.is_none()
         && is_file(&standalone)
         && !standalone.as_os_str().as_encoded_bytes().contains(&b':')
@@ -252,6 +262,11 @@ mod tests {
         assert_eq!(
             appimage_alsa_config(appdir, None, without_standalone),
             Some(after("/usr/share/alsa/alsa.conf"))
+        );
+        // The CLI Cap starts inherits the desktop's setting and keeps it.
+        assert_eq!(
+            appimage_alsa_config(appdir, Some(standalone.as_os_str()), bundled),
+            None
         );
         let without_plugin = |path: &Path| bundled(path) && !path.ends_with(PULSE_PLUGIN);
         assert_eq!(appimage_alsa_config(appdir, None, without_plugin), None);
