@@ -198,16 +198,6 @@ label = "Capture keyboard presses"
 description = "Automatically restores the notch for new screen and area recordings when the selected region contains the complete notch. External displays, partial areas, and window recordings are left alone. Each recording can override it in the editor."
 label = "Draw the MacBook notch on screen recordings"
 
-[settings.general.recording.max_fps]
-description = "Maximum framerate for screen capture."
-description_high = { text = "Maximum framerate for screen capture. Higher values may cause drops or increased CPU usage on some systems.", context = "Shown instead of the short description when more than 60 FPS is selected." }
-fps_120 = { text = "120 FPS", max_px = 180, size = 12 }
-fps_24 = { text = "24 FPS", max_px = 180, size = 12 }
-fps_25 = { text = "25 FPS", max_px = 180, size = 12 }
-fps_30 = { text = "30 FPS", max_px = 180, size = 12 }
-fps_60 = { text = "60 FPS (Recommended)", max_px = 180, size = 12 }
-label = "Max capture framerate"
-
 [settings.general.recording.keep_drawings]
 description = "Drawings stay until you clear them. When off, each one fades a few seconds after you draw it."
 label = "Keep drawings on screen"
@@ -352,6 +342,21 @@ resolution_up_to = { text = "Up to {resolution}", context = "Shown with several 
 title = "Studio Mode"
 ultra = "Maximum detail"
 ultra_description = "Keeps the most detail for heavy editing. Uses the most disk space."
+
+[settings.quality.studio.frame_rate]
+description = "Studio Mode records up to this rate and never faster than your display refreshes. With a camera on, it records at 30 FPS or less."
+description_high = "Recording above 60 FPS uses more CPU and disk space, and some computers encode it in software. Studio Mode never records faster than your display refreshes. With a camera on, it records at 30 FPS or less."
+description_match = { text = "Records at your display's refresh rate, up to {fps} FPS. Recording above 60 FPS uses more CPU and disk space. With a camera on, Studio Mode records at 30 FPS or less.", context = "{fps} is the highest frame rate Studio Mode records on this computer: 240 on macOS, 120 on Windows and Linux." }
+fps_120 = { text = "120 FPS", max_px = 180, size = 12 }
+fps_144 = { text = "144 FPS", max_px = 180, size = 12 }
+fps_165 = { text = "165 FPS", max_px = 180, size = 12 }
+fps_24 = { text = "24 FPS", max_px = 180, size = 12 }
+fps_240 = { text = "240 FPS", max_px = 180, size = 12 }
+fps_25 = { text = "25 FPS", max_px = 180, size = 12 }
+fps_30 = { text = "30 FPS", max_px = 180, size = 12 }
+fps_60 = { text = "60 FPS (Recommended)", max_px = 180, size = 12 }
+label = "Frame rate"
+match_display = { text = "Match display", max_px = 180, size = 12 }
 
 [settings.quality.instant]
 description = "Uploaded while you record, so the link is ready the moment you stop. For the best quality, use Studio Mode: it records at the highest quality your screen allows, and you can export up to 4K."

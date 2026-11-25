@@ -30,6 +30,7 @@ pub(super) fn is_settings_surface_key(key: &str) -> bool {
 
 const FORMATTED: &[&str] = &[
     "settings.quality.studio.bitrate_value",
+    "settings.quality.studio.frame_rate.description_match",
     "settings.quality.studio.resolution_up_to",
     "settings.sidebar.downloading",
     "settings.sidebar.downloading_progress",
@@ -193,6 +194,54 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (
             tr::settings::quality::studio::ultra_description(),
             "Keeps the most detail for heavy editing. Uses the most disk space.",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::label(),
+            "Frame rate",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::description(),
+            "Studio Mode records up to this rate and never faster than your display refreshes. With a camera on, it records at 30 FPS or less.",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::description_high(),
+            "Recording above 60 FPS uses more CPU and disk space, and some computers encode it in software. Studio Mode never records faster than your display refreshes. With a camera on, it records at 30 FPS or less.",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_24(),
+            "24 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_25(),
+            "25 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_30(),
+            "30 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_60(),
+            "60 FPS (Recommended)",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_120(),
+            "120 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_144(),
+            "144 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_165(),
+            "165 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_240(),
+            "240 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::match_display(),
+            "Match display",
         ),
         (tr::settings::quality::studio::custom(), "Custom"),
         (
@@ -1554,6 +1603,14 @@ fn settings_surface_messages_format_like_the_code_they_replaced() {
         tr::settings::quality::studio::resolution_up_to("4K"),
         "Up to 4K"
     );
+    for fps in [240, 120] {
+        assert_eq!(
+            tr::settings::quality::studio::frame_rate::description_match(fps),
+            format!(
+                "Records at your display's refresh rate, up to {fps} FPS. Recording above 60 FPS uses more CPU and disk space. With a camera on, Studio Mode records at 30 FPS or less."
+            )
+        );
+    }
     let version = "0.6.2";
     assert_eq!(
         tr::settings::sidebar::downloading(version),

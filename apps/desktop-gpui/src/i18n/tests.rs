@@ -329,40 +329,6 @@ fn english_matches_the_literals_it_replaced() {
                 .into(),
         ),
         (
-            tr::settings::general::recording::max_fps::description(),
-            "Maximum framerate for screen capture.".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::description_high(),
-            "Maximum framerate for screen capture. Higher values may cause \
-                             drops or increased CPU usage on some systems."
-                .into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_120(),
-            "120 FPS".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_24(),
-            "24 FPS".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_25(),
-            "25 FPS".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_30(),
-            "30 FPS".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_60(),
-            "60 FPS (Recommended)".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::label(),
-            "Max capture framerate".into(),
-        ),
-        (
             tr::settings::general::storage::choose_folder(),
             "Choose Folder".into(),
         ),
