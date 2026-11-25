@@ -1,8 +1,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { organizationInvites } from "@cap/database/schema";
+import { findPendingOrganizationInviteId } from "@cap/database/organization-pointer";
 import { userIsPro } from "@cap/utils";
-import { and, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AuthContextProvider } from "@/app/Layout/AuthContext";
@@ -28,21 +27,6 @@ import {
 
 export const dynamic = "force-dynamic";
 
-async function getPendingInviteIdForUser(email: string) {
-	const [invite] = await db()
-		.select({ id: organizationInvites.id })
-		.from(organizationInvites)
-		.where(
-			and(
-				eq(organizationInvites.invitedEmail, email.toLowerCase()),
-				eq(organizationInvites.status, "pending"),
-			),
-		)
-		.limit(1);
-
-	return invite?.id ?? null;
-}
-
 export default async function DashboardLayout({
 	children,
 }: {
@@ -52,9 +36,17 @@ export default async function DashboardLayout({
 	if (!user) redirect("/login");
 
 	const hasName = Boolean(user.name && user.name.length > 0);
-	const pendingInviteIdPromise = getPendingInviteIdForUser(user.email);
+	const pendingInviteIdPromise = findPendingOrganizationInviteId(
+		db(),
+		user.email,
+	);
 	const offerPasskeyPromise = shouldOfferPasskey(user);
-	const dashboardDataPromise = hasName ? getDashboardData(user) : null;
+	const dashboardDataPromise = hasName
+		? getDashboardData(user, {
+				canCreatePersonalOrganization: async () =>
+					!(await pendingInviteIdPromise),
+			})
+		: null;
 	// Fail-open: the meter is informational and must never take the shell down.
 	const shareableLinkUsagePromise =
 		hasName && !userIsPro(user)

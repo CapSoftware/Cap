@@ -145,12 +145,14 @@ describe("createInstantRecording folder placement", () => {
 		expect(mocks.writableAccess).toHaveBeenCalledTimes(1);
 	});
 
-	it("refuses an active organization the caller no longer belongs to", async () => {
+	it("never records into an organization the caller no longer belongs to", async () => {
 		mocks.organizationRows = [];
 
 		const exit = await create(Option.none());
 
-		expect(failureTag(exit)).toBe(new Policy.PolicyDeniedError()._tag);
+		// The proxy driver has no transactions, so the personal organization
+		// fallback is covered in organization-pointer-database.test.ts.
+		expect(Exit.isFailure(exit)).toBe(true);
 		const [lookup] = organizationLookups();
 		expect(String(lookup?.[0])).toContain(
 			"`organizations`.`tombstoneAt` is null",

@@ -1,4 +1,4 @@
-import { resolveActiveOrganization } from "@cap/database/organization-pointer";
+import { resolveOrCreateActiveOrganization } from "@cap/database/organization-pointer";
 import * as Db from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import type { Organisation, User } from "@cap/web-domain";
@@ -106,9 +106,10 @@ export class Extensions extends Effect.Service<Extensions>()("Extensions", {
 			}) {
 				// The extension records into whatever this returns and
 				// createInstantRecording only accepts the stored active
-				// organization, so a stale pointer is repaired, not returned.
+				// organization, so a stale pointer is repaired, not returned,
+				// and an account with no organization gets a personal one.
 				const organization = yield* db.use((db) =>
-					resolveActiveOrganization(db, user),
+					resolveOrCreateActiveOrganization(db, user),
 				);
 
 				return Option.fromNullable(organization);

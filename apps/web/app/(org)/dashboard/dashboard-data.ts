@@ -1,6 +1,9 @@
 import { db } from "@cap/database";
 import type { userSelectProps } from "@cap/database/auth/session";
-import { resolveActiveOrganization as resolveStoredActiveOrganization } from "@cap/database/organization-pointer";
+import {
+	ensurePersonalOrganization,
+	resolveActiveOrganization as resolveStoredActiveOrganization,
+} from "@cap/database/organization-pointer";
 import {
 	notifications,
 	organizationInvites,
@@ -389,9 +392,21 @@ async function loadActiveOrganizationData(
 	};
 }
 
-export async function getDashboardData(user: typeof userSelectProps) {
+export async function getDashboardData(
+	user: typeof userSelectProps,
+	options: { canCreatePersonalOrganization?: () => Promise<boolean> } = {},
+) {
 	try {
-		const userOrganizations = await loadUserOrganizations(user);
+		let userOrganizations = await loadUserOrganizations(user);
+		// Recording and spaces need an organization, so an account left without
+		// one gets a personal organization, as signup and desktop uploads do.
+		if (
+			userOrganizations.length === 0 &&
+			(await options.canCreatePersonalOrganization?.())
+		) {
+			if (await ensurePersonalOrganization(db(), user.id))
+				userOrganizations = await loadUserOrganizations(user);
+		}
 		const organizationIds = userOrganizations.map((org) => org.id);
 		const active = await resolveActiveOrganization(user, userOrganizations);
 
