@@ -22,6 +22,9 @@ vi.mock("@cap/database", () => {
 		select: () => ({
 			from: () => ({
 				where: () => ({ limit: nextRows }),
+				innerJoin: () => ({
+					where: () => ({ limit: nextRows }),
+				}),
 			}),
 		}),
 		insert: () => ({
@@ -53,9 +56,10 @@ import {
 const organizationId = Organisation.OrganisationId.make("orgaaaaaaaaaaaa");
 const invitedByUserId = User.UserId.make("adminaaaaaaaaaa");
 
-function queueNewAddress(inviterEmail?: string) {
+function queueNewAddress(inviterEmail?: string, sameDomain = true) {
 	mocks.selects = [
 		...(inviterEmail ? [[{ email: inviterEmail }]] : []),
+		...(inviterEmail && !sameDomain ? [[]] : []),
 		[],
 		[],
 		[],
@@ -109,7 +113,7 @@ describe("provisionOrganizationInvitee", () => {
 		["admin@acme.dev", "someone@elsewhere.dev"],
 		["admin@gmail.com", "someone@gmail.com"],
 	])("writes nothing when %s adds %s", async (inviterEmail, inviteeEmail) => {
-		queueNewAddress(inviterEmail);
+		queueNewAddress(inviterEmail, false);
 
 		await expect(
 			provisionOrganizationInvitee({
@@ -126,6 +130,7 @@ describe("provisionOrganizationInvitee", () => {
 	it("writes nothing for an existing account outside the inviter's domain", async () => {
 		mocks.selects = [
 			[{ email: "admin@acme.dev" }],
+			[],
 			[{ id: "existingaaaaaaa", email: "someone@elsewhere.dev" }],
 		];
 
@@ -139,6 +144,37 @@ describe("provisionOrganizationInvitee", () => {
 		).rejects.toBeInstanceOf(InviteeRequiresAcceptanceError);
 		expect(mocks.inserts).toEqual([]);
 		expect(mocks.updates).toEqual([]);
+	});
+
+	it("leaves an address outside the inviter's domain alone when it is already a member", async () => {
+		mocks.selects = [
+			[{ email: "admin@acme.dev" }],
+			[{ id: "memberaaaaaaaaa" }],
+			[
+				{
+					id: "existingaaaaaaa",
+					email: "someone@elsewhere.dev",
+					name: "Someone",
+					activeOrganizationId: organizationId,
+					defaultOrgId: organizationId,
+				},
+			],
+			[{ id: "memberaaaaaaaaa", hasProSeat: false }],
+		];
+
+		const result = await provisionOrganizationInvitee({
+			organizationId,
+			email: "someone@elsewhere.dev",
+			invitedByUserId,
+			role: "member",
+		});
+
+		expect(result).toMatchObject({
+			userId: "existingaaaaaaa",
+			userCreated: false,
+			memberCreated: false,
+		});
+		expect(mocks.inserts).toEqual([]);
 	});
 
 	it("still adds any address for operator-approved imports", async () => {

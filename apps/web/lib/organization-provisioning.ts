@@ -60,7 +60,18 @@ export async function provisionOrganizationInvitee({
 				.where(eq(users.id, invitedByUserId))
 				.limit(1);
 			if (!sharesInviterCompanyDomain(inviter?.email, normalizedEmail)) {
-				throw new InviteeRequiresAcceptanceError();
+				const [currentMember] = await tx
+					.select({ id: organizationMembers.id })
+					.from(organizationMembers)
+					.innerJoin(users, eq(users.id, organizationMembers.userId))
+					.where(
+						and(
+							eq(organizationMembers.organizationId, organizationId),
+							eq(users.email, normalizedEmail),
+						),
+					)
+					.limit(1);
+				if (!currentMember) throw new InviteeRequiresAcceptanceError();
 			}
 		}
 

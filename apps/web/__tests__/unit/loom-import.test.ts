@@ -1191,7 +1191,8 @@ describe("importFromLoom", () => {
 	it("asks for an invite first when a CSV owner is outside the importer's domain", async () => {
 		whereMock
 			.mockReturnValueOnce(withLimit([]))
-			.mockReturnValueOnce(withLimit([{ email: "admin@example.com" }]));
+			.mockReturnValueOnce(withLimit([{ email: "admin@example.com" }]))
+			.mockReturnValueOnce(withLimit([]));
 
 		const fetchMock = vi.mocked(fetch);
 		const { importFromLoomCsv } = await import("@/actions/loom");
