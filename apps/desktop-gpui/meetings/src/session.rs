@@ -8,6 +8,9 @@ use crate::transcript::Source;
 mod tests;
 
 const START_TIMEOUT_MS: u64 = 30_000;
+/// How long after a wake the meeting's call app holding the microphone
+/// still means the call went on through the sleep.
+pub const WAKE_CALL_WINDOW_MS: u64 = 10_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,6 +85,9 @@ pub struct SessionConfig {
     pub inactivity_warn_ms: Option<u64>,
     pub inactivity_stop_after_ms: u64,
     pub resume_offer_ms: u64,
+    /// How long Resume stays offered after a sleep stopped a meeting with no
+    /// calendar event (one with an event keeps it until the event ends).
+    pub sleep_offer_ms: u64,
     pub min_transcript_chars: usize,
     pub auto_generate_notes: bool,
     /// How long after a start without a call one that begins is taken as
@@ -101,6 +107,7 @@ impl Default for SessionConfig {
             inactivity_warn_ms: Some(600_000),
             inactivity_stop_after_ms: 120_000,
             resume_offer_ms: 30_000,
+            sleep_offer_ms: 300_000,
             min_transcript_chars: 400,
             auto_generate_notes: true,
             join_window_ms: 300_000,
@@ -138,6 +145,10 @@ pub struct Session {
     /// Sleep stopped a meeting (or came while its Resume was offered): wake
     /// offers Resume, as inactivity does, before the notes are written.
     offer_on_wake: bool,
+    /// That sleep stopped the meeting while it recorded (not a stopped one
+    /// waiting on its Resume offer).
+    slept_recording: bool,
+    woke_at: Option<Millis>,
     pending_notes: Option<PendingNotes>,
     last_stop: Option<StopReason>,
     starting_since: Option<Millis>,
@@ -166,6 +177,8 @@ impl Session {
             has_meeting: false,
             asleep: false,
             offer_on_wake: false,
+            slept_recording: false,
+            woke_at: None,
             pending_notes: None,
             last_stop: None,
             starting_since: None,
@@ -207,6 +220,19 @@ impl Session {
         self.offer_on_wake
     }
 
+    /// The call app to look for on the microphone: the meeting was
+    /// recording it when the computer slept, the wake was moments ago and
+    /// its Resume is still offered.
+    pub fn call_to_look_for_after_wake(&self, now: Millis) -> Option<&str> {
+        let fresh = self
+            .woke_at
+            .is_some_and(|at| now.since(at) <= WAKE_CALL_WINDOW_MS);
+        if !fresh || !self.slept_recording || self.asleep || self.resume_offer_until.is_none() {
+            return None;
+        }
+        self.app_id.as_deref()
+    }
+
     pub fn speech_ms(&self, source: Source) -> u64 {
         match source {
             Source::Mic => self.mic_speech_ms,
@@ -241,6 +267,7 @@ impl Session {
         }
         self.resume_offer_until = None;
         self.offer_on_wake = false;
+        self.slept_recording = false;
         self.flush_notes(&mut out);
         self.pending_notes = None;
         self.app_id = app_id;
@@ -264,11 +291,13 @@ impl Session {
         match self.state {
             SessionState::Idle => {
                 self.resume_offer_until = None;
+                self.slept_recording = false;
                 self.pending_notes = None;
                 self.begin(now, true, &mut out);
             }
             SessionState::Stopping => {
                 self.resume_offer_until = None;
+                self.slept_recording = false;
                 self.resume_queued = true;
             }
             SessionState::Starting | SessionState::Recording => {}
@@ -281,6 +310,7 @@ impl Session {
         let mut out = self.advance(now);
         if self.resume_offer_until.take().is_some() {
             self.resume_queued = false;
+            self.slept_recording = false;
             self.flush_notes(&mut out);
         }
         out
@@ -292,6 +322,7 @@ impl Session {
         if reason == StopReason::Deleted {
             self.resume_offer_until = None;
             self.offer_on_wake = false;
+            self.slept_recording = false;
             self.resume_queued = false;
             self.pending_notes = None;
             self.has_meeting = false;
@@ -493,7 +524,11 @@ impl Session {
         self.asleep = true;
         let recording = matches!(self.state, SessionState::Starting | SessionState::Recording);
         let offered = self.resume_offer_until.is_some() || self.resume_queued;
-        self.offer_on_wake = self.has_meeting && (recording || offered || self.offer_on_wake);
+        let waiting = offered || self.offer_on_wake;
+        self.offer_on_wake = self.has_meeting && (recording || waiting);
+        // A second sleep while a sleep's Resume is offered keeps its kind.
+        self.slept_recording = self.has_meeting && (recording || (waiting && self.slept_recording));
+        self.woke_at = None;
         self.resume_queued = false;
         self.resume_offer_until = None;
         self.halt(now, StopReason::Sleep, &mut out);
@@ -509,12 +544,38 @@ impl Session {
         self.asleep = false;
         self.last_activity = now;
         if std::mem::take(&mut self.offer_on_wake) {
-            let until = now.plus(self.config.resume_offer_ms);
+            let until = now.plus(self.wake_offer_ms(now));
             self.resume_offer_until = Some(until);
+            self.woke_at = Some(now);
             out.push(SessionAction::OfferResume { until });
         }
         self.flush_notes(&mut out);
         out
+    }
+
+    /// The meeting's call app was still on the microphone just after the
+    /// wake: the call went on through the sleep, and so does its meeting.
+    pub fn call_still_on_after_wake(&mut self, now: Millis) -> Vec<SessionAction> {
+        let now = self.clamp(now);
+        let mut out = self.advance(now);
+        if self.call_to_look_for_after_wake(now).is_some() {
+            out.extend(self.resume(now));
+        }
+        out
+    }
+
+    /// A meeting the sleep stopped while it recorded keeps its Resume until
+    /// its calendar event ends (at least the usual offer), or for
+    /// `sleep_offer_ms` with no event. A Resume already offered before the
+    /// sleep (a quiet spell) is offered as before.
+    fn wake_offer_ms(&self, now: Millis) -> u64 {
+        if !self.slept_recording {
+            return self.config.resume_offer_ms;
+        }
+        match self.event_end {
+            Some(end) => end.since(now).max(self.config.resume_offer_ms),
+            None => self.config.sleep_offer_ms,
+        }
     }
 
     pub fn tick(&mut self, now: Millis) -> Vec<SessionAction> {
@@ -659,6 +720,7 @@ impl Session {
         {
             self.resume_offer_until = None;
             self.resume_queued = false;
+            self.slept_recording = false;
             self.flush_notes(&mut out);
         }
         out

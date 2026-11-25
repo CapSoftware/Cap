@@ -206,6 +206,15 @@ impl Detector {
         &self.calls
     }
 
+    /// Whether `app_id` is among these microphone clients, read the way a
+    /// call is (Cap's own processes and ignored devices do not count).
+    pub fn holds_mic(&self, app_id: &str, clients: &[MicClient]) -> bool {
+        clients.iter().any(|client| {
+            !self.ignored(client)
+                && apps::classify(self.platform, &client.platform_id).is_some_and(|a| a.id == app_id)
+        })
+    }
+
     pub fn on_mic_clients(&mut self, now: Millis, clients: &[MicClient]) -> Vec<DetectEvent> {
         let now = self.clamp(now);
         let mut events = self.advance(now);

@@ -116,6 +116,28 @@ fn meet(title: &str) -> BrowserVerdict {
 }
 
 #[test]
+fn holds_mic_reads_one_look_the_way_a_call_is_read() {
+    let detector = Detector::new(
+        Platform::MacOS,
+        DetectConfig {
+            own_pids: vec![7],
+            ..DetectConfig::default()
+        },
+    );
+    let zoom = MicClient::new("us.zoom.xos", 1).on_device("BuiltInMic-uid");
+    assert!(detector.holds_mic("zoom", std::slice::from_ref(&zoom)));
+    assert!(!detector.holds_mic("teams", std::slice::from_ref(&zoom)));
+    assert!(!detector.holds_mic("zoom", &[]));
+    assert!(!detector.holds_mic(
+        "zoom",
+        &[MicClient::new("us.zoom.xos", 1).on_device("BlackHole2ch_UID")]
+    ));
+    assert!(!detector.holds_mic("zoom", &[MicClient::new("us.zoom.xos", 7)]));
+    let linux = Detector::new(Platform::Linux, DetectConfig::default());
+    assert!(linux.holds_mic("zoom", &[MicClient::new("zoom", 40)]));
+}
+
+#[test]
 fn join_and_leave() {
     let mut s = Sim::new();
     s.at(1_000).mic(&["us.zoom.xos"]).quiet();
