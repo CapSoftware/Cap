@@ -298,27 +298,61 @@ pub fn fill_rgb(frame: &Video, image: &mut RgbImage, regions: &[Rect]) {
     } else {
         (frame.stride(2), frame.data(2))
     };
+    let mut spans = Vec::new();
     for region in regions {
         let r = region.clamp_to(frame.width(), frame.height());
         let (x0, y0) = (r.x.floor().max(0.0) as usize, r.y.floor().max(0.0) as usize);
         let x1 = (r.right().ceil() as usize).min(width);
         let y1 = (r.bottom().ceil() as usize).min(height);
+        if x1 <= x0 || y1 <= y0 {
+            continue;
+        }
         for y in y0..y1 {
-            let luma = &y_plane[y * y_stride..];
+            // Only the parts of the row no earlier region converted.
+            spans.clear();
+            spans.extend(
+                image
+                    .filled
+                    .iter()
+                    .filter(|f| f[1] <= y && y < f[3] && f[0] < x1 && f[2] > x0)
+                    .map(|f| (f[0], f[2])),
+            );
+            spans.sort_unstable();
+            let luma = &y_plane[y * y_stride..y * y_stride + width];
             let out = &mut image.data[y * width * 3..(y + 1) * width * 3];
-            for x in x0..x1 {
-                let (u, v) = if nv12 {
-                    let index = (y / 2) * u_stride + (x / 2) * 2;
-                    (u_plane[index], u_plane[index + 1])
-                } else {
-                    (
-                        u_plane[(y / 2) * u_stride + x / 2],
-                        v_plane[(y / 2) * v_stride + x / 2],
-                    )
-                };
-                out[x * 3..x * 3 + 3].copy_from_slice(&yuv_to_rgb(luma[x], u, v));
+            let mut x = x0;
+            for &(a, b) in spans.iter().chain(std::iter::once(&(x1, x1))) {
+                let end = a.min(x1);
+                if end > x {
+                    if nv12 {
+                        let chroma = &u_plane[(y / 2) * u_stride..];
+                        for x in x..end {
+                            let index = (x / 2) * 2;
+                            out[x * 3..x * 3 + 3].copy_from_slice(&yuv_to_rgb(
+                                luma[x],
+                                chroma[index],
+                                chroma[index + 1],
+                            ));
+                        }
+                    } else {
+                        let u_row = &u_plane[(y / 2) * u_stride..];
+                        let v_row = &v_plane[(y / 2) * v_stride..];
+                        for x in x..end {
+                            out[x * 3..x * 3 + 3].copy_from_slice(&yuv_to_rgb(
+                                luma[x],
+                                u_row[x / 2],
+                                v_row[x / 2],
+                            ));
+                        }
+                    }
+                }
+                x = x.max(b);
+                if x >= x1 {
+                    break;
+                }
             }
         }
+        image.filled.push([x0, y0, x1, y1]);
     }
 }
 
@@ -393,6 +427,53 @@ mod tests {
         let mut out = Video::empty();
         scaler.run(frame, &mut out).unwrap();
         out
+    }
+
+    #[test]
+    fn overlapping_regions_fill_like_one_pass() {
+        ffmpeg::init().ok();
+        for format in [Pixel::NV12, Pixel::YUV420P] {
+            let (w, h) = (64u32, 40u32);
+            let mut frame = Video::new(format, w, h);
+            let mut seed = 3u32;
+            for plane in 0..frame.planes() {
+                for value in frame.data_mut(plane) {
+                    seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    *value = (seed >> 16) as u8;
+                }
+            }
+            let regions = [
+                Rect::new(3.5, 2.2, 30.0, 20.0),
+                Rect::new(10.0, 5.0, 40.7, 9.0),
+                Rect::new(0.0, 15.0, 64.0, 4.0),
+                Rect::new(12.0, 6.0, 5.0, 5.0),
+                Rect::new(50.0, 30.0, 30.0, 30.0),
+            ];
+            let mut together = RgbImage::new(w, h);
+            fill_rgb(&frame, &mut together, &regions);
+            let mut stepwise = RgbImage::new(w, h);
+            for region in &regions {
+                fill_rgb(&frame, &mut stepwise, std::slice::from_ref(region));
+            }
+            assert_eq!(together.data, stepwise.data);
+            let mut whole = RgbImage::new(w, h);
+            fill_rgb(
+                &frame,
+                &mut whole,
+                &[Rect::new(0.0, 0.0, w as f32, h as f32)],
+            );
+            for (i, (t, full)) in together.data.iter().zip(&whole.data).enumerate() {
+                let (x, y) = ((i / 3) % w as usize, (i / 3) / w as usize);
+                let inside = regions.iter().any(|r| {
+                    let r = r.clamp_to(w, h);
+                    x >= r.x.floor() as usize
+                        && x < r.right().ceil() as usize
+                        && y >= r.y.floor() as usize
+                        && y < r.bottom().ceil() as usize
+                });
+                assert_eq!(*t, if inside { *full } else { 0 }, "{format:?} {x},{y}");
+            }
+        }
     }
 
     #[test]

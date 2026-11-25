@@ -85,6 +85,9 @@ pub struct RgbImage {
     pub width: u32,
     pub height: u32,
     pub data: Vec<u8>,
+    /// Pixel boxes (x0, y0, x1, y1) already converted by
+    /// [`crate::frames::fill_rgb`], which it skips when asked again.
+    pub(crate) filled: Vec<[usize; 4]>,
 }
 
 /// 8-bit luma.
@@ -123,6 +126,7 @@ impl RgbImage {
             width,
             height,
             data: vec![0; width as usize * height as usize * 3],
+            filled: Vec::new(),
         }
     }
 
