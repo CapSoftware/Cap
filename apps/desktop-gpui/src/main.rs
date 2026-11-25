@@ -371,6 +371,8 @@ fn main() {
     }
 
     single_instance::acquire();
+    #[cfg(target_os = "linux")]
+    app_sounds::prepare_output();
     let previous_session = crash_capture::begin_session(&diagnostics::logs_dir());
     encoder_recovery::configure(previous_session.as_ref());
     blur_recovery::configure(previous_session.as_ref());

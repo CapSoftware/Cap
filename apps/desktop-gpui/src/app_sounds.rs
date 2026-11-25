@@ -119,18 +119,44 @@ mod tests {
 pub(crate) fn open_output() -> Result<(OutputStream, rodio::OutputStreamHandle), rodio::StreamError>
 {
     #[cfg(target_os = "linux")]
-    if let Some(name) = cap_recording::sources::screen_capture::sound_server_output() {
-        use rodio::cpal::traits::{DeviceTrait, HostTrait};
-        if let Some(output) = rodio::cpal::default_host()
-            .output_devices()
-            .ok()
-            .and_then(|mut devices| {
-                devices.find(|device| device.name().is_ok_and(|device_name| device_name == name))
-            })
-            .and_then(|device| OutputStream::try_from_device(&device).ok())
-        {
-            return Ok(output);
-        }
+    if let Some(output) =
+        sound_server_output_device().and_then(|device| OutputStream::try_from_device(&device).ok())
+    {
+        return Ok(output);
     }
     OutputStream::try_default()
+}
+
+/// The sound server's output, found once. rodio's cpal has no lookup by
+/// name: its device list opens every PCM, a bare-card default among them,
+/// which took the card from the sound server when the start cue looked it
+/// up as a recording began. [`prepare_output`] finds it at launch instead.
+#[cfg(target_os = "linux")]
+static SOUND_SERVER_OUTPUT: std::sync::Mutex<Option<rodio::cpal::Device>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(target_os = "linux")]
+fn sound_server_output_device() -> Option<rodio::cpal::Device> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+
+    let name = cap_recording::sources::screen_capture::sound_server_output()?;
+    let mut found = SOUND_SERVER_OUTPUT.lock().ok()?;
+    if found.is_none() {
+        *found = rodio::cpal::default_host()
+            .output_devices()
+            .ok()?
+            .find(|device| device.name().is_ok_and(|device_name| device_name == name));
+    }
+    found.clone()
+}
+
+/// Finds the output Cap's sounds play through before anything plays.
+#[cfg(target_os = "linux")]
+pub(crate) fn prepare_output() {
+    std::thread::Builder::new()
+        .name("app-sound-output".into())
+        .spawn(|| {
+            sound_server_output_device();
+        })
+        .ok();
 }

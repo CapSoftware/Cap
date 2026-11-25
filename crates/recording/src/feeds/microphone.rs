@@ -1323,17 +1323,49 @@ fn alsa_card_names() -> Vec<String> {
     names
 }
 
+/// The ALSA software PCMs cpal lists by name, ahead of the sound cards.
+#[cfg(target_os = "linux")]
+const ALSA_SOFTWARE_INPUTS: [&str; 5] = ["default", "pipewire", "pulse", "jack", "oss"];
+
+/// An ALSA PCM by name, without listing devices. cpal's list opens every PCM
+/// it finds, both ways, starting with "default": where that is the bare sound
+/// card, listing takes the card from the sound server for a moment.
+#[cfg(target_os = "linux")]
+fn alsa_device(pcm_id: &str) -> Device {
+    cpal::platform::AlsaDevice::from_pcm_id(pcm_id).into()
+}
+
 /// The sound server's input that records the microphone selected as `label`,
 /// when ALSA would open that selection on the bare sound card (see
 /// [`crate::sources::screen_capture::microphone_input_device`]). Its formats
 /// are the ones the recording gets, and probing the card instead fails while
 /// the server holds it.
 #[cfg(target_os = "linux")]
-fn sound_server_input(host: &cpal::Host, label: &str) -> Option<Device> {
-    let input = crate::sources::screen_capture::microphone_input_device(label)?;
-    host.input_devices()
-        .ok()?
-        .find(|device| device.name().is_ok_and(|name| name == input))
+fn sound_server_input(label: &str) -> Option<Device> {
+    crate::sources::screen_capture::microphone_input_device(label).map(|input| alsa_device(&input))
+}
+
+/// Input names from the last device list (at launch, and whenever a device
+/// menu lists them again), so that starting a recording lists nothing.
+#[cfg(target_os = "linux")]
+static LISTED_INPUT_NAMES: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+
+#[cfg(target_os = "linux")]
+fn remember_listed_inputs(names: Vec<String>) {
+    if let Ok(mut listed) = LISTED_INPUT_NAMES.lock() {
+        *listed = Some(names);
+    }
+}
+
+/// The input names the last device list found, or a fresh list when nothing
+/// has listed them in this process yet.
+#[cfg(target_os = "linux")]
+pub(crate) fn listed_input_names() -> Vec<String> {
+    let listed = LISTED_INPUT_NAMES
+        .lock()
+        .ok()
+        .and_then(|listed| listed.clone());
+    listed.unwrap_or_else(list_input_device_names)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1359,7 +1391,10 @@ fn list_input_device_names() -> Vec<String> {
         }
     }
 
-    names.into_keys().collect()
+    let names = names.into_keys().collect::<Vec<_>>();
+    #[cfg(target_os = "linux")]
+    remember_listed_inputs(names.clone());
+    names
 }
 
 #[cfg(windows)]
@@ -1425,7 +1460,7 @@ impl MicrophoneFeed {
         let host = cpal::default_host();
         #[cfg(target_os = "linux")]
         if let Some((_, device, config)) =
-            sound_server_input(&host, "default").and_then(|device| get_usable_device(device, None))
+            sound_server_input("default").and_then(|device| get_usable_device(device, None))
         {
             return Some(("default".to_string(), device, config));
         }
@@ -1447,11 +1482,24 @@ impl MicrophoneFeed {
     /// it, and ALSA hardware PCMs are exclusive: the card a feed is recording
     /// from drops out of that list. A card counts as present for as long as
     /// ALSA still has it, which needs no PCM to be opened.
+    ///
+    /// That list holds "default" (always), the cards and ALSA's other
+    /// software PCMs, so this opens at most the one PCM asked about: a
+    /// recording asks every second, and listing opens every device, which
+    /// takes a bare-card default from the sound server each time.
     pub fn is_connected(name: &str) -> bool {
         #[cfg(target_os = "linux")]
-        if alsa_card_names().iter().any(|card| card == name) {
-            return true;
+        {
+            if name == "default" || alsa_card_names().iter().any(|card| card == name) {
+                return true;
+            }
+            if !ALSA_SOFTWARE_INPUTS.contains(&name) {
+                return false;
+            }
+            let device = alsa_device(name);
+            device.supported_input_configs().is_ok() || device.supported_output_configs().is_ok()
         }
+        #[cfg(not(target_os = "linux"))]
         list_input_device_names()
             .iter()
             .any(|listed| listed == name)
@@ -1462,8 +1510,8 @@ impl MicrophoneFeed {
         let mut device_map = IndexMap::new();
 
         #[cfg(target_os = "linux")]
-        if let Some((_, device, config)) = sound_server_input(&host, "default")
-            .and_then(|device| get_usable_device(device, settings))
+        if let Some((_, device, config)) =
+            sound_server_input("default").and_then(|device| get_usable_device(device, settings))
         {
             device_map.insert("default".to_string(), (device, config));
         }
@@ -1491,6 +1539,8 @@ impl MicrophoneFeed {
             }
         }
 
+        #[cfg(target_os = "linux")]
+        remember_listed_inputs(device_map.keys().cloned().collect());
         device_map
     }
 
@@ -1503,8 +1553,14 @@ impl MicrophoneFeed {
             get_usable_device(device, settings).map(|(_, device, config)| (device, config))
         };
         #[cfg(target_os = "linux")]
-        if let Some(device) = sound_server_input(&host, label).and_then(configure) {
+        if let Some(device) = sound_server_input(label).and_then(configure) {
             return Some(device);
+        }
+        // A software PCM's name is its ALSA name: open it directly rather
+        // than listing (and so opening) every device to find it.
+        #[cfg(target_os = "linux")]
+        if label != "default" && ALSA_SOFTWARE_INPUTS.contains(&label) {
+            return configure(alsa_device(label));
         }
         if let Some(device) = configure_named_device(
             host.default_input_device(),

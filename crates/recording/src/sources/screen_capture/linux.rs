@@ -2249,8 +2249,9 @@ fn source_output_needs_move(current_source: u32, target_source: Option<u32>) -> 
 }
 
 fn select_system_audio_monitor() -> anyhow::Result<SelectedSystemAudioInput> {
-    let devices = MicrophoneFeed::list();
-    let available = devices.keys().cloned().collect::<Vec<_>>();
+    // The last device list's names: listing again here opens every device,
+    // which takes a bare-card default from the sound server as recording starts.
+    let available = crate::feeds::microphone::listed_input_names();
 
     if let Some(name) = preferred_system_audio_device(&available, false) {
         return Ok(SelectedSystemAudioInput {
