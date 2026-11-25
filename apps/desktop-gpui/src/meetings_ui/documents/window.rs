@@ -142,15 +142,22 @@ fn placement(cx: &App) -> Bounds<Pixels> {
 }
 
 pub fn open(doc_id: Option<String>, cx: &mut App) {
-    open_with(doc_id, false, cx);
+    open_with(doc_id, false, true, cx);
 }
 
 /// `open` for a meeting just started: the cursor lands in its notes.
 pub fn open_to_type(doc_id: String, cx: &mut App) {
-    open_with(Some(doc_id), true, cx);
+    open_with(Some(doc_id), true, true, cx);
 }
 
-fn open_with(doc_id: Option<String>, type_into: bool, cx: &mut App) {
+/// `open` for a meeting that needs the person while they may be typing in
+/// the call (it started on its own, or is about to stop): the window comes
+/// up in front without taking the keyboard from the app in use.
+pub fn open_quietly(cx: &mut App) {
+    open_with(None, false, false, cx);
+}
+
+fn open_with(doc_id: Option<String>, type_into: bool, activate: bool, cx: &mut App) {
     crate::app_windows::hide_main_for_meeting_window(cx);
     if let Some(handle) = MeetingWindows::get(cx).documents {
         let revealed = handle.update(cx, |root, window, cx| {
@@ -163,24 +170,29 @@ fn open_with(doc_id: Option<String>, type_into: bool, cx: &mut App) {
                     root.reveal(doc_id.clone(), cx);
                 });
             }
-            window.activate_window();
+            if activate {
+                window.activate_window();
+            }
             platform::native_window(window)
         });
         match revealed {
-            Ok(Some(native)) => cx
+            Ok(Some(native)) if activate => cx
                 .spawn(async move |_| platform::show_native(&native))
+                .detach(),
+            Ok(Some(native)) => cx
+                .spawn(async move |_| platform::show_native_quietly(&native))
                 .detach(),
             // Off macOS there is no native handle to raise: the open window
             // is already revealed and activated, and is the only one.
             Ok(None) => {}
             Err(_) => {
                 MeetingWindows::get(cx).documents = None;
-                open_new(doc_id, type_into, cx);
+                open_new(doc_id, type_into, activate, cx);
             }
         }
         return;
     }
-    open_new(doc_id, type_into, cx);
+    open_new(doc_id, type_into, activate, cx);
 }
 
 /// Open the notes window and say `message` there, for something that went
@@ -300,7 +312,7 @@ pub fn new_note(cx: &mut App) {
         .ok();
 }
 
-fn open_new(doc_id: Option<String>, type_into: bool, cx: &mut App) {
+fn open_new(doc_id: Option<String>, type_into: bool, activate: bool, cx: &mut App) {
     let typed_doc = doc_id.clone().filter(|_| type_into);
     let opened_at = Instant::now();
     let bounds = placement(cx);
@@ -315,7 +327,7 @@ fn open_new(doc_id: Option<String>, type_into: bool, cx: &mut App) {
                 traffic_light_position: Some(TRAFFIC_LIGHTS),
             }),
             kind: WindowKind::Normal,
-            focus: true,
+            focus: activate,
             show: true,
             is_resizable: true,
             is_minimizable: true,
@@ -345,6 +357,9 @@ fn open_new(doc_id: Option<String>, type_into: bool, cx: &mut App) {
         })
         .ok()
         .flatten();
+    if !activate && let Some(native) = &native {
+        platform::show_native_quietly(native);
+    }
     cx.spawn(async move |cx| {
         if let Some(native) = &native {
             let kind = platform::install_window_material(native, style::MATERIAL_RADIUS);

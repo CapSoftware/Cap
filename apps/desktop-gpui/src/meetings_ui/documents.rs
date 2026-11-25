@@ -143,6 +143,14 @@ pub fn open(doc_id: Option<String>, cx: &mut App) {
     window::open(target, cx);
 }
 
+/// Open the notes window in front without taking the keyboard from the app
+/// in use: a meeting that needs the person while they may be typing in the
+/// call (it started on its own, or is about to stop).
+pub fn open_quietly(cx: &mut App) {
+    tracing::info!("opening the notes window without focus");
+    window::open_quietly(cx);
+}
+
 /// Open the notes window on a meeting just started, cursor in its notes, so
 /// what the person types first is kept wherever they started it from.
 pub fn open_to_type(doc_id: String, cx: &mut App) {

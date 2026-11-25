@@ -168,7 +168,10 @@ impl Live {
             MeetingEvent::WantsAttention { reason } => {
                 tracing::info!(?reason, "meeting wants attention");
                 cx.emit(LiveEvent::Attention(reason.clone()));
-                cx.defer(bring_note_forward);
+                // A recording that started on its own or is about to stop may
+                // come while the person types in the call: shown, not focused.
+                let quietly = !matches!(reason, AttentionReason::ResumeOffered);
+                cx.defer(move |cx| bring_note_forward(quietly, cx));
             }
             MeetingEvent::AutoStartFailed { error } => {
                 let error = error.clone();
@@ -480,14 +483,18 @@ pub fn mute_app(id: u64, app_id: &str, cx: &mut App) {
 /// "Bring Cap forward": a recording that needs the person (it started on its
 /// own, or is about to stop) brings its note up, never over a video
 /// recording in progress.
-fn bring_note_forward(cx: &mut App) {
+fn bring_note_forward(quietly: bool, cx: &mut App) {
     if !settings(cx).is_some_and(|settings| settings.automation.bring_up_window) {
         return;
     }
     if crate::session::RecordingSession::global(cx).read(cx).phase != crate::session::Phase::Idle {
         return;
     }
-    crate::meetings_ui::documents::open(None, cx);
+    if quietly {
+        crate::meetings_ui::documents::open_quietly(cx);
+    } else {
+        crate::meetings_ui::documents::open(None, cx);
+    }
 }
 
 pub fn open_document(doc_id: Option<String>, cx: &mut App) {

@@ -1175,6 +1175,7 @@ fn open_window(cx: &mut App) {
                     shadow: true,
                 },
             );
+            crate::platform::take_key_only_on_click(window);
             indicator.panel = Panel::of(window);
             indicator.material = indicator.panel.is_some();
             cx.notify();

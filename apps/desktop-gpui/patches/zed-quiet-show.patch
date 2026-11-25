@@ -1,0 +1,48 @@
+diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
+index 169a2cdfb5..449ed1778a 100644
+--- a/crates/gpui_linux/src/linux/x11/window.rs
++++ b/crates/gpui_linux/src/linux/x11/window.rs
+@@ -59,6 +59,7 @@ x11rb::atom_manager! {
+         WM_CHANGE_STATE,
+         WM_TRANSIENT_FOR,
+         _NET_WM_PID,
++        _NET_WM_USER_TIME,
+         _NET_WM_NAME,
+         _NET_WM_ICON,
+         _NET_WM_STATE,
+@@ -528,6 +529,19 @@ impl X11WindowState {
+                     &[pid],
+                 ),
+             )?;
++            if !params.focus {
++                // EWMH: a user time of 0 asks the window manager not to focus the window when it maps.
++                check_reply(
++                    || "X11 ChangeProperty for _NET_WM_USER_TIME failed.",
++                    xcb.change_property32(
++                        xproto::PropMode::REPLACE,
++                        x_window,
++                        atoms._NET_WM_USER_TIME,
++                        xproto::AtomEnum::CARDINAL,
++                        &[0],
++                    ),
++                )?;
++            }
+ 
+             let reply = get_reply(|| "X11 GetGeometry failed.", xcb.get_geometry(x_window))?;
+             if reply.x == 0 && reply.y == 0 {
+diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
+index 8fdd318182..bbe72f6f3b 100644
+--- a/crates/gpui_windows/src/window.rs
++++ b/crates/gpui_windows/src/window.rs
+@@ -591,6 +591,11 @@ impl WindowsWindow {
+             params.window_min_size,
+         )?;
+         if params.show {
++            let mut placement = placement;
++            if !params.focus {
++                // Shown without taking the foreground from the app in use.
++                placement.showCmd = SW_SHOWNOACTIVATE.0 as u32;
++            }
+             unsafe { SetWindowPlacement(hwnd, &placement)? };
+         } else {
+             let client = calculate_client_rect(
