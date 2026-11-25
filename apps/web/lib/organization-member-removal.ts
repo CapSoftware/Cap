@@ -1,15 +1,15 @@
 import type { db } from "@cap/database";
+import { findFallbackOrganization } from "@cap/database/organization-pointer";
 import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import {
 	organizationInvites,
 	organizationMembers,
-	organizations,
 	spaceMembers,
 	spaces,
 	users,
 } from "@cap/database/schema";
 import { Organisation, type User } from "@cap/web-domain";
-import { and, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof db>["transaction"]>[0]
@@ -89,35 +89,8 @@ async function moveOrganizationPointersAway(
 	)
 		return;
 
-	const [owned] = await tx
-		.select({ id: organizations.id })
-		.from(organizations)
-		.where(
-			and(
-				eq(organizations.ownerId, userId),
-				ne(organizations.id, organizationId),
-				isNull(organizations.tombstoneAt),
-			),
-		)
-		.limit(1);
-	const [joined] = owned
-		? []
-		: await tx
-				.select({ id: organizations.id })
-				.from(organizationMembers)
-				.innerJoin(
-					organizations,
-					eq(organizations.id, organizationMembers.organizationId),
-				)
-				.where(
-					and(
-						eq(organizationMembers.userId, userId),
-						ne(organizations.id, organizationId),
-						isNull(organizations.tombstoneAt),
-					),
-				)
-				.limit(1);
-	const fallback = owned?.id ?? joined?.id ?? null;
+	const fallback =
+		(await findFallbackOrganization(tx, userId, organizationId))?.id ?? null;
 
 	await tx
 		.update(users)
