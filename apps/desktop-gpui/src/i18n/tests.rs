@@ -61,6 +61,7 @@ fn english_matches_the_literals_it_replaced() {
         (tr::editor::redact::panel_empty(), "Nothing is hidden here.".into()),
         (tr::editor::redact::panel_title(), "Hidden here".into()),
         (tr::editor::redact::preparing(), "Getting ready".into()),
+        (tr::editor::redact::scan_again(), "Scan again".into()),
         (tr::editor::redact::style_blur(), "Blur".into()),
         (tr::editor::redact::style_pixelate(), "Pixelate".into()),
         (tr::editor::redact::title(), "Auto redact".into()),

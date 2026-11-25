@@ -3561,6 +3561,7 @@ nothing = "Nothing to hide"
 panel_empty = "Nothing is hidden here."
 panel_title = "Hidden here"
 preparing = "Getting ready"
+scan_again = "Scan again"
 scanning = { text = "Scanning {percent}%", context = "{percent} is a whole number from 0 to 100." }
 style_blur = "Blur"
 style_pixelate = "Pixelate"

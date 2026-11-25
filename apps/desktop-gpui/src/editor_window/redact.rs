@@ -492,6 +492,28 @@ impl EditorWindow {
         matches!(self.redact.phase, Some(JobPhase::Scanning))
     }
 
+    /// "Scan again": drops the saved scan and scans the recording from the
+    /// start, for a recording scanned before a scanner change or by mistake.
+    pub(super) fn rescan_redact(&mut self, cx: &mut Context<Self>) {
+        if self.redact.job.is_some() {
+            return;
+        }
+        if let Err(error) = std::fs::remove_file(Redactions::path_for(&self.project_path))
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%error, "Could not remove the saved auto redact scan");
+            return;
+        }
+        self.redact.redactions = None;
+        self.redact.phase = None;
+        self.redact.quiet = false;
+        if let Some(instance) = &self.instance {
+            instance.render_constants.redactions.set(None);
+        }
+        self.sync_redact(cx);
+        cx.notify();
+    }
+
     #[cfg(feature = "redact-bench")]
     pub(crate) fn forget_redact_scan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_redact_enabled(false, window, cx);
@@ -599,6 +621,7 @@ impl EditorWindow {
                 }
             });
         let scanning = self.redact_scan_shown();
+        let can_rescan = on && self.redact.job.is_none();
         let shown = self.redact.progress;
         let status: Option<AnyElement> = on.then(|| {
             let (text, fraction): (SharedString, Option<f32>) = match &self.redact.phase {
@@ -637,6 +660,22 @@ impl EditorWindow {
                                 .text_size(px(11.))
                                 .text_color(Hsla::from(editor.text_2))
                                 .child(found)
+                        }))
+                        .children(can_rescan.then(|| {
+                            div()
+                                .id("redact-rescan")
+                                .flex_none()
+                                .h(px(22.))
+                                .px(px(7.))
+                                .flex()
+                                .items_center()
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .text_size(px(11.))
+                                .text_color(Hsla::from(editor.text_2))
+                                .hover(|style| style.bg(Hsla::from(editor.ctl_hover)))
+                                .on_click(cx.listener(|this, _, _, cx| this.rescan_redact(cx)))
+                                .child(tr::editor::redact::scan_again())
                         })),
                 )
                 .children(fraction.map(|fraction| {
