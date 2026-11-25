@@ -517,6 +517,9 @@ impl UploadBackend for LiveBackend {
         if status == StatusCode::CONFLICT
             && response.get("status").and_then(Value::as_str) == Some("reupload-required")
         {
+            if response.get("code").and_then(Value::as_str) == Some("video-deleting") {
+                return Ok(Confirmation::DeletedOnWeb);
+            }
             return Ok(Confirmation::ReuploadRequired);
         }
         if status == StatusCode::NOT_FOUND
