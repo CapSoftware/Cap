@@ -21,6 +21,24 @@ const params = (condition: SQL) => dialect.sqlToQuery(condition).params;
 const sortsNewestFirst = (ordering: SQL) =>
 	/`createdAt` desc$/.test(dialect.sqlToQuery(ordering).sql);
 
+function countRecent(condition: SQL) {
+	const [userId, source, sinceParam] = params(condition);
+	if (typeof sinceParam !== "string" || !/^\d{4}-\d{2}-\d{2} /.test(sinceParam))
+		return [];
+	const since = new Date(`${sinceParam.replace(" ", "T")}Z`);
+	state.events.push("count");
+	return [
+		{
+			total: state.rows.filter(
+				(row) =>
+					row.userId === userId &&
+					row.source === source &&
+					row.createdAt > since,
+			).length,
+		},
+	];
+}
+
 function keysTable() {
 	const insert = () => ({
 		values: async (value: Omit<KeyRow, "createdAt">) => {
@@ -31,33 +49,40 @@ function keysTable() {
 	});
 	const select = () => ({
 		from: () => ({
-			where: (condition: SQL) => ({
-				for: async (strength: string) => {
-					state.events.push(`lock:${strength}:${params(condition).join(",")}`);
-					return [{ id: params(condition)[0] }];
-				},
-				orderBy: (ordering: SQL) => ({
-					limit: (limit: number) => ({
-						offset: async (offset: number) => {
-							const [userId, source, excludedId] = params(condition);
-							const direction = sortsNewestFirst(ordering) ? -1 : 1;
-							return state.rows
-								.filter(
-									(row) =>
-										row.userId === userId &&
-										row.source === source &&
-										row.id !== excludedId,
-								)
-								.sort(
-									(a, b) =>
-										direction * (a.createdAt.getTime() - b.createdAt.getTime()),
-								)
-								.slice(offset, offset + limit)
-								.map((row) => ({ id: row.id }));
+			where: (condition: SQL) =>
+				Object.assign(
+					Promise.resolve().then(() => countRecent(condition)),
+					{
+						for: async (strength: string) => {
+							state.events.push(
+								`lock:${strength}:${params(condition).join(",")}`,
+							);
+							return [{ id: params(condition)[0] }];
 						},
-					}),
-				}),
-			}),
+						orderBy: (ordering: SQL) => ({
+							limit: (limit: number) => ({
+								offset: async (offset: number) => {
+									const [userId, source, excludedId] = params(condition);
+									const direction = sortsNewestFirst(ordering) ? -1 : 1;
+									return state.rows
+										.filter(
+											(row) =>
+												row.userId === userId &&
+												row.source === source &&
+												row.id !== excludedId,
+										)
+										.sort(
+											(a, b) =>
+												direction *
+												(a.createdAt.getTime() - b.createdAt.getTime()),
+										)
+										.slice(offset, offset + limit)
+										.map((row) => ({ id: row.id }));
+								},
+							}),
+						}),
+					},
+				),
 		}),
 	});
 	const remove = () => ({
@@ -170,9 +195,40 @@ describe("desktop api key sign-in", () => {
 		]);
 	});
 
-	it("locks the user's row before adding a key", async () => {
+	it("locks the user's row before counting and adding a key", async () => {
 		await requestApiKey();
 
-		expect(state.events).toEqual(["lock:update:user-1", "insert"]);
+		expect(state.events).toEqual(["lock:update:user-1", "count", "insert"]);
+	});
+
+	it("issues no key once 20 desktop keys were made in the last hour", async () => {
+		const now = Date.now();
+		const recent = (id: string, minutesAgo: number, source = "desktop") => ({
+			id,
+			userId: "user-1",
+			source,
+			createdAt: new Date(now - minutesAgo * 60_000),
+		});
+		state.rows.push(
+			...Array.from({ length: 19 }, (_, index) =>
+				recent(`recent-${index}`, 50 - index),
+			),
+			recent("hour-old", 61),
+			recent("extension-key", 5, "extension"),
+		);
+		expect(await requestApiKey()).toMatch(/^[0-9a-f-]{36}$/);
+
+		state.rows.push(recent("recent-19", 1));
+		state.events = [];
+		const before = state.rows.length;
+		const { app } = await import("@/app/api/desktop/[...route]/session");
+		const refused = await app.request(
+			"https://cap.example/request?type=api_key&platform=web&port=49152",
+		);
+
+		expect(refused.status).toBe(429);
+		expect(refused.headers.get("location")).toBeNull();
+		expect(state.events).toEqual(["lock:update:user-1", "count"]);
+		expect(state.rows).toHaveLength(before);
 	});
 });
