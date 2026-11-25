@@ -23,7 +23,7 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..de829d7 100644
+index c02bd16..227f47e 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -997,6 +997,56 @@ pub trait InteractiveElement: Sized {
@@ -213,7 +213,7 @@ index c02bd16..de829d7 100644
                              delta_x = delta.y;
                          }
                      }
-@@ -3109,19 +3240,123 @@ impl Interactivity {
+@@ -3109,19 +3240,133 @@ impl Interactivity {
                      if overflow.y == Overflow::Scroll {
                          if !delta.y.is_zero() {
                              delta_y = delta.y;
@@ -243,10 +243,8 @@ index c02bd16..de829d7 100644
 +                            } else {
 +                                delta_x = Pixels::ZERO;
 +                            }
-                         }
-                     }
--                    scroll_offset.y += delta_y;
--                    scroll_offset.x += delta_x;
++                        }
++                    }
 +                    #[cfg(feature = "rubber-band")]
 +                    if let Some(rb_state) = rubber_band_state.as_ref()
 +                        && event.is_precise_trackpad_scroll()
@@ -264,7 +262,7 @@ index c02bd16..de829d7 100644
 +                            crate::ScrollPhase::Began | crate::ScrollPhase::MayBegin
 +                        ) {
 +                            rb.catch_springs(now, &config);
-+                        }
+                         }
 +                        let is_momentum = event.momentum_phase != crate::ScrollPhase::None;
 +                        let mut ox: f32 = scroll_offset.x.into();
 +                        let mut oy: f32 = scroll_offset.y.into();
@@ -279,6 +277,16 @@ index c02bd16..de829d7 100644
 +                        if !(is_momentum && (was_springing || rb.momentum_bounced)) {
 +                            let mut x_axis = rb.x;
 +                            let mut y_axis = rb.y;
++                            let allow_overscroll_x = match overscroll_behavior.x {
++                                crate::OverscrollBehavior::Auto => true,
++                                crate::OverscrollBehavior::WhenScrollable => max_x > 0.0,
++                                crate::OverscrollBehavior::None => false,
++                            };
++                            let allow_overscroll_y = match overscroll_behavior.y {
++                                crate::OverscrollBehavior::Auto => true,
++                                crate::OverscrollBehavior::WhenScrollable => max_y > 0.0,
++                                crate::OverscrollBehavior::None => false,
++                            };
 +                            crate::apply_scroll_delta(
 +                                &mut x_axis,
 +                                &mut ox,
@@ -287,7 +295,7 @@ index c02bd16..de829d7 100644
 +                                w,
 +                                dt,
 +                                is_momentum,
-+                                overscroll_behavior.x != crate::OverscrollBehavior::None,
++                                allow_overscroll_x,
 +                                now,
 +                                &config,
 +                            );
@@ -299,7 +307,7 @@ index c02bd16..de829d7 100644
 +                                h,
 +                                dt,
 +                                is_momentum,
-+                                overscroll_behavior.y != crate::OverscrollBehavior::None,
++                                allow_overscroll_y,
 +                                now,
 +                                &config,
 +                            );
@@ -341,11 +349,13 @@ index c02bd16..de829d7 100644
 +                    {
 +                        scroll_offset.y += delta_y;
 +                        scroll_offset.x += delta_x;
-+                    }
+                     }
+-                    scroll_offset.y += delta_y;
+-                    scroll_offset.x += delta_x;
                      if *scroll_offset != old_scroll_offset {
                          cx.notify(current_view);
                      }
-@@ -3360,6 +3595,8 @@ pub struct InteractiveElementState {
+@@ -3360,6 +3605,8 @@ pub struct InteractiveElementState {
      /// blur). `None` means no activation key is pending.
      pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
@@ -463,10 +473,10 @@ index 1feee49..1c95a05 100644
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..0090814
+index 0000000..6496dcc
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,331 @@
+@@ -0,0 +1,332 @@
 +use std::f32::consts::PI;
 +use std::sync::RwLock;
 +use std::time::Instant;
@@ -477,6 +487,7 @@ index 0000000..0090814
 +pub enum OverscrollBehavior {
 +    #[default]
 +    Auto,
++    WhenScrollable,
 +    None,
 +}
 +

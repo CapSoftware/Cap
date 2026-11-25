@@ -464,6 +464,16 @@ impl RenderOnce for Menu {
             .max_w(max_width)
             .max_h(max_height)
             .overflow_y_scroll()
+            .map(|el| {
+                #[cfg(feature = "gpui-rubber-band")]
+                {
+                    el.overscroll_behavior(gpui::OverscrollBehavior::WhenScrollable)
+                }
+                #[cfg(not(feature = "gpui-rubber-band"))]
+                {
+                    el
+                }
+            })
             .track_scroll(&scroll)
             .on_mouse_down(MouseButton::Left, move |_, window, _| {
                 pressed_on_down.set(true);
