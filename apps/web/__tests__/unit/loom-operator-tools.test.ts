@@ -248,6 +248,7 @@ describe("operator CSV import", () => {
 			actorId: "owneraaaaaaaaaa",
 			allowFolders: true,
 			importPriority: "bulk",
+			operatorApproved: true,
 		});
 	});
 
