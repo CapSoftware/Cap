@@ -29,7 +29,8 @@ export async function authorizeMcpClient(formData: FormData) {
 	if (!request) throw new Error("Invalid authorization request");
 	const user = await getCurrentUser();
 	if (!user) redirect("/login");
-	if (await shouldRefuseTorExit("mcp-authorize"))
+	const decision = formData.get("decision");
+	if (decision === "approve" && (await shouldRefuseTorExit("mcp-authorize")))
 		redirect("/login?error=SignupBlocked");
 	if (
 		await isRateLimited(RATE_LIMIT_IDS.AGENT_AUTHORIZATION, {
@@ -38,7 +39,6 @@ export async function authorizeMcpClient(formData: FormData) {
 	)
 		throw new Error("Too many authorization attempts. Try again later.");
 	const callback = new URL(request.redirectUri);
-	const decision = formData.get("decision");
 	if (decision === "approve") {
 		callback.searchParams.set(
 			"code",

@@ -150,6 +150,14 @@ async function mcpApprove() {
 	return authorizeMcpClient(form);
 }
 
+async function mcpCancel() {
+	const { authorizeMcpClient } = await import("@/app/mcp/authorize/actions");
+	const form = new FormData();
+	form.set("client_id", "client");
+	form.set("decision", "deny");
+	return authorizeMcpClient(form);
+}
+
 async function createCliKey() {
 	const { createCliApiKey } = await import(
 		"@/app/(org)/dashboard/settings/account/server"
@@ -206,6 +214,14 @@ describe("credential creation from a Tor exit in deny mode", () => {
 	it("refuses MCP authorization with the blocked notice", async () => {
 		const error = await rejection(mcpApprove);
 		expect((error as Redirected).location).toBe("/login?error=SignupBlocked");
+		expect(mocks.writes).toBe(0);
+	});
+
+	it("lets MCP authorization be cancelled", async () => {
+		const error = await rejection(mcpCancel);
+		expect((error as Error).message).toBe(
+			"Too many authorization attempts. Try again later.",
+		);
 		expect(mocks.writes).toBe(0);
 	});
 
