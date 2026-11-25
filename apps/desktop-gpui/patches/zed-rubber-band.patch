@@ -23,7 +23,7 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..1186d1c 100644
+index c02bd16..625e64a 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -997,6 +997,56 @@ pub trait InteractiveElement: Sized {
@@ -213,7 +213,7 @@ index c02bd16..1186d1c 100644
                              delta_x = delta.y;
                          }
                      }
-@@ -3109,21 +3240,175 @@ impl Interactivity {
+@@ -3109,21 +3240,183 @@ impl Interactivity {
                      if overflow.y == Overflow::Scroll {
                          if !delta.y.is_zero() {
                              delta_y = delta.y;
@@ -243,8 +243,10 @@ index c02bd16..1186d1c 100644
 +                            } else {
 +                                delta_x = Pixels::ZERO;
 +                            }
-+                        }
-+                    }
+                         }
+                     }
+-                    scroll_offset.y += delta_y;
+-                    scroll_offset.x += delta_x;
 +                    #[cfg(feature = "rubber-band")]
 +                    if let Some(rb_state) = rubber_band_state.as_ref()
 +                        && event.is_precise_trackpad_scroll()
@@ -257,11 +259,19 @@ index c02bd16..1186d1c 100644
 +                            .map(|last| now.saturating_duration_since(last).as_secs_f32())
 +                            .unwrap_or(1.0 / 60.0);
 +                        rb.last_event_at = Some(now);
++                        let w: f32 = rb.bounds_size.width.into();
++                        let h: f32 = rb.bounds_size.height.into();
 +                        if matches!(
 +                            event.scroll_phase,
 +                            crate::ScrollPhase::Began | crate::ScrollPhase::MayBegin
 +                        ) {
-+                            rb.catch_springs(now, &config);
++                            if overscroll_behavior.x != crate::OverscrollBehavior::Chain {
++                                rb.x.catch_spring(w, now, &config);
++                            }
++                            if overscroll_behavior.y != crate::OverscrollBehavior::Chain {
++                                rb.y.catch_spring(h, now, &config);
++                            }
++                            rb.momentum_bounced = false;
 +                            rb.chain_to_parent_x = None;
 +                            rb.chain_to_parent_y = None;
 +                        }
@@ -270,31 +280,31 @@ index c02bd16..1186d1c 100644
 +                        let mut oy: f32 = scroll_offset.y.into();
 +                        let max_x: f32 = rb.scroll_max.x.into();
 +                        let max_y: f32 = rb.scroll_max.y.into();
-+                        let w: f32 = rb.bounds_size.width.into();
-+                        let h: f32 = rb.bounds_size.height.into();
 +                        let mut dx: f32 = delta_x.into();
 +                        let mut dy: f32 = delta_y.into();
 +
 +                        if overscroll_behavior.x == crate::OverscrollBehavior::Chain {
 +                            if dx != 0.0 && rb.chain_to_parent_x.is_none() {
-+                                let can_scroll = rb.x.raw_overscroll != 0.0
-+                                    || rb.x.spring.is_some()
-+                                    || (max_x > 0.0
-+                                        && ((dx > 0.0 && ox < -0.5)
-+                                            || (dx < 0.0 && ox > -max_x + 0.5)));
++                                let can_scroll = max_x > 0.0
++                                    && ((dx > 0.0 && ox < -0.5)
++                                        || (dx < 0.0 && ox > -max_x + 0.5));
++                                if can_scroll {
++                                    rb.x.catch_spring(w, now, &config);
++                                }
 +                                rb.chain_to_parent_x = Some(!can_scroll);
 +                            }
 +                            if rb.chain_to_parent_x == Some(true) {
 +                                dx = 0.0;
 +                            }
-                         }
++                        }
 +                        if overscroll_behavior.y == crate::OverscrollBehavior::Chain {
 +                            if dy != 0.0 && rb.chain_to_parent_y.is_none() {
-+                                let can_scroll = rb.y.raw_overscroll != 0.0
-+                                    || rb.y.spring.is_some()
-+                                    || (max_y > 0.0
-+                                        && ((dy > 0.0 && oy < -0.5)
-+                                            || (dy < 0.0 && oy > -max_y + 0.5)));
++                                let can_scroll = max_y > 0.0
++                                    && ((dy > 0.0 && oy < -0.5)
++                                        || (dy < 0.0 && oy > -max_y + 0.5));
++                                if can_scroll {
++                                    rb.y.catch_spring(h, now, &config);
++                                }
 +                                rb.chain_to_parent_y = Some(!can_scroll);
 +                            }
 +                            if rb.chain_to_parent_y == Some(true) {
@@ -387,9 +397,7 @@ index c02bd16..1186d1c 100644
 +                    {
 +                        scroll_offset.y += delta_y;
 +                        scroll_offset.x += delta_x;
-                     }
--                    scroll_offset.y += delta_y;
--                    scroll_offset.x += delta_x;
++                    }
                      if *scroll_offset != old_scroll_offset {
                          cx.notify(current_view);
 +                        #[cfg(feature = "rubber-band")]
@@ -397,7 +405,7 @@ index c02bd16..1186d1c 100644
                      }
                  }
              });
-@@ -3360,6 +3645,8 @@ pub struct InteractiveElementState {
+@@ -3360,6 +3653,8 @@ pub struct InteractiveElementState {
      /// blur). `None` means no activation key is pending.
      pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
@@ -515,10 +523,10 @@ index 1feee49..1c95a05 100644
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..cc81dbf
+index 0000000..c6f0705
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,352 @@
+@@ -0,0 +1,344 @@
 +use std::f32::consts::PI;
 +use std::sync::RwLock;
 +use std::time::Instant;
@@ -742,14 +750,6 @@ index 0000000..cc81dbf
 +}
 +
 +impl RubberBandScrollState {
-+    pub(crate) fn catch_springs(&mut self, now: Instant, config: &RubberBandConfig) {
-+        self.x
-+            .catch_spring(self.bounds_size.width.into(), now, config);
-+        self.y
-+            .catch_spring(self.bounds_size.height.into(), now, config);
-+        self.momentum_bounced = false;
-+    }
-+
 +    pub(crate) fn start_springs(&mut self, now: Instant, config: &RubberBandConfig) -> bool {
 +        let x = self
 +            .x
