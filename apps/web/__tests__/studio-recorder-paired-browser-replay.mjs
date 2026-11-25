@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { STREAMING_MP4_MIME_TYPES } from "@cap/recorder-core/recorder-constants";
+import { webmCuesTrailerBytes } from "@cap/recorder-core/recording-index";
 import { chromium, webkit } from "@playwright/test";
 import { build } from "esbuild";
 
@@ -271,6 +272,7 @@ async function replayPairedCapture(
 					value: getUserMedia,
 				});
 				window.capRecorderPutBodies = [];
+				window.capRecorderPutBlobs = [];
 				const open = XMLHttpRequest.prototype.open;
 				XMLHttpRequest.prototype.open = function (method, url, ...options) {
 					this.capRecorderUploadUrl = method === "PUT" ? String(url) : null;
@@ -283,6 +285,11 @@ async function replayPairedCapture(
 						body instanceof Blob
 					) {
 						const url = this.capRecorderUploadUrl;
+						window.capRecorderPutBlobs.push({
+							url,
+							partNumber: Number(url.split("/").at(-1)),
+							body,
+						});
 						window.capRecorderPutBodies.push(
 							body
 								.arrayBuffer()
@@ -602,18 +609,66 @@ async function replayPairedCapture(
 			);
 		}
 		if (failCameraCompletion) {
-			const evidence = await page.evaluate(async () => {
-				const readBytes = async (download) =>
-					download ? (await (await fetch(download.url)).blob()).size : 0;
-				return {
-					cameraBackupBytes: await readBytes(
+			const { cameraUpload, ...evidence } = await page.evaluate(
+				async (cameraSubpath) => {
+					const readBlob = async (download) =>
+						download ? await (await fetch(download.url)).blob() : new Blob([]);
+					const digest = async (blob) =>
+						Array.from(
+							new Uint8Array(
+								await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()),
+							),
+							(byte) => byte.toString(16).padStart(2, "0"),
+						).join("");
+					const cameraBackup = await readBlob(
 						window.capRecorderHarness?.cameraErrorDownload,
-					),
-					displayBackupBytes: await readBytes(
-						window.capRecorderHarness?.errorDownload,
-					),
-				};
-			});
+					);
+					const uploaded = new Blob(
+						window.capRecorderPutBlobs
+							.filter((part) => part.url.includes(cameraSubpath))
+							.sort((left, right) => left.partNumber - right.partNumber)
+							.map((part) => part.body),
+					);
+					// The uploader may append a seek index after the recorded
+					// bytes; the backup is the recorded bytes alone.
+					const appended = new Uint8Array(
+						await uploaded.slice(cameraBackup.size).arrayBuffer(),
+					);
+					const view = new DataView(appended.buffer);
+					return {
+						cameraBackupBytes: cameraBackup.size,
+						cameraRecordedBytes: window.capRecorderMediaRecorders
+							.filter(
+								({ recorder }) =>
+									recorder.stream.getVideoTracks()[0]?.getSettings().width ===
+									320,
+							)
+							.reduce((total, { stats }) => total + stats.bytes, 0),
+						displayBackupBytes: (
+							await readBlob(window.capRecorderHarness?.errorDownload)
+						).size,
+						cameraUpload: {
+							bytes: uploaded.size,
+							startsWithBackup:
+								(await digest(uploaded.slice(0, cameraBackup.size))) ===
+								(await digest(cameraBackup)),
+							appendedBytes: appended.byteLength,
+							appendedId: Array.from(appended.subarray(0, 4), (byte) =>
+								byte.toString(16).padStart(2, "0"),
+							).join(""),
+							appendedCuesBytes:
+								appended.byteLength >= 9
+									? Number(view.getBigUint64(appended.byteLength - 8))
+									: null,
+							appendedTracks:
+								appended.byteLength >= 9
+									? view.getUint8(appended.byteLength - 9)
+									: null,
+						},
+					};
+				},
+				cameraSubpath,
+			);
 			const sentParts = await withStepTimeout(
 				"sent part digests",
 				page.evaluate(() => Promise.all(window.capRecorderPutBodies)),
@@ -622,7 +677,20 @@ async function replayPairedCapture(
 				.filter((part) => part.url.includes(cameraSubpath))
 				.reduce((total, part) => total + part.bytes, 0);
 			assert.ok(cameraBytes > 0);
-			assert.equal(evidence.cameraBackupBytes, cameraBytes);
+			assert.equal(cameraUpload.bytes, cameraBytes);
+			// The backup holds every byte the camera recorder delivered, and the
+			// upload is those bytes, plus the WebM seek index the uploader
+			// appends when the recorder wrote none of its own.
+			assert.equal(evidence.cameraBackupBytes, evidence.cameraRecordedBytes);
+			assert.ok(cameraUpload.startsWithBackup);
+			if (cameraUpload.appendedBytes > 0) {
+				assert.equal(cameraUpload.appendedId, "1c53bb6b");
+				assert.equal(
+					cameraUpload.appendedBytes,
+					cameraUpload.appendedCuesBytes +
+						webmCuesTrailerBytes(cameraUpload.appendedTracks),
+				);
+			}
 			assert.ok(evidence.displayBackupBytes > 0);
 			assert.ok(
 				browserErrors.some((error) =>
