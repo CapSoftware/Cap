@@ -215,12 +215,11 @@ impl<'a> Analyzer<'a> {
         let started = Instant::now();
         let cancel = self.cancel.clone();
         let model = &mut *self.model;
-        let mut convert = frames::Convert::default();
         let (opened_tx, opened_rx) = mpsc::sync_channel(1);
         let (frame_tx, frame_rx) = mpsc::sync_channel::<Decoded>(DECODE_AHEAD);
         let path = source.path.clone();
         let decode_cancel = cancel.clone();
-        let (mut scan, mut segment_info) = std::thread::scope(|scope| -> anyhow::Result<_> {
+        let (scan, segment_info) = std::thread::scope(|scope| -> anyhow::Result<_> {
             // Decoding and the tracking-size luma run here while the frames
             // before are analysed; the channel keeps their order.
             let decoder = scope.spawn(move || -> anyhow::Result<bool> {
@@ -232,10 +231,12 @@ impl<'a> Analyzer<'a> {
                     }
                 };
                 let _ = opened_tx.send(Some((
-                    frames.width,
-                    frames.height,
-                    frames.track_width,
-                    frames.duration,
+                    SegmentShape {
+                        width: frames.width,
+                        height: frames.height,
+                        track_width: frames.track_width,
+                        duration: frames.duration,
+                    },
                     frames.is_hardware_accelerated(),
                 )));
                 let mut decode_mark = Instant::now();
@@ -259,116 +260,378 @@ impl<'a> Analyzer<'a> {
                 })?;
                 Ok(frames.is_hardware_accelerated())
             });
-            let Ok(Some((width, height, track_width, duration, hardware))) = opened_rx.recv()
-            else {
+            let Ok(Some((shape, hardware))) = opened_rx.recv() else {
                 return Err(join_decoder(decoder)
                     .err()
                     .unwrap_or_else(|| anyhow::anyhow!("decoder stopped")));
             };
-            let mut scan = Scan::new(source.index, width, height, track_width);
-            scan.end_time = duration;
-            let mut last_progress = Instant::now();
-            let mut segment_info = RedactionSegment {
-                index: source.index,
-                source_frames: 0,
-                fps: 0.0,
-                width,
-                height,
-                fingerprint,
-                complete: false,
-            };
             stats.hardware_decode = hardware;
-            // Frames are prepared on their own thread (change map, regions,
-            // detection start) while this one finishes the frames before.
-            // Preparing a frame needs the detector scale the line heights
-            // gave after the frame LOOKAHEAD + 1 earlier was finished; this
-            // thread sends one scale per finished frame, in order.
-            let (prepared_tx, prepared_rx) = mpsc::sync_channel::<Prepared>(LOOKAHEAD);
-            let (scale_tx, scale_rx) = mpsc::channel::<f32>();
-            let mut prep = scan.prep();
-            let mut starter = model.starter()?;
-            let first_scale = scan.detect_scale();
-            let prep_cancel = cancel.clone();
-            let preparer = scope.spawn(move || -> anyhow::Result<Stats> {
-                let mut stats = Stats::default();
-                let mut convert = frames::Convert::default();
-                let mut wait_mark = Instant::now();
-                for (index, decoded) in frame_rx.iter().enumerate() {
-                    stats.frame_wait += wait_mark.elapsed();
-                    stats.decode += decoded.decode;
-                    stats.gray += decoded.gray_time;
-                    if prep_cancel.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let scale = if index > LOOKAHEAD {
-                        match scale_rx.recv() {
-                            Ok(scale) => scale,
-                            Err(_) => break,
-                        }
-                    } else {
-                        first_scale
-                    };
-                    let started = Instant::now();
-                    let prepared = prep.prepare(
-                        &mut starter,
-                        &mut convert,
-                        decoded.frame,
-                        Arc::new(decoded.gray),
-                        scale,
-                        &mut stats,
-                    )?;
-                    stats.prepare += started.elapsed();
-                    if prepared_tx.send(prepared).is_err() {
-                        break;
-                    }
-                    wait_mark = Instant::now();
-                }
-                Ok(stats)
-            });
+            let analysed = analyze_decoded(
+                model,
+                &cancel,
+                source.index,
+                shape,
+                fingerprint,
+                frame_rx,
+                stats,
+                &mut progress,
+            );
+            let hardware = join_decoder(decoder);
+            let analysed = analysed?;
+            stats.hardware_decode |= hardware?;
+            Ok(analysed)
+        })?;
+        Ok(close_segment(scan, segment_info, stats, started))
+    }
+}
+
+/// What the analysis of a segment needs before its frames arrive.
+#[derive(Debug, Clone, Copy)]
+struct SegmentShape {
+    width: u32,
+    height: u32,
+    track_width: u32,
+    duration: Option<f64>,
+}
+
+/// Analyses the frames arriving on `frame_rx` in order, until it closes: the
+/// same work for decoded files and for frames pushed while recording.
+#[allow(clippy::too_many_arguments)]
+fn analyze_decoded(
+    model: &mut OcrModel,
+    cancel: &Arc<AtomicBool>,
+    index: u32,
+    shape: SegmentShape,
+    fingerprint: String,
+    frame_rx: mpsc::Receiver<Decoded>,
+    stats: &mut Stats,
+    progress: &mut dyn FnMut(f64, &[RedactionRegion], &RedactionSegment),
+) -> anyhow::Result<(Scan, RedactionSegment)> {
+    let mut convert = frames::Convert::default();
+    std::thread::scope(|scope| -> anyhow::Result<_> {
+        let mut scan = Scan::new(index, shape.width, shape.height, shape.track_width);
+        scan.end_time = shape.duration;
+        let mut last_progress = Instant::now();
+        let mut segment_info = RedactionSegment {
+            index,
+            source_frames: 0,
+            fps: 0.0,
+            width: shape.width,
+            height: shape.height,
+            fingerprint,
+            complete: false,
+        };
+        // Frames are prepared on their own thread (change map, regions,
+        // detection start) while this one finishes the frames before.
+        // Preparing a frame needs the detector scale the line heights
+        // gave after the frame LOOKAHEAD + 1 earlier was finished; this
+        // thread sends one scale per finished frame, in order.
+        let (prepared_tx, prepared_rx) = mpsc::sync_channel::<Prepared>(LOOKAHEAD);
+        let (scale_tx, scale_rx) = mpsc::channel::<f32>();
+        let mut prep = scan.prep();
+        let mut starter = model.starter()?;
+        let first_scale = scan.detect_scale();
+        let prep_cancel = cancel.clone();
+        let preparer = scope.spawn(move || -> anyhow::Result<Stats> {
+            let mut stats = Stats::default();
+            let mut convert = frames::Convert::default();
             let mut wait_mark = Instant::now();
-            for prepared in prepared_rx.iter() {
+            for (index, decoded) in frame_rx.iter().enumerate() {
                 stats.frame_wait += wait_mark.elapsed();
-                if cancel.load(Ordering::Relaxed) {
-                    anyhow::bail!("cancelled");
+                stats.decode += decoded.decode;
+                stats.gray += decoded.gray_time;
+                if prep_cancel.load(Ordering::Relaxed) {
+                    break;
                 }
-                let time = prepared.time();
-                scan.receive(time);
-                let finish_started = Instant::now();
-                scan.finish(model, &mut convert, prepared, stats)?;
-                let _ = scale_tx.send(scan.detect_scale());
-                stats.finish += finish_started.elapsed();
-                stats.frames += 1;
-                stats.frame_costs.push(finish_started.elapsed());
-                if last_progress.elapsed() >= Duration::from_millis(500) {
-                    last_progress = Instant::now();
-                    segment_info.source_frames = scan.frame_count;
-                    segment_info.fps = scan.fps_estimate;
-                    let compile_started = Instant::now();
-                    let partial = scan.regions();
-                    stats.compile += compile_started.elapsed();
-                    progress(time, &partial, &segment_info);
+                let scale = if index > LOOKAHEAD {
+                    match scale_rx.recv() {
+                        Ok(scale) => scale,
+                        Err(_) => break,
+                    }
+                } else {
+                    first_scale
+                };
+                let started = Instant::now();
+                let prepared = prep.prepare(
+                    &mut starter,
+                    &mut convert,
+                    decoded.frame,
+                    Arc::new(decoded.gray),
+                    scale,
+                    &mut stats,
+                )?;
+                stats.prepare += started.elapsed();
+                if prepared_tx.send(prepared).is_err() {
+                    break;
                 }
                 wait_mark = Instant::now();
             }
-            drop(scale_tx);
-            let prepared_stats = preparer
-                .join()
-                .unwrap_or_else(|_| Err(anyhow::anyhow!("preparing thread panicked")))?;
-            stats.absorb(&prepared_stats);
-            stats.hardware_decode |= join_decoder(decoder)?;
-            Ok((scan, segment_info))
-        })?;
-        let fps = scan.fps_estimate;
-        stats.source_seconds += scan.last_time - scan.first_time.unwrap_or(0.0) + 1.0 / fps;
-        let compile_started = Instant::now();
-        let regions = scan.regions();
-        stats.compile += compile_started.elapsed();
-        stats.cache_entries += scan.cache_entries() as u64;
-        stats.total += started.elapsed();
-        segment_info.source_frames = scan.frame_count;
-        segment_info.fps = fps;
-        segment_info.complete = true;
-        Ok((segment_info, regions))
+            Ok(stats)
+        });
+        let mut wait_mark = Instant::now();
+        for prepared in prepared_rx.iter() {
+            stats.frame_wait += wait_mark.elapsed();
+            if cancel.load(Ordering::Relaxed) {
+                anyhow::bail!("cancelled");
+            }
+            let time = prepared.time();
+            scan.receive(time);
+            let finish_started = Instant::now();
+            scan.finish(model, &mut convert, prepared, stats)?;
+            let _ = scale_tx.send(scan.detect_scale());
+            stats.finish += finish_started.elapsed();
+            stats.frames += 1;
+            stats.frame_costs.push(finish_started.elapsed());
+            if last_progress.elapsed() >= Duration::from_millis(500) {
+                last_progress = Instant::now();
+                segment_info.source_frames = scan.frame_count;
+                segment_info.fps = scan.fps_estimate;
+                let compile_started = Instant::now();
+                let partial = scan.regions();
+                stats.compile += compile_started.elapsed();
+                progress(time, &partial, &segment_info);
+            }
+            wait_mark = Instant::now();
+        }
+        drop(scale_tx);
+        let prepared_stats = preparer
+            .join()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("preparing thread panicked")))?;
+        stats.absorb(&prepared_stats);
+        Ok((scan, segment_info))
+    })
+}
+
+/// The segment's regions once every frame was analysed.
+fn close_segment(
+    mut scan: Scan,
+    mut segment_info: RedactionSegment,
+    stats: &mut Stats,
+    started: Instant,
+) -> (RedactionSegment, Vec<RedactionRegion>) {
+    let fps = scan.fps_estimate;
+    stats.source_seconds += scan.last_time - scan.first_time.unwrap_or(0.0) + 1.0 / fps;
+    let compile_started = Instant::now();
+    let regions = scan.regions();
+    stats.compile += compile_started.elapsed();
+    stats.cache_entries += scan.cache_entries() as u64;
+    stats.total += started.elapsed();
+    segment_info.source_frames = scan.frame_count;
+    segment_info.fps = fps;
+    segment_info.complete = true;
+    (segment_info, regions)
+}
+
+/// Frames a live segment queues ahead of its analysis; a push beyond this is
+/// dropped and counted rather than waited for.
+pub const LIVE_QUEUE: usize = 60;
+
+/// One segment analysed while it records: frames are pushed as they are
+/// written, in order, and the result is the same as analysing the finished
+/// video, as long as no frame was dropped.
+pub struct LiveSegment {
+    frames: Option<mpsc::SyncSender<Decoded>>,
+    gray: frames::GrayScale,
+    last_time: f64,
+    dropped: u64,
+    cancel: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<LiveOutcome>>,
+}
+
+struct LiveOutcome {
+    model: OcrModel,
+    analysed: anyhow::Result<(Scan, RedactionSegment)>,
+    stats: Stats,
+}
+
+/// A finished live segment: the model back, and its regions unless the
+/// analysis failed.
+pub struct LiveResult {
+    pub model: OcrModel,
+    pub segment: anyhow::Result<(RedactionSegment, Vec<RedactionRegion>)>,
+    /// Pushed frames that were dropped because the queue was full; the
+    /// result is complete only when this is zero.
+    pub dropped: u64,
+    pub stats: Stats,
+}
+
+impl LiveSegment {
+    /// Starts analysing segment `index` of `width` x `height` frames on a
+    /// thread of its own; `worker` runs first on that thread (to lower its
+    /// priority, for one).
+    pub fn start(
+        mut model: OcrModel,
+        index: u32,
+        width: u32,
+        height: u32,
+        worker: impl FnOnce() + Send + 'static,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(width > 0 && height > 0, "frames have no size");
+        let gray = frames::GrayScale::new(width, height);
+        let shape = SegmentShape {
+            width,
+            height,
+            track_width: gray.track_width(),
+            duration: None,
+        };
+        let (frame_tx, frame_rx) = mpsc::sync_channel::<Decoded>(LIVE_QUEUE);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let handle = std::thread::Builder::new()
+            .name("cap-redact-live".into())
+            .spawn(move || {
+                worker();
+                let mut stats = Stats::default();
+                let analysed = analyze_decoded(
+                    &mut model,
+                    &worker_cancel,
+                    index,
+                    shape,
+                    String::new(),
+                    frame_rx,
+                    &mut stats,
+                    &mut |_, _, _| {},
+                );
+                LiveOutcome {
+                    model,
+                    analysed,
+                    stats,
+                }
+            })
+            .context("start live analysis thread")?;
+        Ok(Self {
+            frames: Some(frame_tx),
+            gray,
+            last_time: -1.0,
+            dropped: 0,
+            cancel,
+            worker: Some(handle),
+        })
+    }
+
+    /// Queues one frame, `time` seconds after the segment's first frame.
+    /// Returns false when the frame was dropped (the queue was full or the
+    /// analysis stopped); the caller keeps writing either way.
+    pub fn push(&mut self, time: f64, video: ffmpeg::frame::Video) -> anyhow::Result<bool> {
+        self.queue(time, video, false)
+    }
+
+    fn queue(
+        &mut self,
+        time: f64,
+        video: ffmpeg::frame::Video,
+        wait: bool,
+    ) -> anyhow::Result<bool> {
+        let Some(frames) = &self.frames else {
+            self.dropped += 1;
+            return Ok(false);
+        };
+        // The same order rule as decoding a file: times only go forward.
+        let time = if time <= self.last_time {
+            self.last_time + 1e-4
+        } else {
+            time
+        };
+        let gray_started = Instant::now();
+        let gray = self.gray.gray(&video)?;
+        let decoded = Decoded {
+            frame: frames::Frame { time, video },
+            gray,
+            decode: Duration::ZERO,
+            gray_time: gray_started.elapsed(),
+        };
+        let sent = if wait {
+            frames.send(decoded).is_ok()
+        } else {
+            frames.try_send(decoded).is_ok()
+        };
+        if sent {
+            self.last_time = time;
+        } else {
+            self.dropped += 1;
+        }
+        Ok(sent)
+    }
+
+    /// Frames dropped so far.
+    pub fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
+    /// Ends the segment: analyses what is queued, then compiles its regions
+    /// with `duration` as the segment's length (the finished video's, as a
+    /// decode of it would report) and `fingerprint` as its identity.
+    pub fn finish(
+        mut self,
+        fingerprint: String,
+        duration: Option<f64>,
+    ) -> anyhow::Result<LiveResult> {
+        let started = Instant::now();
+        self.frames = None;
+        self.wait(|outcome| {
+            let LiveOutcome {
+                model,
+                analysed,
+                mut stats,
+            } = outcome;
+            let segment = analysed.map(|(mut scan, mut segment_info)| {
+                scan.end_time = duration;
+                segment_info.fingerprint = fingerprint;
+                let (segment, regions) = close_segment(scan, segment_info, &mut stats, started);
+                (segment, regions.into_iter().map(round_region).collect())
+            });
+            (model, segment, stats)
+        })
+    }
+
+    /// Stops without a result (the recording was discarded, or live analysis
+    /// fell too far behind), handing the model back.
+    pub fn cancel(mut self) -> anyhow::Result<LiveResult> {
+        self.cancel.store(true, Ordering::Relaxed);
+        self.frames = None;
+        self.wait(|outcome| {
+            (
+                outcome.model,
+                Err(anyhow::anyhow!("cancelled")),
+                outcome.stats,
+            )
+        })
+    }
+
+    fn wait(
+        &mut self,
+        close: impl FnOnce(
+            LiveOutcome,
+        ) -> (
+            OcrModel,
+            anyhow::Result<(RedactionSegment, Vec<RedactionRegion>)>,
+            Stats,
+        ),
+    ) -> anyhow::Result<LiveResult> {
+        let handle = self
+            .worker
+            .take()
+            .context("live segment already finished")?;
+        let outcome = handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("live analysis thread panicked"))?;
+        let (model, segment, stats) = close(outcome);
+        Ok(LiveResult {
+            model,
+            segment,
+            dropped: self.dropped,
+            stats,
+        })
+    }
+}
+
+impl Drop for LiveSegment {
+    fn drop(&mut self) {
+        if let Some(handle) = self.worker.take() {
+            self.cancel.store(true, Ordering::Relaxed);
+            self.frames = None;
+            let _ = handle.join();
+        }
     }
 }
 
@@ -608,6 +871,54 @@ pub(crate) fn region_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A recording's display video analysed live, frame by frame as a decode
+    /// of it delivers them, gives the same segment and byte-identical regions
+    /// as analysing the file. Set `CAP_REDACT_TEST_MODEL` to a model folder
+    /// and `CAP_REDACT_TEST_VIDEO` to a display video; skipped without them.
+    #[test]
+    fn live_segment_matches_the_decoded_file() {
+        let (Some(model_dir), Some(video)) = (
+            std::env::var_os("CAP_REDACT_TEST_MODEL"),
+            std::env::var_os("CAP_REDACT_TEST_VIDEO"),
+        ) else {
+            return;
+        };
+        let video = PathBuf::from(video);
+        let mut model = OcrModel::load(Path::new(&model_dir)).unwrap();
+        let offline = Analyzer::new(&mut model)
+            .analyze(
+                &[SegmentSource {
+                    index: 0,
+                    path: video.clone(),
+                }],
+                None,
+                |_| {},
+                &mut Stats::default(),
+            )
+            .unwrap();
+
+        let mut frames = FrameSource::open(&video).unwrap();
+        let duration = frames.duration;
+        let mut live = LiveSegment::start(model, 0, frames.width, frames.height, || {}).unwrap();
+        frames
+            .for_each(|_, frame| {
+                assert!(live.queue(frame.time, frame.video, true)?);
+                Ok(true)
+            })
+            .unwrap();
+        let result = live
+            .finish(offline.segments[0].fingerprint.clone(), duration)
+            .unwrap();
+        assert_eq!(result.dropped, 0);
+        let (segment, regions) = result.segment.unwrap();
+        assert_eq!(segment, offline.segments[0]);
+        assert!(!regions.is_empty());
+        assert_eq!(
+            serde_json::to_vec(&regions).unwrap(),
+            serde_json::to_vec(&offline.regions).unwrap()
+        );
+    }
 
     fn key(t: f64, x: f32) -> RedactionKey {
         RedactionKey {
