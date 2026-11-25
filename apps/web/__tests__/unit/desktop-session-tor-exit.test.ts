@@ -7,10 +7,11 @@ vi.mock("@cap/database", () => {
 	const tx = {
 		select: () => ({
 			from: () => ({
-				where: () => ({
-					for: async () => [],
-					orderBy: () => ({ limit: () => ({ offset: async () => [] }) }),
-				}),
+				where: () =>
+					Object.assign(Promise.resolve([{ total: 0 }]), {
+						for: async () => [],
+						orderBy: () => ({ limit: () => ({ offset: async () => [] }) }),
+					}),
 			}),
 		}),
 		insert: () => ({
@@ -28,6 +29,10 @@ vi.mock("@cap/database", () => {
 		}),
 	};
 });
+vi.mock("@/lib/rate-limit", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/rate-limit")>()),
+	isRateLimited: async () => false,
+}));
 vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: async () => ({ id: "user-1" }),
 }));
