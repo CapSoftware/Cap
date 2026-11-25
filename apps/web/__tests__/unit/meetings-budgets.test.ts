@@ -118,7 +118,7 @@ describe("meeting budgets", () => {
 			windowMs: HOUR_MS,
 		});
 		expect(budgets.MEETING_AUDIO_BUDGET).toEqual({
-			limit: 3_600,
+			limit: 5_760,
 			windowMs: 24 * HOUR_MS,
 		});
 	});
@@ -192,10 +192,10 @@ describe("meeting budgets", () => {
 		expect(units(0)).toBe(0);
 	});
 
-	it("falls back to a rolling day of 3,600 units when the firewall cannot answer", async () => {
+	it("falls back to a rolling day of 5,760 units when the firewall cannot answer", async () => {
 		const { budgets } = await load();
 		const headers = new Headers();
-		for (let index = 0; index < 300; index++) {
+		for (let index = 0; index < 480; index++) {
 			expect(
 				await budgets.consumeMeetingAudioBudget("user-1", CLIP_120S, headers),
 			).toEqual({ limited: false });
@@ -208,7 +208,8 @@ describe("meeting budgets", () => {
 		);
 		expect(limited.limited).toBe(true);
 		if (limited.limited) {
-			expect(limited.retryAfterSeconds).toBeGreaterThan(18 * 3_600);
+			expect(limited.daily).toBe(true);
+			expect(limited.retryAfterSeconds).toBeGreaterThan(14 * 3_600);
 			expect(limited.retryAfterSeconds).toBeLessThanOrEqual(24 * 3_600);
 		}
 		expect(
@@ -299,7 +300,7 @@ describe("meeting budgets", () => {
 			return { rateLimited: false };
 		});
 		const headers = new Headers();
-		for (let index = 0; index < 300; index++) {
+		for (let index = 0; index < 480; index++) {
 			expect(
 				await budgets.consumeMeetingAudioBudget("user-1", CLIP_120S, headers),
 			).toEqual({ limited: false });
@@ -344,8 +345,8 @@ describe("meeting budgets", () => {
 				CLIP_120S,
 				new Headers(),
 			),
-		).toEqual({ limited: true, retryAfterSeconds: 900 });
-		expect(mocks.daily).toHaveBeenCalledWith("user-1", 12, 3_600);
+		).toEqual({ limited: true, retryAfterSeconds: 900, daily: true });
+		expect(mocks.daily).toHaveBeenCalledWith("user-1", 12, 5_760);
 	});
 
 	it("does not charge the day for a clip the hourly limit refused", async () => {
@@ -370,7 +371,7 @@ describe("meeting budgets", () => {
 		mocks.daily.mockResolvedValue({ allowed: undefined });
 		const { budgets } = await load();
 		const headers = new Headers();
-		for (let index = 0; index < 300; index++)
+		for (let index = 0; index < 480; index++)
 			expect(
 				await budgets.consumeMeetingAudioBudget("user-1", CLIP_120S, headers),
 			).toEqual({ limited: false });
@@ -379,7 +380,7 @@ describe("meeting budgets", () => {
 			CLIP_120S,
 			headers,
 		);
-		expect(limited.limited).toBe(true);
+		expect(limited).toMatchObject({ limited: true, daily: true });
 	});
 
 	it("needs no fallback while the firewall and the database both answer", async () => {
@@ -387,7 +388,7 @@ describe("meeting budgets", () => {
 		mocks.checkRateLimit.mockResolvedValue({ rateLimited: false });
 		const { budgets } = await load();
 		const headers = new Headers();
-		for (let index = 0; index < 400; index++)
+		for (let index = 0; index < 600; index++)
 			expect(
 				await budgets.consumeMeetingAudioBudget("user-1", CLIP_120S, headers),
 			).toEqual({ limited: false });

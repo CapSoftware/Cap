@@ -39,7 +39,7 @@ export function meetingAudioUnits(samples: number): number {
 
 export type MeetingBudgetResult =
 	| { limited: false }
-	| { limited: true; retryAfterSeconds: number };
+	| { limited: true; retryAfterSeconds: number; daily?: true };
 
 export function meetingRequestBudget(
 	endpoint: MeetingEndpoint,
@@ -137,7 +137,11 @@ export async function consumeMeetingAudioBudget(
 		MEETING_AUDIO_BUDGET.limit,
 	);
 	if (daily.allowed === false)
-		return { limited: true, retryAfterSeconds: daily.retryAfterSeconds };
+		return {
+			limited: true,
+			retryAfterSeconds: daily.retryAfterSeconds,
+			daily: true,
+		};
 	if (firewall === false && daily.allowed) return { limited: false };
 
 	const decision = await consumeRollingBudget(ruleId, {
@@ -147,5 +151,9 @@ export async function consumeMeetingAudioBudget(
 	});
 	return decision.allowed
 		? { limited: false }
-		: { limited: true, retryAfterSeconds: decision.retryAfterSeconds };
+		: {
+				limited: true,
+				retryAfterSeconds: decision.retryAfterSeconds,
+				daily: true,
+			};
 }

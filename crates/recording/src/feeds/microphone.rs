@@ -1193,6 +1193,25 @@ fn list_input_device_names() -> Vec<String> {
     names.into_keys().collect()
 }
 
+#[cfg(windows)]
+fn register_microphone_callback_thread() -> bool {
+    thread_local! {
+        static MMCSS_HANDLE: std::cell::OnceCell<
+            Option<cap_mediafoundation_utils::MmcssAudioHandle>,
+        > = const { std::cell::OnceCell::new() };
+    }
+    MMCSS_HANDLE.with(|cell| {
+        cell.get_or_init(|| {
+            let handle = cap_mediafoundation_utils::MmcssAudioHandle::register_audio();
+            if handle.is_none() {
+                debug!("Microphone callback thread was not registered with MMCSS");
+            }
+            handle
+        })
+        .is_some()
+    })
+}
+
 impl MicrophoneFeed {
     pub fn new(error_sender: flume::Sender<StreamError>) -> Self {
         Self {
@@ -1468,6 +1487,8 @@ impl MicrophoneFeed {
                         let mut callback_count = 0u64;
                         let mut enqueue_failures = EnqueueFailureLog::default();
                         move |data, info| {
+                            #[cfg(windows)]
+                            register_microphone_callback_thread();
                             #[cfg(target_os = "linux")]
                             if system_stream_cancel.is_cancelled() {
                                 return;
@@ -5429,5 +5450,19 @@ mod recording_subscription_tests {
             expected: true,
         });
         assert!(!expected.failed.load(Ordering::Acquire));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn microphone_callback_thread_registers_with_mmcss() {
+        let registered = std::thread::spawn(|| {
+            [
+                register_microphone_callback_thread(),
+                register_microphone_callback_thread(),
+            ]
+        })
+        .join()
+        .unwrap();
+        assert_eq!(registered, [true, true]);
     }
 }

@@ -91,9 +91,12 @@ import {
 } from "@/lib/meetings/wav";
 import { getAuth } from "../../utils";
 
-const rateLimited = (retryAfterSeconds: number) =>
+const rateLimited = (
+	retryAfterSeconds: number,
+	error: "rate_limited" | "daily_audio_limit" = "rate_limited",
+) =>
 	Response.json(
-		{ error: "rate_limited", retryAfterSeconds },
+		{ error, retryAfterSeconds },
 		{ status: 429, headers: { "Retry-After": String(retryAfterSeconds) } },
 	);
 
@@ -342,7 +345,10 @@ app.post("/transcribe", async (c) => {
 	);
 	if (audioBudget.limited) {
 		log({ outcome: "audio_budget", status: 429, inputBytes });
-		return rateLimited(audioBudget.retryAfterSeconds);
+		return rateLimited(
+			audioBudget.retryAfterSeconds,
+			audioBudget.daily ? "daily_audio_limit" : "rate_limited",
+		);
 	}
 
 	const signal = AbortSignal.any([

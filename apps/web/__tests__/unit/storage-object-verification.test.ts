@@ -53,6 +53,9 @@ vi.mock("@/lib/server", async () => {
 	const { Effect } = await import("effect");
 	return { runPromise: Effect.runPromise };
 });
+vi.mock("@/lib/shareable-link-quota", () => ({
+	isVideoLockedByShareableLinkLimit: async () => false,
+}));
 vi.mock("@/utils/helpers", () => ({ CACHE_CONTROL_HEADERS: {} }));
 
 import { GET, HEAD } from "@/app/api/storage/object/route";
