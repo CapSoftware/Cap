@@ -1657,20 +1657,6 @@ mod tests {
         })
     }
 
-    fn stall_bookkeeping_for(
-        shared: Arc<BookkeepingShared>,
-        duration: Duration,
-    ) -> std::thread::JoinHandle<()> {
-        let (held_tx, held_rx) = mpsc::channel();
-        let handle = std::thread::spawn(move || {
-            let _held = lock(&shared.ledger);
-            held_tx.send(()).unwrap();
-            std::thread::sleep(duration);
-        });
-        held_rx.recv().unwrap();
-        handle
-    }
-
     fn while_stalled<R: Send + 'static>(work: impl FnOnce() -> R + Send + 'static) -> R {
         let (done_tx, done_rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -1758,12 +1744,25 @@ mod tests {
         let base_path = temp.path().join("stalled");
         let (mut encoder, rx) = libx264_encoder(&base_path, true, true);
         queue_test_frames(&mut encoder, 0..RECORDED_FRAMES - 1);
-        let stall = stall_bookkeeping_for(background_shared(&encoder), Duration::from_millis(800));
+        let shared = background_shared(&encoder);
+        let stalled = lock(&shared.ledger);
         queue_test_frames(&mut encoder, RECORDED_FRAMES - 1..RECORDED_FRAMES);
-        let started = std::time::Instant::now();
-        let actual = finish_recording(encoder, rx, &base_path);
-        assert!(started.elapsed() >= Duration::from_millis(600));
-        stall.join().unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+        let finishing = std::thread::spawn({
+            let base_path = base_path.clone();
+            move || {
+                let actual = finish_recording(encoder, rx, &base_path);
+                let _ = done_tx.send(());
+                actual
+            }
+        });
+        assert!(done_rx.recv_timeout(Duration::from_millis(500)).is_err());
+        assert_eq!(read_manifest(&base_path)["is_complete"], false);
+        drop(stalled);
+        done_rx
+            .recv_timeout(Duration::from_secs(60))
+            .expect("finish completes once the bookkeeping is released");
+        let actual = finishing.join().unwrap();
 
         assert_eq!(read_manifest(&base_path)["is_complete"], true);
         assert_same_output(&expected, &actual);
