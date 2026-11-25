@@ -615,6 +615,71 @@ fn auto_record_waits_for_the_recorded_meeting_to_end() {
 }
 
 #[test]
+fn auto_record_never_hands_over_to_a_meeting_that_is_over() {
+    // B (26..29 min) runs inside A (0..30 min), A records: when A ends, B
+    // is over too, so A keeps recording and nothing switches.
+    for scheduled_enabled in [true, false] {
+        let mut s = Sim::with(PromptConfig {
+            scheduled_enabled,
+            auto_record: AutoRecord::Scheduled,
+            ..PromptConfig::default()
+        });
+        s.events(vec![
+            ev("a", "A", 0, 30 * MIN as i64, false),
+            ev("b", "B", 26 * MIN as i64, 3 * MIN as i64, false),
+        ]);
+        s.recording(RecordingState::Recording {
+            event_id: Some("a".into()),
+        });
+        s.take();
+        s.at(60 * MIN);
+        let log = s.take();
+        assert!(
+            log.iter()
+                .all(|(_, a)| !a.starts_with("record") && !a.contains("countdown")),
+            "{scheduled_enabled} {log:?}"
+        );
+    }
+
+    // Nothing records and a short meeting is already over when its
+    // reminder would show: it is not recorded on its own.
+    let mut s = Sim::with(PromptConfig {
+        scheduled_enabled: false,
+        auto_record: AutoRecord::Scheduled,
+        ..PromptConfig::default()
+    });
+    s.at(10 * MIN);
+    s.events(vec![ev("c", "C", 7 * MIN as i64, 2 * MIN as i64, false)]);
+    s.at(30 * MIN);
+    let log = s.take();
+    assert!(log.iter().all(|(_, a)| !a.starts_with("record")), "{log:?}");
+}
+
+#[test]
+fn auto_record_hands_over_to_a_meeting_still_running_when_the_recorded_one_ends() {
+    // B (27..40 min) starts inside A (0..30 min): when A ends B takes over.
+    let mut s = Sim::with(PromptConfig {
+        auto_record: AutoRecord::Scheduled,
+        ..PromptConfig::default()
+    });
+    s.events(vec![
+        ev("a", "A", 0, 30 * MIN as i64, false),
+        ev("b", "B", 27 * MIN as i64, 13 * MIN as i64, false),
+    ]);
+    s.recording(RecordingState::Recording {
+        event_id: Some("a".into()),
+    });
+    s.take();
+    s.at(30 * MIN + 5_000);
+    let log = s.take();
+    assert!(
+        log.iter()
+            .any(|(t, a)| *t == 30 * MIN + 5_000 && a == "record event b"),
+        "{log:?}"
+    );
+}
+
+#[test]
 fn auto_record_never_ends_a_recording_the_calendar_does_not_end() {
     for state in [
         RecordingState::Recording { event_id: None },

@@ -458,7 +458,10 @@ impl PromptPlanner {
                         && let Some(from) = self.auto_start_from(clock.wall)
                     {
                         let at = event.start.max(from);
-                        if at > clock.wall && self.over_at(slot).is_some_and(|over| at < over) {
+                        if at > clock.wall
+                            && at < event.end
+                            && self.over_at(slot).is_some_and(|over| at < over)
+                        {
                             consider(self.mono_at(clock, at));
                         }
                     }
@@ -848,11 +851,9 @@ impl PromptPlanner {
             let countdown = self.countdown(now);
             let recorded = self.recording.event_id().map(str::to_string);
             for slot in &mut self.slots {
-                let started = slot
-                    .prompt
-                    .event
-                    .as_ref()
-                    .is_some_and(|e| e.start <= now.wall && Some(&e.id) != recorded.as_ref());
+                let started = slot.prompt.event.as_ref().is_some_and(|e| {
+                    e.start <= now.wall && now.wall < e.end && Some(&e.id) != recorded.as_ref()
+                });
                 if slot.prompt.kind == PromptKind::Scheduled
                     && slot.prompt.countdown.is_none()
                     && started
@@ -887,7 +888,9 @@ impl PromptPlanner {
                 if attached {
                     continue;
                 }
-                let countdown = (self.may_auto_start(now.wall) && event.start <= now.wall)
+                let countdown = (self.may_auto_start(now.wall)
+                    && event.start <= now.wall
+                    && now.wall < event.end)
                     .then(|| self.countdown(now));
                 let mut prompt = Prompt {
                     id: self.new_id(),
