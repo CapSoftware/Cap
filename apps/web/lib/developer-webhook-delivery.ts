@@ -1,6 +1,11 @@
 import { db } from "@cap/database";
+import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
 import { decrypt } from "@cap/database/crypto";
-import { developerApps, developerWebhookEndpoints } from "@cap/database/schema";
+import {
+	developerApps,
+	developerWebhookEndpoints,
+	users,
+} from "@cap/database/schema";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import {
 	WEBHOOK_DISABLE_AFTER_FAILURES,
@@ -257,6 +262,7 @@ async function findDeliverableEndpoint(endpointId: string) {
 			encryptedSecret: developerWebhookEndpoints.encryptedSecret,
 			events: developerWebhookEndpoints.events,
 			enabled: developerWebhookEndpoints.enabled,
+			ownerEmail: users.email,
 		})
 		.from(developerWebhookEndpoints)
 		.innerJoin(
@@ -266,6 +272,7 @@ async function findDeliverableEndpoint(endpointId: string) {
 				isNull(developerApps.deletedAt),
 			),
 		)
+		.innerJoin(users, eq(developerApps.ownerId, users.id))
 		.where(
 			and(
 				eq(developerWebhookEndpoints.id, endpointId),
@@ -273,7 +280,8 @@ async function findDeliverableEndpoint(endpointId: string) {
 			),
 		)
 		.limit(1);
-	return endpoint ?? null;
+	if (!endpoint || isBlockedAccountEmail(endpoint.ownerEmail)) return null;
+	return endpoint;
 }
 
 export async function deliverDeveloperWebhookAttempt(

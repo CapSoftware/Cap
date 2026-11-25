@@ -69,7 +69,7 @@ pub fn play() {
 
 fn play_to_end() -> anyhow::Result<()> {
     use anyhow::Context as _;
-    let (_stream, handle) = rodio::OutputStream::try_default().context("opening audio output")?;
+    let (_stream, handle) = crate::app_sounds::open_output().context("opening audio output")?;
     let sink = rodio::Sink::try_new(&handle).context("creating chime sink")?;
     sink.append(rodio::buffer::SamplesBuffer::new(1, RATE, samples()));
     sink.sleep_until_end();
