@@ -194,7 +194,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
                     if let Some(region) = first.and_then(|(start, end)| {
                         view.redact_regions_between(start, end).into_iter().next()
                     }) {
-                        view.set_redact_kept(&[region.id.clone()], true, window, cx);
+                        view.set_redact_kept(std::slice::from_ref(&region.id), true, window, cx);
                         tracing::info!(id = region.id, "redact demo: kept one visible");
                     }
                 })
