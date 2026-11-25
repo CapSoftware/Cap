@@ -1238,6 +1238,9 @@ impl MainWindow {
                         })
                 };
                 let still_saving = notice.is_none() && session.read(cx).recording_still_saving;
+                #[cfg(not(windows))]
+                debug_assert!(!still_saving);
+                #[cfg(windows)]
                 if still_saving {
                     // Shown in the window: a native dialog can stall the
                     // window while the earlier recording is still being written.
