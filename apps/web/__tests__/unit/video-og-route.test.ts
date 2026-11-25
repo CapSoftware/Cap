@@ -80,8 +80,10 @@ vi.mock("@cap/web-backend", async () => {
 		},
 		VideosPolicy,
 		testVideosPolicy: VideosPolicy.make({
-			canViewLoaded: (video, password) =>
-				buildCanViewLoaded(deps, video, password),
+			canViewLoaded: (
+				video: Parameters<typeof buildCanViewLoaded>[1],
+				password: Parameters<typeof buildCanViewLoaded>[2],
+			) => buildCanViewLoaded(deps, video, password),
 		} as unknown as ConstructorParameters<typeof VideosPolicy>[0]),
 	};
 });
@@ -93,9 +95,13 @@ vi.mock("@/lib/og/poster-frame", () => ({
 }));
 vi.mock("@/lib/server", async () => {
 	const { Video } = await import("@cap/web-domain");
-	const backend = (await import("@cap/web-backend")) as unknown as {
-		VideosPolicy: Parameters<typeof Effect.provideService>[0];
-		testVideosPolicy: never;
+	const { VideosPolicy } = await import(
+		"@cap/web-backend/src/Videos/VideosPolicy"
+	);
+	const { testVideosPolicy } = (await import(
+		"@cap/web-backend"
+	)) as unknown as {
+		testVideosPolicy: InstanceType<typeof VideosPolicy>;
 	};
 	return {
 		runPromise: (effect: Effect.Effect<unknown, unknown>) =>
@@ -106,7 +112,7 @@ vi.mock("@/lib/server", async () => {
 					Effect.provideService(Video.VideoPasswordAttachment, {
 						passwords: mocks.cookiePasswords,
 					}),
-					Effect.provideService(backend.VideosPolicy, backend.testVideosPolicy),
+					Effect.provideService(VideosPolicy, testVideosPolicy),
 				) as Effect.Effect<unknown, unknown, never>,
 			),
 	};
