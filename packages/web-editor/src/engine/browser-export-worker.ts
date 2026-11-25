@@ -277,12 +277,14 @@ async function frameFor(
 	) {
 		return frame;
 	}
+	// copyTo copies the visible rect, which is smaller than the coded size
+	// when the decoder pads it (640x360 H.264 decodes to 640x368).
 	const pixels = new Uint8Array(frame.allocationSize());
 	const layout = await frame.copyTo(pixels);
 	const tagged = new VideoFrame(pixels, {
 		format: frame.format,
-		codedWidth: frame.codedWidth,
-		codedHeight: frame.codedHeight,
+		codedWidth: frame.visibleRect?.width ?? frame.codedWidth,
+		codedHeight: frame.visibleRect?.height ?? frame.codedHeight,
 		timestamp: frame.timestamp,
 		layout,
 		colorSpace: {
