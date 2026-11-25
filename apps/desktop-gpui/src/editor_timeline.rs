@@ -2117,28 +2117,43 @@ impl TimelineModel {
             .collect::<Vec<_>>();
         spans.sort_by(|a, b| a.0.total_cmp(&b.0));
         const JOIN: f64 = 0.4;
-        let mut merged: Vec<(f64, f64, Vec<&str>, Vec<(f64, f64)>)> = Vec::new();
+        struct Merged<'a> {
+            start: f64,
+            end: f64,
+            ids: Vec<&'a str>,
+            ranges: Vec<(f64, f64)>,
+        }
+        let mut merged: Vec<Merged> = Vec::new();
         for (start, end, id) in spans {
             match merged.last_mut() {
-                Some(last) if start <= last.1 + JOIN => {
-                    last.1 = last.1.max(end);
-                    if !last.2.contains(&id) {
-                        last.2.push(id);
+                Some(last) if start <= last.end + JOIN => {
+                    last.end = last.end.max(end);
+                    if !last.ids.contains(&id) {
+                        last.ids.push(id);
                     }
-                    last.3.push((start, end));
+                    last.ranges.push((start, end));
                 }
-                _ => merged.push((start, end, vec![id], vec![(start, end)])),
+                _ => merged.push(Merged {
+                    start,
+                    end,
+                    ids: vec![id],
+                    ranges: vec![(start, end)],
+                }),
             }
         }
         self.redact = merged
             .into_iter()
-            .map(|(start, end, ids, ranges)| Segment {
-                start,
-                end,
+            .map(|span| Segment {
+                start: span.start,
+                end: span.end,
                 lane: 0,
                 detail: SegmentDetail::Redact {
-                    count: ids.iter().filter(|id| !settings.is_excluded(id)).count() as u32,
-                    marks: pack_redact_marks(&ranges).into(),
+                    count: span
+                        .ids
+                        .iter()
+                        .filter(|id| !settings.is_excluded(id))
+                        .count() as u32,
+                    marks: pack_redact_marks(&span.ranges).into(),
                 },
             })
             .collect();
