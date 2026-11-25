@@ -313,6 +313,100 @@ pub fn simplify_keys(keys: &[RedactionKey], tol_x: f32, tol_y: f32) -> Vec<Redac
         .collect()
 }
 
+/// Two regions of one category are one mask when they are alive together for
+/// at least this share of the shorter one's life ...
+const SAME_MASK_LIFE: f64 = 0.8;
+/// ... and their boxes share at least this share of the smaller box at every
+/// key of that time.
+const SAME_MASK_AREA: f32 = 0.5;
+
+/// Joins regions that mask the same spot with the same category for most of
+/// their lives (two reads of one line, such as the whole line and its tail)
+/// into one region. The joined box is the bounds of both at every key, which
+/// covers at least what either covered.
+pub(crate) fn join_same_masks(regions: Vec<RedactionRegion>) -> Vec<RedactionRegion> {
+    let mut regions = regions.into_iter().map(Some).collect::<Vec<_>>();
+    for i in 0..regions.len() {
+        let Some(mut joined) = regions[i].take() else {
+            continue;
+        };
+        for slot in regions.iter_mut().skip(i + 1) {
+            if let Some(other) = slot
+                && same_mask(&joined, other)
+            {
+                joined = join(&joined, other);
+                *slot = None;
+            }
+        }
+        regions[i] = Some(joined);
+    }
+    regions.into_iter().flatten().collect()
+}
+
+fn same_mask(a: &RedactionRegion, b: &RedactionRegion) -> bool {
+    if a.category != b.category || a.segment != b.segment {
+        return false;
+    }
+    let (t0, t1) = (a.start.max(b.start), a.end.min(b.end));
+    let shorter = (a.end - a.start).min(b.end - b.start);
+    if t1 < t0 || t1 - t0 < shorter * SAME_MASK_LIFE {
+        return false;
+    }
+    [t0, t1]
+        .into_iter()
+        .chain(a.keys.iter().chain(&b.keys).map(|k| k.t))
+        .filter(|t| (t0..=t1).contains(t))
+        .all(|t| {
+            let (Some(p), Some(q)) = (a.rect_at(t), b.rect_at(t)) else {
+                return false;
+            };
+            let w = (p.x + p.w).min(q.x + q.w) - p.x.max(q.x);
+            let h = (p.y + p.h).min(q.y + q.h) - p.y.max(q.y);
+            let smaller = (p.w * p.h).min(q.w * q.h);
+            w > 0.0 && h > 0.0 && smaller > 0.0 && w * h >= smaller * SAME_MASK_AREA
+        })
+}
+
+fn join(a: &RedactionRegion, b: &RedactionRegion) -> RedactionRegion {
+    let mut times = [a.start, a.end, b.start, b.end]
+        .into_iter()
+        .chain(a.keys.iter().chain(&b.keys).map(|k| k.t))
+        .collect::<Vec<_>>();
+    times.sort_by(f64::total_cmp);
+    times.dedup();
+    let keys = times
+        .into_iter()
+        .filter_map(|t| {
+            let rects = [a.rect_at(t), b.rect_at(t)];
+            let mut rects = rects.iter().flatten();
+            let first = *rects.next()?;
+            let (mut x0, mut y0) = (first.x, first.y);
+            let (mut x1, mut y1) = (first.x + first.w, first.y + first.h);
+            for r in rects {
+                x0 = x0.min(r.x);
+                y0 = y0.min(r.y);
+                x1 = x1.max(r.x + r.w);
+                y1 = y1.max(r.y + r.h);
+            }
+            Some(RedactionKey {
+                t,
+                x: x0,
+                y: y0,
+                w: x1 - x0,
+                h: y1 - y0,
+            })
+        })
+        .collect();
+    RedactionRegion {
+        id: a.id.clone(),
+        segment: a.segment,
+        category: a.category,
+        start: a.start.min(b.start),
+        end: a.end.max(b.end),
+        keys,
+    }
+}
+
 pub(crate) fn region_id(
     segment: u32,
     category: RedactCategory,
@@ -375,6 +469,63 @@ mod tests {
             assert!(rect.x <= original.x + 1e-6, "{rect:?} {original:?}");
             assert!(rect.x + rect.w >= original.x + original.w - 1e-6);
         }
+    }
+
+    fn region(
+        id: &str,
+        category: RedactCategory,
+        start: f64,
+        end: f64,
+        x: f32,
+        y: f32,
+        w: f32,
+    ) -> RedactionRegion {
+        let at = |t| RedactionKey {
+            t,
+            x,
+            y,
+            w,
+            h: 0.03,
+        };
+        RedactionRegion {
+            id: id.into(),
+            segment: 0,
+            category,
+            start,
+            end,
+            keys: vec![at(start), at(end)],
+        }
+    }
+
+    #[test]
+    fn a_line_and_its_tail_are_one_mask() {
+        let line = region("line", RedactCategory::Secret, 1.0, 5.0, 0.1, 0.5, 0.4);
+        let tail = region("tail", RedactCategory::Secret, 1.2, 5.0, 0.35, 0.505, 0.17);
+        let joined = join_same_masks(vec![line.clone(), tail.clone()]);
+        assert_eq!(joined.len(), 1, "{joined:?}");
+        let one = &joined[0];
+        assert_eq!(one.id, "line");
+        assert_eq!((one.start, one.end), (1.0, 5.0));
+        for t in [1.0, 1.2, 3.0, 5.0] {
+            let r = one.rect_at(t).unwrap();
+            for part in [&line, &tail] {
+                if let Some(p) = part.rect_at(t) {
+                    assert!(r.x <= p.x && r.y <= p.y, "{r:?} {p:?}");
+                    assert!(r.x + r.w >= p.x + p.w - 1e-6 && r.y + r.h >= p.y + p.h - 1e-6);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn other_lines_categories_and_handoffs_stay_apart() {
+        let line = region("line", RedactCategory::Secret, 1.0, 5.0, 0.1, 0.5, 0.4);
+        let below = region("below", RedactCategory::Secret, 1.0, 5.0, 0.1, 0.525, 0.4);
+        let other = region("other", RedactCategory::Email, 1.0, 5.0, 0.1, 0.5, 0.4);
+        let next = region("next", RedactCategory::Secret, 4.9, 9.0, 0.1, 0.5, 0.4);
+        assert_eq!(join_same_masks(vec![line.clone(), below]).len(), 2);
+        assert_eq!(join_same_masks(vec![line.clone(), other]).len(), 2);
+        assert_eq!(join_same_masks(vec![line, next]).len(), 2);
     }
 
     #[test]

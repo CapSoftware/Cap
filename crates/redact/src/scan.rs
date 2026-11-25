@@ -16,7 +16,7 @@ use cap_project::{
 };
 
 use crate::{
-    analyze::{Stats, merge_overlapping, region_id, simplify_keys},
+    analyze::{Stats, join_same_masks, merge_overlapping, region_id, simplify_keys},
     classify::{
         Finding, LineContext, classify_frame_with, classify_line, classify_line_with_alternatives,
     },
@@ -1009,6 +1009,7 @@ impl Scan {
             }
         }
         regions.sort_by(|a, b| a.start.total_cmp(&b.start));
+        let mut regions = join_same_masks(regions);
         let mut seen = std::collections::HashSet::new();
         for region in &mut regions {
             let mut id = region.id.clone();
