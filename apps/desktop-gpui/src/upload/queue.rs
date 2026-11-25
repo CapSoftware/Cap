@@ -138,7 +138,10 @@ impl UploadState {
         }
         self.phase = if needs_authentication {
             UploadPhase::NeedsAuthentication
-        } else if self.attempt_count < MAX_AUTOMATIC_ATTEMPTS && error != RECORDING_DELETED_ON_WEB {
+        } else if self.attempt_count < MAX_AUTOMATIC_ATTEMPTS
+            && error != RECORDING_DELETED_ON_WEB
+            && error != RECORDING_REPLACED_ON_WEB
+        {
             UploadPhase::Retrying
         } else {
             UploadPhase::Failed
@@ -401,6 +404,7 @@ enum Confirmation {
     Verified(VerifiedUploadReceipt),
     ReuploadRequired,
     DeletedOnWeb,
+    ReplacedOnWeb,
 }
 
 trait UploadBackend: Send + Sync + 'static {
@@ -521,8 +525,10 @@ impl UploadBackend for LiveBackend {
         if status == StatusCode::CONFLICT
             && response.get("status").and_then(Value::as_str) == Some("reupload-required")
         {
-            if response.get("code").and_then(Value::as_str) == Some("video-deleting") {
-                return Ok(Confirmation::DeletedOnWeb);
+            match response.get("code").and_then(Value::as_str) {
+                Some("video-deleting") => return Ok(Confirmation::DeletedOnWeb),
+                Some("output-replaced") => return Ok(Confirmation::ReplacedOnWeb),
+                _ => {}
             }
             return Ok(Confirmation::ReuploadRequired);
         }
@@ -856,6 +862,7 @@ impl<B: UploadBackend> Manager<B> {
                 );
             }
             Confirmation::DeletedOnWeb => return Err(RECORDING_DELETED_ON_WEB.into()),
+            Confirmation::ReplacedOnWeb => return Err(RECORDING_REPLACED_ON_WEB.into()),
             Confirmation::Verified(receipt) => state.receipt = Some(receipt),
         }
         let receipt = state.receipt.as_ref().ok_or("Upload receipt is missing")?;
