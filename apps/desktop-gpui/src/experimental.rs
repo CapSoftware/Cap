@@ -58,17 +58,6 @@ pub fn set_desktop_redesign_enabled_cached(enabled: bool) {
     let _ = enabled;
 }
 
-#[cfg(feature = "experimental-redesign")]
-pub fn is_desktop_redesign_enabled(settings: &crate::store::GeneralSettings) -> bool {
-    is_desktop_redesign_unlocked() && settings.experimental_desktop_redesign
-}
-
-#[cfg(not(feature = "experimental-redesign"))]
-pub fn is_desktop_redesign_enabled(settings: &crate::store::GeneralSettings) -> bool {
-    let _ = settings;
-    false
-}
-
 #[macro_export]
 macro_rules! cfg_redesign {
     (feature = $feat:literal, { $($item:item)* }) => {

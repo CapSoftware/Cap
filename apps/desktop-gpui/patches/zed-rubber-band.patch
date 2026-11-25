@@ -473,34 +473,45 @@ index 1feee49..1c95a05 100644
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..6496dcc
+index 0000000..e19ffbc
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,332 @@
+@@ -0,0 +1,345 @@
 +use std::f32::consts::PI;
 +use std::sync::RwLock;
 +use std::time::Instant;
 +
 +use crate::{Pixels, Point, Size};
 +
++/// Controls whether a scrollable container bounces past its scroll bounds.
 +#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 +pub enum OverscrollBehavior {
++    /// Always allow rubber-band overscroll on scrollable axes.
 +    #[default]
 +    Auto,
++    /// Only allow rubber-band overscroll when the content actually overflows on that axis.
 +    WhenScrollable,
++    /// Disable rubber-band overscroll on this container.
 +    None,
 +}
 +
++/// Tuning parameters for GPUI's scroll rubber-banding physics.
 +#[derive(Clone, Copy, Debug, PartialEq)]
 +pub struct RubberBandConfig {
++    /// Resistance factor applied to overscroll distance (`0.01..=1.0`).
 +    pub resistance: f32,
++    /// Critically-damped spring response duration in seconds.
 +    pub response: f32,
++    /// Fraction of scroll momentum carried into the spring when hitting an edge.
 +    pub momentum_carry: f32,
++    /// Maximum visual overscroll as a fraction of the viewport dimension.
 +    pub max_overscroll_ratio: f32,
++    /// Visual offset threshold (in pixels) below which the spring settles to zero.
 +    pub settle_epsilon: f32,
 +}
 +
 +impl RubberBandConfig {
++    /// Default rubber-banding physics parameters.
 +    pub const DEFAULT: Self = Self {
 +        resistance: 0.10,
 +        #[cfg(target_os = "macos")]
@@ -521,12 +532,14 @@ index 0000000..6496dcc
 +
 +static RUBBER_BAND_CONFIG: RwLock<RubberBandConfig> = RwLock::new(RubberBandConfig::DEFAULT);
 +
++/// Returns the active global [`RubberBandConfig`].
 +pub fn rubber_band_config() -> RubberBandConfig {
 +    *RUBBER_BAND_CONFIG
 +        .read()
 +        .unwrap_or_else(|poisoned| poisoned.into_inner())
 +}
 +
++/// Updates the global [`RubberBandConfig`].
 +pub fn set_rubber_band_config(config: RubberBandConfig) {
 +    if let Ok(mut guard) = RUBBER_BAND_CONFIG.write() {
 +        *guard = config;
