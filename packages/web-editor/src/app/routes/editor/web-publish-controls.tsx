@@ -106,6 +106,7 @@ export function WebPublishControls() {
 						"Cap save renders in this browser:",
 						next.error ?? "the render farm stopped making progress",
 					);
+					setSavedRevision(projectRevision());
 					await saveInBrowser();
 					return;
 				}
