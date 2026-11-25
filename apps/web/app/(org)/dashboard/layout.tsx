@@ -1,6 +1,9 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { findPendingOrganizationInviteId } from "@cap/database/organization-pointer";
+import {
+	findPendingOrganizationInviteId,
+	readActiveOrganizationId,
+} from "@cap/database/organization-pointer";
 import { userIsPro } from "@cap/utils";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -87,6 +90,17 @@ export default async function DashboardLayout({
 		spacesData = [];
 		anyNewNotifications = false;
 		userPreferences = null;
+	}
+
+	// The current user is cached for this request, so pages rendered with this
+	// layout would still read the organization the dashboard just moved off.
+	// Reloading once makes them read the stored one.
+	if (
+		activeOrganizationId &&
+		activeOrganizationId !== user.activeOrganizationId &&
+		(await readActiveOrganizationId(db(), user.id)) === activeOrganizationId
+	) {
+		redirect("/dashboard/caps");
 	}
 
 	const shareableLinkUsage = await shareableLinkUsagePromise;

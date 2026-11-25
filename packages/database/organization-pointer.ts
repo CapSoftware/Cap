@@ -213,3 +213,15 @@ export async function findPendingOrganizationInviteId(
 		.limit(1);
 	return invite?.id ?? null;
 }
+
+export async function readActiveOrganizationId(
+	database: Client,
+	userId: User.UserId,
+): Promise<Organisation.OrganisationId | null> {
+	const [user] = await database
+		.select({ activeOrganizationId: users.activeOrganizationId })
+		.from(users)
+		.where(eq(users.id, userId))
+		.limit(1);
+	return user?.activeOrganizationId ?? null;
+}
