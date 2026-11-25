@@ -52,6 +52,8 @@ This CLI default does not change desktop camera-window settings or Studio's sepa
 
 ## Updates and verification
 
+The RPM carries its own ALSA pulse plugin in `/usr/lib/cap/alsa-lib` instead of requiring `alsa-plugins-pulseaudio`, which conflicts with openSUSE's `pipewire-alsa`. Cap loads it only when the host has no pulse plugin of its own and `ALSA_CONFIG_PATH` is unset. The configuration includes the distribution's `alsa.conf` itself, because openSUSE's alsa-lib ignores an `ALSA_CONFIG_PATH` that lists several files.
+
 DEB and AppImage installations use separate updater targets. RPM and Arch installations direct users to update through their package manager or install the latest package, avoiding an incompatible DEB update.
 
 The release workflow checks bundled executables, native FFmpeg libraries, package markers, AppImage audio configuration, RPM version metadata, and final updater signatures. Runtime validation must additionally cover GPUI/Tauri switching, capture permissions, screen/window/area selection, camera and audio, playback, export, and CLI behavior on each supported desktop.

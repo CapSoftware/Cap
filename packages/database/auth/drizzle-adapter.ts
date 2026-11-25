@@ -7,6 +7,7 @@ import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { Adapter } from "next-auth/adapters";
 import { nanoId } from "../helpers.ts";
 import { enqueueLoopsSync } from "../loops/queue.ts";
+import { insertPersonalOrganization } from "../organization-pointer.ts";
 import {
 	accounts,
 	organizationInvites,
@@ -214,28 +215,7 @@ export function DrizzleAdapter(
 					return;
 				}
 
-				const organizationId = Organisation.OrganisationId.make(nanoId());
-
-				await tx.insert(organizations).values({
-					id: organizationId,
-					ownerId: userId,
-					name: "My Organization",
-				});
-
-				await tx.insert(organizationMembers).values({
-					id: nanoId(),
-					organizationId,
-					userId,
-					role: "owner",
-				});
-
-				await tx
-					.update(users)
-					.set({
-						activeOrganizationId: organizationId,
-						defaultOrgId: organizationId,
-					})
-					.where(eq(users.id, userId));
+				await insertPersonalOrganization(tx, userId);
 			});
 
 			const rows = await db
