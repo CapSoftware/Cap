@@ -75,8 +75,8 @@ cap upload out.mp4 --json                   # -> {"type":"uploaded","id","link"}
 `cap upload <path.cap> --export --json` will export a project to its default output and upload it in one
 step.
 
-On macOS, a foreground Studio `cap record start --duration <seconds> --json` also reports `screenFrames` in its
-`stopped` event: frames shown on screen while recording (`displayed`), delivered by screen capture, handed to the
+On macOS, a foreground Studio `cap record start --duration <seconds> --json` without a camera also reports
+`screenFrames` in its `stopped` event: frames shown on screen while recording (`displayed`), delivered by screen capture, handed to the
 encoder and `written`, and how many were lost in capture, before the encoder and in the encoder.
 
 ## Commands
