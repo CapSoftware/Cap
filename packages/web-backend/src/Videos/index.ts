@@ -31,7 +31,8 @@ import type { CreateVideoInput as RepoCreateVideoInput } from "./VideosRepo.ts";
 import { VideosRepo } from "./VideosRepo.ts";
 
 const DEFAULT_ANALYTICS_RANGE_DAYS = 90;
-const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
+const escapeSqlLiteral = (value: string) =>
+	value.replace(/\\/g, "\\\\").replace(/'/g, "''");
 const formatDate = (date: Date) => date.toISOString().slice(0, 10);
 const formatDateTime = (date: Date) =>
 	date.toISOString().slice(0, 19).replace("T", " ");
