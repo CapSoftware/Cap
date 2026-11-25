@@ -20,6 +20,9 @@ const COLLAPSE_AFTER: Duration = Duration::from_millis(650);
 const RESIZE: Duration = Duration::from_millis(200);
 /// How long the "still recording" line shows after the indicator is hidden.
 const HIDDEN_NOTE: Duration = Duration::from_millis(1800);
+/// A countdown up to this long drains ten times a second; a longer one (a
+/// Resume kept up after a sleep) moves too slowly to need it.
+const FAST_COUNTDOWN: Duration = Duration::from_secs(120);
 
 /// A press on the body. macOS moves the panel itself (screen points);
 /// elsewhere the window manager does, once the press has moved (window px).
@@ -243,7 +246,9 @@ impl Indicator {
                 matches!(active.state, ActiveState::Recording | ActiveState::Starting)
                     || countdown_secs(active).is_some()
             });
-        let fast = self.countdown.is_some();
+        let fast = self
+            .countdown
+            .is_some_and(|(_, total)| total <= FAST_COUNTDOWN);
         if !ticking {
             self.tick = None;
         } else if self.tick.is_none() || self.tick_fast != fast {
