@@ -86,11 +86,11 @@ pub fn diff_tiles(previous: &GrayImage, current: &GrayImage) -> ChangeMap {
                 }
                 let x0 = tx * TILE;
                 let x1 = (x0 + TILE).min(width);
-                for x in x0..x1 {
-                    if (i16::from(a[x]) - i16::from(b[x])).abs() > PIXEL_DELTA {
-                        *count += 1;
-                    }
-                }
+                *count += a[x0..x1]
+                    .iter()
+                    .zip(&b[x0..x1])
+                    .map(|(p, q)| u32::from(p.abs_diff(*q) > PIXEL_DELTA as u8))
+                    .sum::<u32>();
             }
         }
         for (tx, count) in counts.iter().enumerate() {
@@ -140,6 +140,43 @@ mod tests {
             }
         }
         image
+    }
+
+    #[test]
+    fn change_map_matches_the_pixel_rule() {
+        let mut seed = 5u32;
+        let mut next = move || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            seed >> 16
+        };
+        for _ in 0..200 {
+            let (w, h) = (1 + next() % 90, 1 + next() % 70);
+            let a = GrayImage {
+                width: w,
+                height: h,
+                data: (0..w * h).map(|_| next() as u8).collect(),
+            };
+            let mut b = a.clone();
+            for _ in 0..next() % 40 {
+                let i = next() as usize % b.data.len();
+                b.data[i] = b.data[i].wrapping_add(10 + (next() % 30) as u8);
+            }
+            let mut expected = ChangeMap::new(w, h);
+            // A tile changes when at least CHANGED_PIXELS of its pixels do.
+            let mut counts = vec![0u32; expected.bits.len()];
+            for y in 0..h as usize {
+                for x in 0..w as usize {
+                    let i = y * w as usize + x;
+                    if (i16::from(a.data[i]) - i16::from(b.data[i])).abs() > PIXEL_DELTA {
+                        counts[(y / TILE) * expected.cols + x / TILE] += 1;
+                    }
+                }
+            }
+            for (bit, count) in expected.bits.iter_mut().zip(counts) {
+                *bit = count >= CHANGED_PIXELS;
+            }
+            assert_eq!(diff_tiles(&a, &b), expected);
+        }
     }
 
     #[test]
