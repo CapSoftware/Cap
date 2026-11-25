@@ -298,6 +298,11 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Recording stopped",
         ),
         (
+            tr::dialog::saving::in_background(),
+            "Your recording is still saving and will appear in your library when it is done. You can start a new recording now.",
+        ),
+        (tr::dialog::saving::title(), "Still saving"),
+        (
             tr::dialog::storage::stopped_kept(),
             "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.",
         ),
