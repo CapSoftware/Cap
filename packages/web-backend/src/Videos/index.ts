@@ -1,4 +1,5 @@
 import { nanoId } from "@cap/database/helpers";
+import { findAccessibleOrganization } from "@cap/database/organization-pointer";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
@@ -659,36 +660,36 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				function* (input: InstantRecordingCreateInput) {
 					const user = yield* CurrentUser;
 
-					if (user.activeOrganizationId !== input.orgId)
-						return yield* Effect.fail(new Policy.PolicyDeniedError());
-					const [organization] = yield* db.use((db) =>
-						db
-							.select({ id: Db.organizations.id })
-							.from(Db.organizations)
-							.leftJoin(
-								Db.organizationMembers,
-								Dz.and(
-									Dz.eq(
-										Db.organizationMembers.organizationId,
-										Db.organizations.id,
-									),
-									Dz.eq(Db.organizationMembers.userId, user.id),
-								),
-							)
-							.where(
-								Dz.and(
-									Dz.eq(Db.organizations.id, input.orgId),
-									Dz.isNull(Db.organizations.tombstoneAt),
-									Dz.or(
-										Dz.eq(Db.organizations.ownerId, user.id),
-										Dz.eq(Db.organizationMembers.userId, user.id),
-									),
-								),
-							)
-							.limit(1),
+					// A pointer left on an organization the user lost access to
+					// would block every recording, so the requested organization
+					// is accepted instead when they can use it, and stored.
+					const active = yield* db.use((db) =>
+						findAccessibleOrganization(db, user.id, user.activeOrganizationId),
 					);
-					if (!organization)
-						return yield* Effect.fail(new Policy.PolicyDeniedError());
+					if (active) {
+						if (active.id !== input.orgId)
+							return yield* Effect.fail(new Policy.PolicyDeniedError());
+					} else {
+						const requested = yield* db.use((db) =>
+							findAccessibleOrganization(db, user.id, input.orgId),
+						);
+						if (!requested)
+							return yield* Effect.fail(new Policy.PolicyDeniedError());
+						yield* db.use((db) =>
+							db
+								.update(Db.users)
+								.set({ activeOrganizationId: requested.id })
+								.where(
+									Dz.and(
+										Dz.eq(Db.users.id, user.id),
+										Dz.eq(
+											Db.users.activeOrganizationId,
+											user.activeOrganizationId,
+										),
+									),
+								),
+						);
+					}
 
 					const folderId: RepoCreateVideoInput["folderId"] =
 						input.folderId ?? Option.none<Folder.FolderId>();
