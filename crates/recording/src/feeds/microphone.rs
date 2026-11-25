@@ -152,13 +152,18 @@ struct SteadyDeliveryClock {
 #[cfg(target_os = "linux")]
 impl SteadyDeliveryClock {
     const WINDOW: Duration = Duration::from_secs(2);
-    /// When the earliest of the recent arrivals lags the earliest of the
-    /// ones before them by this much, frames were lost. A latency ramp adds
-    /// far less in that time, and comparing earliest arrivals over half a
-    /// second rides out bursts (PipeWire delivers a big quantum, up to about
-    /// 200 ms, in one go).
+    /// An arrival this much later than every arrival kept is a stall that
+    /// lost frames, marked where it happened. PipeWire delivers even its
+    /// largest quantum in bursts of about 200 ms.
+    const STALL: Duration = Duration::from_millis(250);
+    /// When the earliest of the last RECENT of arrivals lags the earliest of
+    /// the ones kept before them (HISTORY) by this much, frames were lost:
+    /// smaller losses, or ones that added up. A latency ramp adds far less in
+    /// that time (PipeWire 1.0's under 100 ms), and comparing earliest
+    /// arrivals rides out bursts.
     const LOSS: Duration = Duration::from_millis(150);
     const RECENT: Duration = Duration::from_millis(500);
+    const HISTORY: Duration = Duration::from_millis(2_500);
     /// Long after the latency a stream starts with has settled.
     const SETTLE: Duration = Duration::from_secs(30);
     /// The most drift followed per window, 1000 ppm: well past any sound
@@ -195,18 +200,19 @@ impl SteadyDeliveryClock {
             }
             anchor = implied;
         }
-        self.recent.push_back((received, implied));
-        // Arrivals from the last RECENT, and before them back to twice that;
-        // the latest earlier one always stays, so the first arrival after a
-        // long stall is measured against the arrivals before it.
-        let recent = |at: &Instant| received.saturating_duration_since(*at) <= Self::RECENT;
-        while self.recent.len() > 2
-            && self.recent.get(1).is_some_and(|(at, _)| {
-                !recent(at) && received.saturating_duration_since(*at) > Self::RECENT * 2
-            })
+        // Arrivals from the last HISTORY; the latest one always stays, so
+        // the first arrival after a long stall is measured against it.
+        while self.recent.len() > 1
+            && self
+                .recent
+                .front()
+                .is_some_and(|(at, _)| received.saturating_duration_since(*at) > Self::HISTORY)
         {
             self.recent.pop_front();
         }
+        let kept_floor = self.recent.iter().map(|(_, implied)| *implied).min();
+        self.recent.push_back((received, implied));
+        let recent = |at: &Instant| received.saturating_duration_since(*at) <= Self::RECENT;
         let floor = |is_recent: bool| {
             self.recent
                 .iter()
@@ -214,13 +220,22 @@ impl SteadyDeliveryClock {
                 .map(|(_, implied)| *implied)
                 .min()
         };
-        if let (Some(now), Some(before)) = (floor(true), floor(false))
-            && now.saturating_duration_since(before) > Self::LOSS
-        {
+        let lost = match (kept_floor, floor(true), floor(false)) {
+            // A stall: this arrival alone is far later than all before it.
+            (Some(kept), _, _) if implied.saturating_duration_since(kept) > Self::STALL => {
+                Some(implied.saturating_duration_since(kept))
+            }
             // Even the earliest recent arrival is this much later than the
-            // ones before: the frames between were lost, so the audio after
-            // them moves on by as much.
-            anchor += now.saturating_duration_since(before);
+            // ones before them.
+            (_, Some(now), Some(before)) if now.saturating_duration_since(before) > Self::LOSS => {
+                Some(now.saturating_duration_since(before))
+            }
+            _ => None,
+        };
+        if let Some(lost) = lost {
+            // The frames between were lost, so the audio after them moves on
+            // by as much.
+            anchor += lost;
             self.recent.clear();
             self.recent.push_back((received, implied));
             self.window_started = Some(received);
@@ -6150,7 +6165,21 @@ mod steady_delivery_clock_tests {
     }
 
     #[test]
-    fn lost_frames_are_marked_within_half_a_second() {
+    fn a_stall_that_lost_frames_is_marked_where_it_happened() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let loss = Duration::from_millis(300);
+        for buffer in 1..=400u32 {
+            let received =
+                start + period() * buffer + if buffer > 50 { loss } else { Duration::ZERO };
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            let off = apart(received, stamped);
+            assert!(off < Duration::from_millis(1), "buffer {buffer}: {off:?}");
+        }
+    }
+
+    #[test]
+    fn a_smaller_loss_is_marked_within_half_a_second() {
         let start = Instant::now();
         let mut clock = SteadyDeliveryClock::default();
         let loss = Duration::from_millis(200);
@@ -6163,6 +6192,28 @@ mod steady_delivery_clock_tests {
                 assert!(off < Duration::from_millis(1), "buffer {buffer}: {off:?}");
             }
         }
+    }
+
+    #[test]
+    fn repeated_short_losses_as_the_stream_starts_are_caught_up() {
+        // 100 ms lost every second from the start: the losses must not be
+        // taken for latency when the stream settles.
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let mut lost = Duration::ZERO;
+        let mut worst = Duration::ZERO;
+        for buffer in 1..=3_200u32 {
+            let captured = period() * buffer + lost;
+            let received = start + captured + Duration::from_millis(20);
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            if buffer > 40 {
+                worst = worst.max(apart(stamped, start + captured));
+            }
+            if buffer % 40 == 0 && buffer <= 1_600 {
+                lost += Duration::from_millis(100);
+            }
+        }
+        assert!(worst < Duration::from_millis(300), "{worst:?}");
     }
 
     #[test]
