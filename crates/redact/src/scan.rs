@@ -152,6 +152,42 @@ struct Thumb {
     width: usize,
     height: usize,
     pixels: Vec<u8>,
+    /// Running sums of whole columns: `columns[x]` is the sum of every pixel
+    /// left of column `x`.
+    columns: Vec<u32>,
+}
+
+impl Thumb {
+    fn new(width: usize, height: usize, pixels: Vec<u8>) -> Self {
+        let mut columns = vec![0u32; width + 1];
+        for row in pixels.chunks_exact(width) {
+            for (x, value) in row.iter().enumerate() {
+                columns[x + 1] += u32::from(*value);
+            }
+        }
+        for x in 0..width {
+            columns[x + 1] += columns[x];
+        }
+        Self {
+            width,
+            height,
+            pixels,
+            columns,
+        }
+    }
+
+    /// Sum of the pixels in columns `x0..x1` and rows `y0..y1`, from the
+    /// column sums less the few rows outside `y0..y1`.
+    fn block_sum(&self, x0: usize, x1: usize, y0: usize, y1: usize) -> u32 {
+        let mut sum = self.columns[x1] - self.columns[x0];
+        for y in (0..y0).chain(y1..self.height) {
+            sum -= self.pixels[y * self.width + x0..y * self.width + x1]
+                .iter()
+                .map(|v| u32::from(*v))
+                .sum::<u32>();
+        }
+        sum
+    }
 }
 
 struct CacheEntry {
@@ -204,6 +240,28 @@ fn aligned_match(a: &Thumb, b: &Thumb, dx: i32, dy: i32) -> bool {
     if x_end - x_start + 4 < a.width.max(b.width) || y_end - y_start + 3 < a.height.max(b.height) {
         return false;
     }
+    let (ya0, ya1) = ((y_start as i32 + dy) as usize, (y_end as i32 + dy) as usize);
+    let shift = |x: usize| (x as i32 + dx) as usize;
+    // The difference of two blocks' sums is at most the sum of their pixel
+    // differences, so a block (or the whole overlap) whose sums are too far
+    // apart fails below without comparing its pixels.
+    let count = ((x_end - x_start) * (y_end - y_start)) as u32;
+    let gap = |x0: usize, x1: usize| {
+        a.block_sum(shift(x0), shift(x1), ya0, ya1)
+            .abs_diff(b.block_sum(x0, x1, y_start, y_end))
+    };
+    if gap(x_start, x_end) / count > THUMB_MEAN {
+        return false;
+    }
+    let mut column = x_start;
+    while column < x_end {
+        let block_end = (column + THUMB_BLOCK).min(x_end);
+        let pixels = ((block_end - column) * (y_end - y_start)) as u32;
+        if gap(column, block_end) / pixels > THUMB_BLOCK_MAX {
+            return false;
+        }
+        column = block_end;
+    }
     let mut total = 0u64;
     let mut count = 0u64;
     let mut column = x_start;
@@ -212,11 +270,13 @@ fn aligned_match(a: &Thumb, b: &Thumb, dx: i32, dy: i32) -> bool {
         let mut sum = 0u32;
         for y in y_start..y_end {
             let ya = (y as i32 + dy) as usize;
-            let row_a = &a.pixels[ya * a.width..(ya + 1) * a.width];
-            let row_b = &b.pixels[y * b.width..(y + 1) * b.width];
-            for x in column..block_end {
-                sum += u32::from(row_a[(x as i32 + dx) as usize].abs_diff(row_b[x]));
-            }
+            let row_a = &a.pixels[ya * a.width + shift(column)..ya * a.width + shift(block_end)];
+            let row_b = &b.pixels[y * b.width + column..y * b.width + block_end];
+            sum += row_a
+                .iter()
+                .zip(row_b)
+                .map(|(p, q)| u32::from(p.abs_diff(*q)))
+                .sum::<u32>();
         }
         let pixels = ((block_end - column) * (y_end - y_start)) as u32;
         if sum / pixels > THUMB_BLOCK_MAX {
@@ -243,11 +303,7 @@ fn thumbnail(luma: &GrayImage, rect: Rect) -> Option<Thumb> {
     for y in y0..y0 + height {
         pixels.extend_from_slice(&luma.data[y * stride + x0..y * stride + x0 + width]);
     }
-    Some(Thumb {
-        width,
-        height,
-        pixels,
-    })
+    Some(Thumb::new(width, height, pixels))
 }
 
 struct Run {
@@ -1420,6 +1476,91 @@ fn overlap(a: &Rect, b: &Rect) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pixel-by-pixel comparison the read cache is defined by.
+    fn reference_match(a: &Thumb, b: &Thumb, dx: i32, dy: i32) -> bool {
+        let x_start = (-dx).max(0) as usize;
+        let x_end = (a.width as i32 - dx).min(b.width as i32);
+        let y_start = (-dy).max(0) as usize;
+        let y_end = (a.height as i32 - dy).min(b.height as i32);
+        if x_end <= x_start as i32 || y_end <= y_start as i32 {
+            return false;
+        }
+        let (x_end, y_end) = (x_end as usize, y_end as usize);
+        if x_end - x_start + 4 < a.width.max(b.width)
+            || y_end - y_start + 3 < a.height.max(b.height)
+        {
+            return false;
+        }
+        let (mut total, mut count) = (0u64, 0u64);
+        let mut column = x_start;
+        while column < x_end {
+            let block_end = (column + THUMB_BLOCK).min(x_end);
+            let mut sum = 0u32;
+            for y in y_start..y_end {
+                let ya = (y as i32 + dy) as usize;
+                for x in column..block_end {
+                    let xa = (x as i32 + dx) as usize;
+                    sum +=
+                        u32::from(a.pixels[ya * a.width + xa].abs_diff(b.pixels[y * b.width + x]));
+                }
+            }
+            let pixels = ((block_end - column) * (y_end - y_start)) as u32;
+            if sum / pixels > THUMB_BLOCK_MAX {
+                return false;
+            }
+            total += u64::from(sum);
+            count += u64::from(pixels);
+            column = block_end;
+        }
+        total / count.max(1) <= u64::from(THUMB_MEAN)
+    }
+
+    #[test]
+    fn cache_match_agrees_with_the_pixel_comparison() {
+        let mut seed = 99u32;
+        let mut next = move || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            seed >> 16
+        };
+        let (mut agree, mut matched) = (0, 0);
+        for _ in 0..3000 {
+            let (w, h) = (8 + next() as usize % 120, 4 + next() as usize % 30);
+            let base = (0..w * h)
+                .map(|_| if next() % 4 == 0 { 30 } else { 230 })
+                .collect::<Vec<u8>>();
+            let a = Thumb::new(w, h, base.clone());
+            let (bw, bh) = (
+                (w as i32 + next() as i32 % 9 - 4).max(2) as usize,
+                (h as i32 + next() as i32 % 7 - 3).max(2) as usize,
+            );
+            let noise = next() % 40;
+            let (ox, oy) = (next() as usize % 3, next() as usize % 3);
+            let pixels = (0..bw * bh)
+                .map(|i| {
+                    let (x, y) = (i % bw + ox, i / bw + oy);
+                    let v = if x < w && y < h { base[y * w + x] } else { 230 };
+                    let n = (next() % (noise + 1)) as i32 - noise as i32 / 2;
+                    let v = if next() % 50 == 0 { 255 - v } else { v };
+                    (i32::from(v) + n).clamp(0, 255) as u8
+                })
+                .collect::<Vec<u8>>();
+            let b = Thumb::new(bw, bh, pixels);
+            for dy in -2..=2 {
+                for dx in -2..=2 {
+                    let expected = reference_match(&a, &b, dx, dy);
+                    assert_eq!(
+                        aligned_match(&a, &b, dx, dy),
+                        expected,
+                        "{w}x{h} {bw}x{bh} {dx},{dy}"
+                    );
+                    agree += 1;
+                    matched += usize::from(expected);
+                }
+            }
+        }
+        assert!(matched > 100 && matched < agree, "{matched} of {agree}");
+    }
 
     /// A frame with a pseudo-random "line of text" of `glyphs` 10 px glyphs
     /// drawn at (x, y), 20 px tall, with `noise` added to every pixel.
