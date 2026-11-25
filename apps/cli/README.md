@@ -77,7 +77,8 @@ step.
 
 On macOS, a foreground Studio `cap record start --duration <seconds> --json` without a camera also reports
 `screenFrames` in its `stopped` event: frames shown on screen while recording (`displayed`), delivered by screen capture, handed to the
-encoder and `written`, and how many were lost in capture, before the encoder and in the encoder.
+encoder and `written` to the file, and how many were lost in capture, before the encoder and in the encoder (which
+includes frames the writer could not put on disk).
 
 ## Commands
 
