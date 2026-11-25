@@ -12,6 +12,7 @@ import {
 	createDesktopRedirectPage,
 	desktopSessionRequestQuerySchema,
 } from "@/lib/desktop-session";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { zValidator } from "@/utils/zod-validator";
 
 export const app = new Hono();
@@ -55,7 +56,12 @@ app.get(
 				expires: String(decodedToken.exp),
 			};
 		} else {
-			const apiKey = await createDesktopApiKey(user.id);
+			const apiKey = (await isRateLimited(RATE_LIMIT_IDS.DESKTOP_KEY_MINT, {
+				key: `desktop-key-mint:${user.id}`,
+				headers: c.req.raw.headers,
+			}))
+				? null
+				: await createDesktopApiKey(user.id);
 			if (!apiKey) {
 				return c.text(
 					"Too many sign-ins in the last hour. Try again later.",

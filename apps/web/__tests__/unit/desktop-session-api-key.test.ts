@@ -12,8 +12,11 @@ type KeyRow = {
 const state = vi.hoisted(() => ({
 	rows: [] as KeyRow[],
 	clock: 0,
+	base: 0,
 	userId: "user-1",
 	events: [] as string[],
+	mints: new Map<string, number>(),
+	limiterCalls: [] as [string, string | undefined][],
 }));
 
 const dialect = new MySqlDialect();
@@ -44,7 +47,10 @@ function keysTable() {
 		values: async (value: Omit<KeyRow, "createdAt">) => {
 			state.events.push("insert");
 			state.clock += 1;
-			state.rows.push({ ...value, createdAt: new Date(state.clock * 1000) });
+			state.rows.push({
+				...value,
+				createdAt: new Date(state.base + state.clock),
+			});
 		},
 	});
 	const select = () => ({
@@ -110,6 +116,16 @@ vi.mock("@cap/database/auth/session", () => ({
 vi.mock("@cap/database/auth/auth-options", () => ({
 	decodeSessionToken: vi.fn(),
 }));
+vi.mock("@/lib/rate-limit", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/rate-limit")>()),
+	isRateLimited: async (ruleId: string, opts?: { key?: string }) => {
+		state.limiterCalls.push([ruleId, opts?.key]);
+		const key = opts?.key ?? "";
+		const seen = (state.mints.get(key) ?? 0) + 1;
+		state.mints.set(key, seen);
+		return seen > 20;
+	},
+}));
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({
 		NEXTAUTH_SECRET: "secret",
@@ -134,8 +150,11 @@ describe("desktop api key sign-in", () => {
 	beforeEach(() => {
 		state.rows = [];
 		state.clock = 0;
+		state.base = Date.now();
 		state.userId = "user-1";
 		state.events = [];
+		state.mints.clear();
+		state.limiterCalls = [];
 	});
 
 	it("returns a new key that stays stored for the signed-in user", async () => {
@@ -153,7 +172,14 @@ describe("desktop api key sign-in", () => {
 	});
 
 	it("keeps only the 20 newest desktop keys per user", async () => {
+		const twoHoursAgo = state.base - 2 * 60 * 60 * 1000;
 		state.rows.push(
+			...Array.from({ length: 20 }, (_, index) => ({
+				id: `old-${index}`,
+				userId: "user-1",
+				source: "desktop",
+				createdAt: new Date(twoHoursAgo + index),
+			})),
 			{
 				id: "mobile-key",
 				userId: "user-1",
@@ -169,9 +195,12 @@ describe("desktop api key sign-in", () => {
 		);
 
 		const issued: (string | null)[] = [];
-		for (let index = 0; index < 25; index++) issued.push(await requestApiKey());
+		for (let index = 0; index < 5; index++) issued.push(await requestApiKey());
 
-		expect(desktopKeys("user-1").map((row) => row.id)).toEqual(issued.slice(5));
+		expect(desktopKeys("user-1").map((row) => row.id)).toEqual([
+			...Array.from({ length: 15 }, (_, index) => `old-${5 + index}`),
+			...issued,
+		]);
 		expect(state.rows.map((row) => row.id)).toEqual(
 			expect.arrayContaining(["mobile-key", "other-user-key"]),
 		);
@@ -201,34 +230,47 @@ describe("desktop api key sign-in", () => {
 		expect(state.events).toEqual(["lock:update:user-1", "count", "insert"]);
 	});
 
-	it("issues no key once 20 desktop keys were made in the last hour", async () => {
-		const now = Date.now();
-		const recent = (id: string, minutesAgo: number, source = "desktop") => ({
-			id,
-			userId: "user-1",
-			source,
-			createdAt: new Date(now - minutesAgo * 60_000),
-		});
-		state.rows.push(
-			...Array.from({ length: 19 }, (_, index) =>
-				recent(`recent-${index}`, 50 - index),
-			),
-			recent("hour-old", 61),
-			recent("extension-key", 5, "extension"),
-		);
-		expect(await requestApiKey()).toMatch(/^[0-9a-f-]{36}$/);
-
-		state.rows.push(recent("recent-19", 1));
-		state.events = [];
-		const before = state.rows.length;
+	const request = async () => {
 		const { app } = await import("@/app/api/desktop/[...route]/session");
-		const refused = await app.request(
+		return app.request(
 			"https://cap.example/request?type=api_key&platform=web&port=49152",
 		);
+	};
+
+	it("issues no key once 20 desktop keys were made in the last hour", async () => {
+		state.rows.push({
+			id: "hour-old",
+			userId: "user-1",
+			source: "desktop",
+			createdAt: new Date(state.base - 61 * 60 * 1000),
+		});
+		for (let index = 0; index < 20; index++) {
+			expect(await requestApiKey()).toMatch(/^[0-9a-f-]{36}$/);
+		}
+		state.mints.clear();
+		state.events = [];
+
+		const refused = await request();
 
 		expect(refused.status).toBe(429);
 		expect(refused.headers.get("location")).toBeNull();
 		expect(state.events).toEqual(["lock:update:user-1", "count"]);
-		expect(state.rows).toHaveLength(before);
+		expect(desktopKeys("user-1")).toHaveLength(20);
+	});
+
+	it("keeps counting keys issued before a sign-out that deleted them", async () => {
+		for (let index = 0; index < 20; index++) await requestApiKey();
+		state.rows = [];
+		state.events = [];
+
+		const refused = await request();
+
+		expect(refused.status).toBe(429);
+		expect(state.events).toEqual([]);
+		expect(state.rows).toHaveLength(0);
+		expect(state.limiterCalls).toHaveLength(21);
+		for (const call of state.limiterCalls) {
+			expect(call).toEqual(["rl_desktop_key_mint", "desktop-key-mint:user-1"]);
+		}
 	});
 });
