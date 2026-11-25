@@ -219,15 +219,9 @@ impl ControlsWindow {
                     .then(|| tr::controls::paused_for_sleep().to_owned())
             })
             .or_else(|| {
-                session.storage_warning.map(|warning| {
-                    match warning {
-                        crate::session::StorageWarning::SaveAtRisk => {
-                            tr::controls::low_storage_save()
-                        }
-                        crate::session::StorageWarning::NearlyFull => tr::controls::low_storage(),
-                    }
-                    .to_owned()
-                })
+                session
+                    .storage_warning
+                    .then(|| tr::controls::low_storage().to_owned())
             })
     }
 

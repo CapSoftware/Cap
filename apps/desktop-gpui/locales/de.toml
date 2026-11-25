@@ -1200,7 +1200,6 @@ share_failed_hint = "Prüfen Sie Ihre Verbindung und versuchen Sie es erneut."
 [controls]
 disk_full_resume = "Nicht genug Speicherplatz zum Fortsetzen. Geben Sie Speicher frei und versuchen Sie es erneut, oder drücken Sie Stopp, um zu speichern."
 low_storage = "Wenig Speicherplatz. Cap beendet die Aufnahme bald, um sie zu sichern."
-low_storage_save = "Wenig Speicherplatz. Geben Sie Speicher frei, damit Cap diese Aufnahme beim Beenden sichern kann."
 paused_for_sleep = "Die Aufnahme wurde pausiert, weil Ihr Mac in den Ruhezustand gewechselt ist. Setzen Sie sie fort, wenn Sie bereit sind, oder klicken Sie auf Stopp, um sie zu sichern."
 
 [controls.confirm]
