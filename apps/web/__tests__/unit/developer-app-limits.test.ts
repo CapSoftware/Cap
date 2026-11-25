@@ -1,7 +1,15 @@
 import * as Db from "@cap/database/schema";
 import type { SQL } from "drizzle-orm";
 import { MySqlDialect, type MySqlTable } from "drizzle-orm/mysql-core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 
 const OWNER = "user_one";
 const LIMIT = 25;
@@ -12,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 	db: vi.fn(),
 	limited: false,
 	limitChecks: [] as Array<{ ruleId: string; key?: string }>,
+	torExitGate: "off",
 }));
 
 vi.mock("server-only", () => ({}));
@@ -28,6 +37,16 @@ vi.mock("@cap/database/crypto", () => ({
 	decrypt: async (value: string) => value.replace(/^sealed:/, ""),
 }));
 vi.mock("@/lib/infra-access", () => ({ canUseInfra: () => true }));
+vi.mock("@cap/env", async (importOriginal) => {
+	const original = await importOriginal<typeof import("@cap/env")>();
+	return {
+		...original,
+		serverEnv: () => ({
+			...original.serverEnv(),
+			CAP_TOR_EXIT_GATE: mocks.torExitGate,
+		}),
+	};
+});
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@/lib/rate-limit")>()),
 	isRateLimited: async (ruleId: string, opts?: { key?: string }) => {
@@ -274,6 +293,7 @@ describe("limits on creating developer apps", () => {
 		mocks.db.mockReturnValue(database.client);
 		mocks.limited = false;
 		mocks.limitChecks = [];
+		mocks.torExitGate = "off";
 	});
 
 	const agentRequest = (
@@ -792,6 +812,56 @@ describe("limits on creating developer apps", () => {
 				200,
 			);
 			expect(database.apps.map((app) => app.logoUrl)).toEqual([null, null]);
+		});
+	});
+	describe("requests from a Tor exit in deny mode", () => {
+		const LISTED = "198.51.100.7";
+		const UNLISTED = "203.0.113.20";
+
+		beforeEach(async () => {
+			const { resetTorExitListCache } = await import("@/lib/tor-exit-gate");
+			resetTorExitListCache();
+			mocks.torExitGate = "deny";
+			vi.stubEnv("VERCEL", "1");
+			const list = [
+				...Array.from({ length: 60 }, (_, i) => `192.0.2.${i + 1}`),
+				LISTED,
+			].join("\n");
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => new Response(list)),
+			);
+			vi.spyOn(console, "warn").mockImplementation(() => {});
+		});
+
+		afterEach(() => {
+			vi.unstubAllGlobals();
+			vi.unstubAllEnvs();
+		});
+
+		const agentCreateFrom = (address: string) => {
+			const request = agentRequest("POST", "/developer/apps", {
+				name: "Agent app",
+				environment: "development",
+			});
+			request.headers.set("x-real-ip", address);
+			return POST(request);
+		};
+
+		it("refuses an agent request before the rate limit and creates nothing", async () => {
+			const response = await agentCreateFrom(LISTED);
+
+			expect(response.status).toBe(403);
+			expect(await response.json()).toMatchObject({ code: "FORBIDDEN" });
+			expect(mocks.limitChecks).toEqual([]);
+			expect(database.liveApps()).toHaveLength(0);
+		});
+
+		it("creates the app for other addresses", async () => {
+			const response = await agentCreateFrom(UNLISTED);
+
+			expect(response.status).toBe(200);
+			expect(database.liveApps()).toHaveLength(1);
 		});
 	});
 });
