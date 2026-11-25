@@ -4,7 +4,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { authApiKeys, users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { User } from "@cap/web-domain";
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, count, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import {
@@ -12,6 +12,7 @@ import {
 	createDesktopRedirectPage,
 	desktopSessionRequestQuerySchema,
 } from "@/lib/desktop-session";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { shouldRefuseTorExit } from "@/lib/tor-exit-gate";
 import { zValidator } from "@/utils/zod-validator";
 
@@ -62,7 +63,22 @@ app.get(
 				expires: String(decodedToken.exp),
 			};
 		} else {
-			data = { type: "api_key", api_key: await createDesktopApiKey(user.id) };
+			const apiKey = (await isRateLimited(RATE_LIMIT_IDS.DESKTOP_KEY_MINT, {
+				key: `desktop-key-mint:${user.id}`,
+				headers: c.req.raw.headers,
+			}))
+				? null
+				: await createDesktopApiKey(user.id);
+			if (!apiKey) {
+				return c.text(
+					"Too many sign-ins in the last hour. Try again later.",
+					429,
+					{
+						"Retry-After": String(DESKTOP_API_KEY_WINDOW_MS / 1000),
+					},
+				);
+			}
+			data = { type: "api_key", api_key: apiKey };
 		}
 
 		const params = new URLSearchParams({ ...data, user_id: user.id });
@@ -92,16 +108,32 @@ app.get(
 );
 
 const MAX_DESKTOP_API_KEYS_PER_USER = 20;
+const DESKTOP_API_KEYS_PER_HOUR = 20;
+const DESKTOP_API_KEY_WINDOW_MS = 60 * 60 * 1000;
 const STALE_DESKTOP_API_KEY_BATCH = 1000;
 
 async function createDesktopApiKey(userId: User.UserId) {
 	const id = crypto.randomUUID();
-	await db().transaction(async (tx) => {
+	const minted = await db().transaction(async (tx) => {
 		await tx
 			.select({ id: users.id })
 			.from(users)
 			.where(eq(users.id, userId))
 			.for("update");
+		const [recent] = await tx
+			.select({ total: count() })
+			.from(authApiKeys)
+			.where(
+				and(
+					eq(authApiKeys.userId, userId),
+					eq(authApiKeys.source, "desktop"),
+					gt(
+						authApiKeys.createdAt,
+						new Date(Date.now() - DESKTOP_API_KEY_WINDOW_MS),
+					),
+				),
+			);
+		if (Number(recent?.total ?? 0) >= DESKTOP_API_KEYS_PER_HOUR) return false;
 		await tx.insert(authApiKeys).values({ id, userId, source: "desktop" });
 		for (;;) {
 			const staleKeys = await tx
@@ -126,8 +158,9 @@ async function createDesktopApiKey(userId: User.UserId) {
 			);
 			if (staleKeys.length < STALE_DESKTOP_API_KEY_BATCH) break;
 		}
+		return true;
 	});
-	return id;
+	return minted ? id : null;
 }
 
 function getDeploymentOrigin() {
