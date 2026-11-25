@@ -3087,25 +3087,25 @@ impl SettingsWindow {
                         self.rows(vec![
                             self.setting_row(
                                 "Resistance",
-                                Some("Asymptotic pull resistance (0.10..1.00, default 0.55)."),
+                                Some("Asymptotic pull resistance (0.05..1.00, default 0.10)."),
                                 stepper(
                                     "rb-resistance",
                                     format!("{:.2}", cfg.resistance),
                                     Box::new(|_, _| {
                                         let mut c = gpui::rubber_band_config();
-                                        c.resistance = (c.resistance - 0.05).clamp(0.10, 1.00);
+                                        c.resistance = (c.resistance - 0.05).clamp(0.05, 1.00);
                                         gpui::set_rubber_band_config(c);
                                     }),
                                     Box::new(|_, _| {
                                         let mut c = gpui::rubber_band_config();
-                                        c.resistance = (c.resistance + 0.05).clamp(0.10, 1.00);
+                                        c.resistance = (c.resistance + 0.05).clamp(0.05, 1.00);
                                         gpui::set_rubber_band_config(c);
                                     }),
                                 ),
                             ),
                             self.setting_row(
                                 "Spring Response (s)",
-                                Some("Return duration (0.20..1.50s, iOS default 0.575s; lower = snappier)."),
+                                Some("Return duration (0.20..1.50s, default 0.425s macOS / 0.350s Win & Linux)."),
                                 stepper(
                                     "rb-response",
                                     format!("{:.3}s", cfg.response),
@@ -3123,7 +3123,7 @@ impl SettingsWindow {
                             ),
                             self.setting_row(
                                 "Momentum Carry",
-                                Some("Momentum overscroll scale (0.00..1.00, default 0.35)."),
+                                Some("Momentum overscroll scale (0.00..1.00, default 0.25)."),
                                 stepper(
                                     "rb-momentum",
                                     format!("{:.2}", cfg.momentum_carry),

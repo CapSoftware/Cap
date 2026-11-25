@@ -354,6 +354,40 @@ index c02bd16..de829d7 100644
      pub(crate) active_tooltip: Option<Rc<RefCell<Option<ActiveTooltip>>>>,
  }
  
+diff --git a/crates/gpui/src/elements/uniform_list.rs b/crates/gpui/src/elements/uniform_list.rs
+index 94ac002..f21da26 100644
+--- a/crates/gpui/src/elements/uniform_list.rs
++++ b/crates/gpui/src/elements/uniform_list.rs
+@@ -378,6 +378,9 @@ impl Element for UniformList {
+             handle.deferred_scroll_to_item.take()
+         });
+ 
++        #[cfg(feature = "rubber-band")]
++        let rubber_band_state = self.interactivity.rubber_band_state.clone();
++
+         self.interactivity.prepaint(
+             global_id,
+             inspector_id,
+@@ -397,9 +400,17 @@ impl Element for UniformList {
+                     let content_height = item_height * self.item_count;
+ 
+                     let is_scrolled_vertically = !scroll_offset.y.is_zero();
+-                    let max_scroll_offset = padded_bounds.size.height - content_height;
++                    let max_scroll_offset = (padded_bounds.size.height - content_height).min(Pixels::ZERO);
++
++                    #[cfg(feature = "rubber-band")]
++                    let is_rubber_banding = rubber_band_state.as_ref().is_some_and(|state| {
++                        let rb = state.borrow();
++                        rb.is_springing() || rb.y.raw_overscroll != 0.0
++                    });
++                    #[cfg(not(feature = "rubber-band"))]
++                    let is_rubber_banding = false;
+ 
+-                    if is_scrolled_vertically && scroll_offset.y < max_scroll_offset {
++                    if !is_rubber_banding && is_scrolled_vertically && scroll_offset.y < max_scroll_offset {
+                         shared_scroll_offset.borrow_mut().y = max_scroll_offset;
+                         scroll_offset.y = max_scroll_offset;
+                     }
 diff --git a/crates/gpui/src/gpui.rs b/crates/gpui/src/gpui.rs
 index a143fab..bbaac69 100644
 --- a/crates/gpui/src/gpui.rs
@@ -429,10 +463,10 @@ index 1feee49..1c95a05 100644
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..8cdcb81
+index 0000000..0090814
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,328 @@
+@@ -0,0 +1,331 @@
 +use std::f32::consts::PI;
 +use std::sync::RwLock;
 +use std::time::Instant;
@@ -457,9 +491,12 @@ index 0000000..8cdcb81
 +
 +impl RubberBandConfig {
 +    pub const DEFAULT: Self = Self {
-+        resistance: 0.55,
-+        response: 0.575,
-+        momentum_carry: 0.35,
++        resistance: 0.10,
++        #[cfg(target_os = "macos")]
++        response: 0.425,
++        #[cfg(not(target_os = "macos"))]
++        response: 0.350,
++        momentum_carry: 0.25,
 +        max_overscroll_ratio: 0.50,
 +        settle_epsilon: 0.25,
 +    };
