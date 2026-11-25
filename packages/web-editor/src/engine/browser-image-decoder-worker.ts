@@ -1,3 +1,4 @@
+import { MISSING_EDITOR_IMAGE } from "./editor-image-missing";
 import { readImageHeader } from "./image-header";
 import { fitWithin, isOpaque, resizeTriangle } from "./triangle-resize";
 
@@ -119,6 +120,7 @@ async function requestBytes(request: DecodeRequest) {
 		cache: "default",
 		credentials: "same-origin",
 	});
+	if (response.status === 404) throw new Error(MISSING_EDITOR_IMAGE);
 	if (!response.ok) throw new Error("Editor image could not load");
 	const bytes = await response.arrayBuffer();
 	if (bytes.byteLength < 1 || bytes.byteLength > 64 * 1024 * 1024) {

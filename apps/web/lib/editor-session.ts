@@ -466,8 +466,8 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 			),
 		);
 		// A saved image whose object is gone is left out, so the editor still
-		// opens and draws a plain background in its place, as the preview and
-		// export already do for an image that fails to load.
+		// opens. The file route answers 404 for it, and the preview and export
+		// draw nothing in its place.
 		const assetHeads = yield* Effect.all(
 			assets.map((asset) =>
 				storage.headObject(asset.key).pipe(

@@ -12,6 +12,7 @@ import {
 import { Effect, Layer, Schema, Stream } from "effect";
 import { loadEligibleEditorVideo } from "@/lib/editor-session";
 import { apiToHandler } from "@/lib/server";
+import { isStorageObjectNotFound } from "@/lib/storage-not-found";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
 export const dynamic = "force-dynamic";
@@ -80,8 +81,12 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					const head = yield* bucket
 						.headObject(asset.key)
 						.pipe(
-							Effect.catchTag("StorageError", () =>
-								Effect.fail(new HttpApiError.ServiceUnavailable()),
+							Effect.catchTag("StorageError", (error) =>
+								Effect.fail(
+									isStorageObjectNotFound(error)
+										? new HttpApiError.NotFound()
+										: new HttpApiError.ServiceUnavailable(),
+								),
 							),
 						);
 					if (

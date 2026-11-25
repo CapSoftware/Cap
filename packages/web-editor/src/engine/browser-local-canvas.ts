@@ -29,6 +29,7 @@ import {
 import { loadBrowserRenderer } from "./browser-renderer";
 import { ensureBrowserRendererFonts } from "./browser-renderer-fonts";
 import { resolveEditorAssetUrl } from "./editor-asset-url";
+import { isMissingEditorImage } from "./editor-image-missing";
 import { perfSpan, perfStart } from "./editor-perf";
 import { setPreviewBackend } from "./renderer-backend";
 
@@ -345,7 +346,10 @@ export class BrowserLocalCanvas {
 				image.height,
 				new Uint8Array(image.pixels),
 			);
-		})();
+		})().catch((error: unknown) => {
+			if (!isMissingEditorImage(error)) throw error;
+			console.warn("Editor image is gone from storage:", path);
+		});
 		this.loadedAssets.set(path, load);
 		load.catch(() => {
 			if (this.loadedAssets.get(path) === load) this.loadedAssets.delete(path);

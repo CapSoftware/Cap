@@ -31,6 +31,10 @@ import {
 	UPLOADS_NV12_PLANES,
 } from "./browser-nv12-planes";
 import {
+	isMissingEditorImage,
+	MISSING_EDITOR_IMAGE,
+} from "./editor-image-missing";
+import {
 	isSourceUrlRenewReply,
 	parentSourceUrlRenewer,
 	type SourceUrlRenewReply,
@@ -302,6 +306,7 @@ async function loadModule(): Promise<RendererModule> {
 
 async function fetchBytes(url: string) {
 	const response = await fetch(url, { credentials: "same-origin" });
+	if (response.status === 404) throw new Error(MISSING_EDITOR_IMAGE);
 	if (!response.ok) throw new Error("Export asset could not load");
 	return new Uint8Array(await response.arrayBuffer());
 }
@@ -350,8 +355,13 @@ async function prepareAssets(module: RendererModule, job: BrowserExportJob) {
 	await Promise.all([
 		...Object.entries(job.assetUrls).map(async ([path, url]) => {
 			if (registeredAssets.has(path) || module.has_asset(path)) return;
-			module.register_asset(path, await fetchBytes(url));
-			registeredAssets.add(path);
+			try {
+				module.register_asset(path, await fetchBytes(url));
+				registeredAssets.add(path);
+			} catch (cause) {
+				if (!isMissingEditorImage(cause)) throw cause;
+				console.warn("Export image is gone from storage:", path);
+			}
 		}),
 		...Object.entries(job.optionalAssetUrls ?? {}).map(async ([path, url]) => {
 			if (registeredAssets.has(path) || module.has_asset(path)) return;
