@@ -19,9 +19,13 @@ import {
 	isNoSpokenAudioError,
 	LIVE_TRANSCRIBE,
 	LIVE_TRANSCRIPT_NO_SEGMENTS,
+	type LiveChunkBatchResult,
+	type LiveChunkCursor,
+	type LiveChunkResult,
 	type LiveTranscriptState,
 	parseLiveTranscript,
 	planNextLiveChunk,
+	runLiveChunkBatch,
 } from "@/lib/live-transcribe-core";
 import {
 	finishLiveTranscription,
@@ -48,24 +52,6 @@ type InitResult =
 			languageCode: string | null;
 			orgLanguage: AiGenerationLanguage;
 	  };
-
-type ChunkStepResult =
-	| {
-			outcome: "chunk";
-			lastAudioSegmentIndex: number;
-			transcribedDurationMs: number;
-			languageCode: string | null;
-			/** This chunk was the recording's final one: the manifest is complete
-			 * and coverage is now full, so promotion can start immediately
-			 * without another poll round-trip. */
-			recordingComplete?: boolean;
-	  }
-	| { outcome: "chunk-failed"; failedAtIndex: number; reason: string }
-	| { outcome: "waiting" }
-	| { outcome: "done" }
-	| { outcome: "no-audio" }
-	| { outcome: "canonical-done" }
-	| { outcome: "gone" };
 
 /**
  * Live transcription for an instant-mode recording. Polls the segment
@@ -95,32 +81,32 @@ export async function liveTranscribeWorkflow(
 		};
 	}
 
-	let lastIndex = init.lastAudioSegmentIndex;
-	let transcribedMs = init.transcribedDurationMs;
-	let languageCode = init.languageCode;
-	let chunkCount = 0;
+	let cursor: LiveChunkCursor = {
+		lastAudioSegmentIndex: init.lastAudioSegmentIndex,
+		transcribedDurationMs: init.transcribedDurationMs,
+		languageCode: init.languageCode,
+		chunkCount: 0,
+	};
 	let idleSteps = 0;
 	let failuresAtIndex = 0;
 	let outcome = "chunk-limit";
+	let promotion: LivePromotionResult | undefined;
 
 	try {
-		while (chunkCount < LIVE_TRANSCRIBE.MAX_CHUNKS) {
-			if (transcribedMs >= LIVE_TRANSCRIBE.MAX_TRANSCRIBED_SECONDS * 1000) {
+		while (cursor.chunkCount < LIVE_TRANSCRIBE.MAX_CHUNKS) {
+			if (
+				cursor.transcribedDurationMs >=
+				LIVE_TRANSCRIBE.MAX_TRANSCRIBED_SECONDS * 1000
+			) {
 				outcome = "budget-exhausted";
 				break;
 			}
 
-			const targetSeconds =
-				chunkCount < LIVE_TRANSCRIBE.GROW_AFTER_CHUNKS
-					? LIVE_TRANSCRIBE.INITIAL_CHUNK_SECONDS
-					: LIVE_TRANSCRIBE.MAX_CHUNK_SECONDS;
-
-			const result = await processNextLiveChunk({
+			const batch = await processLiveChunks({
 				videoId,
 				userId,
-				lastProcessedIndex: lastIndex,
-				targetSeconds,
-				language: languageCode ?? init.orgLanguage,
+				cursor,
+				orgLanguage: init.orgLanguage,
 				// After repeated failures the chunk is skipped: advance past it and
 				// leave a gap for the canonical transcription to fill.
 				skipPastFailedChunk:
@@ -129,19 +115,17 @@ export async function liveTranscribeWorkflow(
 				withContext: failuresAtIndex === 0,
 			});
 
-			if (result.outcome === "chunk") {
-				lastIndex = result.lastAudioSegmentIndex;
-				transcribedMs = result.transcribedDurationMs;
-				languageCode = languageCode ?? result.languageCode;
-				chunkCount++;
+			if (batch.chunks > 0) {
+				cursor = {
+					...batch.cursor,
+					languageCode: cursor.languageCode ?? batch.cursor.languageCode,
+				};
 				idleSteps = 0;
 				failuresAtIndex = 0;
-				if (result.recordingComplete) {
-					outcome = "done";
-					break;
-				}
-				continue;
 			}
+
+			const result = batch.last;
+			if (result.outcome === "progress") continue;
 
 			if (result.outcome === "chunk-failed") {
 				failuresAtIndex++;
@@ -164,6 +148,7 @@ export async function liveTranscribeWorkflow(
 			}
 
 			outcome = result.outcome;
+			promotion = batch.promotion;
 			break;
 		}
 	} catch (error) {
@@ -177,7 +162,7 @@ export async function liveTranscribeWorkflow(
 		// Full gap-free coverage: promote the live transcript to canonical and
 		// skip the duplicate full transcription pass entirely. On any failure
 		// the full-pass fallback is queued so transcription still lands fast.
-		const promotion = await promoteLiveTranscriptStep(videoId, userId);
+		promotion ??= await promoteLiveTranscriptStep(videoId, userId);
 		if (promotion.promoted) {
 			return {
 				success: true,
@@ -268,18 +253,61 @@ async function initLiveTranscription(
 	};
 }
 
-async function processNextLiveChunk(options: {
+type LivePromotionResult = Awaited<ReturnType<typeof promoteLiveTranscript>>;
+
+async function processLiveChunks(options: {
 	videoId: string;
 	userId: string;
+	cursor: LiveChunkCursor;
+	orgLanguage: AiGenerationLanguage;
+	skipPastFailedChunk: boolean;
+	withContext: boolean;
+}): Promise<LiveChunkBatchResult & { promotion?: LivePromotionResult }> {
+	"use step";
+
+	const { videoId, userId, orgLanguage } = options;
+	const batch = await runLiveChunkBatch({
+		cursor: options.cursor,
+		skipPastFailedChunk: options.skipPastFailedChunk,
+		withContext: options.withContext,
+		now: Date.now,
+		processChunk: (chunk) =>
+			transcribeNextLiveChunk({
+				videoId,
+				lastProcessedIndex: chunk.lastProcessedIndex,
+				targetSeconds: chunk.targetSeconds,
+				language: chunk.languageCode ?? orgLanguage,
+				skipPastFailedChunk: chunk.skipPastFailedChunk,
+				withContext: chunk.withContext,
+				pollUntil: chunk.pollUntil,
+				resumeFromArtifact:
+					chunk.lastProcessedIndex === options.cursor.lastAudioSegmentIndex,
+			}),
+		onError: (error) =>
+			console.warn(
+				`[liveTranscribe] Chunk batch for ${videoId} ended early`,
+				error,
+			),
+	});
+	if (batch.last.outcome !== "done") return batch;
+	// Promote in the same invocation: a separate step would add a workflow
+	// round trip between the last words landing and the final transcript.
+	// promoteLiveTranscript never throws and claims the canonical slot
+	// atomically, so a retried step only sees it declined.
+	return { ...batch, promotion: await promoteLiveTranscript(videoId, userId) };
+}
+
+async function transcribeNextLiveChunk(options: {
+	videoId: string;
 	lastProcessedIndex: number;
 	targetSeconds: number;
 	language: string;
 	skipPastFailedChunk: boolean;
 	withContext: boolean;
-}): Promise<ChunkStepResult> {
-	"use step";
-
-	const { videoId, userId, lastProcessedIndex, targetSeconds } = options;
+	pollUntil: number;
+	resumeFromArtifact: boolean;
+}): Promise<LiveChunkResult> {
+	const { videoId, lastProcessedIndex, targetSeconds } = options;
 	const contextSeconds = options.withContext ? liveContextSeconds() : 0;
 
 	const [video] = await db()
@@ -309,9 +337,31 @@ async function processNextLiveChunk(options: {
 		ownerId: video.ownerId,
 	});
 
+	if (options.resumeFromArtifact) {
+		// A retried step re-sends the cursor it started from, but the attempt
+		// that failed may already have written later chunks. Re-applying an
+		// older chunk drops the words after it while the stored cursor stays
+		// ahead, so a storage error here must fail the step instead of reading
+		// as "no transcript yet" and replaying.
+		const existing = await bucket
+			.getObject(getLiveTranscriptObjectKey(video.ownerId, videoId))
+			.pipe(runWorkflowPromise);
+		const artifact = Option.isSome(existing)
+			? parseLiveTranscript(existing.value)
+			: null;
+		if (artifact && artifact.lastAudioSegmentIndex > lastProcessedIndex) {
+			return {
+				outcome: "chunk",
+				lastAudioSegmentIndex: artifact.lastAudioSegmentIndex,
+				transcribedDurationMs: artifact.transcribedDurationMs,
+				languageCode: artifact.languageCode,
+			};
+		}
+	}
+
 	// Poll inside the step (same pattern as the mux-completion wait) so idle
 	// time costs one held invocation, not hundreds of queued step dispatches.
-	const pollDeadline = Date.now() + LIVE_TRANSCRIBE.MAX_POLL_MS_PER_STEP;
+	const pollDeadline = options.pollUntil;
 	let decision: ReturnType<typeof planNextLiveChunk> | null = null;
 	let decodedManifest: Video.SegmentManifestType | null = null;
 
@@ -337,6 +387,7 @@ async function processNextLiveChunk(options: {
 					lastProcessedIndex,
 					targetSeconds,
 					contextSeconds,
+					minSentSeconds: LIVE_TRANSCRIBE.MIN_SENT_SECONDS,
 				});
 				if (next.action !== "wait") {
 					decision = next;

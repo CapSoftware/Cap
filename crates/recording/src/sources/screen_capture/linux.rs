@@ -1589,48 +1589,77 @@ mod alsa_input_backend {
         Some(unsafe { CStr::from_ptr(value) }.to_owned())
     }
 
+    /// Where an ALSA device's capture (or playback) chain ends.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum CaptureBackend {
+        /// The PulseAudio ALSA plugin (PulseAudio or PipeWire's pulse server).
+        Pulse,
+        /// A sound card opened directly, which a running sound server cannot share.
+        Hardware,
+        /// Any other plugin: PipeWire's own ALSA plugin, JACK, a file, a null device.
+        Other,
+    }
+
     fn nested_pcm(
         root: *mut c_void,
         node: *mut c_void,
         key: &CStr,
+        side: &CStr,
         depth: usize,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<CaptureBackend> {
         let node = child(node, key).context("ALSA input slave is missing")?;
         let named = string(node)
             .map(|name| definition(root, c"pcm_slave", &name))
             .transpose()?;
         let slave = named.as_ref().map_or(node, |config| config.raw);
         let pcm = child(slave, c"pcm").context("ALSA input slave PCM is missing")?;
-        node_uses_pulse(root, pcm, depth + 1)
+        node_capture_backend(root, pcm, side, depth + 1)
     }
 
-    fn node_uses_pulse(root: *mut c_void, node: *mut c_void, depth: usize) -> anyhow::Result<bool> {
+    /// `side` is the `asym` branch to follow: `capture` or `playback`.
+    fn node_capture_backend(
+        root: *mut c_void,
+        node: *mut c_void,
+        side: &CStr,
+        depth: usize,
+    ) -> anyhow::Result<CaptureBackend> {
         ensure!(
             depth < 32,
             "ALSA input configuration exceeds the alias depth limit"
         );
         if let Some(name) = string(node) {
             let resolved = definition(root, c"pcm", &name)?;
-            return node_uses_pulse(root, resolved.raw, depth + 1);
+            return node_capture_backend(root, resolved.raw, side, depth + 1);
         }
         let kind = child(node, c"type")
             .and_then(string)
             .context("ALSA input plugin type is missing")?;
         match kind.as_bytes() {
-            b"pulse" => Ok(true),
-            b"asym" => nested_pcm(root, node, c"capture", depth),
-            b"file" if child(node, c"infile").is_some() => Ok(false),
+            b"pulse" => Ok(CaptureBackend::Pulse),
+            b"hw" => Ok(CaptureBackend::Hardware),
+            b"asym" => nested_pcm(root, node, side, side, depth),
+            b"file" if child(node, c"infile").is_some() => Ok(CaptureBackend::Other),
             b"plug" | b"rate" | b"route" | b"linear" | b"lfloat" | b"copy" | b"softvol"
-            | b"dsnoop" | b"mmap_emul" | b"file" => nested_pcm(root, node, c"slave", depth),
-            _ if child(node, c"slave").is_some() => nested_pcm(root, node, c"slave", depth),
+            | b"dsnoop" | b"dmix" | b"mmap_emul" | b"file" => {
+                nested_pcm(root, node, c"slave", side, depth)
+            }
+            _ if child(node, c"slave").is_some() => nested_pcm(root, node, c"slave", side, depth),
             b"multi" => {
                 bail!("ALSA input has multiple backends; cannot identify a single Pulse route")
             }
-            _ => Ok(false),
+            _ => Ok(CaptureBackend::Other),
         }
     }
 
-    pub(super) fn uses_pulse(device_name: &str) -> anyhow::Result<bool> {
+    pub(super) fn capture_backend(device_name: &str) -> anyhow::Result<CaptureBackend> {
+        backend(device_name, c"capture")
+    }
+
+    pub(super) fn playback_backend(device_name: &str) -> anyhow::Result<CaptureBackend> {
+        backend(device_name, c"playback")
+    }
+
+    fn backend(device_name: &str, side: &CStr) -> anyhow::Result<CaptureBackend> {
         let name = CString::new(device_name).context("Invalid ALSA input name")?;
         let mut raw = std::ptr::null_mut();
         let status = unsafe { snd_config_update_ref(&mut raw) };
@@ -1639,7 +1668,11 @@ mod alsa_input_backend {
         }
         let root = Config { raw, shared: true };
         let input = definition(root.raw, c"pcm", &name)?;
-        node_uses_pulse(root.raw, input.raw, 0)
+        node_capture_backend(root.raw, input.raw, side, 0)
+    }
+
+    pub(super) fn uses_pulse(device_name: &str) -> anyhow::Result<bool> {
+        capture_backend(device_name).map(|backend| backend == CaptureBackend::Pulse)
     }
 
     #[cfg(test)]
@@ -1647,6 +1680,10 @@ mod alsa_input_backend {
         use super::*;
 
         fn configured_input_uses_pulse(text: &str) -> anyhow::Result<bool> {
+            configured_capture_backend(text).map(|backend| backend == CaptureBackend::Pulse)
+        }
+
+        fn configured_capture_backend(text: &str) -> anyhow::Result<CaptureBackend> {
             let text = CString::new(text)?;
             let mut raw = std::ptr::null_mut();
             let status =
@@ -1657,7 +1694,74 @@ mod alsa_input_backend {
             );
             let root = Config { raw, shared: false };
             let input = definition(root.raw, c"pcm", c"default")?;
-            node_uses_pulse(root.raw, input.raw, 0)
+            node_capture_backend(root.raw, input.raw, c"capture", 0)
+        }
+
+        fn configured_playback_backend(text: &str) -> anyhow::Result<CaptureBackend> {
+            let text = CString::new(text)?;
+            let mut raw = std::ptr::null_mut();
+            let status =
+                unsafe { snd_config_load_string(&mut raw, text.as_ptr(), text.as_bytes().len()) };
+            ensure!(
+                status >= 0 && !raw.is_null(),
+                "ALSA test configuration failed: {status}"
+            );
+            let root = Config { raw, shared: false };
+            let output = definition(root.raw, c"pcm", c"default")?;
+            node_capture_backend(root.raw, output.raw, c"playback", 0)
+        }
+
+        #[test]
+        fn playback_follows_the_playback_branch_and_dmix() {
+            for (config, expected) in [
+                (
+                    "pcm.default { type asym playback.pcm { type dmix ipc_key 1 slave.pcm { type hw card 0 } } capture.pcm { type pulse } }",
+                    CaptureBackend::Hardware,
+                ),
+                (
+                    "pcm.default { type asym playback.pcm { type pulse } capture.pcm { type hw card 0 } }",
+                    CaptureBackend::Pulse,
+                ),
+                (
+                    "pcm.default { type plug slave.pcm { type pipewire } }",
+                    CaptureBackend::Other,
+                ),
+            ] {
+                assert_eq!(
+                    configured_playback_backend(config).unwrap(),
+                    expected,
+                    "{config}"
+                );
+            }
+        }
+
+        #[test]
+        fn sound_cards_are_told_apart_from_sound_server_plugins() {
+            for (config, expected) in [
+                ("pcm.default { type hw card 0 }", CaptureBackend::Hardware),
+                (
+                    "pcm.default { type asym playback.pcm { type pulse } capture.pcm { type dsnoop ipc_key 1 slave.pcm { type hw card 0 } } }",
+                    CaptureBackend::Hardware,
+                ),
+                (
+                    "pcm.default { type plug slave.pcm card0 }\npcm.card0 { type hw card 0 }",
+                    CaptureBackend::Hardware,
+                ),
+                ("pcm.default { type pipewire }", CaptureBackend::Other),
+                (
+                    "pcm.default { type plug slave.pcm { type pipewire } }",
+                    CaptureBackend::Other,
+                ),
+                ("pcm.default { type jack }", CaptureBackend::Other),
+                ("pcm.default { type null }", CaptureBackend::Other),
+                ("pcm.default { type pulse }", CaptureBackend::Pulse),
+            ] {
+                assert_eq!(
+                    configured_capture_backend(config).unwrap(),
+                    expected,
+                    "{config}"
+                );
+            }
         }
 
         #[test]
@@ -1854,6 +1958,54 @@ fn started_input_source_output(
 
 fn uses_default_pulse_input(device_name: &str) -> bool {
     device_name.eq_ignore_ascii_case("default") || device_name.eq_ignore_ascii_case("pulse")
+}
+
+/// The ALSA input to open for the microphone the user selected, when it is
+/// not the selection itself.
+///
+/// Without a sound-server override of ALSA "default" (Arch without
+/// pipewire-alsa, for example) "default" opens the sound card directly. A
+/// running PipeWire or PulseAudio cannot then use that card's capture
+/// device, so Cap's own system-audio stream stalls and other apps lose the
+/// microphone. The server's default source records the same microphone
+/// without holding the card.
+pub(crate) fn microphone_input_device(label: &str) -> Option<String> {
+    use alsa_input_backend::capture_backend;
+
+    routes_default_microphone_through_server(
+        label,
+        || capture_backend("default").ok(),
+        || capture_backend("pulse").ok(),
+        pactl_default_source,
+    )
+    .then(|| "pulse".to_string())
+}
+
+/// The ALSA output Cap plays its own sounds through when ALSA "default"
+/// playback is the bare sound card and a sound server runs. Opening the card
+/// would take the speakers from the server, which silences other apps and the
+/// server's monitor that Cap records system audio from.
+pub fn sound_server_output() -> Option<&'static str> {
+    use alsa_input_backend::{CaptureBackend, playback_backend};
+
+    (playback_backend("default").ok()? == CaptureBackend::Hardware
+        && playback_backend("pulse").ok()? == CaptureBackend::Pulse
+        && pactl_default_sink().is_some())
+    .then_some("pulse")
+}
+
+fn routes_default_microphone_through_server(
+    label: &str,
+    default_backend: impl FnOnce() -> Option<alsa_input_backend::CaptureBackend>,
+    pulse_backend: impl FnOnce() -> Option<alsa_input_backend::CaptureBackend>,
+    default_source: impl FnOnce() -> Option<String>,
+) -> bool {
+    use alsa_input_backend::CaptureBackend;
+
+    label.eq_ignore_ascii_case("default")
+        && default_backend() == Some(CaptureBackend::Hardware)
+        && pulse_backend() == Some(CaptureBackend::Pulse)
+        && default_source().is_some_and(|source| !source.ends_with(".monitor"))
 }
 
 impl AudioSource for SystemAudioSource {
@@ -3805,8 +3957,9 @@ mod system_audio_tests {
         pactl_monitor_preference, pactl_source_index, plan_system_audio_route,
         preferred_system_audio_device, previous_source_destination, process_source_output_ids,
         pulse_input_route_destination, retry_system_audio_connection, route_watch_after_disconnect,
-        source_output_needs_move, source_output_route_matches, started_input_source_output,
-        uses_default_pulse_input, wait_for_audio_after_route, wait_for_started_source_output,
+        routes_default_microphone_through_server, source_output_needs_move,
+        source_output_route_matches, started_input_source_output, uses_default_pulse_input,
+        wait_for_audio_after_route, wait_for_started_source_output,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -4404,6 +4557,59 @@ mod system_audio_tests {
         assert!(source_output_route_matches(&routed, 1128, 47).unwrap());
         assert!(source_output_route_matches(&[], 1128, 47).is_err());
         assert!(source_output_route_matches(&routed, 1129, 47).is_err());
+    }
+
+    #[test]
+    fn only_a_default_microphone_on_the_bare_sound_card_moves_to_the_sound_server() {
+        use super::alsa_input_backend::CaptureBackend::{Hardware, Other, Pulse};
+
+        let source = || Some("alsa_input.pci-0000_00_1f.3.analog-stereo".to_string());
+        assert!(routes_default_microphone_through_server(
+            "default",
+            || Some(Hardware),
+            || Some(Pulse),
+            source
+        ));
+        assert!(routes_default_microphone_through_server(
+            "Default",
+            || Some(Hardware),
+            || Some(Pulse),
+            source
+        ));
+        for (default, pulse) in [
+            (Some(Pulse), Some(Pulse)),
+            (Some(Other), Some(Pulse)),
+            (None, Some(Pulse)),
+            (Some(Hardware), None),
+            (Some(Hardware), Some(Other)),
+        ] {
+            assert!(!routes_default_microphone_through_server(
+                "default",
+                || default,
+                || pulse,
+                source
+            ));
+        }
+        assert!(!routes_default_microphone_through_server(
+            "default",
+            || Some(Hardware),
+            || Some(Pulse),
+            || None
+        ));
+        assert!(!routes_default_microphone_through_server(
+            "default",
+            || Some(Hardware),
+            || Some(Pulse),
+            || Some("alsa_output.pci-0000_00_1f.3.analog-stereo.monitor".to_string())
+        ));
+        for label in ["pulse", "pipewire", "HDA Intel PCH", "USB Microphone"] {
+            assert!(!routes_default_microphone_through_server(
+                label,
+                || panic!("a named input never reads the ALSA configuration"),
+                || panic!("a named input never reads the ALSA configuration"),
+                || panic!("a named input never asks the sound server"),
+            ));
+        }
     }
 
     #[test]

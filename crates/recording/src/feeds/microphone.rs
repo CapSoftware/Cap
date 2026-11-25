@@ -131,6 +131,81 @@ fn audio_follows_confirmed_route(
             .is_some_and(|(captured_at, routed_at)| captured_at >= routed_at.instant())
 }
 
+/// Timestamps for a microphone whose callbacks arrive in bursts, as ALSA's
+/// pulse plugin delivers them from PipeWire's pulse server. Linux stamps
+/// audio with the time its callback runs, so a burst made the muxer see a
+/// gap, insert silence and then trim the late audio as overlap. Here each
+/// buffer is placed by the frames delivered so far from the earliest anchor
+/// its arrivals allow: steady delivery keeps the arrival times exactly, a
+/// late callback no longer moves its audio, an arrival later than any burst
+/// marks lost frames where they were lost, and slow clock drift moves the
+/// anchor once a whole window of arrivals agrees.
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct SteadyDeliveryClock {
+    anchor: Option<Instant>,
+    rate: u32,
+    frames: u64,
+    window_started: Option<Instant>,
+    window_min_lag: Option<Duration>,
+}
+
+#[cfg(target_os = "linux")]
+impl SteadyDeliveryClock {
+    const WINDOW: Duration = Duration::from_secs(2);
+    /// Bursts seen from PipeWire's pulse server hold back about three 25 ms
+    /// buffers; an arrival this much later means frames were lost.
+    const LOSS: Duration = Duration::from_millis(150);
+
+    fn timestamp(&mut self, received: Instant, frame_count: usize, rate: u32) -> Timestamp {
+        if rate == 0 {
+            return Timestamp::Instant(received);
+        }
+        if rate != self.rate {
+            *self = Self {
+                rate,
+                ..Self::default()
+            };
+        }
+        let frames = self.frames + frame_count as u64;
+        self.frames = frames;
+        let delivered = Duration::from_secs_f64(frames as f64 / f64::from(rate));
+        let Some(anchor) = self.anchor else {
+            self.anchor = Some(received.checked_sub(delivered).unwrap_or(received));
+            self.window_started = Some(received);
+            return Timestamp::Instant(received);
+        };
+        let predicted = anchor + delivered;
+        if received < predicted {
+            // Arrivals are never early, so this one shows the anchor was late.
+            let early = predicted.saturating_duration_since(received);
+            self.anchor = Some(anchor.checked_sub(early).unwrap_or(anchor));
+            return Timestamp::Instant(received);
+        }
+        let lag = received.saturating_duration_since(predicted);
+        if lag > Self::LOSS {
+            self.anchor = Some(anchor + lag);
+            self.window_started = Some(received);
+            self.window_min_lag = None;
+            return Timestamp::Instant(received);
+        }
+        self.window_min_lag = Some(self.window_min_lag.map_or(lag, |min| min.min(lag)));
+        if self
+            .window_started
+            .is_some_and(|started| received.saturating_duration_since(started) >= Self::WINDOW)
+        {
+            // Every arrival in the window was late by at least this much: the
+            // device clock runs slow, not a burst.
+            if let Some(min_lag) = self.window_min_lag.take() {
+                self.anchor = Some(anchor + min_lag);
+            }
+            self.window_started = Some(received);
+            return Timestamp::Instant(self.anchor.unwrap_or(anchor) + delivered);
+        }
+        Timestamp::Instant(predicted)
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn cancellable_system_stream_ready(
     ready: StreamReadyFuture,
@@ -491,14 +566,48 @@ fn prepare_pending_samples(pending_samples: &mut VecDeque<MicrophoneSamples>, sa
     }
 }
 
+const ENQUEUE_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(5);
+
+/// A feed that falls behind fails the hand-off for every callback buffer, on
+/// the realtime audio thread, so only the first failure is logged and then at
+/// most one summary per interval. `dropped_message_count` still counts each.
+#[derive(Default)]
+struct EnqueueFailureLog {
+    last_logged: Option<Instant>,
+    unlogged: u64,
+}
+
+impl EnqueueFailureLog {
+    fn record(&mut self, error: impl std::fmt::Display, now: Instant) {
+        match self.last_logged {
+            Some(last) if now.saturating_duration_since(last) < ENQUEUE_FAILURE_LOG_INTERVAL => {
+                self.unlogged += 1;
+            }
+            Some(_) => {
+                warn!(
+                    dropped_since_last_report = self.unlogged + 1,
+                    "Failed to enqueue microphone samples: {error}"
+                );
+                self.last_logged = Some(now);
+                self.unlogged = 0;
+            }
+            None => {
+                warn!("Failed to enqueue microphone samples: {error}");
+                self.last_logged = Some(now);
+            }
+        }
+    }
+}
+
 fn enqueue_microphone_samples(
     actor_ref: &ActorRef<MicrophoneFeed>,
     dropped_message_count: &AtomicU64,
+    failure_log: &mut EnqueueFailureLog,
     samples: MicrophoneSamples,
 ) {
     if let Err(error) = actor_ref.tell(samples).try_send() {
         dropped_message_count.fetch_add(1, Ordering::Relaxed);
-        warn!("Failed to enqueue microphone samples: {error}");
+        failure_log.record(error, Instant::now());
     }
 }
 
@@ -623,6 +732,7 @@ impl SystemAudioRouteWatch {
         let _ = std::thread::Builder::new()
             .name("system-audio-route".into())
             .spawn(move || {
+                let mut failure_log = EnqueueFailureLog::default();
                 crate::sources::screen_capture::watch_system_audio_route(
                     cancel,
                     route,
@@ -635,7 +745,7 @@ impl SystemAudioRouteWatch {
                             event,
                         );
                         for sample in released {
-                            enqueue_microphone_samples(&actor, &dropped, sample);
+                            enqueue_microphone_samples(&actor, &dropped, &mut failure_log, sample);
                         }
                     },
                 );
@@ -1492,6 +1602,19 @@ fn alsa_card_names() -> Vec<String> {
     names
 }
 
+/// The sound server's input that records the microphone selected as `label`,
+/// when ALSA would open that selection on the bare sound card (see
+/// [`crate::sources::screen_capture::microphone_input_device`]). Its formats
+/// are the ones the recording gets, and probing the card instead fails while
+/// the server holds it.
+#[cfg(target_os = "linux")]
+fn sound_server_input(host: &cpal::Host, label: &str) -> Option<Device> {
+    let input = crate::sources::screen_capture::microphone_input_device(label)?;
+    host.input_devices()
+        .ok()?
+        .find(|device| device.name().is_ok_and(|name| name == input))
+}
+
 #[cfg(not(target_os = "macos"))]
 fn list_input_device_names() -> Vec<String> {
     let host = cpal::default_host();
@@ -1516,6 +1639,25 @@ fn list_input_device_names() -> Vec<String> {
     }
 
     names.into_keys().collect()
+}
+
+#[cfg(windows)]
+fn register_microphone_callback_thread() -> bool {
+    thread_local! {
+        static MMCSS_HANDLE: std::cell::OnceCell<
+            Option<cap_mediafoundation_utils::MmcssAudioHandle>,
+        > = const { std::cell::OnceCell::new() };
+    }
+    MMCSS_HANDLE.with(|cell| {
+        cell.get_or_init(|| {
+            let handle = cap_mediafoundation_utils::MmcssAudioHandle::register_audio();
+            if handle.is_none() {
+                debug!("Microphone callback thread was not registered with MMCSS");
+            }
+            handle
+        })
+        .is_some()
+    })
 }
 
 impl MicrophoneFeed {
@@ -1588,6 +1730,12 @@ impl MicrophoneFeed {
 
     pub fn default_device() -> Option<(String, Device, SupportedStreamConfig)> {
         let host = cpal::default_host();
+        #[cfg(target_os = "linux")]
+        if let Some((_, device, config)) =
+            sound_server_input(&host, "default").and_then(|device| get_usable_device(device, None))
+        {
+            return Some(("default".to_string(), device, config));
+        }
         host.default_input_device()
             .and_then(|device| get_usable_device(device, None))
     }
@@ -1620,17 +1768,27 @@ impl MicrophoneFeed {
         let host = cpal::default_host();
         let mut device_map = IndexMap::new();
 
-        if let Some((name, device, config)) = host
-            .default_input_device()
+        #[cfg(target_os = "linux")]
+        if let Some((_, device, config)) = sound_server_input(&host, "default")
             .and_then(|device| get_usable_device(device, settings))
+        {
+            device_map.insert("default".to_string(), (device, config));
+        }
+        if !device_map.contains_key("default")
+            && let Some((name, device, config)) = host
+                .default_input_device()
+                .and_then(|device| get_usable_device(device, settings))
         {
             device_map.insert(name, (device, config));
         }
 
         match host.input_devices() {
             Ok(devices) => {
-                for (name, device, config) in
-                    devices.filter_map(|device| get_usable_device(device, settings))
+                // The default is already listed: probing it again only reopens it.
+                let listed = device_map.keys().cloned().collect::<Vec<_>>();
+                for (name, device, config) in devices
+                    .filter(|device| !device.name().is_ok_and(|name| listed.contains(&name)))
+                    .filter_map(|device| get_usable_device(device, settings))
                 {
                     device_map.entry(name).or_insert((device, config));
                 }
@@ -1651,6 +1809,10 @@ impl MicrophoneFeed {
         let configure = |device| {
             get_usable_device(device, settings).map(|(_, device, config)| (device, config))
         };
+        #[cfg(target_os = "linux")]
+        if let Some(device) = sound_server_input(&host, label).and_then(configure) {
+            return Some(device);
+        }
         if let Some(device) = configure_named_device(
             host.default_input_device(),
             label,
@@ -1729,6 +1891,20 @@ impl MicrophoneFeed {
                 if setup_cancel.is_cancelled() || ready_tx.is_canceled() {
                     return;
                 }
+                #[cfg(target_os = "linux")]
+                let label = match (pulse_input_role
+                    == crate::sources::screen_capture::PulseInputRole::Microphone)
+                    .then(|| crate::sources::screen_capture::microphone_input_device(&label))
+                    .flatten()
+                {
+                    Some(device) => {
+                        info!(
+                            "🎤 ALSA '{label}' opens the sound card directly; recording it through the sound server's '{device}' input"
+                        );
+                        device
+                    }
+                    None => label,
+                };
                 let Some((device, config)) = Self::device_with_settings(&label, settings.as_ref())
                 else {
                     let _ = ready_tx.send(Err(SetInputError::DeviceNotFound));
@@ -1835,7 +2011,15 @@ impl MicrophoneFeed {
                         #[cfg(target_os = "linux")]
                         let dropped_message_count = dropped_message_count.clone();
                         let mut callback_count = 0u64;
+                        let mut enqueue_failures = EnqueueFailureLog::default();
+                        #[cfg(target_os = "linux")]
+                        let mut delivery_clock = (route_required
+                            && pulse_input_role
+                                == crate::sources::screen_capture::PulseInputRole::Microphone)
+                            .then(SteadyDeliveryClock::default);
                         move |data, info| {
+                            #[cfg(windows)]
+                            register_microphone_callback_thread();
                             #[cfg(target_os = "linux")]
                             if system_stream_cancel.is_cancelled() {
                                 return;
@@ -1912,6 +2096,15 @@ impl MicrophoneFeed {
                                 .unwrap_or(callback_received);
                             #[cfg(not(target_os = "linux"))]
                             let captured_at = Instant::now();
+                            #[cfg(target_os = "linux")]
+                            let timestamp = match delivery_clock.as_mut() {
+                                Some(clock) => clock.timestamp(
+                                    callback_received,
+                                    frame_count,
+                                    effective_sample_rate.sample_rate,
+                                ),
+                                None => timestamp,
+                            };
                             #[cfg(windows)]
                             let timestamp = capture_clock.timestamp(
                                 timestamp,
@@ -1933,7 +2126,7 @@ impl MicrophoneFeed {
                                 capture_epoch,
                             };
 
-                            let forward = |captured_at: Instant, samples: MicrophoneSamples| {
+                            let mut forward = |captured_at: Instant, samples: MicrophoneSamples| {
                                 #[cfg(target_os = "linux")]
                                 if let Some(staging) = &system_audio_staging {
                                     let _ = staging.lock().unwrap().push(captured_at, samples);
@@ -1944,6 +2137,7 @@ impl MicrophoneFeed {
                                 enqueue_microphone_samples(
                                     &actor_ref,
                                     &dropped_message_count,
+                                    &mut enqueue_failures,
                                     samples,
                                 );
                             };
@@ -3762,7 +3956,7 @@ pub mod synthetic {
     /// cpal has no public constructor for `InputCallbackInfo`, and a
     /// synthetic device has no device callback. Consumers time samples from
     /// `MicrophoneSamples::timestamp`; this info reads as stream instant 0.
-    fn zero_callback_info() -> InputCallbackInfo {
+    pub(super) fn zero_callback_info() -> InputCallbackInfo {
         // SAFETY: `InputCallbackInfo` (cpal pinned by git rev) holds two
         // `StreamInstant { secs: i64, nanos: u32 }` values and nothing else,
         // so the all-zero bit pattern is a valid value (instant 0) whatever
@@ -3922,6 +4116,112 @@ pub mod synthetic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct EnqueueFailureWarnings(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl EnqueueFailureWarnings {
+        fn count(&self) -> usize {
+            self.0.load(Ordering::Relaxed)
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for EnqueueFailureWarnings {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            struct Message(bool);
+            impl tracing::field::Visit for Message {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    if field.name() == "message" {
+                        self.0 =
+                            format!("{value:?}").contains("Failed to enqueue microphone samples");
+                    }
+                }
+            }
+            let mut message = Message(false);
+            event.record(&mut message);
+            if message.0 && *event.metadata().level() == tracing::Level::WARN {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn count_enqueue_failure_warnings()
+    -> (EnqueueFailureWarnings, tracing::subscriber::DefaultGuard) {
+        use tracing_subscriber::layer::SubscriberExt;
+        let warnings = EnqueueFailureWarnings::default();
+        let guard =
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(warnings.clone()));
+        (warnings, guard)
+    }
+
+    #[tokio::test]
+    async fn a_stalled_feed_logs_its_first_dropped_buffer_rather_than_every_one() {
+        let (warnings, _subscriber) = count_enqueue_failure_warnings();
+        let (error_tx, _error_rx) = flume::unbounded();
+        let feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+        let _ = feed
+            .tell(crate::feeds::Stall(Duration::from_secs(30)))
+            .try_send();
+
+        const BUFFERS: u64 = 400;
+        let dropped = AtomicU64::new(0);
+        let mut failure_log = EnqueueFailureLog::default();
+        for _ in 0..BUFFERS {
+            enqueue_microphone_samples(
+                &feed,
+                &dropped,
+                &mut failure_log,
+                MicrophoneSamples {
+                    stream_id: 1,
+                    data: vec![0; 480 * 4],
+                    format: SampleFormat::F32,
+                    sample_rate: 48_000,
+                    channels: 1,
+                    info: synthetic::zero_callback_info(),
+                    timestamp: Timestamp::Instant(Instant::now()),
+                    #[cfg(target_os = "linux")]
+                    capture_epoch: 0,
+                },
+            );
+        }
+
+        let dropped = dropped.load(Ordering::Relaxed);
+        assert!(
+            dropped > BUFFERS / 2,
+            "a stalled feed must refuse buffers once its mailbox is full, refused {dropped} of {BUFFERS}"
+        );
+        assert_eq!(
+            warnings.count(),
+            1,
+            "{dropped} refused buffers must log once, not once each"
+        );
+    }
+
+    #[test]
+    fn enqueue_failures_are_summarised_once_per_interval() {
+        let (warnings, _subscriber) = count_enqueue_failure_warnings();
+        let mut failure_log = EnqueueFailureLog::default();
+        let start = Instant::now();
+
+        failure_log.record("full", start);
+        for millis in 1..100 {
+            failure_log.record("full", start + Duration::from_millis(millis * 10));
+        }
+        assert_eq!(warnings.count(), 1);
+        assert_eq!(failure_log.unlogged, 99);
+
+        failure_log.record("full", start + ENQUEUE_FAILURE_LOG_INTERVAL);
+        assert_eq!(warnings.count(), 2);
+        assert_eq!(failure_log.unlogged, 0);
+    }
 
     #[tokio::test]
     async fn dropping_microphone_readiness_cancels_queued_native_work() {
@@ -5966,5 +6266,114 @@ mod recording_subscription_tests {
             expected: true,
         });
         assert!(!expected.failed.load(Ordering::Acquire));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn microphone_callback_thread_registers_with_mmcss() {
+        let registered = std::thread::spawn(|| {
+            [
+                register_microphone_callback_thread(),
+                register_microphone_callback_thread(),
+            ]
+        })
+        .join()
+        .unwrap();
+        assert_eq!(registered, [true, true]);
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod steady_delivery_clock_tests {
+    use super::SteadyDeliveryClock;
+    use cap_timestamp::Timestamp;
+    use std::time::{Duration, Instant};
+
+    const RATE: u32 = 44_100;
+    const FRAMES: usize = 1_102;
+
+    fn period() -> Duration {
+        Duration::from_secs_f64(FRAMES as f64 / f64::from(RATE))
+    }
+
+    fn apart(a: Instant, b: Instant) -> Duration {
+        a.saturating_duration_since(b)
+            .max(b.saturating_duration_since(a))
+    }
+
+    fn instant(timestamp: Timestamp) -> Instant {
+        match timestamp {
+            Timestamp::Instant(instant) => instant,
+            other => panic!("expected an Instant timestamp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn steady_delivery_keeps_the_arrival_times() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        for buffer in 1..=200u32 {
+            let received = start + period() * buffer;
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            assert!(apart(stamped, received) < Duration::from_micros(50));
+        }
+    }
+
+    #[test]
+    fn a_burst_of_late_callbacks_keeps_its_audio_in_place() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let mut stamps = Vec::new();
+        for buffer in 1..=60u32 {
+            let on_time = start + period() * buffer;
+            // Buffers 20 to 22 arrive together, 75 ms after the first was due.
+            let received = if (20..=22).contains(&buffer) {
+                start + period() * 20 + Duration::from_millis(75)
+            } else {
+                on_time
+            };
+            stamps.push(instant(clock.timestamp(received, FRAMES, RATE)));
+        }
+        for pair in stamps.windows(2) {
+            let step = pair[1].saturating_duration_since(pair[0]);
+            assert!(step.abs_diff(period()) < Duration::from_micros(50));
+        }
+    }
+
+    #[test]
+    fn lost_frames_are_marked_where_they_were_lost() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let loss = Duration::from_millis(200);
+        for buffer in 1..=400u32 {
+            let received =
+                start + period() * buffer + if buffer > 50 { loss } else { Duration::ZERO };
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            let off = apart(received, stamped);
+            assert!(off < Duration::from_millis(1), "buffer {buffer}: {off:?}");
+        }
+    }
+
+    #[test]
+    fn a_slow_device_clock_is_followed_within_a_window() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        // 0.1% slow: each buffer arrives a little later than its frames say.
+        let mut last_off = Duration::ZERO;
+        for buffer in 1..=2_000u32 {
+            let received = start + period().mul_f64(1.001) * buffer;
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            last_off = apart(received, stamped);
+        }
+        assert!(last_off < Duration::from_millis(5), "{last_off:?}");
+    }
+
+    #[test]
+    fn a_new_rate_starts_a_new_timeline() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let _ = clock.timestamp(start, FRAMES, RATE);
+        let later = start + Duration::from_secs(5);
+        assert_eq!(instant(clock.timestamp(later, 960, 48_000)), later);
     }
 }

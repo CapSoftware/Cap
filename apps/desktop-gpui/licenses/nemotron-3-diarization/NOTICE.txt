@@ -1,0 +1,8 @@
+Nemotron 3 Diarization, by NVIDIA Corporation
+https://huggingface.co/nvidia/Nemotron-3-Diarization
+
+Cap uses its int8 ONNX export:
+https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX (revision 353b6f8ad2cac3580e982d7fbdf0a010786b0406)
+
+Used under the OpenMDW License Agreement, version 1.1 (LICENSE-OpenMDW-1.1.txt in this folder).
+Cap downloads the model on demand for meeting speaker labels.

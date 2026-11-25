@@ -128,7 +128,7 @@ fn english_matches_the_literals_it_replaced() {
         (tr::settings::nav::recordings(), "Recordings".into()),
         (tr::settings::nav::screenshots(), "Screenshots".into()),
         (tr::settings::nav::shortcuts(), "Shortcuts".into()),
-        (tr::settings::nav::transcription(), "Transcription".into()),
+        (tr::settings::nav::transcription(), "Dictionary".into()),
         (
             tr::settings::general::appearance::description(),
             "Match Cap to your system theme or pick a fixed look.".into(),
@@ -539,6 +539,13 @@ fn english_matches_the_literals_it_replaced() {
                 && !super::editor_panels_surface_tests::is_editor_panels_surface_key(key)
                 && !super::editor_shell_surface_tests::is_editor_shell_surface_key(key)
                 && !key.starts_with(super::messages::KEY_PREFIX)
+                && !key.starts_with("meeting.")
+                && !key.starts_with("settings.meetings.")
+                && !key.starts_with("meeting_setup.")
+                && !key.starts_with("documents.")
+                && !key.starts_with("cap_ai.")
+                && !key.starts_with("local_page.")
+                && !key.starts_with("library.")
         })
         .count()
         // `tray.version`, `excluded_windows.missing_body`, `self_host.confirm_change`,

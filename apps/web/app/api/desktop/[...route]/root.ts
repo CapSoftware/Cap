@@ -26,6 +26,7 @@ import { type Context, Hono } from "hono";
 import type Stripe from "stripe";
 import { z } from "zod";
 import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
+import { planPriceId } from "@/lib/checkout/plans";
 import {
 	createWithReferralDiscount,
 	referralDiscountForCheckout,
@@ -278,7 +279,20 @@ app.post(
 	),
 	async (c) => {
 		const { feedback, os, version } = c.req.valid("form");
-		const userEmail = c.get("user").email;
+		const user = c.get("user");
+		const userEmail = user.email;
+
+		if (
+			await isRateLimited(RATE_LIMIT_IDS.DESKTOP_FEEDBACK, {
+				headers: c.req.raw.headers,
+				key: `desktop-feedback:${user.id}`,
+			})
+		) {
+			return c.json(
+				{ error: "Too many feedback submissions" },
+				{ status: 429 },
+			);
+		}
 
 		try {
 			await sendEmail({
@@ -577,12 +591,20 @@ app.post(
 					{
 						message: "Invalid priceId",
 					},
-				),
+				)
+				.optional(),
 			platform: z.literal("mobile").optional(),
 		}),
 	),
 	async (c) => {
-		const { priceId, platform } = c.req.valid("json");
+		const body = c.req.valid("json");
+		const { platform } = body;
+		const priceId =
+			body.priceId ??
+			planPriceId(
+				"monthly",
+				serverEnv().VERCEL_ENV === "production" ? "production" : "development",
+			);
 		const user = c.get("user");
 		const checkoutPlatform = platform ?? "desktop";
 

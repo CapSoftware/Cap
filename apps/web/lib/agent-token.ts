@@ -1,5 +1,6 @@
 import "server-only";
 
+import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { Database } from "@cap/web-backend";
@@ -84,12 +85,14 @@ export const exchangeAgentAuthorizationCode = Effect.fn(
 			}
 			// Same row lock as "Sign out of all devices", so the two never interleave.
 			const [account] = await tx
-				.select({ id: Db.users.id })
+				.select({ id: Db.users.id, email: Db.users.email })
 				.from(Db.users)
 				.where(eq(Db.users.id, grant.userId))
 				.limit(1)
 				.for("update");
-			if (!account) return { state: "invalid" as const };
+			if (!account || isBlockedAccountEmail(account.email)) {
+				return { state: "invalid" as const };
+			}
 
 			const consumed = await tx
 				.update(Db.agentApiAuthorizationCodes)

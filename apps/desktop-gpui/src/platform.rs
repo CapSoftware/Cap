@@ -1314,6 +1314,12 @@ mod mac {
     /// *other* Cap windows and is deliberately not reproduced here.
     const NS_GLASS_EFFECT_VIEW_STYLE_REGULAR: isize = 0;
 
+    /// The corner radius AppKit gives a titled window's own frame (its edge
+    /// highlight and shadow) on macOS 26 and 27, with or without a toolbar:
+    /// measured with `-[NSWindow _cornerRadius]` on 27.0 (read once by hand,
+    /// never at runtime: it is private).
+    const TITLED_WINDOW_RADIUS: f64 = 16.;
+
     /// `LIQUID_GLASS_IDENTIFIER`, kept byte-identical to the Tauri app so the
     /// two view hierarchies read the same in a debugger.
     const LIQUID_GLASS_IDENTIFIER: &str = "so.cap.liquid-glass-background";
@@ -1355,6 +1361,23 @@ mod mac {
         // that proven.
         let mtm = MainThreadMarker::new()?;
         let content_view = native.0.contentView()?;
+
+        // A titled window keeps its frame's own corners whatever we draw, so
+        // a material or clip with any other radius leaves that frame showing
+        // as a second edge just outside the content's corners. Titled windows
+        // always take the frame's radius; borderless panels keep theirs.
+        const TITLED: usize = 1 << 0;
+        let mask: usize = unsafe { msg_send![&*native.0, styleMask] };
+        let radius = if mask & TITLED != 0 && (radius - TITLED_WINDOW_RADIUS).abs() > 0.5 {
+            tracing::warn!(
+                asked = radius,
+                used = TITLED_WINDOW_RADIUS,
+                "a titled window's material follows the window's own corners"
+            );
+            TITLED_WINDOW_RADIUS
+        } else {
+            radius
+        };
 
         // Clip the content view to the window's corner radius so the material
         // below cannot paint a square corner outside the shell's own rounded
@@ -1521,10 +1544,13 @@ mod mac {
     /// started (see [`install_occlusion_shim`]) evaluates the gate again. gpui
     /// windows are their own delegate, so the selector lives on the window.
     pub fn kick_display_link(window: &Window) {
+        // No native window, nothing to kick: the process-wide shim waits
+        // for a real window.
+        let Some(ns_window) = ns_window(window) else {
+            return;
+        };
         install_occlusion_shim();
-        if let Some(ns_window) = ns_window(window) {
-            rerun_occlusion_handler(&ns_window);
-        }
+        rerun_occlusion_handler(&ns_window);
     }
 
     fn rerun_occlusion_handler(ns_window: &NSWindow) {
@@ -1953,6 +1979,11 @@ mod mac {
 
     /// The `NSWindow` behind a gpui window.
     pub fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
+        // Test builds only ever have gpui's test windows, which panic when
+        // asked for a platform handle instead of returning an error.
+        if cfg!(test) {
+            return None;
+        }
         // Fully qualified: `Window` also has an inherent `window_handle()`
         // returning gpui's own `AnyWindowHandle`.
         let handle = HasWindowHandle::window_handle(window).ok()?;
@@ -2447,10 +2478,11 @@ mod mac {
     /// treatment included, so the installed Cap.app's is used when it exists
     /// and the raw asset only as a fallback. A future .app bundle with its
     /// own (Icon Composer) icon supersedes all of this.
-    pub fn set_dock_icon(fallback_png: &[u8]) {
+    pub fn load_dock_icon(fallback_png: &[u8]) -> Option<DockIcon> {
+        use objc2::rc::autoreleasepool;
         use objc2::{class, msg_send};
         use objc2_foundation::NSString;
-        unsafe {
+        autoreleasepool(|_| unsafe {
             let mut image: Option<Retained<AnyObject>> = None;
 
             let cap_app = NSString::from_str("/Applications/Cap.app");
@@ -2488,14 +2520,33 @@ mod mac {
                 }
             }
 
-            let Some(image) = image else { return };
+            image.map(|image| DockIcon {
+                image,
+                from_installed_app: exists,
+            })
+        })
+    }
+
+    pub fn set_dock_icon(icon: DockIcon) {
+        use objc2::{class, msg_send};
+        unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             if !app.is_null() {
-                let _: () = msg_send![app, setApplicationIconImage: &*image];
+                let _: () = msg_send![app, setApplicationIconImage: &*icon.image];
             }
-            tracing::info!(from_installed_app = exists, "dock icon set");
         }
+        tracing::info!(
+            from_installed_app = icon.from_installed_app,
+            "dock icon set"
+        );
     }
+
+    pub struct DockIcon {
+        image: Retained<AnyObject>,
+        from_installed_app: bool,
+    }
+
+    unsafe impl Send for DockIcon {}
 
     pub fn close_native(native: &NativeWindow) {
         use objc2::{msg_send, sel};
@@ -3584,7 +3635,6 @@ mod stub {
     }
 
     pub fn close_native(_native: &NativeWindow) {}
-    pub fn set_dock_icon(_png: &[u8]) {}
     pub fn show_about_panel(_name: &str, _version: &str) {}
     pub fn escape_hotkey_events() -> flume::Receiver<()> {
         // A channel whose sender is dropped immediately: the drain task's

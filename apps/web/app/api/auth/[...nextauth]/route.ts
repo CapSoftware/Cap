@@ -26,6 +26,7 @@ import {
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { shouldRefuseTorExit } from "@/lib/tor-exit-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -153,6 +154,18 @@ async function emailCodeLimitResponse(
 	return null;
 }
 
+async function torExitResponse(request: NextRequest, nextauth: string[]) {
+	if (nextauth[0] !== "signin" && nextauth[0] !== "callback") return null;
+	if (!nextauth[1]) return null;
+	if (!(await shouldRefuseTorExit("web-sign-in", request.headers))) return null;
+	const url = new URL("/login", serverEnv().WEB_URL);
+	url.searchParams.set("error", "SignupBlocked");
+	const body = await readSignInBody(request);
+	return body?.json
+		? NextResponse.json({ url: url.toString() }, { status: 403 })
+		: NextResponse.redirect(url, 302);
+}
+
 function withSignInEmailIdentifier(request: NextRequest, nextauth: string[]) {
 	if (nextauth[0] !== "callback" || nextauth[1] !== "email") return request;
 	const email = request.nextUrl.searchParams.get("email");
@@ -168,6 +181,8 @@ async function handler(
 	context: { params: Promise<{ nextauth: string[] }> },
 ) {
 	const { nextauth } = await context.params;
+	const refusedResponse = await torExitResponse(request, nextauth);
+	if (refusedResponse) return refusedResponse;
 	const limitedResponse = await emailCodeLimitResponse(request, nextauth);
 	if (limitedResponse) return limitedResponse;
 	if (

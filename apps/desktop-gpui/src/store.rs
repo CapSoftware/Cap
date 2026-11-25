@@ -109,11 +109,35 @@ pub struct PersistedState {
     pub screenshot_crop_snap_to_ratio: Option<bool>,
     #[serde(default)]
     pub editor_window: Option<EditorWindowMemory>,
+    #[serde(default)]
+    pub meeting_indicator: Option<MeetingIndicatorMemory>,
+    /// The main window library's last tab (`recordings`, `screenshots` or
+    /// `notes`), so the Library button opens where the person left it.
+    #[serde(default)]
+    pub library_tab: Option<String>,
     /// The picture last chosen as the camera, and whether it is the current
     /// camera. Kept apart from `recording_settings.cameraId`, which the
     /// shared store reads as a device.
     #[serde(default)]
     pub camera_picture: Option<CameraPictureChoice>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MeetingIndicatorMemory {
+    #[serde(default)]
+    pub last_display: Option<String>,
+    #[serde(default)]
+    pub docks: Vec<RememberedIndicatorDock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RememberedIndicatorDock {
+    pub display: String,
+    pub right: bool,
+    pub y: f64,
+    /// Where across the display, 0 to 1. Older files only knew the edge.
+    #[serde(default)]
+    pub x: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -194,6 +218,11 @@ pub fn app_data_dir() -> PathBuf {
         && !dir.trim().is_empty()
     {
         return PathBuf::from(dir);
+    }
+    // A test that never redirects the store or a data folder must not write
+    // into the developer's own Cap profile (the Notes dictionary mirror did).
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("cap-gpui-tests-{}", std::process::id()));
     }
 
     #[cfg(target_os = "macos")]
@@ -1163,6 +1192,9 @@ pub struct GeneralSettings {
     /// `!!settings.outOfProcessMuxer` in experimental.tsx).
     pub enable_native_camera_preview: bool,
     pub out_of_process_muxer: bool,
+    /// Experimental: the header Library button opens the Library window
+    /// instead of the panel. Off until the window is proven.
+    pub library_window: bool,
     /// Not part of `general_settings` at all: the mic-confirmation toggle
     /// lives in the store's own `recording_start_safety` section
     /// (`RECORDING_START_SAFETY_DEFAULTS`), and the page renders it in the
@@ -1636,6 +1668,7 @@ impl GeneralSettings {
             editor_preview_enhance: bool_at(general, EDITOR_PREVIEW_ENHANCE_KEY, false),
             enable_native_camera_preview: bool_at(general, "enableNativeCameraPreview", false),
             out_of_process_muxer: bool_at(general, "outOfProcessMuxer", false),
+            library_window: bool_at(general, "libraryWindow", false),
             confirm_without_microphone: bool_at(
                 safety,
                 "confirmBeforeRecordingWithoutMicrophone",
@@ -1874,7 +1907,9 @@ where
 
 /// `deriveGeneralSettings(store).transcriptionHints ?? []`: the stored array
 /// as-is when the key exists (normalisation happens on write, not read), the
-/// four defaults when it does not.
+/// four defaults when it does not. Reading goes through the dictionary now;
+/// the tests keep pinning the stored shape.
+#[cfg(test)]
 pub fn transcription_hints() -> Vec<String> {
     match store_section(GENERAL_SETTINGS).get("transcriptionHints") {
         Some(Value::Array(entries)) => entries
@@ -1888,6 +1923,35 @@ pub fn transcription_hints() -> Vec<String> {
             .map(|hint| (*hint).to_string())
             .collect(),
     }
+}
+
+/// The caption words exactly as saved, or `None` when nobody ever saved any.
+pub fn transcription_hints_saved() -> Option<Vec<String>> {
+    match store_section(GENERAL_SETTINGS).get("transcriptionHints") {
+        Some(Value::Array(entries)) => Some(
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// The one dictionary's spellings, written where the caption settings and
+/// the older app read them, whenever the dictionary changes.
+pub fn mirror_transcription_hints(spellings: &[String]) {
+    set_store_setting(
+        GENERAL_SETTINGS,
+        "transcriptionHints",
+        Value::Array(
+            normalize_transcription_hints(spellings)
+                .into_iter()
+                .map(Value::String)
+                .collect(),
+        ),
+    );
 }
 
 // -- The auth section -----------------------------------------------------------
@@ -2348,6 +2412,18 @@ pub fn preset_names() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tests_never_reach_the_real_cap_profile() {
+        if std::env::var("CAP_GPUI_APP_DATA_DIR").is_ok_and(|dir| !dir.trim().is_empty()) {
+            return;
+        }
+        assert!(app_data_dir().starts_with(std::env::temp_dir()));
+        assert!(
+            tauri_store_path().starts_with(std::env::temp_dir())
+                || TEST_TAURI_STORE_PATH.with(|path| path.borrow().is_some())
+        );
+    }
 
     struct TempStore {
         path: PathBuf,

@@ -94,6 +94,7 @@ pub enum Page {
     Cli,
     Recordings,
     Screenshots,
+    Meetings,
     Automations,
     Transcription,
     Integrations,
@@ -111,6 +112,7 @@ impl Page {
         Page::Cli,
         Page::Recordings,
         Page::Screenshots,
+        Page::Meetings,
         Page::Automations,
         Page::Transcription,
         Page::Integrations,
@@ -130,6 +132,7 @@ impl Page {
             Self::Cli => tr::settings::nav::cli(),
             Self::Recordings => tr::settings::nav::recordings(),
             Self::Screenshots => tr::settings::nav::screenshots(),
+            Self::Meetings => tr::settings::meetings::nav(),
             Self::Automations => tr::settings::nav::automations(),
             Self::Transcription => tr::settings::nav::transcription(),
             Self::Integrations => tr::settings::nav::integrations(),
@@ -149,6 +152,7 @@ impl Page {
             Self::Cli => "cli",
             Self::Recordings => "recordings",
             Self::Screenshots => "screenshots",
+            Self::Meetings => "meetings",
             Self::Automations => "automations",
             Self::Transcription => "transcription",
             Self::Integrations => "integrations",
@@ -172,6 +176,7 @@ impl Page {
             Self::Quality => "icons/gauge.svg",
             Self::Recordings => "icons/square-play.svg",
             Self::Screenshots => "icons/image.svg",
+            Self::Meetings => "icons/users.svg",
             Self::Automations => "icons/zap.svg",
             Self::Transcription => "icons/captions.svg",
             Self::Integrations => "icons/unplug.svg",
@@ -218,6 +223,7 @@ pub(crate) enum MenuKind {
     AutomationExportFps(usize, usize),
     AutomationExportCompression(usize, usize),
     AutomationPreset(usize, usize),
+    Meetings(crate::meetings_ui::settings::MeetingsMenu),
 }
 
 struct OpenMenu {
@@ -716,7 +722,7 @@ pub struct SettingsWindow {
     pub(crate) page: Page,
     pub(crate) settings: GeneralSettings,
     menu: Option<OpenMenu>,
-    page_scroll: ScrollHandle,
+    pub(crate) page_scroll: ScrollHandle,
     instant_quality_anchor: ScrollAnchor,
     studio_quality_anchor: ScrollAnchor,
     quality_scroll_request: Option<Mode>,
@@ -1583,6 +1589,7 @@ impl SettingsWindow {
                 .into_iter()
                 .map(|window| ui::MenuItem::new(window_option_label(&window), false))
                 .collect(),
+            MenuKind::Meetings(menu) => self.meetings_menu_items(menu),
             kind => self.pages_menu_items(kind),
         }
     }
@@ -1648,6 +1655,7 @@ impl SettingsWindow {
                 });
                 self.write_excluded(next, cx);
             }
+            MenuKind::Meetings(menu) => self.meetings_choose(menu, index, window, cx),
             kind => self.pages_choose(kind, index, window, cx),
         }
         cx.notify();
@@ -1867,6 +1875,7 @@ impl Render for SettingsWindow {
             // the drag layer the zoom slider needs while the button is held.
             .children(self.render_menu(cx))
             .children(self.render_slider_drag_layer(cx))
+            .children(crate::keylat::probe())
     }
 }
 
@@ -2385,6 +2394,7 @@ impl SettingsWindow {
                         Page::Quality => self.render_recording_quality(cx),
                         Page::Recordings => self.render_recordings(cx),
                         Page::Screenshots => self.render_screenshots(cx),
+                        Page::Meetings => self.render_meetings(window, cx),
                         Page::Shortcuts => self.render_shortcuts(cx),
                         Page::Cli => self.render_cli(cx),
                         Page::Automations => self.render_automations(cx),
@@ -5143,7 +5153,7 @@ mod tests {
     /// addresses by slug.
     #[test]
     fn every_page_round_trips_through_its_slug() {
-        assert_eq!(Page::ALL.len(), 13);
+        assert_eq!(Page::ALL.len(), 14);
         for page in Page::ALL {
             assert_eq!(Page::from_slug(page.slug()), Some(*page));
         }
@@ -5510,4 +5520,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod recording_action_tests;
+pub(crate) mod recording_action_tests;

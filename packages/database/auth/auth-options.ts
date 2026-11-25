@@ -63,12 +63,15 @@ export async function decodeSessionToken(
 	if (!userId) return token;
 
 	const [user] = await db()
-		.select({ authSessionVersion: users.authSessionVersion })
+		.select({
+			authSessionVersion: users.authSessionVersion,
+			email: users.email,
+		})
 		.from(users)
 		.where(eq(users.id, User.UserId.make(userId)))
 		.limit(1);
 
-	if (!user) return null;
+	if (!user || isBlockedAccountEmail(user.email)) return null;
 
 	const sessionVersion =
 		typeof token.sessionVersion === "number" ? token.sessionVersion : 0;
