@@ -397,6 +397,10 @@ impl WindowsSegmentedCameraMuxer {
         let frame_rate = self.video_config.fps();
         let bitrate_multiplier = 0.2f32;
         let input_format = first_frame.dxgi_format();
+        let source_color = cap_enc_mediafoundation::InputColorSpace::from_media_type(
+            first_frame.color.yuv_matrix,
+            first_frame.color.nominal_range,
+        );
         let video_config = self.video_config;
         let encoder_preferences = self.encoder_preferences.clone();
 
@@ -458,6 +462,7 @@ impl WindowsSegmentedCameraMuxer {
                         output_size,
                         frame_rate,
                         bitrate_multiplier,
+                        source_color,
                     ) {
                         Ok(encoder) => {
                             if let Err(e) = encoder.validate() {

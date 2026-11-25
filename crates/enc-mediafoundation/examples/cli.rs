@@ -119,6 +119,7 @@ mod win {
                 resolution,
                 frame_rate,
                 0.07,
+                cap_enc_mediafoundation::InputColorSpace::screen_rgb(),
             )
             .unwrap();
 

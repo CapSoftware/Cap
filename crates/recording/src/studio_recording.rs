@@ -3819,6 +3819,11 @@ async fn create_segment_pipeline(
                 .with_start_gate(start_gate.clone())
                 .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
                     encoder_preferences: encoder_preferences.clone(),
+                    source_color: base_inputs
+                        .camera_feed
+                        .as_ref()
+                        .map(|feed| feed.native_ingress().source_color())
+                        .unwrap_or_default(),
                     ..Default::default()
                 })
                 .instrument(error_span!("screen-out"))
@@ -3957,6 +3962,11 @@ async fn create_segment_pipeline(
                 .with_start_gate(start_gate.clone())
                 .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
                     encoder_preferences: encoder_preferences.clone(),
+                    source_color: base_inputs
+                        .camera_feed
+                        .as_ref()
+                        .map(|feed| feed.native_ingress().source_color())
+                        .unwrap_or_default(),
                     ..Default::default()
                 })
                 .instrument(error_span!("camera-out"))

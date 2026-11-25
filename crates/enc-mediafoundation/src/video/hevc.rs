@@ -50,6 +50,7 @@ pub struct HevcEncoder {
     output_stream_id: u32,
     output_type: IMFMediaType,
     bitrate: u32,
+    color_tags: String,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -83,6 +84,7 @@ impl HevcEncoder {
         output_resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
         flags: MFT_ENUM_FLAG,
         enable_hardware_transforms: bool,
     ) -> Result<Self, NewHevcEncoderError> {
@@ -109,6 +111,7 @@ impl HevcEncoder {
             DXGI_FORMAT_NV12,
             output_resolution,
             frame_rate,
+            source,
         )
         .map_err(NewHevcEncoderError::VideoProcessor)?;
 
@@ -192,37 +195,56 @@ impl HevcEncoder {
                 .map_err(NewHevcEncoderError::EncoderTransform)?;
         };
 
-        let output_type = (|| unsafe {
-            let output_type = MFCreateMediaType()?;
-            let attributes: IMFAttributes = output_type.cast()?;
-            output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_HEVC)?;
-            output_type.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
-            MFSetAttributeSize(
-                &attributes,
-                &MF_MT_FRAME_SIZE,
-                output_resolution.Width as u32,
-                output_resolution.Height as u32,
-            )?;
-            MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, frame_rate, 1)?;
-            MFSetAttributeRatio(&attributes, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
-            output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-            output_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-            transform.SetOutputType(output_stream_id, &output_type, 0)?;
-            Ok(output_type)
-        })()
-        .map_err(NewHevcEncoderError::OutputType)?;
+        let mut output_type = None;
+        let output_probe = {
+            let mut set_output = |tags: &[crate::color::ColorTag]| -> windows::core::Result<()> {
+                unsafe {
+                    let media_type = MFCreateMediaType()?;
+                    let attributes: IMFAttributes = media_type.cast()?;
+                    media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+                    media_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_HEVC)?;
+                    media_type.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
+                    MFSetAttributeSize(
+                        &attributes,
+                        &MF_MT_FRAME_SIZE,
+                        output_resolution.Width as u32,
+                        output_resolution.Height as u32,
+                    )?;
+                    MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, frame_rate, 1)?;
+                    MFSetAttributeRatio(&attributes, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
+                    media_type
+                        .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+                    media_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+                    crate::color::apply_color_tags(&media_type, tags)?;
+                    transform.SetOutputType(output_stream_id, &media_type, 0)?;
+                    output_type = Some(media_type);
+                    Ok(())
+                }
+            };
+            set_output(&[]).map_err(NewHevcEncoderError::OutputType)?;
+            crate::color::probe_color_tags(&mut set_output, crate::color::media_type_is_unsupported)
+                .map_err(NewHevcEncoderError::OutputType)?
+        };
+        let output_type = output_type.ok_or_else(|| {
+            NewHevcEncoderError::OutputType(Error::new(
+                MF_E_TRANSFORM_TYPE_NOT_SET,
+                "HEVC output type was not set",
+            ))
+        })?;
+        let after_output = crate::color::codec_color_passes(&transform);
 
-        let input_type: Option<IMFMediaType> = (|| unsafe {
-            let mut count = 0;
+        let input_index = (|| unsafe {
+            let mut count = 0u32;
             loop {
                 let result = transform.GetInputAvailableType(input_stream_id, count);
                 if let Err(error) = &result
                     && error.code() == MF_E_NO_MORE_TYPES
                 {
-                    break Ok(None);
+                    return Err(Error::new(
+                        MF_E_TRANSFORM_TYPE_NOT_SET,
+                        "No suitable input type found! Try a different set of encoding settings.",
+                    ));
                 }
-
                 let input_type = result?;
                 let attributes: IMFAttributes = input_type.cast()?;
                 input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
@@ -234,31 +256,53 @@ impl HevcEncoder {
                     output_resolution.Height as u32,
                 )?;
                 MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, frame_rate, 1)?;
-                let result = transform.SetInputType(
+                let test = transform.SetInputType(
                     input_stream_id,
                     &input_type,
                     MFT_SET_TYPE_TEST_ONLY.0 as u32,
                 );
-                if let Err(error) = &result
+                if let Err(error) = &test
                     && error.code() == MF_E_INVALIDMEDIATYPE
                 {
                     count += 1;
                     continue;
                 }
-                result?;
-                break Ok(Some(input_type));
+                test?;
+                return Ok(count);
             }
         })()
         .map_err(NewHevcEncoderError::InputType)?;
-        if let Some(input_type) = input_type {
-            unsafe { transform.SetInputType(input_stream_id, &input_type, 0) }
-                .map_err(NewHevcEncoderError::InputType)?;
-        } else {
-            return Err(NewHevcEncoderError::InputType(Error::new(
-                MF_E_TRANSFORM_TYPE_NOT_SET,
-                "No suitable input type found! Try a different set of encoding settings.",
-            )));
-        }
+        let input_probe = {
+            let mut set_input = |tags: &[crate::color::ColorTag]| -> windows::core::Result<()> {
+                unsafe {
+                    let input_type =
+                        transform.GetInputAvailableType(input_stream_id, input_index)?;
+                    let attributes: IMFAttributes = input_type.cast()?;
+                    input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+                    input_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+                    MFSetAttributeSize(
+                        &attributes,
+                        &MF_MT_FRAME_SIZE,
+                        output_resolution.Width as u32,
+                        output_resolution.Height as u32,
+                    )?;
+                    MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, frame_rate, 1)?;
+                    crate::color::apply_color_tags(&input_type, tags)?;
+                    transform.SetInputType(input_stream_id, &input_type, 0)?;
+                    Ok(())
+                }
+            };
+            set_input(&[]).map_err(NewHevcEncoderError::InputType)?;
+            crate::color::probe_color_tags(&mut set_input, crate::color::media_type_is_unsupported)
+                .map_err(NewHevcEncoderError::InputType)?
+        };
+        let after_input = crate::color::codec_color_passes(&transform);
+        let color_tags = format!(
+            "{} {}",
+            crate::color::color_tag_report(&output_probe, &input_probe),
+            crate::color::codec_color_report(&after_output, &after_input),
+        );
+        tracing::info!(%color_tags, "media foundation color tags");
 
         Ok(Self {
             _d3d_device: d3d_device.clone(),
@@ -274,6 +318,7 @@ impl HevcEncoder {
             bitrate,
 
             output_type,
+            color_tags,
         })
     }
 
@@ -284,6 +329,7 @@ impl HevcEncoder {
         output_resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewHevcEncoderError> {
         Self::new_with_scaled_output_with_flags(
             d3d_device,
@@ -292,6 +338,7 @@ impl HevcEncoder {
             output_resolution,
             frame_rate,
             bitrate_multipler,
+            source,
             MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_TRANSCODE_ONLY,
             true,
         )
@@ -304,6 +351,7 @@ impl HevcEncoder {
         output_resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewHevcEncoderError> {
         Self::new_with_scaled_output_with_flags(
             d3d_device,
@@ -312,6 +360,7 @@ impl HevcEncoder {
             output_resolution,
             frame_rate,
             bitrate_multipler,
+            source,
             MFT_ENUM_FLAG_TRANSCODE_ONLY,
             false,
         )
@@ -323,6 +372,7 @@ impl HevcEncoder {
         resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewHevcEncoderError> {
         Self::new_with_scaled_output(
             d3d_device,
@@ -331,6 +381,7 @@ impl HevcEncoder {
             resolution,
             frame_rate,
             bitrate_multipler,
+            source,
         )
     }
 
@@ -340,6 +391,7 @@ impl HevcEncoder {
         resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewHevcEncoderError> {
         Self::new_with_scaled_output_software(
             d3d_device,
@@ -348,11 +400,16 @@ impl HevcEncoder {
             resolution,
             frame_rate,
             bitrate_multipler,
+            source,
         )
     }
 
     pub fn bitrate(&self) -> u32 {
         self.bitrate
+    }
+
+    pub fn color_tags(&self) -> &str {
+        &self.color_tags
     }
 
     pub fn output_type(&self) -> &IMFMediaType {

@@ -70,6 +70,8 @@ pub struct NativeCameraIngress {
     senders: std::sync::atomic::AtomicUsize,
     mailbox_full: std::sync::atomic::AtomicU64,
     mjpeg_budget: Arc<MjpegOverlayBudget>,
+    #[cfg(windows)]
+    source_color: std::sync::Mutex<cap_camera_windows::CapturedColor>,
 }
 
 impl NativeCameraIngress {
@@ -82,6 +84,22 @@ impl NativeCameraIngress {
     pub fn record_mailbox_full(&self) {
         self.mailbox_full
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(windows)]
+    pub fn set_source_color(&self, color: cap_camera_windows::CapturedColor) {
+        *self
+            .source_color
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = color;
+    }
+
+    #[cfg(windows)]
+    pub fn source_color(&self) -> cap_camera_windows::CapturedColor {
+        *self
+            .source_color
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -1255,6 +1273,7 @@ async fn setup_camera(
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
     let format = select_camera_format(&camera, settings)?;
+    native_ingress.set_source_color(format.captured_color());
     let frame_rate = format.frame_rate().round().max(1.0) as u32;
 
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -1303,6 +1322,7 @@ async fn setup_camera(
                                 width: frame.native().width as u32,
                                 height: frame.native().height as u32,
                                 is_bottom_up: frame.native().is_bottom_up,
+                                color: frame.native().captured_color(),
                                 timestamp,
                             },
                         );

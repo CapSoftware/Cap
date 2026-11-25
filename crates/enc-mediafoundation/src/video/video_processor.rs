@@ -10,15 +10,17 @@ use windows::{
                 D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
                 D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_COLOR_SPACE,
                 D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
-                D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255,
-                D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
+                D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
                 D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM,
                 D3D11_VIDEO_USAGE_OPTIMAL_QUALITY, D3D11_VPIV_DIMENSION_TEXTURE2D,
                 D3D11_VPOV_DIMENSION_TEXTURE2D, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
                 ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor,
                 ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
             },
-            Dxgi::Common::{DXGI_FORMAT, DXGI_RATIONAL, DXGI_SAMPLE_DESC},
+            Dxgi::Common::{
+                DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_RATIONAL,
+                DXGI_SAMPLE_DESC,
+            },
         },
     },
     core::Interface,
@@ -61,6 +63,7 @@ impl VideoProcessor {
         output_format: DXGI_FORMAT,
         output_size: SizeInt32,
         frame_rate: u32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewVideoProcessorError> {
         let d3d_context = unsafe { d3d_device.GetImmediateContext() }
             .map_err(NewVideoProcessorError::GetDevice)?;
@@ -95,13 +98,21 @@ impl VideoProcessor {
         let video_processor = unsafe { video_device.CreateVideoProcessor(&video_enum, 0) }
             .map_err(NewVideoProcessorError::CreateVideoProcessor)?;
 
-        let mut color_space = D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
-            _bitfield: 1 | D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255.0 as u32,
+        let words = crate::color::resolved_processor_words(
+            input_is_full_range_rgb(input_format),
+            input_size.Width as u32,
+            input_size.Height as u32,
+            source,
+        );
+        let output_color = D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
+            _bitfield: words.output,
         };
-        unsafe { video_context.VideoProcessorSetOutputColorSpace(&video_processor, &color_space) };
-        color_space._bitfield = 1 | D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235.0 as u32;
+        let stream_color = D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
+            _bitfield: words.stream,
+        };
         unsafe {
-            video_context.VideoProcessorSetStreamColorSpace(&video_processor, 0, &color_space)
+            video_context.VideoProcessorSetOutputColorSpace(&video_processor, &output_color);
+            video_context.VideoProcessorSetStreamColorSpace(&video_processor, 0, &stream_color);
         };
 
         // If the input and output resolutions don't match, setup the
@@ -246,6 +257,13 @@ impl VideoProcessor {
             )
         }
     }
+}
+
+fn input_is_full_range_rgb(format: DXGI_FORMAT) -> bool {
+    matches!(
+        format,
+        DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_R8G8B8A8_UNORM
+    )
 }
 
 fn compute_scale_factor(output_size: Vector2, input_size: Vector2) -> f32 {
