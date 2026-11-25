@@ -386,6 +386,16 @@ struct LateStop(Arc<LateStopInner>);
 struct LateStopInner {
     late: watch::Sender<bool>,
     finishing: std::sync::Mutex<Option<crate::recovery::finishing::FinishingProject>>,
+    inputs: std::sync::Mutex<Option<StopInputs>>,
+}
+
+/// The microphone and camera a stopping recording still holds. A stop that
+/// runs late gives them back at once, so another recording can use them.
+#[cfg(windows)]
+struct StopInputs {
+    mic: Option<Arc<MicrophoneFeedLock>>,
+    camera: Option<Arc<CameraFeedLock>>,
+    camera_input: Option<StudioCameraInput>,
 }
 
 #[cfg(windows)]
@@ -394,6 +404,7 @@ impl Default for LateStopInner {
         Self {
             late: watch::channel(false).0,
             finishing: std::sync::Mutex::new(None),
+            inputs: std::sync::Mutex::new(None),
         }
     }
 }
@@ -414,10 +425,40 @@ impl LateStop {
             *finishing = Some(crate::recovery::finishing::register(recording_dir));
         }
         drop(finishing);
+        if let Some(inputs) = self.take_inputs() {
+            drop(inputs.mic);
+            drop(inputs.camera);
+            if let Some(camera_input) = inputs.camera_input
+                && let Ok(runtime) = tokio::runtime::Handle::try_current()
+            {
+                drop(runtime.spawn(async move {
+                    if let Err(error) = camera_input.release().await {
+                        warn!(%error, "Could not release the camera of a late Studio stop");
+                    }
+                }));
+            }
+        }
         self.0.late.send_replace(true);
     }
 
+    fn hold_inputs(&self, inputs: StopInputs) {
+        *self
+            .0
+            .inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(inputs);
+    }
+
+    fn take_inputs(&self) -> Option<StopInputs> {
+        self.0
+            .inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
     fn release(&self) {
+        drop(self.take_inputs());
         let finished = self
             .0
             .finishing
@@ -579,6 +620,19 @@ impl Actor {
         tracing::info!("pipeline shutting down");
 
         #[cfg(windows)]
+        let device_ids = (
+            self.segment_factory.camera_device_id(),
+            self.segment_factory.mic_device_id(),
+        );
+        #[cfg(windows)]
+        if let Some(late_stop) = &late_stop {
+            late_stop.hold_inputs(StopInputs {
+                mic: self.segment_factory.base_inputs.mic_feed.take(),
+                camera: self.segment_factory.base_inputs.camera_feed.take(),
+                camera_input: self.segment_factory.live_camera.take(),
+            });
+        }
+        #[cfg(windows)]
         let stopped = pipeline
             .stop_with_late_stop(late_stop.map(|late_stop| (late_stop, self.recording_dir.clone())))
             .await;
@@ -630,7 +684,11 @@ impl Actor {
             (Default::default(), 0)
         };
 
+        #[cfg(windows)]
+        let (camera_device_id, mic_device_id) = device_ids;
+        #[cfg(not(windows))]
         let camera_device_id = self.segment_factory.camera_device_id();
+        #[cfg(not(windows))]
         let mic_device_id = self.segment_factory.mic_device_id();
 
         if screen_empty && media_error.is_none() {
