@@ -173,6 +173,46 @@ describe("organization invite delivery", () => {
 		expect(provisionOrganizationInvitee).not.toHaveBeenCalled();
 	});
 
+	it("records a pending invite without enrolling the address when email is off", async () => {
+		const result = await sendOrganizationInvites(
+			["future@example.com"],
+			Organisation.OrganisationId.make("org-1"),
+			"member",
+			{ sendEmailNotifications: false },
+		);
+		expect(result).toEqual({
+			success: true,
+			failedEmails: [],
+			skippedEmails: [],
+		});
+		expect(provisionOrganizationInvitee).not.toHaveBeenCalled();
+		expect(mocks.insert).toHaveBeenCalledWith([
+			expect.objectContaining({
+				id: "invite-1",
+				organizationId: "org-1",
+				invitedEmail: "future@example.com",
+				role: "member",
+			}),
+		]);
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
+	});
+
+	it("skips addresses already invited or already members when email is off", async () => {
+		mocks.existingInviteEmails = ["pending@example.com"];
+		mocks.existingMemberEmails = ["member@example.com"];
+		await sendOrganizationInvites(
+			["pending@example.com", "member@example.com", "new@example.com"],
+			Organisation.OrganisationId.make("org-1"),
+			"member",
+			{ sendEmailNotifications: false },
+		);
+		expect(provisionOrganizationInvitee).not.toHaveBeenCalled();
+		expect(mocks.insert).toHaveBeenCalledWith([
+			expect.objectContaining({ invitedEmail: "new@example.com" }),
+		]);
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
+	});
+
 	it("does not consult the limit when no address is valid", async () => {
 		const result = await sendOrganizationInvites(
 			["not-an-email"],
