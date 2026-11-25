@@ -23,7 +23,7 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..ca45e8e 100644
+index c02bd16..0a7938d 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -997,6 +997,13 @@ pub trait InteractiveElement: Sized {
@@ -71,7 +71,7 @@ index c02bd16..ca45e8e 100644
                  let style = self.compute_style_internal(None, element_state.as_mut(), window, cx);
                  let layout_id = f(style, window, cx);
                  (layout_id, element_state)
-@@ -2271,11 +2295,72 @@ impl Interactivity {
+@@ -2271,11 +2295,66 @@ impl Interactivity {
              // were removed or the bounds became larger).
              let mut scroll_offset = scroll_offset.borrow_mut();
  
@@ -87,41 +87,35 @@ index c02bd16..ca45e8e 100644
 +                if scroll_to_bottom {
 +                    scroll_offset.y = -scroll_max.y;
 +                    rb.y.raw_overscroll = 0.0;
-+                    rb.y.cancel_spring();
++                    rb.y.spring = None;
 +                    scroll_offset.x = scroll_offset.x.clamp(-scroll_max.x, px(0.));
 +                    rb.x.raw_overscroll = 0.0;
-+                    rb.x.cancel_spring();
++                    rb.x.spring = None;
 +                } else if rb.is_springing() {
 +                    let config = crate::rubber_band_config();
 +                    let now = std::time::Instant::now();
-+                    let dt = rb
-+                        .last_frame
-+                        .map(|last| now.saturating_duration_since(last).as_secs_f32())
-+                        .unwrap_or(1.0 / 60.0);
-+                    rb.last_frame = Some(now);
++                    let mut keep_animating = false;
 +
-+                    let x_active = rb.x.step_spring(dt, &config);
-+                    let y_active = rb.y.step_spring(dt, &config);
++                    if let Some((x_val, x_active)) =
++                        rb.x.step_spring(now, scroll_max.x.into(), &config)
++                    {
++                        scroll_offset.x = px(x_val);
++                        keep_animating |= x_active;
++                    } else if rb.x.raw_overscroll == 0.0 {
++                        scroll_offset.x = scroll_offset.x.clamp(-scroll_max.x, px(0.));
++                    }
 +
-+                    let base_x = scroll_offset.x.clamp(-scroll_max.x, px(0.));
-+                    let base_y = scroll_offset.y.clamp(-scroll_max.y, px(0.));
-+                    scroll_offset.x = base_x
-+                        + px(crate::rubber_band_offset(
-+                            rb.x.raw_overscroll,
-+                            bounds.size.width.into(),
-+                            &config,
-+                        ));
-+                    scroll_offset.y = base_y
-+                        + px(crate::rubber_band_offset(
-+                            rb.y.raw_overscroll,
-+                            bounds.size.height.into(),
-+                            &config,
-+                        ));
++                    if let Some((y_val, y_active)) =
++                        rb.y.step_spring(now, scroll_max.y.into(), &config)
++                    {
++                        scroll_offset.y = px(y_val);
++                        keep_animating |= y_active;
++                    } else if rb.y.raw_overscroll == 0.0 {
++                        scroll_offset.y = scroll_offset.y.clamp(-scroll_max.y, px(0.));
++                    }
 +
-+                    if x_active || y_active {
++                    if keep_animating {
 +                        window.request_animation_frame();
-+                    } else {
-+                        rb.last_frame = None;
 +                    }
 +                } else if rb.x.raw_overscroll == 0.0 && rb.y.raw_overscroll == 0.0 {
 +                    scroll_offset.x = scroll_offset.x.clamp(-scroll_max.x, px(0.));
@@ -148,7 +142,7 @@ index c02bd16..ca45e8e 100644
              }
  
              if let Some(mut scroll_handle_state) = tracked_scroll_handle {
-@@ -3091,6 +3176,8 @@ impl Interactivity {
+@@ -3091,6 +3170,8 @@ impl Interactivity {
              let line_height = window.line_height();
              let hitbox = hitbox.clone();
              let current_view = window.current_view();
@@ -157,7 +151,7 @@ index c02bd16..ca45e8e 100644
              window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                  if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
                      let mut scroll_offset = scroll_offset.borrow_mut();
-@@ -3120,8 +3207,87 @@ impl Interactivity {
+@@ -3120,8 +3201,89 @@ impl Interactivity {
                              delta_x = Pixels::ZERO;
                          }
                      }
@@ -169,11 +163,12 @@ index c02bd16..ca45e8e 100644
 +                    {
 +                        let mut rb = rb_state.borrow_mut();
 +                        let config = crate::rubber_band_config();
++                        let now = std::time::Instant::now();
 +                        if matches!(
 +                            event.scroll_phase,
 +                            crate::ScrollPhase::Began | crate::ScrollPhase::MayBegin
 +                        ) {
-+                            rb.cancel_springs();
++                            rb.catch_springs(now, &config);
 +                        }
 +                        let is_momentum = event.momentum_phase != crate::ScrollPhase::None;
 +                        let mut ox: f32 = scroll_offset.x.into();
@@ -196,6 +191,7 @@ index c02bd16..ca45e8e 100644
 +                                dx,
 +                                w,
 +                                is_momentum,
++                                now,
 +                                &config,
 +                            );
 +                            crate::apply_scroll_delta(
@@ -205,6 +201,7 @@ index c02bd16..ca45e8e 100644
 +                                dy,
 +                                h,
 +                                is_momentum,
++                                now,
 +                                &config,
 +                            );
 +                            rb.x = x_axis;
@@ -217,7 +214,6 @@ index c02bd16..ca45e8e 100644
 +                            if is_momentum {
 +                                rb.momentum_bounced = true;
 +                            }
-+                            rb.last_frame = Some(std::time::Instant::now());
 +                            cx.notify(current_view);
 +                        }
 +
@@ -232,7 +228,7 @@ index c02bd16..ca45e8e 100644
 +                        if momentum_ended {
 +                            rb.momentum_bounced = false;
 +                        }
-+                        if (gesture_ended || momentum_ended) && rb.start_springs() {
++                        if (gesture_ended || momentum_ended) && rb.start_springs(now, &config) {
 +                            cx.notify(current_view);
 +                        }
 +                    } else {
@@ -247,7 +243,7 @@ index c02bd16..ca45e8e 100644
                      if *scroll_offset != old_scroll_offset {
                          cx.notify(current_view);
                      }
-@@ -3360,6 +3526,8 @@ pub struct InteractiveElementState {
+@@ -3360,6 +3522,8 @@ pub struct InteractiveElementState {
      /// blur). `None` means no activation key is pending.
      pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
@@ -331,10 +327,11 @@ index 1feee49..1c95a05 100644
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..214aebe
+index 0000000..36bc79b
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,251 @@
+@@ -0,0 +1,309 @@
++use std::f32::consts::PI;
 +use std::sync::RwLock;
 +use std::time::Instant;
 +
@@ -343,8 +340,7 @@ index 0000000..214aebe
 +#[derive(Clone, Copy, Debug, PartialEq)]
 +pub struct RubberBandConfig {
 +    pub resistance: f32,
-+    pub spring_stiffness: f32,
-+    pub spring_damping: f32,
++    pub response: f32,
 +    pub momentum_carry: f32,
 +    pub max_overscroll_ratio: f32,
 +    pub settle_epsilon: f32,
@@ -353,8 +349,7 @@ index 0000000..214aebe
 +impl RubberBandConfig {
 +    pub const DEFAULT: Self = Self {
 +        resistance: 0.55,
-+        spring_stiffness: 220.0,
-+        spring_damping: 30.0,
++        response: 0.575,
 +        momentum_carry: 0.35,
 +        max_overscroll_ratio: 0.50,
 +        settle_epsilon: 0.25,
@@ -381,7 +376,11 @@ index 0000000..214aebe
 +    }
 +}
 +
-+pub fn rubber_band_offset(raw_overscroll: f32, dimension: f32, config: &RubberBandConfig) -> f32 {
++pub(crate) fn rubber_band_offset(
++    raw_overscroll: f32,
++    dimension: f32,
++    config: &RubberBandConfig,
++) -> f32 {
 +    if raw_overscroll == 0.0 {
 +        return 0.0;
 +    }
@@ -389,96 +388,171 @@ index 0000000..214aebe
 +    let d = raw_overscroll.abs();
 +    let c = config.resistance.clamp(0.01, 1.0);
 +    let max_overscroll = dim * config.max_overscroll_ratio.clamp(0.05, 0.95);
-+    let rubber = (d * c * dim) / (dim + c * d);
++    let rubber = (1.0 - 1.0 / (d / dim * c + 1.0)) * dim;
 +    raw_overscroll.signum() * rubber.min(max_overscroll)
 +}
 +
++pub(crate) fn rubber_band_offset_inv(
++    visual_overscroll: f32,
++    dimension: f32,
++    config: &RubberBandConfig,
++) -> f32 {
++    if visual_overscroll == 0.0 {
++        return 0.0;
++    }
++    let dim = dimension.max(1.0);
++    let c = config.resistance.clamp(0.01, 1.0);
++    let v = visual_overscroll.abs().min(dim - 1e-3);
++    visual_overscroll.signum() * (dim * v / (dim - v)) / c
++}
++
++#[derive(Clone, Copy, Debug)]
++pub(crate) struct SpringState {
++    started_at: Instant,
++    lambda: f32,
++    c1: f32,
++    c2: f32,
++    anchor_max_edge: bool,
++}
++
++impl SpringState {
++    fn new(
++        visual_offset: f32,
++        velocity: f32,
++        anchor_max_edge: bool,
++        now: Instant,
++        config: &RubberBandConfig,
++    ) -> Self {
++        let response = config.response.clamp(0.1, 2.0);
++        let lambda = 2.0 * PI / response;
++        Self {
++            started_at: now,
++            lambda,
++            c1: visual_offset,
++            c2: velocity + lambda * visual_offset,
++            anchor_max_edge,
++        }
++    }
++
++    pub(crate) fn offset_at(&self, now: Instant) -> f32 {
++        let t = now.saturating_duration_since(self.started_at).as_secs_f32();
++        (self.c1 + self.c2 * t) * (-self.lambda * t).exp()
++    }
++
++    fn velocity_at(&self, t: f32) -> f32 {
++        (self.c2 - self.lambda * (self.c1 + self.c2 * t)) * (-self.lambda * t).exp()
++    }
++
++    pub(crate) fn evaluate(&self, now: Instant, config: &RubberBandConfig) -> Option<f32> {
++        let t = now.saturating_duration_since(self.started_at).as_secs_f32();
++        let offset = (self.c1 + self.c2 * t) * (-self.lambda * t).exp();
++        let velocity = self.velocity_at(t);
++        if (t > 0.02 && offset.abs() < config.settle_epsilon && velocity.abs() < 1.0) || t > 2.5 {
++            None
++        } else {
++            Some(offset)
++        }
++    }
++}
++
 +#[derive(Clone, Copy, Debug, Default)]
-+pub struct RubberBandAxisState {
-+    pub raw_overscroll: f32,
-+    pub velocity: f32,
-+    pub springing: bool,
++pub(crate) struct RubberBandAxisState {
++    pub(crate) raw_overscroll: f32,
++    pub(crate) spring: Option<SpringState>,
 +}
 +
 +impl RubberBandAxisState {
-+    pub fn cancel_spring(&mut self) {
-+        self.springing = false;
-+        self.velocity = 0.0;
++    pub(crate) fn catch_spring(
++        &mut self,
++        dim: f32,
++        now: Instant,
++        config: &RubberBandConfig,
++    ) {
++        if let Some(spring) = self.spring.take() {
++            let caught = spring.offset_at(now);
++            self.raw_overscroll = rubber_band_offset_inv(caught, dim, config);
++        }
 +    }
 +
-+    pub fn start_spring(&mut self) {
++    pub(crate) fn start_spring(
++        &mut self,
++        dim: f32,
++        now: Instant,
++        config: &RubberBandConfig,
++    ) -> bool {
 +        if self.raw_overscroll != 0.0 {
-+            self.springing = true;
++            let visual = rubber_band_offset(self.raw_overscroll, dim, config);
++            let anchor_max_edge = self.raw_overscroll > 0.0;
++            self.raw_overscroll = 0.0;
++            self.spring = Some(SpringState::new(visual, 0.0, anchor_max_edge, now, config));
++            true
++        } else {
++            false
 +        }
 +    }
 +
-+    pub fn step_spring(&mut self, dt: f32, config: &RubberBandConfig) -> bool {
-+        if !self.springing {
-+            return false;
-+        }
-+        let dt = dt.clamp(0.0, 1.0 / 30.0);
-+        let prev = self.raw_overscroll;
-+        let accel =
-+            -config.spring_stiffness * self.raw_overscroll - config.spring_damping * self.velocity;
-+        self.velocity += accel * dt;
-+        self.raw_overscroll += self.velocity * dt;
-+
-+        let crossed_zero =
-+            (prev > 0.0 && self.raw_overscroll <= 0.0) || (prev < 0.0 && self.raw_overscroll >= 0.0);
-+        if crossed_zero
-+            || (self.raw_overscroll.abs() < config.settle_epsilon && self.velocity.abs() < 1.0)
-+        {
-+            self.raw_overscroll = 0.0;
-+            self.velocity = 0.0;
-+            self.springing = false;
-+            false
++    pub(crate) fn step_spring(
++        &mut self,
++        now: Instant,
++        max_scroll: f32,
++        config: &RubberBandConfig,
++    ) -> Option<(f32, bool)> {
++        let spring = self.spring?;
++        let base = if spring.anchor_max_edge {
++            0.0
 +        } else {
-+            true
++            -max_scroll.max(0.0)
++        };
++        if let Some(offset) = spring.evaluate(now, config) {
++            Some((base + offset, true))
++        } else {
++            self.spring = None;
++            Some((base, false))
 +        }
 +    }
 +}
 +
 +#[derive(Clone, Debug, Default)]
-+pub struct RubberBandScrollState {
-+    pub x: RubberBandAxisState,
-+    pub y: RubberBandAxisState,
-+    pub last_frame: Option<Instant>,
-+    pub scroll_max: Point<Pixels>,
-+    pub bounds_size: Size<Pixels>,
-+    pub momentum_bounced: bool,
++pub(crate) struct RubberBandScrollState {
++    pub(crate) x: RubberBandAxisState,
++    pub(crate) y: RubberBandAxisState,
++    pub(crate) scroll_max: Point<Pixels>,
++    pub(crate) bounds_size: Size<Pixels>,
++    pub(crate) momentum_bounced: bool,
 +}
 +
 +impl RubberBandScrollState {
-+    pub fn cancel_springs(&mut self) {
-+        self.x.cancel_spring();
-+        self.y.cancel_spring();
-+        self.last_frame = None;
++    pub(crate) fn catch_springs(&mut self, now: Instant, config: &RubberBandConfig) {
++        self.x
++            .catch_spring(self.bounds_size.width.into(), now, config);
++        self.y
++            .catch_spring(self.bounds_size.height.into(), now, config);
 +        self.momentum_bounced = false;
 +    }
 +
-+    pub fn start_springs(&mut self) -> bool {
-+        self.x.start_spring();
-+        self.y.start_spring();
-+        if self.x.springing || self.y.springing {
-+            self.last_frame = Some(Instant::now());
-+            true
-+        } else {
-+            false
-+        }
++    pub(crate) fn start_springs(&mut self, now: Instant, config: &RubberBandConfig) -> bool {
++        let x = self
++            .x
++            .start_spring(self.bounds_size.width.into(), now, config);
++        let y = self
++            .y
++            .start_spring(self.bounds_size.height.into(), now, config);
++        x || y
 +    }
 +
-+    pub fn is_springing(&self) -> bool {
-+        self.x.springing || self.y.springing
++    pub(crate) fn is_springing(&self) -> bool {
++        self.x.spring.is_some() || self.y.spring.is_some()
 +    }
 +}
 +
-+pub fn apply_scroll_delta(
++pub(crate) fn apply_scroll_delta(
 +    axis: &mut RubberBandAxisState,
 +    offset: &mut f32,
 +    max_scroll: f32,
 +    delta: f32,
 +    dim: f32,
 +    is_momentum: bool,
++    now: Instant,
 +    config: &RubberBandConfig,
 +) {
 +    if delta == 0.0 {
@@ -495,10 +569,10 @@ index 0000000..214aebe
 +                if config.momentum_carry <= 0.001 {
 +                    *offset = max;
 +                } else {
-+                    axis.raw_overscroll = excess * config.momentum_carry;
-+                    axis.velocity = (delta * 60.0 * config.momentum_carry).clamp(-2400.0, 2400.0);
-+                    axis.springing = true;
-+                    *offset = max + rubber_band_offset(axis.raw_overscroll, dim, config);
++                    let visual = rubber_band_offset(excess * config.momentum_carry, dim, config);
++                    let velocity = (delta * 60.0 * config.momentum_carry).clamp(-2000.0, 2000.0);
++                    axis.spring = Some(SpringState::new(visual, velocity, true, now, config));
++                    *offset = max + visual;
 +                }
 +            } else {
 +                axis.raw_overscroll = excess;
@@ -510,10 +584,10 @@ index 0000000..214aebe
 +                if config.momentum_carry <= 0.001 {
 +                    *offset = min;
 +                } else {
-+                    axis.raw_overscroll = excess * config.momentum_carry;
-+                    axis.velocity = (delta * 60.0 * config.momentum_carry).clamp(-2400.0, 2400.0);
-+                    axis.springing = true;
-+                    *offset = min + rubber_band_offset(axis.raw_overscroll, dim, config);
++                    let visual = rubber_band_offset(excess * config.momentum_carry, dim, config);
++                    let velocity = (delta * 60.0 * config.momentum_carry).clamp(-2000.0, 2000.0);
++                    axis.spring = Some(SpringState::new(visual, velocity, false, now, config));
++                    *offset = min + visual;
 +                }
 +            } else {
 +                axis.raw_overscroll = excess;
@@ -524,12 +598,7 @@ index 0000000..214aebe
 +        }
 +    } else {
 +        let was_positive = axis.raw_overscroll > 0.0;
-+        let scaled_delta = if is_momentum && (delta > 0.0) == was_positive {
-+            delta * config.momentum_carry
-+        } else {
-+            delta
-+        };
-+        let next_raw = axis.raw_overscroll + scaled_delta;
++        let next_raw = axis.raw_overscroll + delta;
 +        if next_raw == 0.0 || (next_raw > 0.0) != was_positive {
 +            axis.raw_overscroll = 0.0;
 +            let base = if was_positive { max } else { min };
@@ -545,45 +614,30 @@ index 0000000..214aebe
 +#[cfg(test)]
 +mod tests {
 +    use super::*;
++    use std::time::Duration;
 +
 +    #[test]
-+    fn resistance_is_monotonic_and_bounded() {
++    fn resistance_and_inverse_roundtrip() {
 +        let config = RubberBandConfig::DEFAULT;
 +        let dim = 600.0;
-+        let a = rubber_band_offset(20.0, dim, &config);
-+        let b = rubber_band_offset(100.0, dim, &config);
-+        let c = rubber_band_offset(10_000.0, dim, &config);
-+
-+        assert!(a > 0.0 && a < 20.0);
-+        assert!(b > a && b < 100.0);
-+        assert!(c >= b);
-+        assert!(c <= dim * config.max_overscroll_ratio + f32::EPSILON);
++        let visual = rubber_band_offset(120.0, dim, &config);
++        let recovered = rubber_band_offset_inv(visual, dim, &config);
++        assert!((recovered - 120.0).abs() < 0.05);
 +    }
 +
 +    #[test]
-+    fn spring_settles_to_zero() {
++    fn analytical_spring_settles_without_overshoot() {
 +        let config = RubberBandConfig::DEFAULT;
-+        let mut axis = RubberBandAxisState {
-+            raw_overscroll: 120.0,
-+            velocity: 0.0,
-+            springing: true,
-+        };
++        let start = Instant::now();
++        let spring = SpringState::new(80.0, 0.0, true, start, &config);
 +
-+        let mut steps = 0;
-+        while axis.step_spring(1.0 / 60.0, &config) {
-+            steps += 1;
-+            assert!(steps < 600, "spring did not settle within 10 seconds");
-+        }
++        let mid = spring
++            .evaluate(start + Duration::from_millis(120), &config)
++            .expect("should still be moving at 120ms");
++        assert!(mid > 0.0 && mid < 80.0);
 +
-+        assert_eq!(axis.raw_overscroll, 0.0);
-+        assert_eq!(axis.velocity, 0.0);
-+        assert!(!axis.springing);
-+    }
-+
-+    #[test]
-+    fn zero_overscroll_returns_zero() {
-+        let config = RubberBandConfig::DEFAULT;
-+        assert_eq!(rubber_band_offset(0.0, 500.0, &config), 0.0);
++        let settled = spring.evaluate(start + Duration::from_millis(1200), &config);
++        assert!(settled.is_none());
 +    }
 +}
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs

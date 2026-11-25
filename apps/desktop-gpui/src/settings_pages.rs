@@ -3104,41 +3104,19 @@ impl SettingsWindow {
                                 ),
                             ),
                             self.setting_row(
-                                "Spring Stiffness",
-                                Some("Return spring stiffness (60..600, default 220)."),
+                                "Spring Response (s)",
+                                Some("Return duration (0.20..1.50s, iOS default 0.575s; lower = snappier)."),
                                 stepper(
-                                    "rb-stiffness",
-                                    format!("{:.0}", cfg.spring_stiffness),
+                                    "rb-response",
+                                    format!("{:.3}s", cfg.response),
                                     Box::new(|_, _| {
                                         let mut c = gpui::rubber_band_config();
-                                        c.spring_stiffness =
-                                            (c.spring_stiffness - 20.0).clamp(60.0, 600.0);
+                                        c.response = (c.response - 0.025).clamp(0.20, 1.50);
                                         gpui::set_rubber_band_config(c);
                                     }),
                                     Box::new(|_, _| {
                                         let mut c = gpui::rubber_band_config();
-                                        c.spring_stiffness =
-                                            (c.spring_stiffness + 20.0).clamp(60.0, 600.0);
-                                        gpui::set_rubber_band_config(c);
-                                    }),
-                                ),
-                            ),
-                            self.setting_row(
-                                "Spring Damping",
-                                Some("Return spring damping (8..80, default 28)."),
-                                stepper(
-                                    "rb-damping",
-                                    format!("{:.0}", cfg.spring_damping),
-                                    Box::new(|_, _| {
-                                        let mut c = gpui::rubber_band_config();
-                                        c.spring_damping =
-                                            (c.spring_damping - 2.0).clamp(8.0, 80.0);
-                                        gpui::set_rubber_band_config(c);
-                                    }),
-                                    Box::new(|_, _| {
-                                        let mut c = gpui::rubber_band_config();
-                                        c.spring_damping =
-                                            (c.spring_damping + 2.0).clamp(8.0, 80.0);
+                                        c.response = (c.response + 0.025).clamp(0.20, 1.50);
                                         gpui::set_rubber_band_config(c);
                                     }),
                                 ),
