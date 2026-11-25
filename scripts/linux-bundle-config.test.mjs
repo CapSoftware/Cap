@@ -50,9 +50,31 @@ test("AppImage includes the system-audio control tool without a webview media fr
 		appimage.files["/usr/lib/cap/alsa-pulse.conf"],
 		"../../packaging/linux/alsa-pulse.conf",
 	);
-	for (const format of [deb, rpm]) {
-		assert.equal(format.files["/usr/lib/cap/alsa-pulse.conf"], undefined);
-	}
+	assert.equal(deb.files["/usr/lib/cap/alsa-pulse.conf"], undefined);
+	assert.equal(
+		Object.keys(deb.files).some((file) => file.includes("alsa")),
+		false,
+	);
+	assert.equal(
+		rpm.files["/usr/lib/alsa-lib/libasound_module_pcm_pulse.so"],
+		undefined,
+	);
+});
+
+test("RPM carries its own ALSA pulse plugin instead of requiring a distribution package", () => {
+	const { rpm } = createLinuxBundleConfig([]).bundle.linux;
+	assert.equal(
+		rpm.files["/usr/lib/cap/alsa-lib/libasound_module_pcm_pulse.so"],
+		"../../target/native-deps/cap-appimage-libs/libasound_module_pcm_pulse.so",
+	);
+	assert.equal(
+		rpm.files["/usr/lib/cap/alsa-pulse.conf"],
+		"../../packaging/linux/alsa-pulse-rpm.conf",
+	);
+	assert.ok(rpm.depends.includes("libpulse.so.0()(64bit)"));
+	assert.ok(
+		!rpm.depends.some((dependency) => dependency.includes("alsa-plugins")),
+	);
 });
 
 test("library mappings are deterministic", () => {
