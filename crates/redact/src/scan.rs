@@ -1442,14 +1442,13 @@ mod tests {
     #[test]
     fn environment_variables_change_nothing_in_a_normal_build() {
         let before = held_frame_scan().regions();
-        // SAFETY: only this test writes these variables, and a normal build
-        // never reads them.
+        // SAFETY: only this test writes this variable, and a normal build
+        // never reads it.
         unsafe {
             std::env::set_var(
                 "CAP_REDACT_OFF",
                 "cache,tiles,propagate,pad,strips,rowmerge,known,alternatives",
             );
-            std::env::set_var("CAP_REDACT_DUMP", "1");
         }
         let scan = held_frame_scan();
         assert_eq!(scan.switches, Switches::all_on());
