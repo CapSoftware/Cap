@@ -138,7 +138,7 @@ fn analyze(args: &[String]) -> anyhow::Result<()> {
             .regions
             .retain(|region| categories.contains(&region.category));
     }
-    let json = serde_json::to_vec_pretty(&redactions)?;
+    let json = serde_json::to_vec(&redactions)?;
     let temp = out.with_extension("json.tmp");
     std::fs::write(&temp, json)?;
     std::fs::rename(&temp, &out)?;

@@ -199,7 +199,7 @@ impl<'a> Analyzer<'a> {
                     });
                 })?;
             result.segments.push(segment);
-            result.regions.extend(regions);
+            result.regions.extend(regions.into_iter().map(round_region));
         }
         Ok(result)
     }
@@ -380,6 +380,43 @@ fn first_frame_fingerprint(path: &Path) -> anyhow::Result<String> {
     })?;
     let first = first.context("video has no frames")?;
     Ok(frames::fingerprint(path, &first))
+}
+
+/// Steps the saved rects and times are rounded to: a 1e-5 of the frame is
+/// 0.02 px at 1920 wide, a microsecond keeps every key distinct.
+const RECT_STEP: f64 = 1e5;
+const TIME_STEP: f64 = 1e6;
+
+/// A region with fewer digits, rounded outward: its keys and its time span
+/// only ever grow, by at most one step.
+fn round_region(mut region: RedactionRegion) -> RedactionRegion {
+    region.start = (region.start * TIME_STEP).floor() / TIME_STEP;
+    region.end = (region.end * TIME_STEP).ceil() / TIME_STEP;
+    for key in &mut region.keys {
+        key.t = (key.t * TIME_STEP).round() / TIME_STEP;
+        let (x, w) = round_span(key.x, key.w);
+        let (y, h) = round_span(key.y, key.h);
+        (key.x, key.y, key.w, key.h) = (x, y, w, h);
+    }
+    region
+}
+
+/// `start` rounded down and `start + len` up, as a start and a length whose
+/// f32 sum still reaches the original end.
+fn round_span(start: f32, len: f32) -> (f32, f32) {
+    let end = f64::from(start) + f64::from(len);
+    let low = ((f64::from(start) * RECT_STEP).floor() / RECT_STEP) as f32;
+    let low = if f64::from(low) > f64::from(start) {
+        low.next_down()
+    } else {
+        low
+    };
+    let high = (end * RECT_STEP).ceil() / RECT_STEP;
+    let mut len = (high - f64::from(low)) as f32;
+    while f64::from(low) + f64::from(len) < end {
+        len = len.next_up();
+    }
+    (low, len)
 }
 
 pub(crate) fn merge_overlapping(mut rects: Vec<Rect>) -> Vec<Rect> {
@@ -661,6 +698,46 @@ mod tests {
         assert_eq!(join_same_masks(vec![line.clone(), below]).len(), 2);
         assert_eq!(join_same_masks(vec![line.clone(), other]).len(), 2);
         assert_eq!(join_same_masks(vec![line, next]).len(), 2);
+    }
+
+    #[test]
+    fn rounded_regions_only_grow_by_a_step() {
+        let mut seed = 17u32;
+        let mut next = move || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (seed >> 8) as f32 / (1u32 << 24) as f32
+        };
+        for _ in 0..20_000 {
+            let original = RedactionKey {
+                t: f64::from(next()) * 600.0,
+                x: next() * 0.9,
+                y: next() * 0.9,
+                w: next() * 0.1,
+                h: next() * 0.1,
+            };
+            let region = RedactionRegion {
+                id: "r".into(),
+                segment: 0,
+                category: RedactCategory::Email,
+                start: original.t,
+                end: original.t + 0.5,
+                keys: vec![original],
+            };
+            let rounded = round_region(region.clone());
+            let key = rounded.keys[0];
+            let right = |k: &RedactionKey| f64::from(k.x) + f64::from(k.w);
+            let bottom = |k: &RedactionKey| f64::from(k.y) + f64::from(k.h);
+            assert!(key.x <= original.x && key.y <= original.y);
+            assert!(right(&key) >= right(&original) && bottom(&key) >= bottom(&original));
+            assert!(f64::from(original.x - key.x) <= 1.01e-5);
+            assert!(right(&key) - right(&original) <= 1.01e-5);
+            assert!(rounded.start <= region.start && rounded.end >= region.end);
+            assert!((key.t - original.t).abs() <= 0.51e-6);
+            assert!(region.end - region.start <= rounded.end - rounded.start);
+            let text = serde_json::to_string(&rounded).unwrap();
+            let back: RedactionRegion = serde_json::from_str(&text).unwrap();
+            assert_eq!(back.keys[0], key);
+        }
     }
 
     #[test]
