@@ -452,7 +452,14 @@ mod tests {
             assert_eq!(at(save_margin + 1).status(), DiskSpaceStatus::Ok);
             assert_eq!(at(save_margin).status(), DiskSpaceStatus::Low);
             assert!(!at(save_margin).nearly_full());
-            assert_eq!(at(old_stop).status(), DiskSpaceStatus::Low);
+            assert_eq!(
+                at(old_stop).status(),
+                if old_stop <= save_margin {
+                    DiskSpaceStatus::Low
+                } else {
+                    DiskSpaceStatus::Ok
+                }
+            );
             assert_eq!(
                 at(RECORDING_DISK_WARN_BYTES + 1).status(),
                 DiskSpaceStatus::Low

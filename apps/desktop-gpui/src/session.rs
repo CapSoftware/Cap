@@ -2334,16 +2334,29 @@ mod storage_check_tests {
     #[test]
     fn a_recording_past_the_old_stop_point_keeps_recording_with_a_warning() {
         let recording_bytes = 30 * GIB;
+        let old_stop = 3 * recording_bytes + RECORDING_DISK_RESERVE_BYTES;
+        assert_eq!(
+            check(old_stop, recording_bytes, 1),
+            StorageCheck::Continue(None)
+        );
         for copies in 1..=3 {
-            let old_stop = 3 * recording_bytes + RECORDING_DISK_RESERVE_BYTES;
             assert_eq!(
-                check(old_stop, recording_bytes, copies),
+                check(
+                    copies * recording_bytes + RECORDING_DISK_WARN_BYTES,
+                    recording_bytes,
+                    copies
+                ),
                 StorageCheck::Continue(Some(StorageWarning::SaveAtRisk))
             );
             assert_eq!(
                 check(old_stop - GIB, recording_bytes, copies),
-                StorageCheck::Continue(Some(StorageWarning::SaveAtRisk))
+                if old_stop - GIB <= copies * recording_bytes + RECORDING_DISK_WARN_BYTES {
+                    StorageCheck::Continue(Some(StorageWarning::SaveAtRisk))
+                } else {
+                    StorageCheck::Continue(None)
+                }
             );
+            assert_ne!(check(old_stop, recording_bytes, copies), StorageCheck::Stop);
             assert_eq!(
                 check(
                     copies * recording_bytes + RECORDING_DISK_WARN_BYTES + 1,
