@@ -19,7 +19,7 @@ impl OverlayLayers {
             text: readiness::measure("layers.text", || TextLayer::new(device, queue)),
             images: readiness::measure("layers.images", || ImageLayer::new(device)),
             shapes: readiness::measure("layers.shapes", || ShapeLayer::new(device)),
-            waveforms: readiness::measure("layers.waveforms", || WaveformLayer::new(device)),
+            waveforms: WaveformLayer::new(),
             captions: readiness::measure("layers.captions", || CaptionsLayer::new(device, queue)),
             keyboard: readiness::measure("layers.keyboard", || KeyboardLayer::new(device, queue)),
         }

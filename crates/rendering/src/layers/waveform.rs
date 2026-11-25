@@ -214,41 +214,51 @@ fn segment_levels(
 }
 
 pub struct WaveformLayer {
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Option<wgpu::RenderPipeline>,
     draws: Vec<wgpu::BindGroup>,
     draw_tracks: Vec<u32>,
 }
 
+// Built on first use, so projects without waveforms never compile the shader.
+fn waveform_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/waveform.wgsl"));
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Waveform overlay pipeline"),
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+impl Default for WaveformLayer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WaveformLayer {
-    pub fn new(device: &wgpu::Device) -> Self {
-        let shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/waveform.wgsl"));
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Waveform overlay pipeline"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+    pub fn new() -> Self {
         Self {
-            pipeline,
+            pipeline: None,
             draws: Vec::new(),
             draw_tracks: Vec::new(),
         }
@@ -260,10 +270,14 @@ impl WaveformLayer {
             contents: bytemuck::bytes_of(uniforms),
             usage: wgpu::BufferUsages::UNIFORM,
         });
+        let layout = self
+            .pipeline
+            .get_or_insert_with(|| waveform_pipeline(device))
+            .get_bind_group_layout(0);
         self.draws
             .push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Waveform overlay bind group"),
-                layout: &self.pipeline.get_bind_group_layout(0),
+                layout: &layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
                     resource: buffer.as_entire_binding(),
@@ -317,10 +331,10 @@ impl WaveformLayer {
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
-        if !self.has_content() {
+        let Some(pipeline) = self.pipeline.as_ref().filter(|_| self.has_content()) else {
             return;
-        }
-        pass.set_pipeline(&self.pipeline);
+        };
+        pass.set_pipeline(pipeline);
         for group in &self.draws {
             pass.set_bind_group(0, group, &[]);
             pass.draw(0..6, 0..1);
@@ -328,10 +342,10 @@ impl WaveformLayer {
     }
 
     pub fn render_track(&self, pass: &mut wgpu::RenderPass<'_>, track: u32) {
-        if !self.has_content() {
+        let Some(pipeline) = self.pipeline.as_ref().filter(|_| self.has_content()) else {
             return;
-        }
-        pass.set_pipeline(&self.pipeline);
+        };
+        pass.set_pipeline(pipeline);
         for (group, draw_track) in self.draws.iter().zip(&self.draw_tracks) {
             if *draw_track == track {
                 pass.set_bind_group(0, group, &[]);
@@ -543,7 +557,7 @@ mod tests {
         };
         let (device, queue) =
             pollster::block_on(adapter.request_device(&Default::default())).unwrap();
-        let mut layer = WaveformLayer::new(&device);
+        let mut layer = WaveformLayer::new();
         let uniforms = waveform_uniforms(&segment(style), (64, 64), values).unwrap();
         layer.push_draw(&device, &uniforms, 0);
 
