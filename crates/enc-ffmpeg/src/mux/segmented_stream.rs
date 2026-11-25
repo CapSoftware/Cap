@@ -747,6 +747,10 @@ impl SegmentedVideoEncoder {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    pub fn packets_written_counter(&self) -> Arc<AtomicU64> {
+        self.packets_written.clone()
+    }
+
     #[cfg(test)]
     fn init_libx264(
         base_path: PathBuf,
