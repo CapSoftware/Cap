@@ -39,10 +39,16 @@ use windows::{
 
 use crate::call_output::{Chooser, Session};
 
-struct ComGuard(bool);
+pub(crate) struct ComGuard(bool);
 
 impl ComGuard {
-    fn init() -> Self {
+    /// As [`ComGuard::init`], also giving what CoInitializeEx answered.
+    pub(crate) fn init_reporting() -> (Self, windows::core::HRESULT) {
+        let result = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        (Self(result.is_ok()), result)
+    }
+
+    pub(crate) fn init() -> Self {
         Self(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok())
     }
 }
@@ -272,7 +278,7 @@ impl Drop for CallOutputWatch {
 const RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;
 
-fn wanted_format() -> WAVEFORMATEXTENSIBLE {
+pub(crate) fn wanted_format() -> WAVEFORMATEXTENSIBLE {
     WAVEFORMATEXTENSIBLE {
         Format: WAVEFORMATEX {
             wFormatTag: 0xFFFE, // WAVE_FORMAT_EXTENSIBLE
@@ -313,12 +319,12 @@ fn is_float32(format: &WAVEFORMATEX) -> bool {
     }
 }
 
-struct Stream {
-    client: IAudioClient,
-    capture: IAudioCaptureClient,
-    event: HANDLE,
-    channels: usize,
-    rate: u32,
+pub(crate) struct Stream {
+    pub(crate) client: IAudioClient,
+    pub(crate) capture: IAudioCaptureClient,
+    pub(crate) event: HANDLE,
+    pub(crate) channels: usize,
+    pub(crate) rate: u32,
 }
 
 impl Drop for Stream {
@@ -405,7 +411,7 @@ fn finite(sample: f32) -> f32 {
 }
 
 /// Downmixes everything waiting into `mono`. False when nothing was waiting.
-fn drain(stream: &Stream, mono: &mut Vec<f32>) -> windows::core::Result<bool> {
+pub(crate) fn drain(stream: &Stream, mono: &mut Vec<f32>) -> windows::core::Result<bool> {
     let mut got = false;
     loop {
         let frames = unsafe { stream.capture.GetNextPacketSize() }?;

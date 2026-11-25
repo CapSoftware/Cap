@@ -38,6 +38,8 @@ pub use macos::browser_probe::{accessibility_trusted, probe_browser};
 #[cfg(windows)]
 pub use windows::follow::{CallOutputWatch, EndpointLoopback};
 #[cfg(windows)]
+pub use windows::reader::{ReaderFreeLoopback, running_reader};
+#[cfg(windows)]
 pub use windows::uia::probe_browser;
 
 /// Only macOS puts reading other apps behind a permission; elsewhere there is
