@@ -119,6 +119,10 @@ const SHORT_LINE: usize = 32;
 /// Box height in frame pixels from which the row merge accepts uneven boxes.
 const LARGE_TEXT: f32 = 28.0;
 const KNOWN_MIN_SHARED: usize = 10;
+/// A re-read line starts a new identity only when the recogniser is at least
+/// this sure of its new text and the text has at least this many characters.
+const NEW_TEXT_CONFIDENCE: f32 = 0.9;
+const NEW_TEXT_MIN_CHARS: usize = 4;
 /// Share of a known string a run from its middle must cover to match.
 const KNOWN_MOST: f32 = 0.6;
 /// Frame pixels from the left or right edge within which a line is cut by it.
@@ -139,6 +143,8 @@ struct Reading {
     /// its text may be the end or the start of a longer string.
     cut_left: bool,
     cut_right: bool,
+    /// How sure the recogniser was of the text (mean peak probability).
+    confidence: f32,
 }
 
 /// A line's full-resolution luma crop.
@@ -705,6 +711,7 @@ impl Scan {
                     text: read.text,
                     cut_left: rect.x <= EDGE,
                     cut_right: rect.right() >= self.width as f32 - EDGE,
+                    confidence: read.confidence,
                 });
                 if let Some(thumb) = thumb {
                     self.cache.insert(thumb, index);
@@ -717,6 +724,14 @@ impl Scan {
                 let reading = reading.unwrap_or_default();
                 match target {
                     Some(index) => {
+                        // The page changed under the line (a navigation, a
+                        // tab title, a reused row): its new text starts a line
+                        // of its own, so nothing found in the old text is
+                        // carried onto it.
+                        if self.is_other_text(self.live[index].identity, reading) {
+                            self.identities.push(Identity::default());
+                            self.live[index].identity = self.identities.len() - 1;
+                        }
                         let live = &mut self.live[index];
                         live.rect = rect;
                         live.reading = reading;
@@ -751,6 +766,50 @@ impl Scan {
         });
         self.extend_runs(time);
         Ok(())
+    }
+
+    /// Whether `new`, a confident read, shows other text on a line that was
+    /// sensitive only as an address: it has no "@" and is not a piece of the
+    /// address (typed, deleted, scrolled in or half behind a window). Lines
+    /// sensitive in any other category keep their identity, since names,
+    /// numbers and places are often read differently while they move.
+    fn is_other_text(&self, identity: usize, new: u32) -> bool {
+        let read = &self.readings[new as usize];
+        if read.confidence < NEW_TEXT_CONFIDENCE
+            || read.text.chars().count() < NEW_TEXT_MIN_CHARS
+            || read.text.contains('@')
+        {
+            return false;
+        }
+        let plain = |text: &str| {
+            text.chars()
+                .filter(|c| !c.is_whitespace())
+                .flat_map(char::to_lowercase)
+                .collect::<String>()
+        };
+        let new_plain = plain(&read.text);
+        let mut addresses = 0;
+        for (&reading, findings) in &self.identities[identity].findings {
+            let text = self.readings[reading as usize]
+                .text
+                .chars()
+                .collect::<Vec<_>>();
+            for finding in findings {
+                if finding.category != RedactCategory::Email {
+                    return false;
+                }
+                let end = finding.end.min(text.len());
+                if finding.start >= end {
+                    continue;
+                }
+                let address = plain(&text[finding.start..end].iter().collect::<String>());
+                if address.contains(&new_plain) || new_plain.contains(&address) {
+                    return false;
+                }
+                addresses += 1;
+            }
+        }
+        addresses > 0
     }
 
     /// Classifies the lines just read together with the lines around them, so
@@ -833,6 +892,9 @@ impl Scan {
                     whole_words(&text, known)
                 } else {
                     shared_span(&text, known)
+                        .filter(|&(start, end)| {
+                            *category != RedactCategory::Email || text[start..end].contains(&'@')
+                        })
                         .or_else(|| edge_span(&text, known, reading.cut_left, reading.cut_right))
                 };
                 if let Some((start, end)) = span
@@ -1418,6 +1480,7 @@ mod tests {
             own: Vec::new(),
             cut_left: false,
             cut_right: false,
+            confidence: 1.0,
         });
         let mut identity = Identity::default();
         identity.findings.insert(
@@ -1459,6 +1522,44 @@ mod tests {
             serde_json::to_string(&before).unwrap(),
             serde_json::to_string(&after).unwrap()
         );
+    }
+
+    #[test]
+    fn new_text_under_a_line_is_a_new_line_but_a_misread_is_not() {
+        let mut scan = Scan::new(0, 1000, 500, 960);
+        let read = |text: &str, confidence| Reading {
+            text: text.into(),
+            spans: Vec::new(),
+            own: Vec::new(),
+            cut_left: false,
+            cut_right: false,
+            confidence,
+        };
+        for (text, confidence) in [
+            ("jane.roe@example.com - Search", 0.97),
+            ("Jane Roe | Profile", 0.97),
+            ("jane.roe@exarnple.com - Search", 0.95),
+            ("jane.roe", 0.97),
+            ("Jane Roe | Profile", 0.6),
+        ] {
+            scan.readings.push(read(text, confidence));
+        }
+        let mut identity = Identity::default();
+        identity.findings.insert(
+            0,
+            vec![Finding {
+                category: RedactCategory::Email,
+                start: 0,
+                end: 20,
+            }],
+        );
+        scan.identities.push(identity);
+        assert!(scan.is_other_text(0, 1));
+        assert!(!scan.is_other_text(0, 2));
+        assert!(!scan.is_other_text(0, 3));
+        assert!(!scan.is_other_text(0, 4));
+        scan.readings.push(read("Jane Roe", 0.97));
+        assert!(scan.is_other_text(0, 5));
     }
 
     #[test]
@@ -1570,6 +1671,32 @@ mod tests {
             whole_words(&chars("Jane Roebuck"), &chars("jane roe")),
             None
         );
+    }
+
+    #[test]
+    fn a_domain_alone_does_not_match_a_known_address() {
+        let mut scan = Scan::new(0, 1000, 500, 960);
+        scan.known.push((
+            RedactCategory::Email,
+            "jane.roe@example.com".chars().collect(),
+        ));
+        for text in [
+            "profile.example.com/in/jane-roe",
+            "write to jane.roe@example.com",
+        ] {
+            scan.readings.push(Reading {
+                text: text.into(),
+                spans: Vec::new(),
+                own: Vec::new(),
+                cut_left: false,
+                cut_right: false,
+                confidence: 1.0,
+            });
+        }
+        scan.refresh_known();
+        let found = |reading: u32| scan.by_known.get(&reading).map_or(0, |(_, f)| f.len());
+        assert_eq!(found(0), 0);
+        assert_eq!(found(1), 1);
     }
 
     #[test]
