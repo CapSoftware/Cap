@@ -787,6 +787,14 @@ fn words_near_the_word_password_are_not_a_password() {
     let own = row.iter().map(|l| classify_line(l.text)).collect();
     let found = classify_frame_with(&row, own);
     assert!(found[1].iter().any(|f| f.category == Secret), "{found:?}");
+    let pin = [line("PIN", 0.40), line("482916", 0.43)];
+    let own = pin.iter().map(|l| classify_line(l.text)).collect();
+    let found = classify_frame_with(&pin, own);
+    assert!(found[1].iter().any(|f| f.category == Secret), "{found:?}");
+    let word = [line("PIN", 0.40), line("kitchen", 0.43)];
+    let own = word.iter().map(|l| classify_line(l.text)).collect();
+    let found = classify_frame_with(&word, own);
+    assert!(found[1].iter().all(|f| f.category != Secret), "{found:?}");
     let masked = [line("Password", 0.40), line("••••••••", 0.43)];
     let own = masked.iter().map(|l| classify_line(l.text)).collect();
     let found = classify_frame_with(&masked, own);

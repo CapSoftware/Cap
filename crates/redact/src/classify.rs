@@ -194,6 +194,7 @@ static LABEL_ONLY: LazyLock<Regex> = LazyLock::new(|| {
         r"(?i)^\s*(?:[a-z\-]+\s+){0,3}(?:password|passcode|passphrase|secret|key|api\s*key|token|credentials?|pin|recovery\s*(?:code|phrase)|seed\s*phrase)\s*[:*]?\s*$",
     )
 });
+static PIN_LABEL: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)\b(?:pin|passcode)\b"));
 static SPACED_SECRET: LazyLock<Regex> = LazyLock::new(|| {
     re(
         r"(?i)\b(?:password|passphrase|passcode|secret|api\s?key|access\s?key|token|pin)(?:\s{2,}|\t+)(\S{4,})",
@@ -543,7 +544,7 @@ pub fn classify_frame_with(
         }
         if let Some((index, _)) = best {
             let text = lines[index].text;
-            if looks_like_value(text) {
+            if looks_like_value(text, label.text) {
                 let len = text.chars().count();
                 let start = text.chars().take_while(|c| c.is_whitespace()).count();
                 let end = len - text.chars().rev().take_while(|c| c.is_whitespace()).count();
@@ -774,10 +775,17 @@ const MIN_VALUE_CHARS: usize = 6;
 
 /// Whether the line under or beside a secret's label holds its value: a
 /// masked field, or one token of at least [`MIN_VALUE_CHARS`] characters
-/// mixing two kinds of character (letters and digits, cases, symbols). Words
-/// and phrases are never a value, whatever label is near them.
-fn looks_like_value(text: &str) -> bool {
+/// mixing two kinds of character (letters and digits, cases, symbols), or 4 to
+/// 8 digits under a PIN or passcode label. Words and phrases are never a
+/// value, whatever label is near them.
+fn looks_like_value(text: &str, label: &str) -> bool {
     let trimmed = text.trim();
+    if PIN_LABEL.is_match(label)
+        && (4..=8).contains(&trimmed.chars().count())
+        && trimmed.chars().all(|c| c.is_ascii_digit())
+    {
+        return true;
+    }
     let lower = trimmed.to_ascii_lowercase();
     if matches!(
         lower.as_str(),
