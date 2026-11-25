@@ -195,13 +195,53 @@ fn describe(action: &PromptAction) -> String {
 }
 
 #[test]
-fn detected_prompt_shows_and_times_out() {
+fn detected_prompt_stays_while_the_call_is_on_until_the_cap() {
     let mut s = Sim::new();
     s.at(2_000).started("zoom");
     s.expect(&[(2_000, "show #1 Detected Meeting detected | Zoom")]);
-    s.at(21_999).quiet();
-    s.at(22_000).expect(&[(22_000, "dismiss #1 TimedOut")]);
+    s.at(22_000).quiet();
+    s.at(121_999).quiet();
+    s.at(122_000).expect(&[(122_000, "dismiss #1 TimedOut")]);
     assert_eq!(s.planner.next_deadline(), None);
+}
+
+#[test]
+fn a_live_calls_prompt_closes_when_the_call_ends() {
+    let mut s = Sim::new();
+    s.at(2_000).started("zoom").take();
+    s.at(40_000).ended("zoom");
+    s.expect(&[(40_000, "dismiss #1 CallEnded")]);
+    assert_eq!(s.planner.next_deadline(), None);
+}
+
+#[test]
+fn a_dismissed_live_prompt_never_returns_for_that_call() {
+    let mut s = Sim::new();
+    s.started_at("zoom", 0).take();
+    s.at(30_000).dismiss(1).expect(&[(30_000, "dismiss #1 User")]);
+    let update = DetectEvent::CallUpdated(call("zoom", 0));
+    let actions = s.planner.on_detect(s.clock(), &update);
+    assert!(actions.is_empty());
+    s.at(100_000).started_at("zoom", 0).quiet();
+    s.at(300_000).quiet();
+    assert!(s.visible_ids().is_empty());
+}
+
+#[test]
+fn two_calls_in_a_row_each_get_exactly_one_prompt() {
+    let mut s = Sim::new();
+    s.started_at("zoom", 0);
+    s.at(1_000).started_at("zoom", 0);
+    s.expect(&[(0, "show #1 Detected Meeting detected | Zoom")]);
+    assert_eq!(s.visible_ids(), vec![1]);
+    s.at(90_000).ended("zoom");
+    s.expect(&[(90_000, "dismiss #1 CallEnded")]);
+    s.at(130_000).started_at("zoom", 130_000);
+    s.at(131_000).started_at("zoom", 130_000);
+    s.expect(&[(130_000, "show #2 Detected Meeting detected | Zoom")]);
+    assert_eq!(s.visible_ids(), vec![2]);
+    s.at(200_000).ended("zoom");
+    s.expect(&[(200_000, "dismiss #2 CallEnded")]);
 }
 
 #[test]
@@ -216,15 +256,15 @@ fn call_nouns_shape_the_title() {
 }
 
 #[test]
-fn hover_pauses_auto_dismiss() {
+fn hover_never_ends_a_live_calls_prompt_early() {
     let mut s = Sim::new();
     s.started("zoom").take();
     s.at(5_000).hover(1, true);
     s.at(15_000).hover(1, false);
     s.at(25_000).hover(1, true);
     s.at(26_000).hover(1, false).quiet();
-    s.at(29_999).quiet();
-    s.at(31_000).expect(&[(31_000, "dismiss #1 TimedOut")]);
+    s.at(119_999).quiet();
+    s.at(120_000).expect(&[(120_000, "dismiss #1 TimedOut")]);
 }
 
 #[test]
@@ -948,8 +988,8 @@ fn detected_call_upgrades_visible_reminder() {
     s.at(9 * MIN + 30_000).started("zoom");
     s.expect(&[(570_000, "update #1 Detected Weekly | 600-2400")]);
     assert_eq!(s.visible_ids(), vec![1]);
-    s.at(9 * MIN + 30_000 + 20_000)
-        .expect(&[(590_000, "dismiss #1 TimedOut")]);
+    s.at(9 * MIN + 30_000 + 120_000)
+        .expect(&[(690_000, "dismiss #1 TimedOut")]);
     s.at(30 * MIN).quiet();
 }
 
@@ -965,7 +1005,7 @@ fn detected_attach_consumes_upcoming_reminder() {
     )]);
     s.at(10 * MIN - 80_000).started("zoom");
     s.expect(&[(520_000, "show #1 Detected Weekly | 600-2400")]);
-    s.at(30 * MIN).expect(&[(540_000, "dismiss #1 TimedOut")]);
+    s.at(30 * MIN).expect(&[(640_000, "dismiss #1 TimedOut")]);
 }
 
 #[test]
@@ -1067,7 +1107,7 @@ fn clock_going_backwards_is_ignored() {
     s.at(10_000).started("zoom").take();
     let early = Now::new(Millis(5_000), wall(5_000));
     assert!(s.planner.tick(early).is_empty());
-    assert_eq!(s.planner.next_deadline(), Some(Millis(30_000)));
+    assert_eq!(s.planner.next_deadline(), Some(Millis(130_000)));
 }
 
 #[test]
