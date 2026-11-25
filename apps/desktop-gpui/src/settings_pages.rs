@@ -3126,7 +3126,7 @@ impl SettingsWindow {
                                 ),
                             ),
                             self.setting_row(
-                                "Reset to iOS Defaults",
+                                "Reset to Defaults",
                                 None,
                                 div()
                                     .id("rb-reset")
@@ -3144,7 +3144,7 @@ impl SettingsWindow {
                                         );
                                         cx.notify();
                                     }))
-                                    .child("Reset to iOS Defaults")
+                                    .child("Reset")
                                     .into_any_element(),
                             ),
                         ])
