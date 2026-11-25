@@ -2526,6 +2526,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sign_in_failures_leave_the_retry_budget_for_after_sign_in() {
+        let fixture = Fixture::new();
+        let manager = Arc::new(Manager::new(FakeBackend::default(), Duration::from_secs(1)));
+        manager.backend.unauthenticated.store(true, Ordering::Release);
+        for _ in 0..=MAX_AUTOMATIC_ATTEMPTS {
+            manager
+                .admit(fixture.project(), fixture.upload(), false)
+                .await
+                .unwrap();
+            joined(&manager).await;
+            let state = fixture.state();
+            assert_eq!(state.phase, UploadPhase::NeedsAuthentication);
+            assert_eq!(state.attempt_count, 0);
+        }
+
+        manager.backend.unauthenticated.store(false, Ordering::Release);
+        manager.backend.fail_transfer.store(true, Ordering::Release);
+        manager
+            .admit(fixture.project(), fixture.upload(), false)
+            .await
+            .unwrap();
+        joined(&manager).await;
+        let state = fixture.state();
+        assert_eq!(state.phase, UploadPhase::Retrying);
+        assert_eq!(state.attempt_count, 1);
+        assert!(state.next_retry_at.is_some());
+        fixture.assert_retained();
+    }
+
+    #[tokio::test]
     async fn live_failure_before_handoff_is_counted_once() {
         let fixture = Fixture::new();
         let upload = fixture.upload();
