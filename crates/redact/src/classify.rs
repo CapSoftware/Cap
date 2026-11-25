@@ -16,7 +16,7 @@ pub struct Finding {
 /// A recognised line with its place on screen, for rules that read a label
 /// on one line and the value on the next (a "Password" field, an "API key"
 /// setting).
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct LineContext<'a> {
     pub text: &'a str,
     pub x: f32,

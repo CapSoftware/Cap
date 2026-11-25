@@ -83,7 +83,7 @@ pub struct DetectedLine {
 
 /// What the recogniser read in a line, with each character's x-span in
 /// frame pixels.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct Recognized {
     pub text: String,
     pub spans: Vec<(f32, f32)>,

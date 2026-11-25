@@ -262,7 +262,6 @@ pub struct Prepared {
     luma: Arc<GrayImage>,
     previous_luma: Option<Arc<GrayImage>>,
     changed: ChangeMap,
-    novel: ChangeMap,
     duplicate: bool,
     rois: Vec<Rect>,
     rgb: Option<(RgbImage, bool)>,
@@ -299,7 +298,6 @@ pub struct Scan {
     pub end_time: Option<f64>,
     /// Every frame's time, in order: a frame shows until the next one.
     frame_times: Vec<f64>,
-    dump: bool,
 }
 
 impl Scan {
@@ -326,7 +324,6 @@ impl Scan {
             last_time: 0.0,
             end_time: None,
             frame_times: Vec::new(),
-            dump: std::env::var_os("CAP_REDACT_DUMP").is_some(),
         }
     }
 
@@ -370,7 +367,6 @@ impl Scan {
                 luma: previous_luma.clone(),
                 previous_luma: Some(previous_luma.clone()),
                 changed: ChangeMap::new(tw, th),
-                novel: ChangeMap::new(tw, th),
                 duplicate: true,
                 rois: Vec::new(),
                 rgb: None,
@@ -438,7 +434,6 @@ impl Scan {
             luma,
             previous_luma,
             changed,
-            novel,
             duplicate: false,
             rois,
             rgb,
@@ -462,7 +457,6 @@ impl Scan {
             luma,
             previous_luma,
             changed,
-            novel,
             duplicate,
             rois: prepared_rois,
             rgb,
@@ -596,21 +590,6 @@ impl Scan {
             }
             stats.detect += detect_started.elapsed();
             stats.detections += 1;
-            if self.dump {
-                let area: f32 = rois.iter().map(Rect::area).sum();
-                eprintln!(
-                    "{time:8.3} detect {} rois {:.0}% lines {} changed {:.0}% novel {:.0}% touched {}",
-                    rois.len(),
-                    100.0 * area / full.area(),
-                    lines.len(),
-                    100.0 * changed.fraction(),
-                    100.0 * novel.fraction(),
-                    self.live
-                        .iter()
-                        .filter(|l| l.state == LineState::Touched)
-                        .count()
-                );
-            }
 
             for line in &lines {
                 self.heights.push_back(line.h);
@@ -719,20 +698,6 @@ impl Scan {
 
             for ((rect, target), reading) in targets.into_iter().zip(readings) {
                 let reading = reading.unwrap_or_default();
-                if self.dump {
-                    eprintln!(
-                        "{time:8.3} [{:5.0},{:5.0} {:4.0}x{:3.0}] {} {}",
-                        rect.x,
-                        rect.y,
-                        rect.w,
-                        rect.h,
-                        match target {
-                            Some(_) => "same",
-                            None => "new ",
-                        },
-                        self.readings[reading as usize].text
-                    );
-                }
                 match target {
                     Some(index) => {
                         let live = &mut self.live[index];
