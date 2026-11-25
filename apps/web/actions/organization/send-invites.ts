@@ -15,7 +15,6 @@ import { serverEnv } from "@cap/env";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import {
 	type AssignableOrganizationRole,
 	normalizeAssignableOrganizationRole,
@@ -111,28 +110,6 @@ export async function sendOrganizationInvites(
 		}
 	};
 
-	if (options.sendEmailNotifications === false) {
-		await assertInviteLimit();
-
-		const provisionResults = await Promise.allSettled(
-			validInvites.map((invite) =>
-				provisionOrganizationInvitee({
-					organizationId,
-					email: invite.email,
-					invitedByUserId: user.id,
-					role: invite.role,
-				}),
-			),
-		);
-		const failedEmails = validInvites
-			.filter((_, index) => provisionResults[index]?.status === "rejected")
-			.map((invite) => invite.email);
-
-		revalidatePath("/dashboard/settings/organization");
-
-		return { success: true, failedEmails, skippedEmails: [] as string[] };
-	}
-
 	const inviteRecords = await db().transaction(async (tx) => {
 		const [existingInvites, existingMembers] = await Promise.all([
 			tx
@@ -193,6 +170,15 @@ export async function sendOrganizationInvites(
 
 		return records;
 	});
+
+	if (options.sendEmailNotifications === false) {
+		revalidatePath("/dashboard/settings/organization");
+		return {
+			success: true,
+			failedEmails: [] as string[],
+			skippedEmails: [] as string[],
+		};
+	}
 
 	const emailResults = await Promise.allSettled(
 		inviteRecords.map((record) => {

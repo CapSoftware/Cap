@@ -121,15 +121,13 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 			}
 			if (result.failedEmails.length > 0) {
 				toast.warning(
-					sendEmailNotifications
-						? `Invite email delivery failed for: ${result.failedEmails.join(", ")}`
-						: `Users added, but provisioning failed for: ${result.failedEmails.join(", ")}`,
+					`Invite email delivery failed for: ${result.failedEmails.join(", ")}`,
 				);
 			} else if (result.skippedEmails.length === 0) {
 				toast.success(
 					sendEmailNotifications
 						? "Invites sent successfully"
-						: "Users added successfully",
+						: "Invites created. People join after they sign in and accept.",
 				);
 			}
 			setIsOpen(false);
@@ -237,7 +235,8 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 								Send invite email
 							</p>
 							<p className="mt-1 text-xs text-gray-10">
-								Turn off to add users without emailing them.
+								Turn off to skip the email. People join after they sign in and
+								accept the invite.
 							</p>
 						</div>
 						<Switch
@@ -267,7 +266,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 						data-invite-submit="true"
 						onClick={handleSendInvites}
 					>
-						{sendEmailNotifications ? "Send Invites" : "Add Users"}
+						{sendEmailNotifications ? "Send Invites" : "Create Invites"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
