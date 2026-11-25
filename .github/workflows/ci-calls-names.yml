@@ -52,7 +52,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 3
       - uses: ./.github/actions/install-desktop-deps
       - uses: dtolnay/rust-toolchain@1.95.0
       - uses: ./.github/actions/setup-rust-cache
@@ -66,7 +66,7 @@ jobs:
       - name: Red on the base, the same sequences through the base caller (observe)
         continue-on-error: true
         run: |
-          git checkout -q HEAD~1 -- apps/desktop-gpui/diarize/src/names.rs apps/desktop-gpui/diarize/src/names/tests.rs
+          git checkout -q HEAD~2 -- apps/desktop-gpui/diarize/src/names.rs apps/desktop-gpui/diarize/src/names/tests.rs
           cat .ci/red.rs >> apps/desktop-gpui/diarize/src/names/tests.rs
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked -p cap-diarize --lib names::tests::red_ 2>&1 | tail -40
 
