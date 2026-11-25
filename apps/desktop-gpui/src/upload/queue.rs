@@ -21,6 +21,8 @@ const MAX_PENDING_RECHECK_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const MAX_AUTOMATIC_ATTEMPTS: u32 = 5;
 pub(crate) const RECORDING_DELETED_ON_WEB: &str =
     "This recording was deleted on the web; the local recording is preserved";
+pub(crate) const RECORDING_REPLACED_ON_WEB: &str =
+    "This recording was replaced on the web; the local recording is preserved";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum UploadKind {
