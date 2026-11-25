@@ -136,6 +136,12 @@ function createServerEnv() {
 				.describe(
 					"Comma-separated domains or full email addresses refused at sign-in",
 				),
+			CAP_TOR_EXIT_GATE: z
+				.string()
+				.optional()
+				.describe(
+					"off, log or deny: how sign-in and key creation treat Tor exit addresses. Defaults to log on cap.so and off elsewhere",
+				),
 
 			/// AI providers
 			ASSEMBLY_API_KEY: z.string().optional().describe("Audio transcription"),
