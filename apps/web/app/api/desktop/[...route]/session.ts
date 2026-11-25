@@ -13,6 +13,7 @@ import {
 	desktopSessionRequestQuerySchema,
 } from "@/lib/desktop-session";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { shouldRefuseTorExit } from "@/lib/tor-exit-gate";
 import { zValidator } from "@/utils/zod-validator";
 
 export const app = new Hono();
@@ -34,6 +35,12 @@ app.get(
 			"next",
 			new URL(`${redirectOrigin}${url.pathname}${url.search}`).toString(),
 		);
+
+		if (await shouldRefuseTorExit("desktop-session", c.req.raw.headers)) {
+			const blockedUrl = new URL(`${redirectOrigin}/login`);
+			blockedUrl.searchParams.set("error", "SignupBlocked");
+			return c.redirect(blockedUrl);
+		}
 
 		const user = await getCurrentUser();
 		if (!user) return c.redirect(loginRedirectUrl);
