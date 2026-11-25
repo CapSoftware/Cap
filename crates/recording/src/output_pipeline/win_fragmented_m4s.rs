@@ -292,6 +292,7 @@ pub struct WindowsFragmentedM4SMuxer {
     disk_space_callback: Option<DiskSpaceCallback>,
     segment_tx:
         Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
+    offload_segment_bookkeeping: bool,
     health_tx: SharedHealthSender,
 }
 
@@ -305,6 +306,7 @@ pub struct WindowsFragmentedM4SMuxerConfig {
     pub disk_space_callback: Option<DiskSpaceCallback>,
     pub segment_tx:
         Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
+    pub offload_segment_bookkeeping: bool,
 }
 
 impl Default for WindowsFragmentedM4SMuxerConfig {
@@ -318,6 +320,7 @@ impl Default for WindowsFragmentedM4SMuxerConfig {
             shared_pause_state: None,
             disk_space_callback: None,
             segment_tx: None,
+            offload_segment_bookkeeping: false,
         }
     }
 }
@@ -363,6 +366,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             started: false,
             disk_space_callback: config.disk_space_callback,
             segment_tx: config.segment_tx,
+            offload_segment_bookkeeping: config.offload_segment_bookkeeping,
             health_tx: SharedHealthSender::new(),
         };
 
@@ -429,6 +433,11 @@ impl WindowsFragmentedM4SMuxer {
         )?;
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
+        }
+        if self.offload_segment_bookkeeping
+            && let Err(error) = encoder.offload_segment_bookkeeping()
+        {
+            warn!(%error, "Segment bookkeeping thread unavailable, keeping it on the encoder thread");
         }
         if let Some(tx) = self.segment_tx.take() {
             encoder.set_segment_callback(tx);
