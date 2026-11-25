@@ -5243,10 +5243,7 @@ mod tests {
         let mut empty = config(serde_json::json!({
             "timeline": { "segments": [], "zoomSegments": [] }
         }));
-        assert!(!keep_only_clip_segment(
-            empty.timeline.as_mut().unwrap(),
-            0
-        ));
+        assert!(!keep_only_clip_segment(empty.timeline.as_mut().unwrap(), 0));
 
         let mut single = config(serde_json::json!({
             "timeline": {
@@ -5272,10 +5269,7 @@ mod tests {
 
         let mut multi = two_clip_config();
         let multi_snapshot = multi.clone();
-        assert!(!keep_only_clip_segment(
-            multi.timeline.as_mut().unwrap(),
-            2
-        ));
+        assert!(!keep_only_clip_segment(multi.timeline.as_mut().unwrap(), 2));
         assert_eq!(
             serde_json::to_value(&multi).unwrap(),
             serde_json::to_value(&multi_snapshot).unwrap()
@@ -5498,10 +5492,7 @@ mod tests {
         assert_eq!(timeline.keyboard_segments[0].keys[0].time_offset, 1000.0);
 
         let audio = &timeline.audio_segments[0];
-        assert_eq!(
-            (audio.start, audio.end, audio.trim_start),
-            (0.0, 3.0, 4.5)
-        );
+        assert_eq!((audio.start, audio.end, audio.trim_start), (0.0, 3.0, 4.5));
         assert_eq!(
             (
                 timeline.style_segments[0].start,

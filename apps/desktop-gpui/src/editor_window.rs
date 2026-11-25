@@ -348,8 +348,7 @@ fn transform_after_keep_only(
     }
     transform.position = (transform.position - shift).max(0.0);
     transform.update_zoom(transform.zoom, target_playhead, new_total);
-    if target_playhead < transform.position
-        || target_playhead > transform.position + transform.zoom
+    if target_playhead < transform.position || target_playhead > transform.position + transform.zoom
     {
         transform.set_position(target_playhead - transform.zoom * 0.5, new_total);
     }
@@ -10085,12 +10084,8 @@ impl EditorWindow {
             keep_only_playhead(previous_playhead, clip_bounds, new_clip_start, self.total);
         self.apply_seek(target_playhead);
         let shift = (old_clip_start - new_clip_start).max(0.0);
-        self.view.transform = transform_after_keep_only(
-            previous_transform,
-            shift,
-            target_playhead,
-            self.total,
-        );
+        self.view.transform =
+            transform_after_keep_only(previous_transform, shift, target_playhead, self.total);
         if self.view.transform != previous_transform {
             self.note_transform("clip-keep-only", Some(target_playhead));
         }
@@ -15287,7 +15282,6 @@ mod tests {
         assert_eq!(playhead_past_end(3.0, 0.0), None);
     }
 
-<<<<<<< HEAD
     /// An editor window holds its project against deletion from the library
     /// for as long as it has it open. Giving up the engine, which closing,
     /// reloading and the editor's own Delete all do first, lets go.
@@ -15448,7 +15442,6 @@ mod tests {
                 position: 2.0,
             }
         );
-    }
     }
 
     #[cfg(target_os = "linux")]
