@@ -26,6 +26,7 @@ import {
 	MAX_EDITOR_VIDEO_COUNT,
 	validEditorVideoAsset,
 } from "./editor-video-upload";
+import { isStorageObjectNotFound } from "./storage-not-found";
 import * as StudioSound from "./studio-sound";
 import { getEditSourceKey } from "./video-edit-processing";
 import { decodeStorageVideo } from "./video-storage";
@@ -464,17 +465,30 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 				Effect.fail(new HttpApiError.ServiceUnavailable()),
 			),
 		);
+		// A saved image whose object is gone is left out, so the editor still
+		// opens and draws a plain background in its place, as the preview and
+		// export already do for an image that fails to load.
 		const assetHeads = yield* Effect.all(
-			assets.map((asset) => storage.headObject(asset.key)),
+			assets.map((asset) =>
+				storage.headObject(asset.key).pipe(
+					Effect.catchIf(
+						(error) => asset.kind === "image" && isStorageObjectNotFound(error),
+						() => Effect.succeed(null),
+					),
+				),
+			),
 			{ concurrency: 4 },
 		).pipe(
 			Effect.catchTag("StorageError", () =>
 				Effect.fail(new HttpApiError.ServiceUnavailable()),
 			),
 		);
+		const availableAssets = assets.flatMap((asset, index) => {
+			const head = assetHeads[index];
+			return head ? [{ asset, head }] : [];
+		});
 		const signedAssets = yield* Effect.all(
-			assets.map((asset, index) => {
-				const head = assetHeads[index];
+			availableAssets.map(({ asset, head }) => {
 				const identity = head
 					? getRecordingObjectIdentity(head, asset.objectIdentity ?? undefined)
 					: null;

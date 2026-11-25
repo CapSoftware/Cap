@@ -39,7 +39,8 @@ function signedSources(
 	audience: "farm" | "browser" = "farm",
 ) {
 	const access = {
-		headObject: (key: string) => Effect.succeed(storage.head(key)),
+		headObject: (key: string) =>
+			Effect.try({ try: () => storage.head(key), catch: (cause) => cause }),
 		getInternalSignedObjectUrl: (key: string) =>
 			Effect.succeed(storage.signed(key)),
 		getSignedObjectUrl: (key: string) => Effect.succeed(storage.signed(key)),
@@ -252,4 +253,56 @@ test("the browser plays an import's own audio but not a recording screen's", asy
 		"browser",
 	);
 	expect(recorded).toMatchObject({ displayHasAudio: false });
+});
+
+test("a saved image whose object is gone is left out instead of failing the editor", async () => {
+	const displayKey = "owner/video/raw-upload.webm";
+	const keptKey =
+		"owner/video/editor-assets/images/11111111-1111-4111-8111-111111111111.png";
+	const goneKey =
+		"owner/video/editor-assets/images/22222222-2222-4222-8222-222222222222.png";
+	storage.head.mockImplementation((key: string) => {
+		if (key === goneKey)
+			throw Object.assign(new Error("NotFound"), {
+				name: "NotFound",
+				$metadata: { httpStatusCode: 404 },
+			});
+		return {
+			ContentLength: key === displayKey ? 1234 : 99,
+			ETag: JSON.stringify(key === displayKey ? "screen" : "kept"),
+		};
+	});
+	storage.signed.mockImplementation(
+		(key: string) => `https://storage.example/${key}`,
+	);
+	const image = (key: string, identity: string) => ({
+		kind: "image",
+		path: `content/images/${key.split("/").pop()}`,
+		key,
+		name: "bg.png",
+		size: 99,
+		contentType: "image/png",
+		objectIdentity: JSON.stringify(identity),
+	});
+	const result = (await signedSources(
+		video({
+			editorSources: {
+				version: 1,
+				display: {
+					key: displayKey,
+					contentType: "video/webm",
+					size: 1234,
+					objectIdentity: JSON.stringify("screen"),
+				},
+			},
+			webEditorAssets: {
+				version: 1,
+				items: [image(keptKey, "kept"), image(goneKey, "gone")],
+			},
+		}),
+		"browser",
+	)) as { imageAssets?: Array<{ path: string }> };
+	expect(result.imageAssets?.map((asset) => asset.path)).toEqual([
+		`content/images/${keptKey.split("/").pop()}`,
+	]);
 });
