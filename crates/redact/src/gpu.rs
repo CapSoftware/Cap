@@ -48,7 +48,6 @@ pub struct GpuDetector {
     /// Tile pixels the network ran on (regions, gutters and padding).
     pub processed: u64,
     pub created: u64,
-    upload: Vec<u8>,
     /// Tallest tile: f32 activations of a 2048 x 2048 tile pass the default
     /// storage binding limit.
     max_height: u32,
@@ -111,7 +110,6 @@ impl GpuDetector {
             frame: 0,
             processed: 0,
             created: 0,
-            upload: Vec::new(),
             max_height: if precision == wdet::Precision::F32 {
                 1088
             } else {
@@ -124,44 +122,26 @@ impl GpuDetector {
         }))
     }
 
-    /// Starts detecting text lines inside each region of `frame`, at `scale`
-    /// (frame pixels to detector pixels, capped by the model's largest side),
-    /// without waiting: [`Self::collect`] returns the lines. The regions of a
-    /// frame are packed into one tile, a black gutter apart, so the network
-    /// runs once per frame however many regions there are, and several
-    /// frames can be in flight while the CPU works on the next ones.
-    pub fn submit(
-        &mut self,
-        frame: &RgbImage,
-        rois: &[Rect],
-        scale: f32,
-        meta: &DetMeta,
-    ) -> anyhow::Result<Ticket> {
+    /// The tallest tile this detector runs, for [`pack_regions`].
+    pub fn max_height(&self) -> u32 {
+        self.max_height
+    }
+
+    /// A handle to wait on submissions without holding the detector.
+    pub fn device(&self) -> wgpu::Device {
+        self.device.clone()
+    }
+
+    /// Uploads and runs a [`pack_regions`] layout, returning its upload
+    /// buffers for reuse.
+    pub fn dispatch(&mut self, packed: Packed) -> anyhow::Result<(Ticket, Vec<Vec<u8>>)> {
         let started = Instant::now();
-        let max_side = meta.max_side.max(64) as f32;
-        let mut jobs = Vec::with_capacity(rois.len());
-        for roi in rois {
-            let roi = roi.clamp_to(frame.width, frame.height);
-            if roi.w < 8.0 || roi.h < 8.0 {
-                jobs.push(None);
-                continue;
-            }
-            let scale = scale
-                .min(max_side / roi.w.max(roi.h))
-                .min(MAX_TILE as f32 / roi.w)
-                .min(self.max_height as f32 / roi.h)
-                .max(0.05);
-            let out_w = ((roi.w * scale).round() as usize).clamp(16, MAX_TILE as usize);
-            let out_h = ((roi.h * scale).round() as usize).clamp(16, self.max_height as usize);
-            jobs.push(Some(Job {
-                roi,
-                out_w,
-                out_h,
-                at: (0, 0),
-                atlas: 0,
-            }));
-        }
-        let atlases = pack(&mut jobs, self.max_height);
+        let Packed {
+            jobs,
+            atlases,
+            uploads,
+            frame_size,
+        } = packed;
         self.frame += 1;
         for size in &atlases {
             self.last_used.insert(*size, self.frame);
@@ -170,25 +150,9 @@ impl GpuDetector {
 
         let mut slots = Vec::with_capacity(atlases.len());
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        for (atlas, size) in atlases.iter().enumerate() {
+        for (size, upload) in atlases.iter().zip(&uploads) {
             let index = self.reserve(*size)?;
             let slot = &self.slots[size][index];
-            let (aw, ah) = (size.0 as usize, size.1 as usize);
-            self.upload.clear();
-            self.upload.resize(aw * ah * 4, 0);
-            for alpha in self.upload.iter_mut().skip(3).step_by(4) {
-                *alpha = 255;
-            }
-            for job in jobs.iter().flatten().filter(|job| job.atlas == atlas) {
-                let (x, y) = job.at;
-                frame.resize_into_rgba(
-                    job.roi,
-                    job.out_w,
-                    job.out_h,
-                    aw,
-                    &mut self.upload[(y * aw + x) * 4..],
-                );
-            }
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &slot.texture,
@@ -196,7 +160,7 @@ impl GpuDetector {
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
-                &self.upload,
+                upload,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(size.0 * 4),
@@ -226,16 +190,19 @@ impl GpuDetector {
             self.detector.map_prob(&self.slots[size][*index].tile);
         }
         self.prepare += started.elapsed();
-        Ok(Ticket {
-            jobs,
-            atlases,
-            slots,
-            submission,
-            frame_size: (frame.width, frame.height),
-        })
+        Ok((
+            Ticket {
+                jobs,
+                atlases,
+                slots,
+                submission,
+                frame_size,
+            },
+            uploads,
+        ))
     }
 
-    /// The lines of a [`Self::submit`], per region, waiting for the GPU if it
+    /// The lines of a [`Self::dispatch`], per region, waiting for the GPU if it
     /// has not finished.
     pub fn collect(
         &mut self,
@@ -318,6 +285,83 @@ impl GpuDetector {
     }
 }
 
+/// Upload buffers kept for reuse.
+pub const SPARE_UPLOADS: usize = 4;
+
+/// A frame's regions laid out in tiles and resampled into their upload
+/// buffers, ready for [`GpuDetector::dispatch`].
+pub struct Packed {
+    jobs: Vec<Option<Job>>,
+    atlases: Vec<(u32, u32)>,
+    uploads: Vec<Vec<u8>>,
+    frame_size: (u32, u32),
+}
+
+/// Lays out `rois` of `frame` at `scale` in tiles no taller than
+/// `max_height` and resamples them into RGBA upload buffers (taken from
+/// `spare` when it has some). [`GpuDetector::dispatch`] runs the layout. Needs no GPU, so it can run beside the GPU
+/// work of other frames.
+pub fn pack_regions(
+    frame: &RgbImage,
+    rois: &[Rect],
+    scale: f32,
+    meta: &DetMeta,
+    max_height: u32,
+    spare: &mut Vec<Vec<u8>>,
+) -> Packed {
+    let max_side = meta.max_side.max(64) as f32;
+    let mut jobs = Vec::with_capacity(rois.len());
+    for roi in rois {
+        let roi = roi.clamp_to(frame.width, frame.height);
+        if roi.w < 8.0 || roi.h < 8.0 {
+            jobs.push(None);
+            continue;
+        }
+        let scale = scale
+            .min(max_side / roi.w.max(roi.h))
+            .min(MAX_TILE as f32 / roi.w)
+            .min(max_height as f32 / roi.h)
+            .max(0.05);
+        let out_w = ((roi.w * scale).round() as usize).clamp(16, MAX_TILE as usize);
+        let out_h = ((roi.h * scale).round() as usize).clamp(16, max_height as usize);
+        jobs.push(Some(Job {
+            roi,
+            out_w,
+            out_h,
+            at: (0, 0),
+            atlas: 0,
+        }));
+    }
+    let atlases = pack(&mut jobs, max_height);
+    let mut uploads = Vec::with_capacity(atlases.len());
+    for (atlas, size) in atlases.iter().enumerate() {
+        let (aw, ah) = (size.0 as usize, size.1 as usize);
+        let mut upload = spare.pop().unwrap_or_default();
+        upload.clear();
+        upload.resize(aw * ah * 4, 0);
+        for alpha in upload.iter_mut().skip(3).step_by(4) {
+            *alpha = 255;
+        }
+        for job in jobs.iter().flatten().filter(|job| job.atlas == atlas) {
+            let (x, y) = job.at;
+            frame.resize_into_rgba(
+                job.roi,
+                job.out_w,
+                job.out_h,
+                aw,
+                &mut upload[(y * aw + x) * 4..],
+            );
+        }
+        uploads.push(upload);
+    }
+    Packed {
+        jobs,
+        atlases,
+        uploads,
+        frame_size: (frame.width, frame.height),
+    }
+}
+
 /// Detection in flight on the GPU.
 pub struct Ticket {
     jobs: Vec<Option<Job>>,
@@ -325,6 +369,13 @@ pub struct Ticket {
     slots: Vec<((u32, u32), usize)>,
     submission: wgpu::SubmissionIndex,
     frame_size: (u32, u32),
+}
+
+impl Ticket {
+    /// The submission to wait for before [`GpuDetector::collect`].
+    pub fn submission(&self) -> wgpu::SubmissionIndex {
+        self.submission.clone()
+    }
 }
 
 impl GpuDetector {

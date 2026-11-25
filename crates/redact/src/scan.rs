@@ -22,7 +22,7 @@ use crate::{
     },
     frames::{self, Convert},
     image::{GrayImage, Rect, RgbImage},
-    model::{OcrModel, PendingDetect},
+    model::{DetectStarter, OcrModel, PendingDetect},
     motion::{ChangeMap, TILE, diff_tiles, mean_difference},
 };
 
@@ -334,7 +334,7 @@ struct Live {
     state: LineState,
 }
 
-/// A frame after [`Scan::prepare`], waiting for [`Scan::finish`].
+/// A frame after [`Prep::prepare`], waiting for [`Scan::finish`].
 pub struct Prepared {
     time: f64,
     video: ffmpeg::frame::Video,
@@ -350,87 +350,47 @@ pub struct Prepared {
     fine: Option<PendingDetect>,
 }
 
-pub struct Scan {
-    segment: u32,
+/// Frames before [`LOOKAHEAD`] + 1 have been finished: the detector scale
+/// [`Prep::prepare`] uses for a frame is the one the line heights gave
+/// after the frame that many frames earlier.
+pub const LOOKAHEAD: usize = 3;
+
+impl Prepared {
+    pub fn time(&self) -> f64 {
+        self.time
+    }
+}
+
+/// The change map, regions and detection start of each frame, on its own
+/// thread: it needs only the previous frames' pixels and the detector scale.
+pub struct Prep {
     width: u32,
     height: u32,
     to_track: f32,
     det_scale: f32,
-    /// Heights of the lines detected lately, which set the detector scale.
-    heights: VecDeque<f32>,
     switches: Switches,
     previous: Option<Arc<GrayImage>>,
     previous_luma: Option<Arc<GrayImage>>,
-    /// Sensitive strings found so far, and per reading how many of them it
-    /// was checked against and what they matched there.
-    known: Vec<(RedactCategory, Vec<char>)>,
-    by_known: HashMap<u32, (usize, Vec<Finding>)>,
-    readings: Vec<Reading>,
-    cache: ReadCache,
-    identities: Vec<Identity>,
-    live: Vec<Live>,
-    pub frame_count: u64,
-    pub fps_estimate: f64,
-    pub first_time: Option<f64>,
-    pub last_time: f64,
-    /// When the segment's last frame stops showing (its duration), if known.
-    pub end_time: Option<f64>,
-    /// Every frame's time, in order: a frame shows until the next one.
-    frame_times: Vec<f64>,
 }
 
-impl Scan {
-    pub fn new(segment: u32, width: u32, height: u32, track_width: u32) -> Self {
-        Self {
-            segment,
-            width,
-            height,
-            to_track: track_width as f32 / width as f32,
-            det_scale: (2048.0 / width.max(height) as f32).min(1.0),
-            heights: VecDeque::new(),
-            switches: Switches::from_env(),
-            previous: None,
-            previous_luma: None,
-            known: Vec::new(),
-            by_known: HashMap::new(),
-            readings: Vec::new(),
-            cache: ReadCache::default(),
-            identities: Vec::new(),
-            live: Vec::new(),
-            frame_count: 0,
-            fps_estimate: 30.0,
-            first_time: None,
-            last_time: 0.0,
-            end_time: None,
-            frame_times: Vec::new(),
-        }
-    }
-
+impl Prep {
     /// The part of a frame's analysis that does not depend on the lines
     /// found so far: what changed, the regions with new content,
     /// and the start of their detection (on the GPU it runs while the next
-    /// frames are prepared). [`Self::finish`] completes the frame.
+    /// frames are prepared). [`Scan::finish`] completes the frame.
+    /// `scale` is [`Scan::detect_scale`] after the frame
+    /// [`LOOKAHEAD`] + 1 frames earlier was finished (the scale the line
+    /// heights gave at that point).
     pub fn prepare(
         &mut self,
-        model: &mut OcrModel,
+        starter: &mut DetectStarter,
         frames: &mut Convert,
         frame: frames::Frame,
         gray: Arc<GrayImage>,
+        scale: f32,
         stats: &mut Stats,
     ) -> anyhow::Result<Prepared> {
         let time = frame.time;
-        if let Some(first) = self.first_time {
-            if self.frame_count >= 1 {
-                self.fps_estimate =
-                    (self.frame_count as f64 / (time - first).max(1e-3)).clamp(1.0, 240.0);
-            }
-        } else {
-            self.first_time = Some(time);
-        }
-        self.last_time = time;
-        self.frame_times.push(time);
-        self.frame_count += 1;
-
         let started = Instant::now();
         let previous = self.previous.replace(gray.clone());
         let (tw, th) = (gray.width, gray.height);
@@ -497,10 +457,9 @@ impl Scan {
             let rgb = frames.rgb_regions(&frame.video, &rois)?;
             stats.rgb += rgb_started.elapsed();
             let detect_started = Instant::now();
-            let scale = self.detect_scale();
-            let pending = model.detect_begin(&rgb.0, &rois, scale)?;
+            let pending = starter.begin(&rgb.0, &rois, scale)?;
             let fine = if scale < self.det_scale {
-                Some(model.detect_begin(&rgb.0, &rois, self.det_scale)?)
+                Some(starter.begin(&rgb.0, &rois, self.det_scale)?)
             } else {
                 None
             };
@@ -520,8 +479,90 @@ impl Scan {
             fine,
         })
     }
+}
 
-    /// Completes a [`Self::prepare`]d frame, in frame order: follows the
+pub struct Scan {
+    segment: u32,
+    width: u32,
+    height: u32,
+    to_track: f32,
+    det_scale: f32,
+    /// Heights of the lines detected lately, which set the detector scale.
+    heights: VecDeque<f32>,
+    switches: Switches,
+    /// Sensitive strings found so far, and per reading how many of them it
+    /// was checked against and what they matched there.
+    known: Vec<(RedactCategory, Vec<char>)>,
+    by_known: HashMap<u32, (usize, Vec<Finding>)>,
+    readings: Vec<Reading>,
+    cache: ReadCache,
+    identities: Vec<Identity>,
+    live: Vec<Live>,
+    pub frame_count: u64,
+    pub fps_estimate: f64,
+    pub first_time: Option<f64>,
+    pub last_time: f64,
+    /// When the segment's last frame stops showing (its duration), if known.
+    pub end_time: Option<f64>,
+    /// Every frame's time, in order: a frame shows until the next one.
+    frame_times: Vec<f64>,
+}
+
+impl Scan {
+    pub fn new(segment: u32, width: u32, height: u32, track_width: u32) -> Self {
+        Self {
+            segment,
+            width,
+            height,
+            to_track: track_width as f32 / width as f32,
+            det_scale: (2048.0 / width.max(height) as f32).min(1.0),
+            heights: VecDeque::new(),
+            switches: Switches::from_env(),
+            known: Vec::new(),
+            by_known: HashMap::new(),
+            readings: Vec::new(),
+            cache: ReadCache::default(),
+            identities: Vec::new(),
+            live: Vec::new(),
+            frame_count: 0,
+            fps_estimate: 30.0,
+            first_time: None,
+            last_time: 0.0,
+            end_time: None,
+            frame_times: Vec::new(),
+        }
+    }
+
+    /// The part of the analysis that runs on the thread preparing frames.
+    pub fn prep(&self) -> Prep {
+        Prep {
+            width: self.width,
+            height: self.height,
+            to_track: self.to_track,
+            det_scale: self.det_scale,
+            switches: self.switches,
+            previous: None,
+            previous_luma: None,
+        }
+    }
+
+    /// Counts a [`Prep::prepare`]d frame, in frame order, before it is
+    /// finished.
+    pub fn receive(&mut self, time: f64) {
+        if let Some(first) = self.first_time {
+            if self.frame_count >= 1 {
+                self.fps_estimate =
+                    (self.frame_count as f64 / (time - first).max(1e-3)).clamp(1.0, 240.0);
+            }
+        } else {
+            self.first_time = Some(time);
+        }
+        self.last_time = time;
+        self.frame_times.push(time);
+        self.frame_count += 1;
+    }
+
+    /// Completes a [`Prep::prepare`]d frame, in frame order: follows the
     /// lines, detects what else changed, reads, classifies.
     pub fn finish(
         &mut self,
@@ -1146,7 +1187,7 @@ impl Scan {
     /// detector at about [`TEXT_HEIGHT`] px and large text is found whole.
     /// The regions are then also detected at the frame's scale for small
     /// text.
-    fn detect_scale(&self) -> f32 {
+    pub fn detect_scale(&self) -> f32 {
         if self.heights.len() < HEIGHT_SAMPLES / 10 {
             return self.det_scale;
         }

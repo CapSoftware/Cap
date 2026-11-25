@@ -178,7 +178,146 @@ pub struct OcrModel {
     /// Lines are read one at a time (batching costs several times more per
     /// line on CPU), spread over a few sessions in parallel.
     rec: Vec<Session>,
-    gpu: Option<crate::gpu::GpuDetector>,
+    gpu: Option<Arc<Mutex<crate::gpu::GpuDetector>>>,
+    /// Waits on GPU submissions without holding the detector.
+    gpu_device: Option<wgpu::Device>,
+    /// Upload buffers reused by [`Self::detect_begin`].
+    spare: Vec<Vec<u8>>,
+}
+
+/// Starts detection from another thread than the one that collects it:
+/// regions are resampled there and handed to the GPU or the CPU detector
+/// threads, which run while the collecting thread works.
+pub struct DetectStarter {
+    gpu: Option<Arc<Mutex<crate::gpu::GpuDetector>>>,
+    max_height: u32,
+    det: DetMeta,
+    jobs: mpsc::Sender<DetJob>,
+    spare: Vec<Vec<u8>>,
+}
+
+impl DetectStarter {
+    pub fn begin(
+        &mut self,
+        frame: &RgbImage,
+        rois: &[Rect],
+        scale: f32,
+    ) -> anyhow::Result<PendingDetect> {
+        match &self.gpu {
+            Some(gpu) => begin_gpu(
+                gpu,
+                self.max_height,
+                &self.det,
+                &mut self.spare,
+                frame,
+                rois,
+                scale,
+            ),
+            None => begin_cpu(&self.jobs, &self.det, frame, rois, scale),
+        }
+    }
+}
+
+fn lock_gpu(
+    gpu: &Mutex<crate::gpu::GpuDetector>,
+) -> std::sync::MutexGuard<'_, crate::gpu::GpuDetector> {
+    gpu.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Resamples the regions here, then uploads and submits them while holding
+/// the detector only for that.
+fn begin_gpu(
+    gpu: &Mutex<crate::gpu::GpuDetector>,
+    max_height: u32,
+    det: &DetMeta,
+    spare: &mut Vec<Vec<u8>>,
+    frame: &RgbImage,
+    rois: &[Rect],
+    scale: f32,
+) -> anyhow::Result<PendingDetect> {
+    let started = std::time::Instant::now();
+    let packed = crate::gpu::pack_regions(frame, rois, scale, det, max_height, spare);
+    let mut detector = lock_gpu(gpu);
+    detector.prepare += started.elapsed();
+    let (ticket, uploads) = detector.dispatch(packed)?;
+    drop(detector);
+    spare.extend(uploads);
+    spare.truncate(crate::gpu::SPARE_UPLOADS);
+    Ok(PendingDetect::Gpu(ticket))
+}
+
+/// Hands every region to the CPU detector threads.
+fn begin_cpu(
+    jobs: &mpsc::Sender<DetJob>,
+    det: &DetMeta,
+    frame: &RgbImage,
+    rois: &[Rect],
+    scale: f32,
+) -> anyhow::Result<PendingDetect> {
+    let mut replies = Vec::with_capacity(rois.len());
+    for roi in rois {
+        let (reply, answer) = mpsc::channel();
+        match detection_input(det, frame, *roi, scale, reply.clone()) {
+            Some(job) => jobs
+                .send(job)
+                .map_err(|_| anyhow::anyhow!("detector threads stopped"))?,
+            None => {
+                let _ = reply.send(Ok(Vec::new()));
+            }
+        }
+        replies.push(answer);
+    }
+    Ok(PendingDetect::Cpu(replies))
+}
+
+/// `roi` of `frame` resampled into the detector's input at `scale` (frame
+/// pixels to detector pixels), or `None` when it is too small.
+fn detection_input(
+    det: &DetMeta,
+    frame: &RgbImage,
+    roi: Rect,
+    scale: f32,
+    reply: mpsc::Sender<anyhow::Result<Vec<DetectedLine>>>,
+) -> Option<DetJob> {
+    let roi = roi.clamp_to(frame.width, frame.height);
+    if roi.w < 8.0 || roi.h < 8.0 {
+        return None;
+    }
+    let multiple = det.multiple.max(1) as usize;
+    let max_side = det.max_side.max(64) as f32;
+    let scale = scale.min(max_side / roi.w.max(roi.h)).max(0.05);
+    let out_w = ((roi.w * scale).round() as usize).max(multiple);
+    let out_h = ((roi.h * scale).round() as usize).max(multiple);
+    let in_w = out_w.div_ceil(multiple) * multiple;
+    let in_h = out_h.div_ceil(multiple) * multiple;
+    let plane = in_w * in_h;
+    let mean = det.mean;
+    let std = det.std;
+    let pad = [-mean[0] / std[0], -mean[1] / std[1], -mean[2] / std[2]];
+    let mut input = vec![0.0f32; 3 * plane];
+    for (channel, value) in pad.iter().enumerate() {
+        input[channel * plane..(channel + 1) * plane].fill(*value);
+    }
+    frame.resize_into_planes(
+        roi,
+        out_w,
+        out_h,
+        in_w,
+        plane,
+        &mut input,
+        |channel, value| (value / 255.0 - mean[channel]) / std[channel],
+    );
+    Some(DetJob {
+        input,
+        in_w,
+        in_h,
+        out_w,
+        out_h,
+        roi,
+        frame: (frame.width, frame.height),
+        reply,
+    })
 }
 
 impl OcrModel {
@@ -216,12 +355,15 @@ impl OcrModel {
             cpu_detection_sessions()
         };
         let det = DetWorkers::new(dir, &meta.det, sessions)?;
+        let gpu_device = gpu.as_ref().map(crate::gpu::GpuDetector::device);
         Ok(Self {
             meta,
             charset,
             det,
             rec,
-            gpu,
+            gpu: gpu.map(|gpu| Arc::new(Mutex::new(gpu))),
+            gpu_device,
+            spare: Vec::new(),
         })
     }
 
@@ -231,7 +373,7 @@ impl OcrModel {
 
     /// Where detection runs: the GPU adapter, or the ONNX runtime.
     pub fn detector(&self) -> String {
-        match &self.gpu {
+        match self.gpu.as_deref().map(lock_gpu) {
             Some(gpu) => format!(
                 "gpu {} ({:.1} Mpx run, {} tiles made; prepare {:.2}s, wait {:.2}s, post {:.2}s)",
                 gpu.adapter,
@@ -266,6 +408,21 @@ impl OcrModel {
         self.detect_end(pending)
     }
 
+    /// A handle that starts detection from another thread; the lines are
+    /// collected here with [`Self::detect_end`].
+    pub fn starter(&self) -> anyhow::Result<DetectStarter> {
+        Ok(DetectStarter {
+            gpu: self.gpu.clone(),
+            max_height: self
+                .gpu
+                .as_deref()
+                .map_or(0, |gpu| lock_gpu(gpu).max_height()),
+            det: self.meta.det.clone(),
+            jobs: self.det.jobs.clone().context("detector threads stopped")?,
+            spare: Vec::new(),
+        })
+    }
+
     /// Starts detecting several regions of one frame; on the GPU this
     /// returns before the work is done, so frames can overlap.
     pub fn detect_begin(
@@ -274,18 +431,23 @@ impl OcrModel {
         rois: &[Rect],
         scale: f32,
     ) -> anyhow::Result<PendingDetect> {
-        if let Some(gpu) = &mut self.gpu {
-            return Ok(PendingDetect::Gpu(gpu.submit(
-                frame,
-                rois,
-                scale,
-                &self.meta.det,
-            )?));
+        match &self.gpu {
+            Some(gpu) => {
+                let max_height = lock_gpu(gpu).max_height();
+                begin_gpu(
+                    gpu,
+                    max_height,
+                    &self.meta.det,
+                    &mut self.spare,
+                    frame,
+                    rois,
+                    scale,
+                )
+            }
+            None => self.detect_begin_cpu(frame, rois, scale),
         }
-        self.detect_begin_cpu(frame, rois, scale)
     }
 
-    /// Hands every region to the CPU detector threads.
     fn detect_begin_cpu(
         &mut self,
         frame: &RgbImage,
@@ -293,20 +455,7 @@ impl OcrModel {
         scale: f32,
     ) -> anyhow::Result<PendingDetect> {
         let jobs = self.det.jobs.as_ref().context("detector threads stopped")?;
-        let mut replies = Vec::with_capacity(rois.len());
-        for roi in rois {
-            let (reply, answer) = mpsc::channel();
-            match self.detection_input(frame, *roi, scale, reply.clone()) {
-                Some(job) => jobs
-                    .send(job)
-                    .map_err(|_| anyhow::anyhow!("detector threads stopped"))?,
-                None => {
-                    let _ = reply.send(Ok(Vec::new()));
-                }
-            }
-            replies.push(answer);
-        }
-        Ok(PendingDetect::Cpu(replies))
+        begin_cpu(jobs, &self.meta.det, frame, rois, scale)
     }
 
     /// The lines of a [`Self::detect_begin`], per region.
@@ -320,60 +469,18 @@ impl OcrModel {
                         .unwrap_or_else(|_| Err(anyhow::anyhow!("detector thread stopped")))
                 })
                 .collect(),
-            PendingDetect::Gpu(ticket) => match &mut self.gpu {
-                Some(gpu) => gpu.collect(ticket, &self.meta.det),
-                None => anyhow::bail!("GPU detection without a GPU detector"),
+            PendingDetect::Gpu(ticket) => match (&self.gpu, &self.gpu_device) {
+                (Some(gpu), Some(device)) => {
+                    let started = std::time::Instant::now();
+                    let _ =
+                        device.poll(wgpu::PollType::WaitForSubmissionIndex(ticket.submission()));
+                    let mut detector = lock_gpu(gpu);
+                    detector.wait += started.elapsed();
+                    detector.collect(ticket, &self.meta.det)
+                }
+                _ => anyhow::bail!("GPU detection without a GPU detector"),
             },
         }
-    }
-
-    /// `roi` of `frame` resampled into the detector's input at `scale`
-    /// (frame pixels to detector pixels), or `None` when it is too small.
-    fn detection_input(
-        &self,
-        frame: &RgbImage,
-        roi: Rect,
-        scale: f32,
-        reply: mpsc::Sender<anyhow::Result<Vec<DetectedLine>>>,
-    ) -> Option<DetJob> {
-        let roi = roi.clamp_to(frame.width, frame.height);
-        if roi.w < 8.0 || roi.h < 8.0 {
-            return None;
-        }
-        let multiple = self.meta.det.multiple.max(1) as usize;
-        let max_side = self.meta.det.max_side.max(64) as f32;
-        let scale = scale.min(max_side / roi.w.max(roi.h)).max(0.05);
-        let out_w = ((roi.w * scale).round() as usize).max(multiple);
-        let out_h = ((roi.h * scale).round() as usize).max(multiple);
-        let in_w = out_w.div_ceil(multiple) * multiple;
-        let in_h = out_h.div_ceil(multiple) * multiple;
-        let plane = in_w * in_h;
-        let mean = self.meta.det.mean;
-        let std = self.meta.det.std;
-        let pad = [-mean[0] / std[0], -mean[1] / std[1], -mean[2] / std[2]];
-        let mut input = vec![0.0f32; 3 * plane];
-        for (channel, value) in pad.iter().enumerate() {
-            input[channel * plane..(channel + 1) * plane].fill(*value);
-        }
-        frame.resize_into_planes(
-            roi,
-            out_w,
-            out_h,
-            in_w,
-            plane,
-            &mut input,
-            |channel, value| (value / 255.0 - mean[channel]) / std[channel],
-        );
-        Some(DetJob {
-            input,
-            in_w,
-            in_h,
-            out_w,
-            out_h,
-            roi,
-            frame: (frame.width, frame.height),
-            reply,
-        })
     }
 
     /// Reads every line crop. Long lines are cut at a gap between words so

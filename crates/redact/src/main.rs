@@ -185,9 +185,10 @@ fn analyze(args: &[String]) -> anyhow::Result<()> {
                 .map_or(0.0, |d| d.as_secs_f64() * 1e3)
         };
         eprintln!(
-            "analysis prepare {:.2}s finish {:.2}s",
+            "analysis prepare {:.2}s finish {:.2}s prepare_wait {:.2}s",
             stats.prepare.as_secs_f64(),
-            stats.finish.as_secs_f64()
+            stats.finish.as_secs_f64(),
+            stats.decode_wait.as_secs_f64()
         );
         eprintln!(
             "frame ms p50 {:.2} p90 {:.2} p99 {:.2} max {:.2}",

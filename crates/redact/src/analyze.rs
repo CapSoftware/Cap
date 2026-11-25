@@ -1,5 +1,4 @@
 use std::{
-    collections::VecDeque,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -19,7 +18,7 @@ use crate::{
     frames::{self, FrameSource},
     image::Rect,
     model::OcrModel,
-    scan::Scan,
+    scan::{LOOKAHEAD, Prepared, Scan},
 };
 
 #[derive(Debug, Clone)]
@@ -78,8 +77,10 @@ pub struct Stats {
     pub track: Duration,
     pub classify: Duration,
     pub compile: Duration,
-    /// Time the analysis waited for the decoding thread.
+    /// Time finishing waited for prepared frames, and preparing waited for
+    /// decoded ones.
     pub frame_wait: Duration,
+    pub decode_wait: Duration,
     /// Analysis time per frame (preparing it and finishing the frames it
     /// lets through), for the spread of frame costs.
     pub frame_costs: Vec<Duration>,
@@ -92,6 +93,21 @@ pub struct Stats {
     pub hardware_decode: bool,
 }
 
+impl Stats {
+    /// Adds what another thread measured for the same segment.
+    fn absorb(&mut self, other: &Stats) {
+        self.duplicates += other.duplicates;
+        self.det_pixels += other.det_pixels;
+        self.decode += other.decode;
+        self.gray += other.gray;
+        self.rgb += other.rgb;
+        self.detect += other.detect;
+        self.track += other.track;
+        self.prepare += other.prepare;
+        self.decode_wait += other.frame_wait;
+    }
+}
+
 pub struct Progress<'a> {
     pub segment: u32,
     pub source_time: f64,
@@ -99,9 +115,6 @@ pub struct Progress<'a> {
     pub snapshot: &'a Redactions,
 }
 
-/// Frames prepared ahead of the one being finished, so their detection runs
-/// on the GPU while the CPU works.
-const LOOKAHEAD: usize = 3;
 /// Decoded frames queued ahead of the analysis.
 const DECODE_AHEAD: usize = 1;
 
@@ -264,35 +277,67 @@ impl<'a> Analyzer<'a> {
                 complete: false,
             };
             stats.hardware_decode = hardware;
-            let mut in_flight = VecDeque::new();
+            // Frames are prepared on their own thread (change map, regions,
+            // detection start) while this one finishes the frames before.
+            // Preparing a frame needs the detector scale the line heights
+            // gave after the frame LOOKAHEAD + 1 earlier was finished; this
+            // thread sends one scale per finished frame, in order.
+            let (prepared_tx, prepared_rx) = mpsc::sync_channel::<Prepared>(LOOKAHEAD);
+            let (scale_tx, scale_rx) = mpsc::channel::<f32>();
+            let mut prep = scan.prep();
+            let mut starter = model.starter()?;
+            let first_scale = scan.detect_scale();
+            let prep_cancel = cancel.clone();
+            let preparer = scope.spawn(move || -> anyhow::Result<Stats> {
+                let mut stats = Stats::default();
+                let mut convert = frames::Convert::default();
+                let mut wait_mark = Instant::now();
+                for (index, decoded) in frame_rx.iter().enumerate() {
+                    stats.frame_wait += wait_mark.elapsed();
+                    stats.decode += decoded.decode;
+                    stats.gray += decoded.gray_time;
+                    if prep_cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let scale = if index > LOOKAHEAD {
+                        match scale_rx.recv() {
+                            Ok(scale) => scale,
+                            Err(_) => break,
+                        }
+                    } else {
+                        first_scale
+                    };
+                    let started = Instant::now();
+                    let prepared = prep.prepare(
+                        &mut starter,
+                        &mut convert,
+                        decoded.frame,
+                        Arc::new(decoded.gray),
+                        scale,
+                        &mut stats,
+                    )?;
+                    stats.prepare += started.elapsed();
+                    if prepared_tx.send(prepared).is_err() {
+                        break;
+                    }
+                    wait_mark = Instant::now();
+                }
+                Ok(stats)
+            });
             let mut wait_mark = Instant::now();
-            for decoded in frame_rx.iter() {
+            for prepared in prepared_rx.iter() {
                 stats.frame_wait += wait_mark.elapsed();
-                stats.decode += decoded.decode;
-                stats.gray += decoded.gray_time;
                 if cancel.load(Ordering::Relaxed) {
                     anyhow::bail!("cancelled");
                 }
-                let time = decoded.frame.time;
-                let frame_started = Instant::now();
-                let prepared = scan.prepare(
-                    model,
-                    &mut convert,
-                    decoded.frame,
-                    Arc::new(decoded.gray),
-                    stats,
-                )?;
-                stats.prepare += frame_started.elapsed();
-                in_flight.push_back(prepared);
+                let time = prepared.time();
+                scan.receive(time);
                 let finish_started = Instant::now();
-                while in_flight.len() > LOOKAHEAD {
-                    if let Some(oldest) = in_flight.pop_front() {
-                        scan.finish(model, &mut convert, oldest, stats)?;
-                    }
-                }
+                scan.finish(model, &mut convert, prepared, stats)?;
+                let _ = scale_tx.send(scan.detect_scale());
                 stats.finish += finish_started.elapsed();
                 stats.frames += 1;
-                stats.frame_costs.push(frame_started.elapsed());
+                stats.frame_costs.push(finish_started.elapsed());
                 if last_progress.elapsed() >= Duration::from_millis(500) {
                     last_progress = Instant::now();
                     segment_info.source_frames = scan.frame_count;
@@ -304,11 +349,12 @@ impl<'a> Analyzer<'a> {
                 }
                 wait_mark = Instant::now();
             }
-            drop(frame_rx);
+            drop(scale_tx);
+            let prepared_stats = preparer
+                .join()
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("preparing thread panicked")))?;
+            stats.absorb(&prepared_stats);
             stats.hardware_decode |= join_decoder(decoder)?;
-            while let Some(oldest) = in_flight.pop_front() {
-                scan.finish(model, &mut convert, oldest, stats)?;
-            }
             Ok((scan, segment_info))
         })?;
         let fps = scan.fps_estimate;
