@@ -140,7 +140,7 @@ impl DetWorkers {
         let receiver = Arc::new(Mutex::new(receiver));
         let mut threads = Vec::with_capacity(count);
         for _ in 0..count {
-            let mut session = session(&dir.join("det.onnx"), detection_threads())?;
+            let mut session = session(&dir.join("det.onnx"), detection_threads(), false)?;
             let receiver = receiver.clone();
             let meta = meta.clone();
             threads.push(std::thread::spawn(move || {
@@ -337,7 +337,7 @@ impl OcrModel {
         }
         cap_camera_effects::initialize_onnx_runtime()?;
         let rec = (0..recognition_sessions())
-            .map(|_| session(&dir.join("rec.onnx"), 2))
+            .map(|_| session(&dir.join("rec.onnx"), 2, true))
             .collect::<anyhow::Result<Vec<_>>>()?;
         let gpu = if std::env::var_os("CAP_REDACT_ORT_DET").is_some() {
             None
@@ -738,8 +738,11 @@ fn recognition_sessions() -> usize {
     (cores / 3).clamp(1, 3)
 }
 
-fn session(path: &Path, threads: usize) -> anyhow::Result<Session> {
-    let builder = Session::builder()
+/// An ONNX session. `keep_buffers: false` frees a run's buffers when it ends
+/// instead of keeping an arena as large as the largest input seen, for the
+/// detector whose regions range from a strip to the whole frame.
+fn session(path: &Path, threads: usize, keep_buffers: bool) -> anyhow::Result<Session> {
+    let mut builder = Session::builder()
         .context("ONNX session builder")?
         .with_intra_threads(threads)
         .map_err(|error| anyhow::anyhow!("intra threads: {error}"))?
@@ -747,6 +750,13 @@ fn session(path: &Path, threads: usize) -> anyhow::Result<Session> {
         .map_err(|error| anyhow::anyhow!("intra spinning: {error}"))?
         .with_inter_op_spinning(false)
         .map_err(|error| anyhow::anyhow!("inter spinning: {error}"))?;
+    if !keep_buffers {
+        builder = builder
+            .with_memory_pattern(false)
+            .map_err(|error| anyhow::anyhow!("memory pattern: {error}"))?
+            .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])
+            .map_err(|error| anyhow::anyhow!("CPU arena: {error}"))?;
+    }
     #[cfg(target_os = "windows")]
     let builder = register_directml(builder);
     let mut builder = builder;
