@@ -341,6 +341,18 @@ fn read_studio_resolution() -> Option<StudioResolution> {
     studio_resolution(&sizes)
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn apply_studio_resolution(
+    current: &mut Option<StudioResolution>,
+    read: Option<StudioResolution>,
+) -> bool {
+    if *current == read {
+        return false;
+    }
+    *current = read;
+    true
+}
+
 #[derive(Clone, Copy)]
 enum InstantQualityNotice {
     SaveFailed,
@@ -791,6 +803,8 @@ pub struct SettingsWindow {
     instant_quality_notice: Option<InstantQualityNotice>,
     studio_quality_save_failed: bool,
     studio_resolution: Option<StudioResolution>,
+    #[cfg(target_os = "linux")]
+    studio_resolution_task: Option<gpui::Task<()>>,
     /// Everything the pages in `settings_pages.rs` own -- their fetch state,
     /// drafts and text-input entities.
     pub(crate) pages: crate::settings_pages::PagesState,
@@ -952,7 +966,12 @@ impl SettingsWindow {
             plan_refresh_failed: false,
             instant_quality_notice: None,
             studio_quality_save_failed: false,
+            #[cfg(not(target_os = "linux"))]
             studio_resolution: read_studio_resolution(),
+            #[cfg(target_os = "linux")]
+            studio_resolution: None,
+            #[cfg(target_os = "linux")]
+            studio_resolution_task: None,
             project_name_input,
             server_url_input,
             _field_events: field_events,
@@ -1008,7 +1027,10 @@ impl SettingsWindow {
         self.quality_scroll_request = None;
         self.instant_quality_notice = None;
         self.studio_quality_save_failed = false;
-        self.studio_resolution = read_studio_resolution();
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.studio_resolution = read_studio_resolution();
+        }
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
         self.shortcuts_cancel(cx);
         self.page = page;
@@ -1051,6 +1073,10 @@ impl SettingsWindow {
     /// scheduling a frame.
     pub fn page_shown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pages_shown(window, cx);
+        #[cfg(target_os = "linux")]
+        if self.page == Page::Quality {
+            self.refresh_studio_resolution(cx);
+        }
         if matches!(self.page, Page::Quality | Page::License) {
             self.refresh_plan(window, cx);
         }
@@ -1072,6 +1098,22 @@ impl SettingsWindow {
         self.recordings.tick = None;
         self.screenshots.scan = None;
         self.screenshots.decode = None;
+    }
+
+    #[cfg(target_os = "linux")]
+    fn refresh_studio_resolution(&mut self, cx: &mut Context<Self>) {
+        self.studio_resolution_task = Some(cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async { read_studio_resolution() })
+                .await;
+            this.update(cx, |this, cx| {
+                if apply_studio_resolution(&mut this.studio_resolution, read) {
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
     }
 
     /// The `recordings` query: scan the library on the background executor,
@@ -5610,6 +5652,29 @@ mod tests {
         ] {
             assert_eq!(resolution_name(width, height), name, "{width}x{height}");
         }
+    }
+
+    #[test]
+    fn a_resolution_read_only_counts_as_a_change_when_the_value_differs() {
+        let uhd = StudioResolution {
+            width: 3840,
+            height: 2160,
+            several_displays: false,
+        };
+        let mut current = None;
+        assert!(apply_studio_resolution(&mut current, Some(uhd)));
+        assert_eq!(current, Some(uhd));
+        assert!(!apply_studio_resolution(&mut current, Some(uhd)));
+        assert_eq!(current, Some(uhd));
+        let several = StudioResolution {
+            several_displays: true,
+            ..uhd
+        };
+        assert!(apply_studio_resolution(&mut current, Some(several)));
+        assert_eq!(current, Some(several));
+        assert!(apply_studio_resolution(&mut current, None));
+        assert_eq!(current, None);
+        assert!(!apply_studio_resolution(&mut current, None));
     }
 
     #[test]
