@@ -80,10 +80,28 @@ jobs:
             runner: macos-15
             headed: "1"
             launcher: bun
+          # The runner's own Chrome and Edge. Windows runners have no GPU, so
+          # both draw with WebGL2 on SwiftShader and have no WebGPU adapter.
+          - name: windows-chrome
+            browser: chromium
+            channel: chrome
+            runner: windows-latest
+            headed: "0"
+            launcher: bun
+          - name: windows-edge
+            browser: chromium
+            channel: msedge
+            runner: windows-latest
+            headed: "0"
+            launcher: bun
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
     env:
       CAP_REPLAY_HEADED: ${{ matrix.headed }}
+      CAP_REPLAY_CHANNEL: ${{ matrix.channel }}
       REPLAY: ${{ matrix.launcher }} packages/web-editor/browser-replay/replay.cjs ${{ matrix.browser }}
     steps:
       - uses: actions/checkout@v4
@@ -91,6 +109,7 @@ jobs:
       - uses: ./.github/actions/setup-js
 
       - name: Install browser
+        if: matrix.channel == ''
         run: bunx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} ${{ matrix.browser }}
 
       - name: Build compositor replay

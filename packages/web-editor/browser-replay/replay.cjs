@@ -139,6 +139,9 @@ async function replay(forceWebGl, forceWebGpu = false) {
 	const browser = await browserType.launch({
 		headless: process.env.CAP_REPLAY_HEADED !== "1",
 		timeout: 30_000,
+		...(process.env.CAP_REPLAY_CHANNEL
+			? { channel: process.env.CAP_REPLAY_CHANNEL }
+			: {}),
 		args: [
 			...(forceWebGpu ? ["--enable-unsafe-webgpu"] : []),
 			...(process.env.CAP_REPLAY_CHROME_SOFTWARE === "1"
