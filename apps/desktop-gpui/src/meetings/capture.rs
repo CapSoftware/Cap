@@ -1660,6 +1660,8 @@ struct SystemPlatform {
 const MONITOR_RATE: u32 = 48_000;
 
 #[cfg(any(target_os = "linux", test))]
+mod reader_free;
+#[cfg(any(target_os = "linux", test))]
 mod sink;
 
 /// The output a meeting's computer audio is read from: `None` is the default.
@@ -1684,14 +1686,22 @@ fn pactl(args: &[&str]) -> String {
 #[cfg(target_os = "linux")]
 /// One look at the sound server: the output to read (`None`: the default),
 /// whether the reader `reader` (a `parec` pid) sits on that output's
-/// monitor (`None` when pactl does not say), and the default output.
-fn look_at_outputs(reader: Option<u32>) -> (Option<String>, Option<bool>, Option<String>) {
+/// monitor (`None` when pactl does not say), the default output, and
+/// whether a screen reader's speech stream exists.
+fn look_at_outputs(reader: Option<u32>) -> (Option<String>, Option<bool>, Option<String>, bool) {
     let default = sink::parse_default_sink(&pactl(&["info"]));
     let recording = sink::parse_streams(&pactl(&["list", "source-outputs"]), "Source");
+    let playing = sink::parse_streams(&pactl(&["list", "sink-inputs"]), "Sink");
+    // A screen reader's speech stream, and a screen reader running: the
+    // process scan only happens when such a stream exists.
+    let reading_aloud = playing
+        .iter()
+        .any(|stream| reader_free::is_reader_stream(&stream.app))
+        && reader_free::screen_reader_running();
     let target = sink::choose(
         &sink::parse_sinks(&pactl(&["list", "short", "sinks"])),
         default.as_deref(),
-        &sink::parse_streams(&pactl(&["list", "sink-inputs"]), "Sink"),
+        &playing,
         &recording,
         std::process::id(),
     );
@@ -1701,7 +1711,7 @@ fn look_at_outputs(reader: Option<u32>) -> (Option<String>, Option<bool>, Option
             let sources = sink::parse_sinks(&pactl(&["list", "short", "sources"]));
             sink::reader_on_monitor(&sources, &recording, pid, &output)
         });
-    (target, placed, default)
+    (target, placed, default, reading_aloud)
 }
 
 #[cfg(target_os = "linux")]
@@ -1777,14 +1787,49 @@ impl SystemPlatform {
         if !system_audio_available() {
             return Err(HealthIssue::TapUnsupported);
         }
-        // The default at first; the watch looks at once, off this thread.
-        let target: SinkTarget = Arc::new(std::sync::Mutex::new(None));
-        let first = spawn_monitor_reader(None)
-            .map_err(|e| HealthIssue::Failed(format!("Computer audio capture failed: {e}")))?;
         let (tx, rx) = flume::bounded::<SystemChunk>(SOURCE_CHANNEL);
-        let stop = Arc::new(AtomicBool::new(false));
-        let child = Arc::new(std::sync::Mutex::new(Some(first)));
         let counters = MonitorCounters::default();
+        // A screen reader already speaking (PipeWire): Cap's reader-free
+        // capture comes first, so its speech never reaches the meeting even
+        // for a moment. Otherwise the default; the watch looks at once, off
+        // this thread.
+        let info = pactl(&["info"]);
+        let pipewire = reader_free::on_pipewire(&info);
+        let mut free = None;
+        let mut told = false;
+        if pipewire
+            && sink::parse_streams(&pactl(&["list", "sink-inputs"]), "Sink")
+                .iter()
+                .any(|stream| reader_free::is_reader_stream(&stream.app))
+            && reader_free::screen_reader_running()
+            && let Some(default) = sink::parse_default_sink(&info)
+        {
+            match reader_free::ReaderFree::start(&default, reader_free_sink(&tx, &counters)) {
+                Ok(made) => {
+                    tracing::info!(
+                        "a screen reader is speaking; its speech is left out of computer audio"
+                    );
+                    made.go_live();
+                    free = Some(made);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "could not leave the screen reader's speech out of computer audio; recording as before");
+                    told = true;
+                }
+            }
+        }
+        let target: SinkTarget = Arc::new(std::sync::Mutex::new(
+            free.as_ref().map(|_| reader_free::NODE.to_string()),
+        ));
+        let first = if free.is_some() {
+            None
+        } else {
+            let first = spawn_monitor_reader(None)
+                .map_err(|e| HealthIssue::Failed(format!("Computer audio capture failed: {e}")))?;
+            Some(first)
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let child = Arc::new(std::sync::Mutex::new(first));
         let thread = std::thread::Builder::new()
             .name("cap-meeting-monitor".into())
             .spawn({
@@ -1794,6 +1839,7 @@ impl SystemPlatform {
                     counters.clone(),
                     target.clone(),
                 );
+                let tx = tx.clone();
                 move || run_monitor(&stop, &child, &tx, &counters, &target)
             })
             .map_err(|e| HealthIssue::Failed(e.to_string()))?;
@@ -1804,7 +1850,14 @@ impl SystemPlatform {
                 let (stop, child, target) = (stop.clone(), child.clone(), target.clone());
                 let outputs = outputs.clone();
                 let monitor = thread.thread().clone();
-                move || watch_sink(&stop, &child, &target, &outputs, &monitor)
+                let reader = ReaderState {
+                    pipewire,
+                    free,
+                    told,
+                    tx,
+                    counters: counters.clone(),
+                };
+                move || watch_sink(&stop, &child, &target, &outputs, &monitor, reader)
             })
             .ok();
         Ok((
@@ -1847,9 +1900,52 @@ impl SystemPlatform {
 #[derive(Clone, Default)]
 struct MonitorCounters {
     dropped: Arc<AtomicU64>,
+    /// The monitor reader's deliveries.
     callbacks: Arc<AtomicU64>,
     frames: Arc<AtomicU64>,
     restarts: Arc<AtomicU64>,
+    /// The reader-free capture's deliveries.
+    reader_free: Arc<AtomicU64>,
+}
+
+/// Where Cap's reader-free capture delivers: the meeting's channel, as the
+/// monitor reader does.
+#[cfg(target_os = "linux")]
+fn reader_free_sink(
+    tx: &flume::Sender<SystemChunk>,
+    counters: &MonitorCounters,
+) -> impl FnMut(&[f32]) + Send + 'static {
+    let (tx, counters) = (tx.clone(), counters.clone());
+    move |samples| {
+        counters.reader_free.fetch_add(1, Ordering::Relaxed);
+        counters
+            .frames
+            .fetch_add(samples.len() as u64, Ordering::Relaxed);
+        let message = SystemChunk::Samples {
+            samples: samples.to_vec(),
+            sample_rate: MONITOR_RATE,
+            synthetic: false,
+            received: Instant::now(),
+        };
+        if tx.try_send(message).is_err() {
+            counters.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// What the meeting's start learned about a screen reader (Linux).
+#[cfg(target_os = "linux")]
+struct ReaderState {
+    /// The sound server is PipeWire's.
+    pipewire: bool,
+    /// The reader-free capture, when a reader was speaking at the start.
+    free: Option<reader_free::ReaderFree>,
+    /// A refusal was already logged.
+    told: bool,
+    /// The meeting's channel and counters, for a reader-free capture made
+    /// later.
+    tx: flume::Sender<SystemChunk>,
+    counters: MonitorCounters,
 }
 
 /// Every couple of seconds: when the call moved to another output (or
@@ -1861,7 +1957,21 @@ fn watch_sink(
     target: &SinkTarget,
     outputs: &std::sync::Mutex<Option<String>>,
     monitor: &std::thread::Thread,
+    reader: ReaderState,
 ) {
+    let ReaderState {
+        pipewire,
+        mut free,
+        mut told,
+        tx,
+        counters,
+    } = reader;
+    // While a screen reader speaks (PipeWire only), the meeting reads a sink
+    // that has everything but the reader's speech. Built before the monitor
+    // moves to it, so a failure leaves today's reading untouched. A refusal
+    // is logged once per meeting.
+    let mut refused: Option<Instant> = told.then(Instant::now);
+    let mut told_pulse = false;
     loop {
         if stop.load(Ordering::Acquire) {
             return;
@@ -1870,7 +1980,50 @@ fn watch_sink(
             .lock()
             .ok()
             .and_then(|slot| slot.as_ref().map(|c| c.id()));
-        let (next, placed, default) = look_at_outputs(reader);
+        let (next, placed, default, reading_aloud) = look_at_outputs(reader);
+        let reading = next.clone().or(default.clone());
+        if reading_aloud && !pipewire && !told_pulse {
+            told_pulse = true;
+            tracing::info!(
+                "a screen reader is speaking; on PulseAudio its speech stays in computer audio"
+            );
+        }
+        if reading_aloud && pipewire {
+            match (&free, reading.as_deref()) {
+                (Some(free), Some(output)) => free.follow(output),
+                (None, Some(output))
+                    if refused.is_none_or(|at| at.elapsed() >= Duration::from_secs(30)) =>
+                {
+                    match reader_free::ReaderFree::start(output, reader_free_sink(&tx, &counters)) {
+                        Ok(made) => {
+                            tracing::info!(
+                                "a screen reader is speaking; its speech is left out of computer audio"
+                            );
+                            free = Some(made);
+                        }
+                        Err(error) => {
+                            if told {
+                                tracing::debug!(%error, "the reader-free sink was refused again");
+                            } else {
+                                tracing::warn!(%error, "could not leave the screen reader's speech out of computer audio; recording as before");
+                                told = true;
+                            }
+                            refused = Some(Instant::now());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let leaving = !reading_aloud && free.is_some();
+        let reader_free_now = reading_aloud && free.is_some();
+        // The reader sits on our sink's monitor then, not the output's.
+        let placed = if reader_free_now { None } else { placed };
+        let next = if reader_free_now {
+            Some(reader_free::NODE.to_string())
+        } else {
+            next
+        };
         if let Ok(mut seen) = outputs.lock() {
             *seen = default.map(|default| match &next {
                 Some(followed) => format!("{default} > {followed}"),
@@ -1881,7 +2034,13 @@ fn watch_sink(
             return;
         };
         if *current != next {
-            tracing::info!(from = ?*current, to = ?next, "the meeting's computer audio follows the call to another output");
+            if next.as_deref() == Some(reader_free::NODE) {
+                tracing::info!(from = ?*current, "the meeting's computer audio moves to the reader-free capture");
+            } else if leaving {
+                tracing::info!(to = ?next, "the screen reader's stream ended; computer audio is read as before");
+            } else {
+                tracing::info!(from = ?*current, to = ?next, "the meeting's computer audio follows the call to another output");
+            }
             *current = next;
         } else if placed == Some(false) {
             // PulseAudio moves a recording off a monitor when the default
@@ -1900,8 +2059,27 @@ fn watch_sink(
         {
             let _ = child.kill();
         }
+        // Our capture takes over as the monitor reader stops.
+        if reader_free_now && let Some(free) = &free {
+            free.go_live();
+        }
         // The monitor loop opens the new output now, not a second later.
         monitor.unpark();
+        if leaving {
+            // Our capture goes once the monitor reader delivers again (or
+            // after a second).
+            let delivered = counters.callbacks.load(Ordering::Relaxed);
+            let waited = Instant::now();
+            loop {
+                if counters.callbacks.load(Ordering::Relaxed) != delivered
+                    || waited.elapsed() >= Duration::from_secs(1)
+                {
+                    break;
+                }
+                std::thread::park_timeout(Duration::from_millis(10));
+            }
+            free = None;
+        }
         std::thread::park_timeout(SINK_CHECK_EVERY);
     }
 }
@@ -1962,6 +2140,10 @@ fn run_monitor(
             return;
         }
         let sink = target.lock().ok().and_then(|t| t.clone());
+        if sink.as_deref() == Some(reader_free::NODE) {
+            // Cap's reader-free capture delivers meanwhile.
+            continue;
+        }
         match spawn_monitor_reader(sink.as_deref()) {
             Ok(mut next) => {
                 counters.restarts.fetch_add(1, Ordering::Relaxed);
