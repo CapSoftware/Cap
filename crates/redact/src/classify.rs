@@ -515,6 +515,7 @@ pub fn classify_frame_with(
     join_wrapped_lines(lines, &mut results);
     names_from_layout(lines, &mut results);
     ips_from_columns(lines, &mut results);
+    cards_from_columns(lines, &mut results);
     cut_by_the_frame(lines, &mut results);
     for (label_index, label) in lines.iter().enumerate() {
         if !LABEL_ONLY.is_match(label.text) {
@@ -610,32 +611,58 @@ fn cut_by_the_frame(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
 /// address (a sheet or table column too narrow for the whole address), are
 /// the visible part of one.
 fn ips_from_columns(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
-    let has_ip = |index: usize| {
-        results[index]
-            .iter()
-            .any(|f| f.category == RedactCategory::Ip)
-    };
-    let cut = (0..lines.len())
-        .filter(|&index| !has_ip(index) && IPV4_PREFIX.is_match(lines[index].text))
+    from_columns(lines, results, RedactCategory::Ip, |text| {
+        IPV4_PREFIX.is_match(text)
+    });
+}
+
+/// A line of 12 to 19 digits (spaces and dashes between groups), in the same
+/// column as a line holding a card number, is one even when its checksum
+/// fails: a run of the same narrow digit can be read a few digits short
+/// ("4111111111111" for "4111111111111111").
+fn cards_from_columns(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
+    from_columns(lines, results, RedactCategory::Card, |text| {
+        let trimmed = text.trim();
+        let digits = trimmed.chars().filter(char::is_ascii_digit).count();
+        trimmed
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == ' ' || c == '-')
+            && (12..=19).contains(&digits)
+            && digits_outside_dates(trimmed, 0, trimmed.len()) == digits
+    });
+}
+
+/// Marks as `category` every line `candidate` accepts that has no finding of
+/// that category yet and shares a column (more than half the narrower width,
+/// within eight line heights) with a line that has one.
+fn from_columns(
+    lines: &[LineContext<'_>],
+    results: &mut [Vec<Finding>],
+    category: RedactCategory,
+    candidate: impl Fn(&str) -> bool,
+) {
+    let has = |index: usize| results[index].iter().any(|f| f.category == category);
+    let found = (0..lines.len())
+        .filter(|&index| !has(index) && candidate(lines[index].text))
         .filter(|&index| {
             let line = &lines[index];
             (0..lines.len()).any(|other| {
                 let o = &lines[other];
                 let shared = (line.x + line.w).min(o.x + o.w) - line.x.max(o.x);
                 other != index
-                    && has_ip(other)
+                    && has(other)
                     && shared > 0.5 * line.w.min(o.w)
                     && (o.y - line.y).abs() < line.h * 8.0
             })
         })
         .collect::<Vec<_>>();
-    for index in cut {
+    for index in found {
         let text = lines[index].text;
         let start = text.chars().take_while(|c| c.is_whitespace()).count();
         let end =
             text.chars().count() - text.chars().rev().take_while(|c| c.is_whitespace()).count();
         results[index].push(Finding {
-            category: RedactCategory::Ip,
+            category,
             start,
             end,
         });

@@ -718,3 +718,32 @@ fn timestamps_next_to_phone_or_account_words_are_not_numbers() {
         "{found:?}"
     );
 }
+
+#[test]
+fn a_card_read_short_in_a_card_column_is_still_a_card() {
+    let line = |text, y| LineContext {
+        text,
+        x: 0.62,
+        y,
+        w: 0.1,
+        h: 0.02,
+    };
+    let lines = [
+        line("4242-4242-4242-4242", 0.30),
+        line("4111111111111", 0.34),
+        line("5555555555554444", 0.38),
+        LineContext {
+            text: "4111111111111",
+            x: 0.1,
+            y: 0.34,
+            w: 0.08,
+            h: 0.02,
+        },
+        line("2026-11-25 10:42", 0.42),
+    ];
+    let own = lines.iter().map(|l| classify_line(l.text)).collect();
+    let found = classify_frame_with(&lines, own);
+    assert!(found[1].iter().any(|f| f.category == Card), "{found:?}");
+    assert!(found[3].iter().all(|f| f.category != Card), "{found:?}");
+    assert!(found[4].iter().all(|f| f.category != Card), "{found:?}");
+}
