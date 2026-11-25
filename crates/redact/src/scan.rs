@@ -51,6 +51,9 @@ pub struct Switches {
     /// Also match strict patterns in the reading the recogniser's runner-up
     /// characters make.
     pub alternatives: bool,
+    /// Detect a frame's regions again at the frame's own scale while the
+    /// adaptive scale is lowered, for text too small to be found there.
+    pub finepass: bool,
 }
 
 impl Switches {
@@ -80,6 +83,7 @@ impl Switches {
             rowmerge: on("rowmerge"),
             known: on("known"),
             alternatives: on("alternatives"),
+            finepass: on("finepass"),
         }
     }
 }
@@ -458,7 +462,7 @@ impl Prep {
             stats.rgb += rgb_started.elapsed();
             let detect_started = Instant::now();
             let pending = starter.begin(&rgb.0, &rois, scale)?;
-            let fine = if scale < self.det_scale {
+            let fine = if self.switches.finepass && scale < self.det_scale {
                 Some(starter.begin(&rgb.0, &rois, self.det_scale)?)
             } else {
                 None
