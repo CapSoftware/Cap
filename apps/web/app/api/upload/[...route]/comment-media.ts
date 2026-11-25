@@ -18,7 +18,10 @@ import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import { commentMediaKeys } from "@/lib/comment-media";
 import {
+	MAX_MEDIA_OBJECT_BYTES,
 	MAX_MEDIA_OBJECTS_PER_VIDEO,
+	releaseCommentMediaBytes,
+	reserveCommentMediaBytes,
 	reserveCommentMediaObjects,
 } from "@/lib/comment-media-quota";
 import { canUseMediaComments } from "@/lib/media-comments";
@@ -35,10 +38,10 @@ const runPromiseAnyEnv = runPromise as <A, E>(
 
 // Storage-growth bounds. Uploads land in the video owner's (possibly BYO)
 // bucket, so an unbounded viewer must not be able to fill it unattended:
-// per-commenter comment-rate, per-video object count, and a per-object
-// multipart ceiling (single PUTs are capped at 5GB by S3 itself).
+// per-commenter comment-rate, per-video object count, a per-object multipart
+// ceiling (single PUTs are capped at 5GB by S3 itself), and a per-commenter
+// byte budget on each video.
 const MAX_MEDIA_COMMENTS_PER_HOUR = 30;
-const MAX_MEDIA_OBJECT_BYTES = 20 * 1024 * 1024 * 1024;
 
 app.post(
 	"/initiate",
@@ -50,6 +53,8 @@ app.post(
 			contentType: z.string(),
 			mode: z.enum(["single", "multipart"]),
 			withThumbnail: z.boolean().optional(),
+			size: z.number().int().nonnegative().optional(),
+			thumbnailSize: z.number().int().nonnegative().optional(),
 		}),
 	),
 	async (c) => {
@@ -57,8 +62,21 @@ app.post(
 			videoId: videoIdRaw,
 			kind,
 			mode,
-			withThumbnail,
+			size,
+			thumbnailSize,
 		} = c.req.valid("json");
+		// Every upload is a single PUT signed for its declared size, so storage
+		// rejects any other size. Without a size there is no thumbnail target
+		// (it is optional) and no upload. Multipart uploads already in flight
+		// can still finish through /presign-part and /complete.
+		const withThumbnail =
+			c.req.valid("json").withThumbnail === true &&
+			thumbnailSize !== undefined &&
+			thumbnailSize <= MAX_MEDIA_OBJECT_BYTES;
+		if (mode !== "single" || size === undefined)
+			return c.json({ error: "Missing upload size" }, 400);
+		if (size > MAX_MEDIA_OBJECT_BYTES)
+			return c.json({ error: "Recording is too large" }, 413);
 		const user = c.get("user");
 		const videoId = Video.VideoId.make(videoIdRaw);
 
@@ -128,24 +146,54 @@ app.post(
 			}
 			const { contentType, key, thumbnailKey } = keys;
 
+			// The viewer's own byte budget goes first, so a viewer at their limit
+			// cannot take the video's shared object slots. The charge is refunded
+			// if the upload is refused or fails after this point.
+			const directBytes = size + (thumbnailKey ? (thumbnailSize ?? 0) : 0);
+			const chargedAt = new Date();
+			const charge = {
+				videoId: video.id,
+				userId: user.id,
+				bytes: directBytes,
+				now: chargedAt,
+			};
+			const refund =
+				directBytes > 0
+					? Effect.tryPromise(() => releaseCommentMediaBytes(charge)).pipe(
+							Effect.catchAll(Effect.logError),
+						)
+					: Effect.void;
+			if (directBytes > 0) {
+				const withinBudget = yield* Effect.tryPromise(() =>
+					reserveCommentMediaBytes(charge),
+				);
+				if (!withinBudget) {
+					c.status(413);
+					return c.json({ error: "Recording is too large" });
+				}
+			}
+
 			// The comment-row throttle above only counts finished comments; an
 			// initiate-and-PUT loop that never creates rows would bypass it. The
 			// object count under the comments prefix is the ground truth for bytes
 			// actually landed in the owner's (possibly BYO) bucket. Uploads that
 			// have not landed yet are counted through a reservation taken under a
 			// row lock, so concurrent initiates cannot all pass the same snapshot.
-			const existingObjects = yield* bucket.listObjects({
-				prefix: `${video.ownerId}/${video.id}/comments/`,
-				maxKeys: MAX_MEDIA_OBJECTS_PER_VIDEO,
-			});
-			const reserved = yield* Effect.tryPromise(() =>
-				reserveCommentMediaObjects({
-					videoId: video.id,
-					objects: thumbnailKey ? 2 : 1,
-					storedObjects: existingObjects.Contents?.length ?? 0,
-				}),
-			);
+			const reserved = yield* Effect.gen(function* () {
+				const existingObjects = yield* bucket.listObjects({
+					prefix: `${video.ownerId}/${video.id}/comments/`,
+					maxKeys: MAX_MEDIA_OBJECTS_PER_VIDEO,
+				});
+				return yield* Effect.tryPromise(() =>
+					reserveCommentMediaObjects({
+						videoId: video.id,
+						objects: thumbnailKey ? 2 : 1,
+						storedObjects: existingObjects.Contents?.length ?? 0,
+					}),
+				);
+			}).pipe(Effect.tapError(() => refund));
 			if (!reserved) {
+				yield* refund;
 				c.status(429);
 				return c.json({
 					error: "This video has reached its media comment limit",
@@ -155,10 +203,14 @@ app.post(
 			// Drive rejects presigned POST, so upload targets are always PUT-style;
 			// createUploadTarget returns the provider-appropriate target shape.
 			const thumbnailUpload = thumbnailKey
-				? yield* bucket.createUploadTarget(thumbnailKey, {
-						contentType: "image/jpeg",
-						method: "put",
-					})
+				? yield* bucket
+						.createUploadTarget(thumbnailKey, {
+							contentType: "image/jpeg",
+							method: "put",
+							contentLength: thumbnailSize,
+							enforceContentLength: true,
+						})
+						.pipe(Effect.tapError(() => refund))
 				: null;
 
 			const uploadToken = createCommentMediaUploadToken({
@@ -173,29 +225,15 @@ app.post(
 
 			// Deliberately no Db.videoUploads row: that table drives the parent
 			// video's "uploading" UI state and the stale-upload cron.
-			if (mode === "single") {
-				const upload = yield* bucket.createUploadTarget(key, {
+			const upload = yield* bucket
+				.createUploadTarget(key, {
 					contentType,
 					method: "put",
-				});
-				return c.json({ commentId, key, uploadToken, upload, thumbnailUpload });
-			}
-
-			const { UploadId } = yield* bucket.multipart.create(key, {
-				ContentType: contentType,
-				Metadata: { userId: user.id, source: "cap-comment-media" },
-				CacheControl: "max-age=31536000",
-			});
-			if (!UploadId) return yield* Effect.fail(new Error("No UploadId"));
-
-			return c.json({
-				commentId,
-				key,
-				uploadToken,
-				uploadId: UploadId,
-				provider: bucket.provider,
-				thumbnailUpload,
-			});
+					contentLength: size,
+					enforceContentLength: true,
+				})
+				.pipe(Effect.tapError(() => refund));
+			return c.json({ commentId, key, uploadToken, upload, thumbnailUpload });
 		}).pipe(
 			Effect.tapError(Effect.logError),
 			Effect.catchAll((e) => {
@@ -360,13 +398,30 @@ app.post(
 				return c.json({ error: "Recording is too large" });
 			}
 
+			const size = head.ContentLength ?? totalSize;
+			const withinBudget = yield* Effect.tryPromise(() =>
+				reserveCommentMediaBytes({
+					videoId: claims.videoId,
+					userId: claims.userId,
+					bytes: size,
+					objectKey: claims.key,
+				}),
+			);
+			if (!withinBudget) {
+				yield* bucket
+					.deleteObject(claims.key)
+					.pipe(Effect.catchAll(Effect.logError));
+				c.status(413);
+				return c.json({ error: "Recording is too large" });
+			}
+
 			// No videos-row update, no transcription queue, no videoUploads delete:
 			// comment media is a leaf object, not a Cap video.
 			return c.json({
 				success: true,
 				processingStarted: true,
 				key: claims.key,
-				size: head.ContentLength ?? totalSize,
+				size,
 				contentType: head.ContentType ?? claims.contentType,
 			});
 		}).pipe(

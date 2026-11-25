@@ -1,8 +1,7 @@
-import { InstantRecordingUploader } from "@cap/recorder-core";
 import type { Storage } from "@cap/web-domain";
 import { Comment, type ImageUpload, type Video } from "@cap/web-domain";
 import { newMediaComment } from "@/actions/videos/new-media-comment";
-import { uploadWithTarget } from "@/utils/upload-target";
+import { UploadRejectedError, uploadWithTarget } from "@/utils/upload-target";
 
 const COMMENT_MEDIA_BASE = "/api/upload/comment-media";
 
@@ -21,8 +20,6 @@ interface InitiateResponse {
 	key: string;
 	uploadToken: string;
 	upload?: Storage.UploadTarget;
-	uploadId?: string;
-	provider?: "s3" | "googleDrive";
 	thumbnailUpload?: Storage.UploadTarget | null;
 }
 
@@ -30,8 +27,10 @@ async function initiate(input: {
 	videoId: string;
 	kind: "video" | "audio";
 	contentType: string;
-	mode: "single" | "multipart";
+	mode: "single";
 	withThumbnail?: boolean;
+	size: number;
+	thumbnailSize?: number;
 }): Promise<InitiateResponse> {
 	const response = await fetch(`${COMMENT_MEDIA_BASE}/initiate`, {
 		method: "POST",
@@ -66,8 +65,8 @@ export interface CommentMediaUploadInput {
 
 /**
  * Full pipeline for a recorded comment: presign under the parent video's
- * prefix, upload (single PUT for voice notes, multipart for video), then
- * create the comment row. Returns the created comment (the shape
+ * prefix, upload with one PUT signed for the blob's size, then create the
+ * comment row. Returns the created comment (the shape
  * handleCommentSuccess expects).
  */
 export async function uploadCommentMedia(input: CommentMediaUploadInput) {
@@ -76,79 +75,30 @@ export async function uploadCommentMedia(input: CommentMediaUploadInput) {
 		videoId: input.videoId,
 		kind: input.kind,
 		contentType: input.mime,
-		mode: isVideo ? "multipart" : "single",
+		mode: "single",
 		withThumbnail: isVideo && Boolean(input.thumbnailBlob),
+		size: input.blob.size,
+		thumbnailSize: input.thumbnailBlob?.size,
 	});
 
-	if (isVideo) {
-		if (!init.uploadId) throw new CommentMediaUploadError("failed");
-		// Monotonic merge of two progress sources: sendProgressUpdate ticks only
-		// when a whole part lands (a typical comment is ONE part — that alone
-		// would jump 0→100), while chunk states carry the XHR's byte-level
-		// progress inside each part. Take whichever is further along.
-		let bestFraction = 0;
-		const totalBytes = input.blob.size;
-		const report = (fraction: number) => {
-			const clamped = Math.min(1, fraction);
-			if (clamped <= bestFraction) return;
-			bestFraction = clamped;
-			input.onProgress?.(clamped);
-		};
-		const uploader = new InstantRecordingUploader({
-			// Only used for labels and passthrough body fields the comment routes
-			// ignore; authorization travels in the token.
-			videoId: input.videoId,
-			uploadId: init.uploadId,
-			provider: init.provider ?? "s3",
-			mimeType: input.mime,
-			subpath: init.key,
-			setUploadStatus: () => {},
-			sendProgressUpdate: async (uploaded, total) => {
-				if (total > 0) report(uploaded / total);
-			},
-			onChunkStateChange: (chunks) => {
-				if (totalBytes <= 0) return;
-				const uploaded = chunks.reduce(
-					(sum, chunk) => sum + chunk.uploadedBytes,
-					0,
-				);
-				report(uploaded / totalBytes);
-			},
-			api: {
-				multipartBasePath: COMMENT_MEDIA_BASE,
-				extraBody: { uploadToken: init.uploadToken },
-			},
-		});
+	if (!init.upload) throw new CommentMediaUploadError("failed");
+	const upload = init.upload;
+	// The target is signed for this exact size, so a retry re-sends the whole
+	// blob. Only network failures are retried; a storage rejection is final.
+	for (let attempt = 1; ; attempt++) {
 		try {
-			await uploader.finalize({
-				durationSeconds: input.durationSeconds,
-				width: input.width,
-				height: input.height,
-				subpath: init.key,
-				finalBlob: input.blob,
+			await uploadWithTarget({
+				target: upload,
+				body: input.blob,
+				onProgress: ({ loaded, total }) => {
+					if (total > 0) input.onProgress?.(Math.min(1, loaded / total));
+				},
 			});
+			break;
 		} catch (error) {
-			// Incomplete multipart uploads accrue storage in the owner's bucket
-			// until aborted; best-effort, the failure itself still surfaces.
-			await fetch(`${COMMENT_MEDIA_BASE}/abort`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					uploadToken: init.uploadToken,
-					uploadId: init.uploadId,
-				}),
-			}).catch(() => {});
-			throw error;
+			if (error instanceof UploadRejectedError || attempt >= 3) throw error;
+			await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
 		}
-	} else {
-		if (!init.upload) throw new CommentMediaUploadError("failed");
-		await uploadWithTarget({
-			target: init.upload,
-			body: input.blob,
-			onProgress: ({ loaded, total }) => {
-				if (total > 0) input.onProgress?.(Math.min(1, loaded / total));
-			},
-		});
 	}
 
 	let hasThumbnail = false;
