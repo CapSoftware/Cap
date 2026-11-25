@@ -1808,6 +1808,14 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let (encoder, _rx) = libx264_encoder(temp.path(), true, true);
         let shared = background_shared(&encoder);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while {
+            let requests = lock(&shared.requests);
+            requests.busy || requests.pending
+        } && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         drop(encoder);
         assert_eq!(Arc::strong_count(&shared), 1);
     }
