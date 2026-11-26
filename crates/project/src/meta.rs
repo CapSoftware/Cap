@@ -12,8 +12,14 @@ use tracing::{debug, info, warn};
 
 use crate::{
     CaptionsData, CursorEvents, CursorImage, KeyboardEvents, ProjectConfiguration, XY,
-    cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+    cursor::{MIN_VISIBLE_CURSOR_SHAPE_MS, SHORT_CURSOR_SHAPE_DEBOUNCE_MS},
 };
+
+/// Recordings made from this version on keep every cursor shape shown for at
+/// least `MIN_VISIBLE_CURSOR_SHAPE_MS`. Recordings saved without the field keep
+/// the one-second debounce they were made and exported with. A segment copied
+/// in from another recording carries that recording's version with it.
+pub const CURSOR_SHAPE_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct VideoMeta {
@@ -295,7 +301,16 @@ impl RecordingMeta {
     }
 
     pub fn project_config(&self) -> ProjectConfiguration {
-        let mut config = ProjectConfiguration::load(&self.project_path).unwrap_or_default();
+        // Imports have no config until their first edit, so a missing file is
+        // a new project. One that exists but fails to parse keeps reading as
+        // the plain default.
+        let mut config = match ProjectConfiguration::load(&self.project_path) {
+            Ok(config) => config,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                ProjectConfiguration::for_new_project()
+            }
+            Err(_) => ProjectConfiguration::default(),
+        };
 
         let captions_path = self.project_path.join("captions.json");
         debug!("Checking for captions at: {:?}", captions_path);
@@ -498,6 +513,13 @@ pub enum StudioRecordingMeta {
 }
 
 impl StudioRecordingMeta {
+    pub fn is_audio_only(&self) -> bool {
+        match self {
+            StudioRecordingMeta::SingleSegment { .. } => false,
+            StudioRecordingMeta::MultipleSegments { inner } => inner.audio_only,
+        }
+    }
+
     /// Notch captured with this recording. Every segment shares one display, so
     /// the first segment speaks for all of them. `None` for recordings made
     /// before Cap started capturing this, and for every non-macOS recording.
@@ -613,6 +635,44 @@ impl StudioRecordingMeta {
         }
     }
 
+    pub fn cursor_shape_version(&self) -> u32 {
+        match self {
+            StudioRecordingMeta::MultipleSegments { inner } => inner.cursor_shape_version,
+            StudioRecordingMeta::SingleSegment { .. } => 0,
+        }
+    }
+
+    pub fn segment_cursor_shape_version(&self, segment: &MultipleSegment) -> u32 {
+        match self {
+            StudioRecordingMeta::MultipleSegments { inner } => segment
+                .cursor_shape_version
+                .unwrap_or(inner.cursor_shape_version),
+            StudioRecordingMeta::SingleSegment { .. } => 0,
+        }
+    }
+
+    pub fn stabilize_cursor_shapes(
+        &self,
+        segment: Option<&MultipleSegment>,
+        events: &mut CursorEvents,
+    ) {
+        let version = segment.map_or_else(
+            || self.cursor_shape_version(),
+            |segment| self.segment_cursor_shape_version(segment),
+        );
+        let current = version >= CURSOR_SHAPE_VERSION;
+        let pointer_ids = match self {
+            StudioRecordingMeta::MultipleSegments { inner } => inner.arrow_cursor_ids(current),
+            StudioRecordingMeta::SingleSegment { .. } => HashSet::new(),
+        };
+        let pointer_ids = (!pointer_ids.is_empty()).then_some(&pointer_ids);
+        if current {
+            events.hold_brief_cursor_shapes(pointer_ids, MIN_VISIBLE_CURSOR_SHAPE_MS);
+        } else {
+            events.stabilize_short_lived_cursor_shapes(pointer_ids, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
+        }
+    }
+
     pub fn min_fps(&self) -> u32 {
         match self {
             Self::SingleSegment { segment } => segment.display.fps,
@@ -653,6 +713,17 @@ pub struct MultipleSegments {
     pub cursors: Cursors,
     #[serde(default)]
     pub status: Option<StudioRecordingStatus>,
+    #[serde(default, skip_serializing_if = "is_legacy_cursor_shape_version")]
+    pub cursor_shape_version: u32,
+    /// Recorded from the microphone and system audio alone. Each segment's
+    /// display track is a small black placeholder that keeps the timeline,
+    /// recovery and the editor on their usual paths; it is never shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub audio_only: bool,
+}
+
+fn is_legacy_cursor_shape_version(version: &u32) -> bool {
+    *version == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -702,16 +773,20 @@ impl MultipleSegments {
     }
 
     pub fn pointer_cursor_ids(&self) -> HashSet<String> {
+        self.arrow_cursor_ids(false)
+    }
+
+    fn arrow_cursor_ids(&self, include_tahoe: bool) -> HashSet<String> {
+        use cap_cursor_info::{CursorShape, CursorShapeMacOS, CursorShapeWindows};
         match &self.cursors {
             Cursors::Correct(map) => map
                 .iter()
                 .filter_map(|(id, cursor)| match cursor.shape.as_ref() {
-                    Some(cap_cursor_info::CursorShape::MacOS(
-                        cap_cursor_info::CursorShapeMacOS::Arrow,
-                    ))
-                    | Some(cap_cursor_info::CursorShape::Windows(
-                        cap_cursor_info::CursorShapeWindows::Arrow,
-                    )) => Some(id.clone()),
+                    Some(CursorShape::MacOS(CursorShapeMacOS::Arrow))
+                    | Some(CursorShape::Windows(CursorShapeWindows::Arrow)) => Some(id.clone()),
+                    Some(CursorShape::MacOS(CursorShapeMacOS::TahoeArrow)) if include_tahoe => {
+                        Some(id.clone())
+                    }
                     _ => None,
                 })
                 .collect(),
@@ -733,6 +808,25 @@ impl MultipleSegments {
     }
 }
 
+/// An audio track that starts more than this many seconds after the segment's
+/// screen and camera is late: it no longer sets the segment's start, and its
+/// clip offset turns negative so it plays from where it was recorded with
+/// silence before it. A microphone that delivers nothing after a resume, or
+/// only comes back part way through a segment, records its start that late
+/// (at the stop time when it never delivered). Aligning to it skipped the
+/// screen and camera forward and held their last frame.
+///
+/// Tracks of a normal recording start within a few hundred milliseconds of
+/// each other: the largest audio lag across 152 audio tracks of real Studio
+/// recordings was 0.155 s (a legacy first-packet system audio start), so
+/// those keep their exact alignment. It matches the recorder's own outage
+/// threshold: a microphone silent for a second is treated as stalled.
+pub const LATE_AUDIO_START_SECS: f64 = 1.0;
+
+fn is_late_audio_start(audio_start: f64, video_start: f64) -> bool {
+    audio_start - video_start > LATE_AUDIO_START_SECS
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct MultipleSegment {
     pub display: VideoMeta,
@@ -750,6 +844,8 @@ pub struct MultipleSegment {
     pub keyboard: Option<RelativePathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_notch: Option<DisplayNotch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_shape_version: Option<u32>,
 }
 
 impl MultipleSegment {
@@ -778,14 +874,11 @@ impl MultipleSegment {
             }
         };
 
-        let pointer_ids = if let RecordingMetaInner::Studio(studio_meta) = &meta.inner {
-            studio_meta.pointer_cursor_ids()
+        if let RecordingMetaInner::Studio(studio_meta) = &meta.inner {
+            studio_meta.stabilize_cursor_shapes(Some(self), &mut data);
         } else {
-            HashSet::new()
-        };
-
-        let pointer_ids_ref = (!pointer_ids.is_empty()).then_some(&pointer_ids);
-        data.stabilize_short_lived_cursor_shapes(pointer_ids_ref, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
+            data.stabilize_short_lived_cursor_shapes(None, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
+        }
 
         data
     }
@@ -819,22 +912,57 @@ impl MultipleSegment {
         }
     }
 
+    /// The segment time every track is aligned to: segment time zero is this
+    /// many seconds after the recording epoch. It is the latest track start,
+    /// except that a late audio track (see [`LATE_AUDIO_START_SECS`]) is left
+    /// out, so it cannot skip the screen and camera forward to its start.
     pub fn latest_start_time(&self) -> Option<f64> {
-        let mut value = self.display.start_time?;
+        let video_start = self.video_start_time()?;
+        let mut value = video_start;
 
-        if let Some(camera) = &self.camera {
-            value = value.max(camera.start_time?);
-        }
-
-        if let Some(mic) = &self.mic {
-            value = value.max(mic.start_time?);
-        }
-
-        if let Some(system_audio) = self.usable_system_audio() {
-            value = value.max(system_audio.start_time?);
+        for audio in self.aligned_audio() {
+            let start = audio.start_time?;
+            if !is_late_audio_start(start, video_start) {
+                value = value.max(start);
+            }
         }
 
         Some(value)
+    }
+
+    /// Whether an audio track started so long after the video that it no
+    /// longer sets the segment's start (see [`LATE_AUDIO_START_SECS`]).
+    pub fn has_late_audio(&self) -> bool {
+        let Some(video_start) = self.video_start_time() else {
+            return false;
+        };
+        self.aligned_audio()
+            .filter_map(|audio| audio.start_time)
+            .any(|start| is_late_audio_start(start, video_start))
+    }
+
+    /// The segment start before late audio was left out: the latest start of
+    /// every track. Projects saved then are timed against it.
+    pub(crate) fn legacy_latest_start_time(&self) -> Option<f64> {
+        let mut value = self.video_start_time()?;
+        for audio in self.aligned_audio() {
+            value = value.max(audio.start_time?);
+        }
+        Some(value)
+    }
+
+    fn video_start_time(&self) -> Option<f64> {
+        let display_start = self.display.start_time?;
+        match &self.camera {
+            Some(camera) => Some(display_start.max(camera.start_time?)),
+            None => Some(display_start),
+        }
+    }
+
+    fn aligned_audio(&self) -> impl Iterator<Item = &AudioMeta> {
+        [self.mic.as_ref(), self.usable_system_audio()]
+            .into_iter()
+            .flatten()
     }
 
     pub fn calculate_audio_offsets(&self) -> crate::ClipOffsets {
@@ -908,6 +1036,32 @@ mod metadata_save_tests {
     }
 
     #[test]
+    fn only_a_project_without_a_config_starts_as_a_new_project() {
+        let directory = tempfile::tempdir().unwrap();
+        let meta = recording(directory.path());
+        assert_eq!(
+            meta.project_config().background.padding_mode,
+            crate::PaddingMode::Even
+        );
+
+        let mut saved = ProjectConfiguration::default();
+        saved.background.padding = 10.0;
+        saved.write(directory.path()).unwrap();
+        let loaded = meta.project_config();
+        assert_eq!(
+            loaded.background.padding_mode,
+            crate::PaddingMode::Proportional
+        );
+        assert_eq!(loaded.background.padding, 10.0);
+
+        std::fs::write(directory.path().join("project-config.json"), b"{not json").unwrap();
+        assert_eq!(
+            meta.project_config().background.padding_mode,
+            crate::PaddingMode::Proportional
+        );
+    }
+
+    #[test]
     fn caption_loading_preserves_missing_empty_and_populated_timelines() {
         let captions = CaptionsData {
             source_timed: true,
@@ -921,6 +1075,7 @@ mod metadata_save_tests {
                     start: 1.25,
                     end: 2.0,
                 }],
+                recording_clip: None,
             }],
             ..Default::default()
         };
@@ -993,6 +1148,7 @@ mod metadata_save_tests {
                 end: 2.0,
                 text: text.into(),
                 words: Vec::new(),
+                recording_clip: None,
             }],
             ..Default::default()
         };
@@ -1392,6 +1548,7 @@ mod test {
                 cursor: None,
                 keyboard: None,
                 display_notch: None,
+                cursor_shape_version: None,
             }
         }
 
@@ -1456,6 +1613,78 @@ mod test {
 
             segment.display.start_time = None;
             assert!(segment.usable_system_audio().is_some());
+        }
+
+        // A microphone that delivered nothing in a segment records the stop
+        // time as its start. The screen must still start at its own start
+        // and the microphone play from where it was recorded.
+        #[test]
+        fn mic_that_never_started_does_not_move_the_video() {
+            let mut segment = segment(-0.053, Some(19.947), None);
+            segment.camera = Some(video(Some(-0.053)));
+            assert!(segment.has_late_audio());
+            assert_eq!(segment.latest_start_time(), Some(-0.053));
+            let offsets = segment.calculate_audio_offsets();
+            assert_eq!(offsets.camera, 0.0);
+            assert!((offsets.mic - -20.0).abs() < 1e-4);
+        }
+
+        // A microphone that came back part way through a segment plays at
+        // the time it came back, with calibration still applied.
+        #[test]
+        fn mic_recovered_mid_segment_keeps_its_recorded_time() {
+            let segment = segment(0.045, Some(5.045), Some(0.0));
+            assert!(segment.has_late_audio());
+            assert_eq!(segment.latest_start_time(), Some(0.045));
+            let offsets = segment.calculate_audio_offsets_with_calibration(Some(0.05));
+            assert!((offsets.mic - -4.95).abs() < 1e-4);
+            assert!((offsets.system_audio - 0.095).abs() < 1e-4);
+        }
+
+        // Late system audio is excluded the same way, while an on-time mic
+        // still sets the start.
+        #[test]
+        fn late_system_audio_is_excluded_but_on_time_mic_still_aligns() {
+            let segment = segment(1.0, Some(1.04), Some(8.0));
+            assert!(segment.has_late_audio());
+            assert_eq!(segment.latest_start_time(), Some(1.04));
+            let offsets = segment.calculate_audio_offsets();
+            assert_eq!(offsets.mic, 0.0);
+            assert!((offsets.system_audio - -6.96).abs() < 1e-4);
+        }
+
+        // Normal recordings start every track within a fraction of a second,
+        // up to and including the threshold: their alignment is unchanged.
+        #[test]
+        fn audio_within_threshold_keeps_historical_alignment() {
+            for lag in [0.0, 0.03, 0.155, 0.5, crate::LATE_AUDIO_START_SECS] {
+                let segment = segment(2.0, Some(2.0 + lag), None);
+                assert!(!segment.has_late_audio(), "lag {lag}");
+                assert_eq!(segment.latest_start_time(), Some(2.0 + lag));
+                assert_eq!(segment.calculate_audio_offsets().mic, 0.0);
+            }
+            let late = segment(2.0, Some(2.0 + crate::LATE_AUDIO_START_SECS + 0.01), None);
+            assert!(late.has_late_audio());
+            assert_eq!(late.latest_start_time(), Some(2.0));
+        }
+
+        // A late camera is video: it still sets the start, and audio is late
+        // only relative to the later of screen and camera.
+        #[test]
+        fn late_audio_is_measured_from_the_later_video_track() {
+            let mut segment = segment(0.0, Some(3.5), None);
+            segment.camera = Some(video(Some(3.0)));
+            assert!(!segment.has_late_audio());
+            assert_eq!(segment.latest_start_time(), Some(3.5));
+
+            segment.camera = Some(video(None));
+            assert!(!segment.has_late_audio());
+            assert_eq!(segment.latest_start_time(), None);
+
+            segment.camera = None;
+            segment.mic.as_mut().unwrap().start_time = None;
+            assert!(!segment.has_late_audio());
+            assert_eq!(segment.latest_start_time(), None);
         }
     }
 }
@@ -1552,6 +1781,8 @@ mod ordinary_media_access_tests {
                 segments: Vec::new(),
                 cursors: Cursors::default(),
                 status,
+                cursor_shape_version: 0,
+                audio_only: false,
             },
         }
     }
@@ -1789,5 +2020,115 @@ mod nul_path_tests {
         let mut path = RelativePathBuf::from("content/segments/segment-0/disp\0lay.mp4");
         normalize_relative_path(&mut path);
         assert_eq!(path.as_str(), "content/segments/segment-0/display.mp4");
+    }
+}
+
+#[cfg(test)]
+mod cursor_shape_version_tests {
+    use super::*;
+
+    const HOVER: &str = r#"{"moves":[
+        {"active_modifiers":[],"cursor_id":"0","time_ms":0.0,"x":0.1,"y":0.1},
+        {"active_modifiers":[],"cursor_id":"2","time_ms":1000.0,"x":0.2,"y":0.2},
+        {"active_modifiers":[],"cursor_id":"2","time_ms":1300.0,"x":0.21,"y":0.2},
+        {"active_modifiers":[],"cursor_id":"0","time_ms":1600.0,"x":0.3,"y":0.3},
+        {"active_modifiers":[],"cursor_id":"0","time_ms":3000.0,"x":0.4,"y":0.4}
+    ],"clicks":[]}"#;
+
+    fn project(version: Option<u32>) -> (tempfile::TempDir, RecordingMeta) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("content/segments/segment-0")).unwrap();
+        std::fs::write(
+            dir.path().join("content/segments/segment-0/cursor.json"),
+            HOVER,
+        )
+        .unwrap();
+        let version = version
+            .map(|version| format!(r#","cursorShapeVersion":{version}"#))
+            .unwrap_or_default();
+        let meta = format!(
+            r#"{{"platform":"MacOS","pretty_name":"Hover","sharing":null,
+            "segments":[{{"display":{{"path":"content/segments/segment-0/display.mp4","fps":60}},
+            "cursor":"content/segments/segment-0/cursor.json"}}],
+            "cursors":{{
+              "0":{{"imagePath":"content/cursors/cursor_0.png","hotspot":{{"x":0.2,"y":0.1}},"shape":"MacOS|TahoeArrow"}},
+              "2":{{"imagePath":"content/cursors/cursor_2.png","hotspot":{{"x":0.4,"y":0.3}},"shape":"MacOS|TahoePointingHand"}}
+            }},
+            "status":{{"status":"Complete"}}{version}}}"#
+        );
+        std::fs::write(dir.path().join("recording-meta.json"), meta).unwrap();
+        let meta = RecordingMeta::load_for_project(dir.path()).unwrap();
+        (dir, meta)
+    }
+
+    fn loaded_shapes(meta: &RecordingMeta) -> Vec<String> {
+        let Some(StudioRecordingMeta::MultipleSegments { inner }) = meta.studio_meta() else {
+            panic!("expected a multi-segment recording");
+        };
+        inner.segments[0]
+            .cursor_events(meta)
+            .moves
+            .into_iter()
+            .map(|event| event.cursor_id)
+            .collect()
+    }
+
+    #[test]
+    fn saved_recordings_keep_the_one_second_debounce() {
+        let (_dir, meta) = project(None);
+        assert_eq!(meta.studio_meta().unwrap().cursor_shape_version(), 0);
+        assert_eq!(loaded_shapes(&meta), ["0", "0", "0", "0", "0"]);
+
+        let mut legacy = CursorEvents::load_from_reader(HOVER.as_bytes()).unwrap();
+        legacy.stabilize_short_lived_cursor_shapes(
+            Some(&HashSet::from(["0".to_string()])),
+            SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+        );
+        let legacy = legacy
+            .moves
+            .into_iter()
+            .map(|event| event.cursor_id)
+            .collect::<Vec<_>>();
+        assert_eq!(loaded_shapes(&meta), legacy);
+    }
+
+    #[test]
+    fn new_recordings_keep_a_hover_shorter_than_a_second() {
+        let (_dir, meta) = project(Some(CURSOR_SHAPE_VERSION));
+        assert_eq!(loaded_shapes(&meta), ["0", "2", "2", "0", "0"]);
+    }
+
+    #[test]
+    fn a_segment_copied_from_another_recording_keeps_its_own_rule() {
+        let (_dir, mut meta) = project(None);
+        let RecordingMetaInner::Studio(studio) = &mut meta.inner else {
+            panic!("expected a studio recording");
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+            panic!("expected a multi-segment recording");
+        };
+        inner.segments[0].cursor_shape_version = Some(CURSOR_SHAPE_VERSION);
+        assert_eq!(loaded_shapes(&meta), ["0", "2", "2", "0", "0"]);
+
+        let (_dir, mut meta) = project(Some(CURSOR_SHAPE_VERSION));
+        let RecordingMetaInner::Studio(studio) = &mut meta.inner else {
+            panic!("expected a studio recording");
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+            panic!("expected a multi-segment recording");
+        };
+        inner.segments[0].cursor_shape_version = Some(0);
+        assert_eq!(loaded_shapes(&meta), ["0", "0", "0", "0", "0"]);
+    }
+
+    #[test]
+    fn the_version_is_written_only_for_new_recordings() {
+        let (_dir, legacy) = project(None);
+        let legacy = serde_json::to_string(&legacy).unwrap();
+        assert!(!legacy.contains("cursorShapeVersion"));
+
+        let (_dir, current) = project(Some(CURSOR_SHAPE_VERSION));
+        let current = serde_json::to_value(&current).unwrap();
+        assert_eq!(current["cursorShapeVersion"], CURSOR_SHAPE_VERSION);
     }
 }

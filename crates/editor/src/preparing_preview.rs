@@ -643,8 +643,12 @@ async fn run_preview(
             if !is_current(&requests, request) {
                 continue 'requests;
             }
-            let cursor_timeline =
-                cursor_cache.get(timeline_segment.recording_clip, &cursor, &project);
+            let cursor_timeline = cursor_cache.get(
+                timeline_segment.recording_clip,
+                &cursor,
+                &cap_rendering::HoverChanges::default(),
+                &project,
+            );
             control.check()?;
             let zoom = cached_zoom(
                 &mut zoom_cache,

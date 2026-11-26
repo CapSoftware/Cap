@@ -28,6 +28,7 @@ interface BreadcrumbItemProps {
 	color: "normal" | "blue" | "red" | "yellow";
 	spaceId?: Space.SpaceIdOrOrganisationId | null;
 	isLast: boolean;
+	compact?: boolean;
 }
 
 export function BreadcrumbItem({
@@ -36,6 +37,7 @@ export function BreadcrumbItem({
 	color,
 	isLast,
 	spaceId,
+	compact = false,
 }: BreadcrumbItemProps) {
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [isMoving, setIsMoving] = useState(false);
@@ -124,14 +126,18 @@ export function BreadcrumbItem({
 	if (isLast) {
 		return (
 			<div
-				className="flex gap-1.5 px-2 items-center"
+				className={clsx(
+					"flex gap-1.5 items-center px-1 min-w-0 rounded-md",
+					isDragOver && "bg-gray-4",
+				)}
+				title={name}
 				onDragOver={handleDragOver}
 				onDragLeave={handleDragLeave}
 				onDrop={handleDrop}
 			>
-				<AllFolders color={color} className="size-5" />
+				<AllFolders color={color} className="size-4 shrink-0" />
 				<p
-					className={clsx(`text-xl whitespace-nowrap text-gray-12`, {
+					className={clsx("tracking-tight leading-6 truncate text-gray-12", {
 						"opacity-70": isMoving,
 					})}
 				>
@@ -146,10 +152,15 @@ export function BreadcrumbItem({
 			onDragOver={handleDragOver}
 			onDragLeave={handleDragLeave}
 			onDrop={handleDrop}
-			className={clsx(`relative px-2`, {
-				"rounded-lg bg-gray-5": isDragOver,
-				"opacity-70": isMoving,
-			})}
+			title={name}
+			className={clsx(
+				"relative min-w-0 rounded-md",
+				compact ? "px-0.5" : "px-1",
+				{
+					"bg-gray-4": isDragOver,
+					"opacity-70": isMoving,
+				},
+			)}
 		>
 			<Link
 				href={
@@ -157,13 +168,15 @@ export function BreadcrumbItem({
 						? `/dashboard/spaces/${linkSpaceId}/folder/${id}`
 						: `/dashboard/folder/${id}`
 				}
-				className="flex gap-1.5 items-center transition-colors duration-200 z-10 relative"
+				className="flex relative z-10 gap-1.5 items-center min-w-0 transition-colors duration-200"
 			>
-				<AllFolders color={color} className="size-5" />
 				<p
 					className={clsx(
-						"text-lg whitespace-nowrap transition-colors duration-200 hover:text-gray-11",
-						isDragOver ? "text-gray-12" : "text-gray-9",
+						"transition-colors duration-200 hover:text-gray-12",
+						compact
+							? "leading-4 [overflow-wrap:anywhere]"
+							: "tracking-tight leading-6 truncate",
+						isDragOver ? "text-gray-12" : "text-gray-10",
 					)}
 				>
 					{name}

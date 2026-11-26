@@ -1,18 +1,17 @@
 "use server";
 
 import { db } from "@cap/database";
+import { revokeAllCredentials } from "@cap/database/auth/revoke-credentials";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import {
 	agentApiKeys,
-	authApiKeys,
 	organizationMembers,
 	organizations,
-	sessions,
 	users,
 } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
-import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
 	agentScopeProfiles,
@@ -21,6 +20,10 @@ import {
 	isAgentScopeProfile,
 } from "@/lib/agent-auth";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import {
+	shouldRefuseTorExit,
+	TOR_EXIT_REFUSAL_MESSAGE,
+} from "@/lib/tor-exit-gate";
 
 export type CliApiKeySummary = {
 	id: string;
@@ -140,6 +143,10 @@ export async function createCliApiKey(input: {
 		throw new Error("Unknown expiry");
 	}
 
+	if (await shouldRefuseTorExit("agent-key")) {
+		throw new Error(TOR_EXIT_REFUSAL_MESSAGE);
+	}
+
 	// Same bucket as the CLI OAuth authorize page: both mint agent credentials.
 	if (
 		await isRateLimited(RATE_LIMIT_IDS.AGENT_AUTHORIZATION, {
@@ -203,21 +210,5 @@ export async function signOutAllDevices() {
 	const currentUser = await getCurrentUser();
 	if (!currentUser) throw new Error("Unauthorized");
 
-	await db().transaction(async (tx) => {
-		await tx
-			.update(users)
-			.set({ authSessionVersion: sql`${users.authSessionVersion} + 1` })
-			.where(eq(users.id, currentUser.id));
-		await tx.delete(sessions).where(eq(sessions.userId, currentUser.id));
-		await tx.delete(authApiKeys).where(eq(authApiKeys.userId, currentUser.id));
-		await tx
-			.update(agentApiKeys)
-			.set({ revokedAt: new Date() })
-			.where(
-				and(
-					eq(agentApiKeys.userId, currentUser.id),
-					isNull(agentApiKeys.revokedAt),
-				),
-			);
-	});
+	await db().transaction((tx) => revokeAllCredentials(tx, currentUser.id));
 }

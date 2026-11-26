@@ -23,6 +23,7 @@ impl MovExportSettings {
         base: ExporterBase,
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
+        let _export_activity = cap_rendering::ExportActivity::begin();
         use cap_utils::operation_diagnostics::{Field, observe};
         observe(
             "export_mov",
@@ -152,6 +153,7 @@ impl MovExportSettings {
                 .iter()
                 .map(|s| RenderSegment {
                     cursor: s.cursor.clone(),
+                    hover_changes: s.hover_changes.clone(),
                     keyboard: s.keyboard.clone(),
                     decoders: s.decoders.clone(),
                     render_display: !self.cursor_only,

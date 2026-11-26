@@ -8,8 +8,7 @@
 //! {name}.cap/` holding `original.png`, a Studio `SingleSegment` meta whose
 //! display track is the PNG at `fps: 0`, and a project config whose
 //! background is transparent white with no shadow (`recording.rs:2963-2985`).
-//! Known deviations from that command: no native notification and no `ScreenshotTaken`
-//! automations (no automation runner here).
+//! Known deviation from that command: no native notification.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -21,10 +20,13 @@ use gpui::App;
 use crate::app_windows;
 
 pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
-    if matches!(target, ScreenCaptureTarget::CameraOnly) {
+    if matches!(
+        target,
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+    ) {
         // `capture_screenshot` rejects it too; failing here keeps the pickers
         // up instead of tearing them down for nothing.
-        tracing::error!("camera-only is not a screenshot target");
+        tracing::error!(kind = target.kind_str(), "not a screenshot target");
         return;
     }
     tracing::info!(kind = target.kind_str(), "taking a screenshot");
@@ -89,6 +91,7 @@ fn capture(target: ScreenCaptureTarget, cx: &mut App) {
 
 fn capture_without_overlays(target: ScreenCaptureTarget, cx: &mut App) {
     let settle = app_windows::prepare_for_screenshot_capture(cx);
+    let automation_target = crate::automation::screenshot_target(&target);
 
     let task = gpui_tokio::Tokio::spawn_result(cx, async move {
         if settle {
@@ -111,7 +114,16 @@ fn capture_without_overlays(target: ScreenCaptureTarget, cx: &mut App) {
                 None
             }
         };
-        cx.update(|cx| app_windows::screenshot_finished(captured, cx));
+        let (editor_choice, rule_deletes) = match (&captured, automation_target) {
+            (Some(png), Some(target)) => {
+                let choice = crate::automation::screenshot_editor_choice(Some(&target), png);
+                let deletes = crate::automation::screenshot_rule_deletes(Some(&target), png);
+                crate::automation::screenshot_taken(png.clone(), target);
+                (choice, deletes)
+            }
+            _ => (None, false),
+        };
+        cx.update(|cx| app_windows::screenshot_finished(captured, editor_choice, rule_deletes, cx));
     })
     .detach();
 }

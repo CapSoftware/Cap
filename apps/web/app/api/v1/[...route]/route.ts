@@ -1,5 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
+import { revokeAllCredentials } from "@cap/database/auth/revoke-credentials";
 import {
 	decrypt,
 	encrypt,
@@ -185,8 +186,11 @@ import {
 import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
-import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
-import { organizationSettingsKeepingLinkOverride } from "@/lib/organization-settings-write";
+import {
+	InviteeRequiresAcceptanceError,
+	provisionOrganizationInvitee,
+} from "@/lib/organization-provisioning";
+import { organizationSettingsKeepingRowOwnedKeys } from "@/lib/organization-settings-write";
 import {
 	canChangeOrganizationMemberRole,
 	canRemoveOrganizationMember,
@@ -204,6 +208,10 @@ import {
 	isDisallowedS3Endpoint,
 	publicOnlyS3Agents,
 } from "@/lib/s3-endpoint-policy";
+import {
+	shouldRefuseTorExit,
+	TOR_EXIT_REFUSAL_MESSAGE,
+} from "@/lib/tor-exit-gate";
 import { transcribeVideo } from "@/lib/transcribe";
 import { currentVideoDownloadAccess } from "@/lib/video-download-access";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
@@ -2568,11 +2576,16 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 									invitedByUserId: principal.id,
 									role: "member",
 								}),
-							catch: () =>
-								temporarilyUnavailable(
-									input.requestId,
-									"The Loom import owner could not be provisioned",
-								),
+							catch: (error) =>
+								error instanceof InviteeRequiresAcceptanceError
+									? forbidden(
+											input.requestId,
+											"The Loom import owner must accept an invite to this organization first",
+										)
+									: temporarilyUnavailable(
+											input.requestId,
+											"The Loom import owner could not be provisioned",
+										),
 						});
 						ownerId = provisioned.userId;
 					}
@@ -3961,6 +3974,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const headers = yield* requestHeaders;
 						const result = yield* runAgentMutation({
 							admit: Effect.gen(function* () {
+								if (
+									yield* Effect.promise(() =>
+										shouldRefuseTorExit("developer-app", headers),
+									)
+								) {
+									return yield* forbidden(requestId, TOR_EXIT_REFUSAL_MESSAGE);
+								}
 								if (
 									yield* Effect.promise(() =>
 										developerAppCreationLimited(principal.id, headers),
@@ -5452,7 +5472,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								await tx
 									.update(Db.organizations)
 									.set({
-										settings: organizationSettingsKeepingLinkOverride(next),
+										settings: organizationSettingsKeepingRowOwnedKeys(next),
 										updatedAt: now,
 									})
 									.where(eq(Db.organizations.id, path.organizationId));
@@ -6216,27 +6236,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (!account) return { state: "not_found" };
-								await tx
-									.update(Db.users)
-									.set({
-										authSessionVersion: sql`${Db.users.authSessionVersion} + 1`,
-									})
-									.where(eq(Db.users.id, principal.id));
-								await tx
-									.delete(Db.sessions)
-									.where(eq(Db.sessions.userId, principal.id));
-								await tx
-									.delete(Db.authApiKeys)
-									.where(eq(Db.authApiKeys.userId, principal.id));
-								await tx
-									.update(Db.agentApiKeys)
-									.set({ revokedAt: new Date() })
-									.where(
-										and(
-											eq(Db.agentApiKeys.userId, principal.id),
-											isNull(Db.agentApiKeys.revokedAt),
-										),
-									);
+								await revokeAllCredentials(tx, principal.id);
 								return {
 									state: "success",
 									response: mutationResponse(
@@ -7381,6 +7381,9 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							{
 								contentType: "video/mp4",
 								method: "put",
+								// Agent keys are also used from scripts that may not send
+								// the returned headers on the PUT.
+								unsignedContentType: true,
 								fields: {
 									"Content-Type": "video/mp4",
 									"x-amz-meta-userid": principal.id,

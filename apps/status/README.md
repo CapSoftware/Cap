@@ -15,14 +15,15 @@ No production deployment, DNS changes, external monitors, or storage resources a
 
 ## Service coverage
 
-All endpoints must be direct HTTPS URLs returning 2xx; redirects are intentionally rejected so a sign-in redirect or protection page cannot count as a healthy service. Use dedicated, public, read-only canaries; never use a customer’s private recording or a signed URL that expires.
+All endpoints must be direct HTTPS URLs returning 2xx; redirects are intentionally rejected so a sign-in redirect or protection page cannot count as a healthy service. Use dedicated, public, read-only canaries; never use a customer’s private recording or a signed URL that expires. When `STATUS_STORAGE_KEY_PAIR_ID` and `STATUS_STORAGE_PRIVATE_KEY` are set, the storage probe signs `STATUS_STORAGE_URL` as a CloudFront URL valid for 15 minutes on every check; without them it requests the URL as configured.
 
 | Environment variable | Probe | Coverage |
 | --- | --- | --- |
 | `STATUS_WEBSITE_URL` | HEAD; defaults to `https://cap.so` | Public website reachability |
 | `STATUS_API_URL` | GET; defaults to `https://cap.so/api/auth/providers` | Authentication API reachability and a real provider payload; does not simulate sign-in or prove database health |
 | `STATUS_SHARING_URL` | HEAD; required | A permanent public test recording’s share page returning 200 |
-| `STATUS_STORAGE_URL` | HEAD; required | A small, permanent canary object on the production storage/CDN path; does not test uploads |
+| `STATUS_STORAGE_URL` | HEAD; required | A small, permanent canary object on the production storage/CDN path, given without a signature; does not test uploads |
+| `STATUS_STORAGE_KEY_PAIR_ID`, `STATUS_STORAGE_PRIVATE_KEY` | Optional | CloudFront key pair ID and PEM private key used to sign the storage probe |
 | `STATUS_MEDIA_URL` | GET; required | Media server `/health`, including `status === "ok"` rather than HTTP status alone |
 | `STATUS_RENDER_URL` | GET; required | Render coordinator `/health`, requiring `ok`, active workers, and render slots |
 

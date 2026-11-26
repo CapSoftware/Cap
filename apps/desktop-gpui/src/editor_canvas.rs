@@ -577,6 +577,9 @@ pub struct CanvasResize {
     pub camera_y: CameraYPosition,
     pub max_width: f64,
     pub padding_scale: f64,
+    /// Set when the display pads evenly, which the proportional
+    /// `max_width` / `padding_scale` model cannot express.
+    pub even: Option<EvenResize>,
 }
 
 pub struct CanvasDrag {
@@ -800,7 +803,7 @@ impl EditorWindow {
             | CanvasSelection::Text(_)
             | CanvasSelection::Image(_)
             | CanvasSelection::Captions => true,
-            | CanvasSelection::Shape(_) => true,
+            CanvasSelection::Shape(_) => true,
         };
         if !draggable {
             cx.notify();
@@ -868,6 +871,25 @@ impl EditorWindow {
             .into_owned();
         let (max_width, padding_scale) =
             display_resize_scales(rect, &layout, effective.aspect_ratio.is_some());
+        // A style segment's padding is laid out inside the base project's
+        // canvas, which keeps its size while the segment's padding changes.
+        let fixed_canvas = self
+            .canvas_style_target(crate::editor_sidebar::StyleGroup::Background)
+            .is_some();
+        let even =
+            (effective.background.padding_mode == cap_project::PaddingMode::Even).then(|| {
+                EvenResize::new(
+                    rect,
+                    &layout,
+                    effective.aspect_ratio.is_some(),
+                    fixed_canvas,
+                    cap_rendering::frame_chrome::chrome_insets(
+                        cap_project::FrameConfiguration::active_style(
+                            effective.background.frame.as_ref(),
+                        ),
+                    ),
+                )
+            });
         self.shape_drag_up(window, cx);
         self.history.pause();
         self.canvas_drag = Some(CanvasDrag {
@@ -886,6 +908,7 @@ impl EditorWindow {
                 camera_y: effective.camera.position.y.clone(),
                 max_width,
                 padding_scale,
+                even,
             }),
         });
         cx.notify();
@@ -942,6 +965,7 @@ impl EditorWindow {
                 resize.camera_y.clone(),
                 resize.max_width,
                 resize.padding_scale,
+                resize.even,
             )
         });
         let size = (
@@ -958,6 +982,7 @@ impl EditorWindow {
             camera_y,
             max_width,
             padding_scale,
+            even,
         )) = resize
         {
             match element {
@@ -972,6 +997,7 @@ impl EditorWindow {
                         DisplayResize {
                             max_width,
                             padding_scale,
+                            even,
                         },
                     );
                     self.snap_guides = guides;
@@ -1283,12 +1309,8 @@ impl EditorWindow {
         self.project_changed_live(cx);
     }
 
-    fn write_canvas_style(
-        &mut self,
-        group: crate::editor_sidebar::StyleGroup,
-        change: impl FnOnce(&mut cap_project::ProjectConfiguration) -> bool,
-        cx: &mut Context<Self>,
-    ) {
+    /// The style segment a canvas edit of `group` writes into, if any.
+    fn canvas_style_target(&self, group: crate::editor_sidebar::StyleGroup) -> Option<usize> {
         use crate::editor_sidebar::StyleGroup;
         let time = self.preview_or_playhead();
         let target = self.project.timeline.as_ref().and_then(|timeline| {
@@ -1312,7 +1334,16 @@ impl EditorWindow {
                 })
                 .map(|(index, _)| index)
         });
-        let changed = match self.selected_style_index().or(target) {
+        self.selected_style_index().or(target)
+    }
+
+    fn write_canvas_style(
+        &mut self,
+        group: crate::editor_sidebar::StyleGroup,
+        change: impl FnOnce(&mut cap_project::ProjectConfiguration) -> bool,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = match self.canvas_style_target(group) {
             Some(index) => crate::editor_sidebar::apply_style_control_change(
                 &mut self.project,
                 index,
@@ -2047,9 +2078,124 @@ fn display_resize_scales(rect: NormRect, layout: &FrameLayout, has_aspect: bool)
     (max_width, (2. * k * 0.4) / 100.)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EvenResize {
+    output: (f64, f64),
+    /// Recording aspect in output pixels; padding is laid out around it.
+    content_aspect: f64,
+    fixed_aspect: bool,
+    fixed_canvas: bool,
+    /// The dragged card (frame included) as a share of the padding box it is
+    /// fitted into: (1, 1) without a frame.
+    card_in_box: (f64, f64),
+}
+
+impl EvenResize {
+    fn new(
+        rect: NormRect,
+        layout: &FrameLayout,
+        fixed_aspect: bool,
+        fixed_canvas: bool,
+        insets: cap_rendering::frame_chrome::ChromeInsets,
+    ) -> Self {
+        let output = (
+            f64::from(layout.output_size[0]).max(1.),
+            f64::from(layout.output_size[1]).max(1.),
+        );
+        let card = ((rect.w * output.0).max(1e-6), (rect.h * output.1).max(1e-6));
+        Self::from_card(output, card, fixed_aspect, fixed_canvas, insets)
+    }
+
+    /// The renderer pads the recording, then fits the framed card inside that
+    /// box, so recover the recording's aspect and the box from the card and
+    /// the frame's insets (fractions of the recording height).
+    fn from_card(
+        output: (f64, f64),
+        card: (f64, f64),
+        fixed_aspect: bool,
+        fixed_canvas: bool,
+        insets: cap_rendering::frame_chrome::ChromeInsets,
+    ) -> Self {
+        let content_height = card.1 / (1. + insets.top + insets.bottom);
+        let content_aspect = (card.0 / content_height - insets.left - insets.right).max(1e-6);
+        let box_size = if card.0 / card.1 >= content_aspect {
+            (card.0, card.0 / content_aspect)
+        } else {
+            (card.1 * content_aspect, card.1)
+        };
+        Self {
+            output,
+            content_aspect,
+            fixed_aspect,
+            fixed_canvas,
+            card_in_box: (card.0 / box_size.0, card.1 / box_size.1),
+        }
+    }
+
+    /// Padding (0..100) that makes the display `width` of the frame wide.
+    fn padding_for_width(self, width: f64) -> f64 {
+        let (output_w, output_h) = self.output;
+        let aspect = self.content_aspect;
+        let ratio = if self.fixed_aspect {
+            // The canvas stays put: the display fits a box inset by a share
+            // of the canvas's shorter side, so solve for that inset.
+            let from_width = (output_w - width * output_w) / 2.;
+            let from_height = (output_h - width * output_w / aspect) / 2.;
+            let inset = (from_width.min(from_height) / output_w.min(output_h)).clamp(0., 0.4999);
+            inset / (1. - 2. * inset)
+        } else if self.fixed_canvas {
+            // The padded screen (content height 1) is fitted into the
+            // unchanged canvas; solve each axis's fit for the content height
+            // in pixels and keep the one that binds.
+            let shorter = aspect.min(1.);
+            let height = (width * output_w / aspect).max(1e-6);
+            let from_width = (output_w / height - aspect) / (2. * shorter);
+            let from_height = (output_h / height - 1.) / (2. * shorter);
+            from_width.min(from_height)
+        } else {
+            // The canvas grows around the display by `ratio` times its
+            // shorter side on every edge.
+            let shorter_over_width = aspect.recip().min(1.);
+            (1. / width.max(1e-6) - 1.) / (2. * shorter_over_width)
+        };
+        clamp(ratio * 100., 0., 100.)
+    }
+
+    /// Display size as fractions of the frame at `padding`.
+    fn size_at(self, padding: f64) -> (f64, f64) {
+        let ratio = padding / 100.;
+        let aspect = self.content_aspect;
+        if self.fixed_aspect {
+            let (output_w, output_h) = self.output;
+            let inset = output_w.min(output_h) * ratio / (1. + 2. * ratio);
+            let available = (
+                (output_w - 2. * inset).max(1.),
+                (output_h - 2. * inset).max(1.),
+            );
+            let (width, height) = if aspect <= available.0 / available.1 {
+                (available.1 * aspect, available.1)
+            } else {
+                (available.0, available.0 / aspect)
+            };
+            (width / output_w, height / output_h)
+        } else if self.fixed_canvas {
+            let (output_w, output_h) = self.output;
+            let margin = 2. * ratio * aspect.min(1.);
+            let height = (output_w / (aspect + margin)).min(output_h / (1. + margin));
+            (aspect * height / output_w, height / output_h)
+        } else {
+            (
+                1. / (1. + 2. * ratio * aspect.recip().min(1.)),
+                1. / (1. + 2. * ratio * aspect.min(1.)),
+            )
+        }
+    }
+}
+
 struct DisplayResize {
     max_width: f64,
     padding_scale: f64,
+    even: Option<EvenResize>,
 }
 
 fn display_resize_rect(
@@ -2064,10 +2210,26 @@ fn display_resize_rect(
     let DisplayResize {
         max_width,
         padding_scale,
+        even,
     } = resize;
     let anchor = (start.x + start.w / 2., start.y + start.h / 2.);
     let (scale, guides) = resolve_scale(start, canvas, delta, direction, anchor, targets, shift);
     let target_width = (start.w * scale).max(1e-6);
+    if let Some(even) = even {
+        let padding = even.padding_for_width(target_width / even.card_in_box.0);
+        let (w, h) = even.size_at(padding);
+        let (w, h) = (w * even.card_in_box.0, h * even.card_in_box.1);
+        return (
+            NormRect {
+                x: clamp(anchor.0 - w / 2., 0., (1. - w).max(0.)),
+                y: clamp(anchor.1 - h / 2., 0., (1. - h).max(0.)),
+                w,
+                h,
+            },
+            padding,
+            guides,
+        );
+    }
     let padding = clamp(
         (max_width / target_width - 1.) / padding_scale.max(1e-9),
         0.,
@@ -2167,6 +2329,73 @@ mod tests {
             output_size: [width, height],
             caption: None,
         }
+    }
+
+    fn even_resize(
+        output: (f64, f64),
+        aspect: f64,
+        fixed_aspect: bool,
+        fixed_canvas: bool,
+    ) -> EvenResize {
+        EvenResize {
+            output,
+            content_aspect: aspect,
+            fixed_aspect,
+            fixed_canvas,
+            card_in_box: (1., 1.),
+        }
+    }
+
+    #[test]
+    fn even_resize_reads_a_framed_card_as_its_recording() {
+        // A 1920 x 1080 recording at Even padding 10 (2136 x 1296 canvas)
+        // with a browser frame: the card is the recording plus the bar, fitted
+        // into the 1920 x 1080 box padding leaves.
+        let insets = cap_rendering::frame_chrome::chrome_insets(cap_project::FrameStyle::Browser);
+        let content_h = (1920. / (16. / 9. + insets.left + insets.right))
+            .min(1080. / (1. + insets.top + insets.bottom));
+        let card = (
+            content_h * (16. / 9. + insets.left + insets.right),
+            content_h * (1. + insets.top + insets.bottom),
+        );
+        let resize = EvenResize::from_card((2136., 1296.), card, false, false, insets);
+        assert!((resize.content_aspect - 16. / 9.).abs() < 1e-9);
+        let box_width = card.0 / 2136. / resize.card_in_box.0;
+        assert!((resize.padding_for_width(box_width) - 10.).abs() < 1e-6);
+    }
+
+    #[test]
+    fn even_resize_inverts_its_own_layout() {
+        for (output, aspect) in [
+            ((2136., 1296.), 16. / 9.),
+            ((1296., 2136.), 9. / 16.),
+            ((1920., 1080.), 1.6),
+        ] {
+            for (fixed_aspect, fixed_canvas) in [(false, false), (true, false), (false, true)] {
+                let resize = even_resize(output, aspect, fixed_aspect, fixed_canvas);
+                for padding in [0., 2.5, 10., 25., 40.] {
+                    let (width, _) = resize.size_at(padding);
+                    let back = resize.padding_for_width(width);
+                    assert!(
+                        (back - padding).abs() < 1e-6,
+                        "{output:?} {aspect} fixed aspect {fixed_aspect} fixed canvas {fixed_canvas}: {padding} -> {back}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn even_resize_in_a_style_segment_keeps_the_base_canvas() {
+        // Base project unpadded (1920 x 1080 canvas); the segment pads 10
+        // evenly, so its 2136 x 1296 layout is fitted into the base canvas.
+        let resize = even_resize((1920., 1080.), 16. / 9., false, true);
+        let (width, height) = resize.size_at(10.);
+        assert!((width - 1600. / 1920.).abs() < 1e-9 && (height - 900. / 1080.).abs() < 1e-9);
+        assert!((resize.padding_for_width(1600. / 1920.) - 10.).abs() < 1e-9);
+        // The growing canvas would read the same width as more padding.
+        let growing = even_resize((1920., 1080.), 16. / 9., false, false);
+        assert!(growing.padding_for_width(1600. / 1920.) > 15.);
     }
 
     #[test]

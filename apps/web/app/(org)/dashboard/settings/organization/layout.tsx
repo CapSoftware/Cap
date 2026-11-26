@@ -28,7 +28,7 @@ export default async function OrganizationSettingsLayout({
 
 	if (!access || !canViewOrganizationSettings(access.role)) {
 		return (
-			<div className="flex flex-col gap-6">
+			<div className="flex flex-col gap-6 mx-auto w-full max-w-4xl">
 				<Card>
 					<CardHeader>
 						<CardTitle>Organization settings are restricted</CardTitle>
@@ -42,7 +42,7 @@ export default async function OrganizationSettingsLayout({
 	}
 
 	return (
-		<div className="flex flex-col gap-6">
+		<div className="flex flex-col gap-8 mx-auto w-full max-w-4xl">
 			<DoodleFilters />
 			<SettingsNav />
 			{children}

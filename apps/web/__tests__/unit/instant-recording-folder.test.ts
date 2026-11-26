@@ -11,6 +11,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	query: vi.fn(),
 	writableAccess: vi.fn(),
+	folderRows: [] as unknown[][],
+	organizationRows: [] as unknown[][],
 }));
 
 vi.mock("@cap/database", async () => {
@@ -93,11 +95,26 @@ function folderLookups() {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.folderRows = [];
+	mocks.organizationRows = [[orgId]];
+	mocks.query.mockImplementation(async (query: string) => ({
+		rows: query.includes("from `organizations`")
+			? mocks.organizationRows
+			: query.includes("from `folders`")
+				? mocks.folderRows
+				: [],
+	}));
 });
+
+function organizationLookups() {
+	return mocks.query.mock.calls.filter(([query]) =>
+		String(query).includes("from `organizations`"),
+	);
+}
 
 describe("createInstantRecording folder placement", () => {
 	it("accepts the caller's own personal folder in the active organization", async () => {
-		mocks.query.mockResolvedValue({ rows: [[folderId]] });
+		mocks.folderRows = [[folderId]];
 
 		const exit = await create(Option.some(folderId));
 
@@ -109,8 +126,6 @@ describe("createInstantRecording folder placement", () => {
 	});
 
 	it("refuses a folder that is not the caller's personal folder in that organization", async () => {
-		mocks.query.mockResolvedValue({ rows: [] });
-
 		const exit = await create(Option.some(folderId));
 
 		expect(failureTag(exit)).toBe(new Policy.PolicyDeniedError()._tag);
@@ -128,5 +143,26 @@ describe("createInstantRecording folder placement", () => {
 		expect(failureTag(exit)).toBe("StorageReached");
 		expect(folderLookups()).toHaveLength(0);
 		expect(mocks.writableAccess).toHaveBeenCalledTimes(1);
+	});
+
+	it("never records into an organization the caller no longer belongs to", async () => {
+		mocks.organizationRows = [];
+
+		const exit = await create(Option.none());
+
+		// The proxy driver has no transactions, so the personal organization
+		// fallback is covered in organization-pointer-database.test.ts.
+		expect(Exit.isFailure(exit)).toBe(true);
+		const [lookup] = organizationLookups();
+		expect(String(lookup?.[0])).toContain(
+			"`organizations`.`tombstoneAt` is null",
+		);
+		expect(lookup?.[1]).toEqual(expect.arrayContaining([orgId, user.id]));
+		expect(mocks.writableAccess).not.toHaveBeenCalled();
+		expect(
+			mocks.query.mock.calls.some(([query]) =>
+				String(query).startsWith("insert"),
+			),
+		).toBe(false);
 	});
 });

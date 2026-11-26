@@ -28,6 +28,11 @@ import {
 	isSignedBaaSubscription,
 } from "@/lib/baa/billing";
 import {
+	CAP_FRIDAY_METADATA,
+	grantCapFridayCredit,
+	reverseCapFridayCredit,
+} from "@/lib/checkout/cap-friday";
+import {
 	syncCustomerUsEin,
 	US_EIN_METADATA_KEY,
 } from "@/lib/checkout/customer-us-ein";
@@ -61,6 +66,8 @@ const relevantEvents = new Set([
 	"payment_intent.payment_failed",
 	"charge.refunded",
 	"charge.dispute.created",
+	"charge.refund.updated",
+	"refund.failed",
 ]);
 
 async function grantDeveloperCredits(
@@ -504,9 +511,35 @@ export const POST = async (req: Request) => {
 				return NextResponse.json({ received: true });
 			}
 			if (
+				event.type === "charge.refund.updated" ||
+				(event.type as string) === "refund.failed"
+			) {
+				const refund = event.data.object as Stripe.Refund;
+				if (
+					refund.status === "failed" &&
+					(await reverseCapFridayCredit(refund)) === "awaiting_grant"
+				) {
+					return new Response("Cap Friday credit not granted yet, retry", {
+						status: 503,
+					});
+				}
+				return NextResponse.json({ received: true });
+			}
+			if (
 				event.type === "charge.refunded" ||
 				event.type === "charge.dispute.created"
 			) {
+				const capFriday = await reverseCapFridayCredit(
+					event.data.object as Stripe.Charge | Stripe.Dispute,
+				);
+				if (capFriday === "awaiting_grant") {
+					return new Response("Cap Friday credit not granted yet, retry", {
+						status: 503,
+					});
+				}
+				if (capFriday === "reversed") {
+					return NextResponse.json({ received: true });
+				}
 				const reversed =
 					event.type === "charge.refunded"
 						? await reverseRefundedCharge(event.data.object as Stripe.Charge)
@@ -540,6 +573,12 @@ export const POST = async (req: Request) => {
 				event.type === "invoice.payment_failed"
 			) {
 				const invoice = event.data.object as Stripe.Invoice;
+				if (invoice.metadata?.[CAP_FRIDAY_METADATA] === "prepay") {
+					if (event.type === "invoice.paid") {
+						await grantCapFridayCredit(invoice);
+					}
+					return NextResponse.json({ received: true });
+				}
 				const subscriptionId =
 					typeof invoice.subscription === "string"
 						? invoice.subscription

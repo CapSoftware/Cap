@@ -66,10 +66,12 @@ vi.mock("@/app/(org)/dashboard/caps/components/FoldersSection", () => ({
 	FoldersSection: () => null,
 }));
 vi.mock("@/app/(org)/dashboard/folder/[id]/components", () => ({
-	BreadcrumbItem: () => null,
-	ClientMyCapsLink: () => null,
 	NewSubfolderButton: mocks.NewSubfolderButton,
 }));
+vi.mock(
+	"@/app/(org)/dashboard/folder/[id]/components/FolderTopBarPath",
+	() => ({ FolderTopBarPath: () => null }),
+);
 vi.mock(
 	"@/app/(org)/dashboard/folder/[id]/components/FolderVideosSection",
 	() => ({ default: () => null }),

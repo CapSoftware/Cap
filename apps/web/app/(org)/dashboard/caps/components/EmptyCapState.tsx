@@ -31,34 +31,30 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
 					<EmptyCap key={`${theme}empty-cap`} className="h-[150px] w-[400px]" />
 				</div>
 				<div className="flex flex-col items-center px-5">
-					<p className="mb-1 text-xl font-semibold text-gray-12">
+					<p className="mb-1 text-xl font-semibold tracking-tight text-gray-12">
 						Hey{userName ? ` ${userName}` : ""}! Record your first Cap
 					</p>
-					<p className="max-w-md text-gray-10 text-md">
+					<p className="max-w-md text-sm text-gray-10">
 						Craft your narrative with Cap - get projects done quicker.
 					</p>
 				</div>
-				<div className="flex flex-wrap gap-3 justify-center items-center mt-4">
+				<div className="flex flex-wrap gap-2 justify-center items-center mt-4">
 					<Button
 						href="/download"
-						className="flex relative gap-2 justify-center items-center"
-						variant="primary"
+						className="flex relative gap-2 justify-center items-center px-4 h-9"
+						size="sm"
+						variant="dark"
 					>
 						<FontAwesomeIcon className="size-3.5" icon={faDownload} />
 						Download Cap
 					</Button>
-					<p className="text-sm text-gray-10">or</p>
 					<WebRecorderDialog />
 					{showChromeButton && (
-						<>
-							<p className="text-sm text-gray-10">or</p>
-							<ChromeRecorderButton
-								className={`${CHROME_EXTENSION_BUTTON_CLASS} font-medium`}
-							/>
-						</>
+						<ChromeRecorderButton
+							className={`${CHROME_EXTENSION_BUTTON_CLASS} font-medium h-9 px-4`}
+						/>
 					)}
-					<p className="text-sm text-gray-10">or</p>
-					<UploadCapButton />
+					<UploadCapButton size="sm" />
 				</div>
 			</div>
 		</div>

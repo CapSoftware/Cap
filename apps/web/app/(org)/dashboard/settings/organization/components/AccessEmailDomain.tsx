@@ -1,10 +1,11 @@
-import { Button, Label, Switch } from "@cap/ui";
+import { Button, Switch } from "@cap/ui";
 import type { Organisation } from "@cap/web-domain";
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 import { updateOrganizationDetails } from "@/actions/organization/update-details";
 import { useDashboardContext } from "../../../Contexts";
+import { SettingsRow } from "../_components/settings-ui";
 
 export const AccessEmailDomain = () => {
 	const { activeOrganization, organizationSettings } = useDashboardContext();
@@ -13,6 +14,7 @@ export const AccessEmailDomain = () => {
 	const [linkOverride, setLinkOverride] = useState(savedLinkOverride);
 	const [linkOverrideLoading, setLinkOverrideLoading] = useState(false);
 	const linkOverrideId = useId();
+	const emailDomainInputId = useId();
 	const [emailDomain, setEmailDomain] = useState(
 		activeOrganization?.organization.allowedEmailDomain || null,
 	);
@@ -58,78 +60,79 @@ export const AccessEmailDomain = () => {
 	};
 
 	return (
-		<div className="flex-1 space-y-4">
-			<div className="space-y-1">
-				<Label htmlFor="allowedEmailDomain">Email access restriction</Label>
-				<p className="text-sm text-gray-10">
-					Restrict who can access public "anyone with the link" videos. Add
-					email domains (e.g.{" "}
-					<code className="text-xs bg-gray-3 px-1 py-0.5 rounded">
-						company.com
-					</code>
-					) or specific email addresses (e.g.{" "}
-					<code className="text-xs bg-gray-3 px-1 py-0.5 rounded">
-						larry@google.com
-					</code>
-					), separated by commas.
-				</p>
-				<p className="text-sm text-gray-10">
-					Members of your organization and spaces can always access videos
-					shared with them, regardless of this setting.{" "}
-					<span className="font-medium text-gray-11">
-						Leave blank to allow anyone with the link.
-					</span>
-				</p>
-			</div>
-			<div className="flex flex-col gap-3 w-full h-fit">
-				<textarea
-					className="flex px-4 py-3 w-full font-thin transition-all duration-200 text-[16px] md:text-[13px] text-gray-12 bg-gray-1 border-gray-4 outline-0 focus:bg-gray-2 rounded-xl hover:bg-gray-2 border-[1px] focus:border-gray-5 placeholder:text-gray-8 ring-0 ring-gray-2 focus:ring-1 focus:ring-gray-12 focus:ring-offset-2 ring-offset-gray-3 hover:placeholder:text-gray-12 placeholder:duration-200 min-h-[72px] resize-y"
-					placeholder="e.g. company.com, partner.org, larry@google.com"
-					value={emailDomain || ""}
-					id="allowedEmailDomain"
-					name="allowedEmailDomain"
-					onChange={(e) => {
-						setEmailDomain(e.target.value);
-					}}
-				/>
-				<div>
-					<Button
-						className="min-w-fit"
-						type="submit"
-						spinner={saveLoading}
-						size="sm"
-						variant="dark"
-						disabled={
-							saveLoading ||
-							emailDomain ===
-								activeOrganization?.organization.allowedEmailDomain
-						}
-						onClick={handleEmailDomainSave}
-					>
-						{saveLoading ? null : "Save"}
-					</Button>
+		<>
+			<SettingsRow
+				title={
+					<label htmlFor={emailDomainInputId}>Email access restriction</label>
+				}
+				description={
+					<>
+						Restrict who can access public &quot;anyone with the link&quot;
+						videos. Add email domains (e.g.{" "}
+						<code className="px-1 py-0.5 text-xs rounded bg-gray-3">
+							company.com
+						</code>
+						) or specific email addresses (e.g.{" "}
+						<code className="px-1 py-0.5 text-xs rounded bg-gray-3">
+							larry@google.com
+						</code>
+						), separated by commas. Members of your organization and spaces can
+						always access videos shared with them.{" "}
+						<span className="font-medium text-gray-11">
+							Leave blank to allow anyone with the link.
+						</span>
+					</>
+				}
+			>
+				<div className="flex flex-col gap-3 mt-4">
+					<textarea
+						className="flex px-3 py-2.5 w-full text-[16px] md:text-[13px] text-gray-12 bg-gray-1 rounded-lg border border-gray-4 transition-colors duration-200 outline-none resize-y min-h-[76px] placeholder:text-gray-9 hover:border-gray-5 focus:border-gray-7 focus:ring-2 focus:ring-gray-4"
+						placeholder="e.g. company.com, partner.org, larry@google.com"
+						value={emailDomain || ""}
+						id={emailDomainInputId}
+						name="allowedEmailDomain"
+						onChange={(e) => {
+							setEmailDomain(e.target.value);
+						}}
+					/>
+					<div className="flex justify-end">
+						<Button
+							className="px-4 h-9 min-w-fit"
+							type="submit"
+							spinner={saveLoading}
+							size="sm"
+							variant="dark"
+							disabled={
+								saveLoading ||
+								emailDomain ===
+									activeOrganization?.organization.allowedEmailDomain
+							}
+							onClick={handleEmailDomainSave}
+						>
+							{saveLoading ? null : "Save"}
+						</Button>
+					</div>
 				</div>
-				{activeOrganization?.organization.allowedEmailDomain?.trim() && (
-					<div className="flex gap-4 justify-between items-center pt-1">
-						<div className="space-y-1">
-							<Label htmlFor={linkOverrideId}>
-								Let members open individual videos
-							</Label>
-							<p className="text-sm text-gray-10">
-								A video's owner can switch its link to anyone with the link.
-								Every other video stays restricted.
-							</p>
-						</div>
+			</SettingsRow>
+			{activeOrganization?.organization.allowedEmailDomain?.trim() && (
+				<SettingsRow
+					title={
+						<label htmlFor={linkOverrideId}>
+							Let members open individual videos
+						</label>
+					}
+					description="A video's owner can switch its link to anyone with the link. Every other video stays restricted."
+					control={
 						<Switch
 							id={linkOverrideId}
 							checked={linkOverride}
 							disabled={linkOverrideLoading}
 							onCheckedChange={handleLinkOverrideChange}
 						/>
-					</div>
-				)}
-			</div>
-		</div>
+					}
+				/>
+			)}
+		</>
 	);
 };
 

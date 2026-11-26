@@ -7,6 +7,7 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
+import { getCustomThumbnailVersion } from "@cap/web-backend/src/Storage/custom-thumbnail";
 import { Video } from "@cap/web-domain";
 import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 
@@ -33,6 +34,7 @@ export type PublicShareVideoCandidate = {
 	width: number | null;
 	height: number | null;
 	duration: number | null;
+	thumbnailVersion?: string | null;
 };
 
 export type PublicShareVideo = Omit<
@@ -91,6 +93,9 @@ export async function getPublicShareVideo(
 			width: videos.width,
 			height: videos.height,
 			duration: videos.duration,
+			customThumbnailFile: sql<
+				string | null
+			>`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customThumbnail.file'))`,
 		})
 		.from(videos)
 		.innerJoin(
@@ -114,7 +119,8 @@ export async function getPublicShareVideo(
 		.where(and(eq(spaceVideos.videoId, videoId), isNotNull(spaces.password)))
 		.limit(1);
 
-	const { videoSettings, organizationSettings, ...rest } = video;
+	const { videoSettings, organizationSettings, customThumbnailFile, ...rest } =
+		video;
 	const candidate: PublicShareVideoCandidate = {
 		...rest,
 		linkOpenToAnyone: Video.isLinkOpenToAnyone(
@@ -122,6 +128,9 @@ export async function getPublicShareVideo(
 			organizationSettings,
 		),
 		hasInheritedPassword: Boolean(inheritedPassword),
+		thumbnailVersion: getCustomThumbnailVersion({
+			customThumbnail: { file: customThumbnailFile },
+		}),
 	};
 
 	if (!isPublicShareVideoCandidateEligible(candidate)) return null;
@@ -135,5 +144,6 @@ export async function getPublicShareVideo(
 		width: candidate.width,
 		height: candidate.height,
 		duration: candidate.duration,
+		thumbnailVersion: candidate.thumbnailVersion,
 	};
 }

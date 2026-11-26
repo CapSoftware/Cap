@@ -2,38 +2,50 @@
 
 import type { videos as videosSchema } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { Button } from "@cap/ui";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { ImageUpload, Video } from "@cap/web-domain";
-import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
+import { faBoxArchive } from "@fortawesome/free-solid-svg-icons/faBoxArchive";
+import clsx from "clsx";
 import { Effect, Exit } from "effect";
+import { AnimatePresence } from "framer-motion";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ChromeRecorderButton } from "@/components/ChromeRecorderButton";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import {
 	type SeededThumbnails,
 	SeededThumbnailsProvider,
 } from "@/components/VideoThumbnail";
-import { CHROME_EXTENSION_BUTTON_CLASS } from "@/lib/chrome-extension";
+import { DEFAULT_DASHBOARD_PAGE_SIZE } from "@/lib/dashboard-page-size";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { parsePageParam } from "@/lib/page-param";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
+import {
+	ArchiveDoodle,
+	libraryDoodleHost,
+} from "../_components/library-doodles";
 import { useDashboardContext } from "../Contexts";
 import {
 	NewFolderDialog,
 	SelectedCapsBar,
-	UploadCapButton,
 	UploadPlaceholderCard,
-	WebRecorderDialog,
 } from "./components";
 import { CapCard } from "./components/CapCard/CapCard";
+import { CapGridItem } from "./components/CapGridItem";
+import {
+	CapListHeader,
+	listControlClass,
+	PageSizeSelect,
+} from "./components/CapListHeader";
 import { CapPagination } from "./components/CapPagination";
 import { DragHint } from "./components/DragHint";
 import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import { FoldersSection } from "./components/FoldersSection";
+import { QuickActions } from "./components/QuickActions";
+import { useArchiveCaps, useLeavingCaps } from "./components/useArchiveCaps";
+import { useCapSelection } from "./components/useCapSelection";
 import { useCapsMoved } from "./components/useCapsMoved";
 import { useUploadingStatus } from "./UploadingContext";
 
@@ -70,6 +82,7 @@ export type VideoData = {
 	inheritedSpaceSettings?: Partial<Record<ViewerSettingKey, SpaceRuleSource[]>>;
 	hasActiveUpload: boolean;
 	settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
+	archivedAt?: Date | null;
 }[];
 
 export const Caps = ({
@@ -78,27 +91,70 @@ export const Caps = ({
 	analyticsEnabled,
 	folders,
 	thumbnails,
+	pageSize = DEFAULT_DASHBOARD_PAGE_SIZE,
+	archivedCount = 0,
+	view = "library",
 }: {
 	data: VideoData;
 	count: number;
 	folders: FolderDataType[];
 	analyticsEnabled: boolean;
 	thumbnails?: SeededThumbnails;
+	pageSize?: number;
+	archivedCount?: number;
+	view?: "library" | "archived";
 }) => {
 	const router = useRouter();
 	const params = useSearchParams();
 	const page = parsePageParam(params.get("page"));
 	const { user } = useDashboardContext();
-	const limit = 15;
+	const isArchivedView = view === "archived";
 	const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
-	const totalPages = Math.ceil(count / limit);
-	const previousCountRef = useRef<number>(0);
-	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
+	const totalPages = Math.ceil(count / pageSize);
 	const moveLocation = { type: "personal" } as const;
+
+	const [isUploading, uploadingCapId] = useUploadingStatus();
+	const listedVideos = useMemo(
+		() =>
+			!isArchivedView && isUploading && uploadingCapId
+				? data.filter((video) => video.id !== uploadingCapId)
+				: data,
+		[data, isArchivedView, isUploading, uploadingCapId],
+	);
+	const leavingCaps = useLeavingCaps(listedVideos);
+	const visibleVideos = leavingCaps.present;
+	const pageIds = useMemo(
+		() => visibleVideos.map((video) => video.id),
+		[visibleVideos],
+	);
+	const selectAllView = useMemo(
+		() =>
+			isArchivedView
+				? ({ type: "archived" } as const)
+				: ({ type: "personal" } as const),
+		[isArchivedView],
+	);
+	const selection = useCapSelection({
+		pageIds,
+		totalCount: count,
+		view: selectAllView,
+	});
+	const selectedCaps = selection.selected;
+	const setSelectedCaps = selection.setSelected;
 
 	useCapsMoved((ids) =>
 		setSelectedCaps((current) => current.filter((id) => !ids.includes(id))),
 	);
+
+	const archiveCaps = useArchiveCaps({
+		onDone: (ids) =>
+			setSelectedCaps((current) => current.filter((id) => !ids.includes(id))),
+		onLeave: leavingCaps.leave,
+		onReturn: leavingCaps.restore,
+	});
+	const shownCount = count - leavingCaps.leavingCount;
+	const shownArchivedCount =
+		archivedCount + (isArchivedView ? 0 : leavingCaps.leavingCount);
 
 	const anyCapSelected = selectedCaps.length > 0;
 
@@ -109,18 +165,6 @@ export const Caps = ({
 	const analytics: Partial<Record<Video.VideoId, number>> =
 		analyticsQuery.data || {};
 	const isLoadingAnalytics = analyticsEnabled && analyticsQuery.isLoading;
-
-	const handleCapSelection = (capId: Video.VideoId) => {
-		setSelectedCaps((prev) => {
-			const newSelection = prev.includes(capId)
-				? prev.filter((id) => id !== capId)
-				: [...prev, capId];
-
-			previousCountRef.current = prev.length;
-
-			return newSelection;
-		});
-	};
 
 	const rpc = useRpcClient() as {
 		VideoDelete: (id: Video.VideoId) => Effect.Effect<void, unknown, never>;
@@ -206,10 +250,6 @@ export const Caps = ({
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "Escape" && selectedCaps.length > 0) {
-				setSelectedCaps([]);
-			}
-
 			if (
 				(e.key === "Delete" || e.key === "Backspace") &&
 				selectedCaps.length > 0
@@ -218,9 +258,14 @@ export const Caps = ({
 				// Deleting is immediate and permanent, so the key only counts on the
 				// page itself: not inside an open dialog (Move, Share), not while a
 				// held key repeats, and not while the previous delete is running.
+				// The shortcut skips the confirmation dialog, so it only acts on
+				// Caps the viewer can see; "Select all" can reach thousands of
+				// Caps across pages, which must go through the confirmed button.
+				const pageIdSet = new Set<string>(pageIds);
 				if (
 					!e.repeat &&
 					!isDeletingCaps &&
+					selectedCaps.every((id) => pageIdSet.has(id)) &&
 					!["INPUT", "TEXTAREA", "SELECT"].includes(active?.tagName || "") &&
 					!(active instanceof HTMLElement && active.isContentEditable) &&
 					!active?.closest('[role="dialog"], [role="alertdialog"]')
@@ -232,17 +277,6 @@ export const Caps = ({
 					deleteCaps(selectedCaps);
 				}
 			}
-
-			if (e.key === "a" && (e.ctrlKey || e.metaKey) && data.length > 0) {
-				if (
-					!["INPUT", "TEXTAREA", "SELECT"].includes(
-						document.activeElement?.tagName || "",
-					)
-				) {
-					e.preventDefault();
-					setSelectedCaps(data.map((cap) => cap.id));
-				}
-			}
 		};
 
 		window.addEventListener("keydown", handleKeyDown);
@@ -250,94 +284,166 @@ export const Caps = ({
 		return () => {
 			window.removeEventListener("keydown", handleKeyDown);
 		};
-	}, [selectedCaps, data, deleteCaps, isDeletingCaps]);
+	}, [selectedCaps, deleteCaps, isDeletingCaps, pageIds]);
 
-	const [isUploading, uploadingCapId] = useUploadingStatus();
-	const visibleVideos = useMemo(
-		() =>
-			isUploading && uploadingCapId
-				? data.filter((video) => video.id !== uploadingCapId)
-				: data,
-		[data, isUploading, uploadingCapId],
-	);
+	if (
+		!isArchivedView &&
+		shownCount === 0 &&
+		folders.length === 0 &&
+		shownArchivedCount === 0
+	)
+		return <EmptyCapState />;
 
-	if (count === 0 && folders.length === 0) return <EmptyCapState />;
+	const archivedLink =
+		!isArchivedView && shownArchivedCount > 0 ? (
+			<Link
+				href="/dashboard/caps/archived"
+				className={clsx(listControlClass, "gap-2 px-3")}
+			>
+				<FontAwesomeIcon icon={faBoxArchive} className="size-3 text-gray-10" />
+				<span>Archived</span>
+				<span className="tabular-nums text-gray-10">
+					{shownArchivedCount.toLocaleString("en-US")}
+				</span>
+			</Link>
+		) : null;
 
 	return (
 		<div className="flex relative flex-col w-full h-full">
-			<NewFolderDialog
-				open={openNewFolderDialog}
-				onOpenChange={setOpenNewFolderDialog}
-			/>
-			<div className="flex flex-wrap gap-3 items-center mb-10 w-full">
-				<Button
-					onClick={() => setOpenNewFolderDialog(true)}
-					size="sm"
-					variant="dark"
-					className="flex gap-2 items-center w-fit"
+			{isArchivedView ? (
+				<div className="mb-8">
+					<p className="max-w-xl text-sm text-gray-10 text-pretty">
+						Archived Caps are hidden from My Caps and your folders. Their links,
+						comments and any spaces they are shared with keep working.
+					</p>
+				</div>
+			) : (
+				<>
+					<NewFolderDialog
+						open={openNewFolderDialog}
+						onOpenChange={setOpenNewFolderDialog}
+					/>
+					<QuickActions onNewFolder={() => setOpenNewFolderDialog(true)} />
+					<FoldersSection
+						title="Folders"
+						scope="personal"
+						folders={folders}
+						canMove
+						moveRootLabel="My Caps"
+					/>
+				</>
+			)}
+			{isArchivedView && visibleVideos.length === 0 && (
+				<div
+					className={clsx(
+						libraryDoodleHost,
+						"flex flex-col gap-3 items-center px-6 py-12 text-center rounded-2xl border border-dashed animate-in fade-in border-gray-5 bg-gray-1",
+					)}
 				>
-					<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-					New Folder
-				</Button>
-				<UploadCapButton size="sm" />
-				<WebRecorderDialog />
-				<ChromeRecorderButton
-					className={`${CHROME_EXTENSION_BUTTON_CLASS} font-medium`}
-				/>
-			</div>
-			<FoldersSection
-				title="Folders"
-				scope="personal"
-				folders={folders}
-				canMove
-				moveRootLabel="My Caps"
-			/>
+					<ArchiveDoodle />
+					<div className="flex flex-col gap-1 items-center">
+						<p className="text-base font-medium text-gray-12">
+							Nothing archived
+						</p>
+						<p className="max-w-sm text-sm text-gray-10 text-pretty">
+							Archive a Cap from its menu to tidy up My Caps without deleting
+							anything.
+						</p>
+					</div>
+					<Link
+						href="/dashboard/caps"
+						className={clsx(listControlClass, "px-3 mt-1")}
+					>
+						Back to My Caps
+					</Link>
+				</div>
+			)}
+			{visibleVideos.length === 0 && archivedLink && (
+				<div className="flex justify-end mb-5">{archivedLink}</div>
+			)}
 			{visibleVideos.length > 0 && (
 				<>
-					<div className="flex justify-between items-center mb-6 w-full">
-						<h1 className="text-2xl font-medium text-gray-12">
-							Videos and screenshots
-						</h1>
-					</div>
+					<CapListHeader
+						title={isArchivedView ? "Archived" : "Videos and screenshots"}
+						count={shownCount}
+						selectionState={selection.pageState}
+						onToggleSelectAll={selection.togglePage}
+						actions={
+							<>
+								{archivedLink}
+								<PageSizeSelect pageSize={pageSize} />
+							</>
+						}
+					/>
 
 					<SeededThumbnailsProvider value={thumbnails}>
-						<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-							{isUploading && (
+						<div className="grid relative grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+							{!isArchivedView && isUploading && (
 								<UploadPlaceholderCard key={"upload-placeholder"} />
 							)}
-							{visibleVideos.map((video) => {
-								const videoAnalytics = analytics[video.id];
-								return (
-									<CapCard
-										key={video.id}
-										cap={video}
-										analytics={videoAnalytics ?? 0}
-										onDelete={() => {
-											if (selectedCaps.length > 0) {
-												deleteCaps(selectedCaps);
-											} else {
-												deleteCap(video.id);
-											}
-										}}
-										userId={user?.id}
-										isLoadingAnalytics={isLoadingAnalytics}
-										isSelected={selectedCaps.includes(video.id)}
-										anyCapSelected={anyCapSelected}
-										onSelectToggle={() => handleCapSelection(video.id)}
-										selectedIds={selectedCaps}
-										canMove
-										moveLocation={moveLocation}
-										moveRootLabel="My Caps"
-									/>
-								);
-							})}
+							<AnimatePresence
+								initial={false}
+								mode="popLayout"
+								custom={leavingCaps.leaving}
+							>
+								{visibleVideos.map((video) => {
+									const videoAnalytics = analytics[video.id];
+									return (
+										<CapGridItem
+											key={video.id}
+											id={video.id}
+											layoutDependency={visibleVideos}
+											returning={leavingCaps.returning.has(video.id)}
+										>
+											<CapCard
+												key={video.id}
+												cap={video}
+												analytics={videoAnalytics ?? 0}
+												onDelete={() => {
+													if (selectedCaps.length > 0) {
+														deleteCaps(selectedCaps);
+													} else {
+														deleteCap(video.id);
+													}
+												}}
+												userId={user?.id}
+												isLoadingAnalytics={isLoadingAnalytics}
+												isSelected={selectedCaps.includes(video.id)}
+												anyCapSelected={anyCapSelected}
+												onSelectToggle={(options) =>
+													selection.toggle(video.id, options)
+												}
+												selectedIds={selectedCaps}
+												canMove={!isArchivedView}
+												moveLocation={moveLocation}
+												moveRootLabel="My Caps"
+												isArchived={isArchivedView}
+												onArchiveToggle={() =>
+													void archiveCaps.mutate({
+														ids: [video.id],
+														archived: !isArchivedView,
+													})
+												}
+											/>
+										</CapGridItem>
+									);
+								})}
+							</AnimatePresence>
 						</div>
 					</SeededThumbnailsProvider>
 				</>
 			)}
-			{(data.length > limit || data.length === limit || page !== 1) && (
+			{(data.length >= pageSize || page !== 1) && (
 				<div className="mt-7">
-					<CapPagination currentPage={page} totalPages={totalPages} />
+					<CapPagination
+						currentPage={page}
+						totalPages={totalPages}
+						hrefForPage={
+							isArchivedView
+								? (target) => `/dashboard/caps/archived?page=${target}`
+								: undefined
+						}
+					/>
 				</div>
 			)}
 			<SelectedCapsBar
@@ -345,10 +451,22 @@ export const Caps = ({
 				setSelectedCaps={setSelectedCaps}
 				deleteSelectedCaps={() => deleteCaps(selectedCaps)}
 				isDeleting={isDeletingCaps || isDeletingCap}
-				moveLocation={moveLocation}
-				moveRootLabel="My Caps"
+				moveLocation={isArchivedView ? undefined : moveLocation}
+				moveRootLabel={isArchivedView ? undefined : "My Caps"}
+				selection={selection}
+				archive={{
+					mode: isArchivedView ? "unarchive" : "archive",
+					isPending: archiveCaps.isPending,
+					onArchive: () =>
+						void archiveCaps.mutate({
+							ids: selectedCaps,
+							archived: !isArchivedView,
+						}),
+				}}
 			/>
-			<DragHint caps="Drop on a folder to move, or on a space to share" />
+			{!isArchivedView && (
+				<DragHint caps="Drop on a folder to move, or on a space to share" />
+			)}
 		</div>
 	);
 };

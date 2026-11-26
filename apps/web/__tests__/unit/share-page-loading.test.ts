@@ -222,6 +222,9 @@ async function renderAuthorizedContent() {
 				sharedOrganizations: unknown[];
 				ownerIsOverShareLimit: boolean;
 				callToAction: { label: string; url: string } | null;
+				callToActionSource: string | null;
+				workspaceCallToAction: { label: string; url: string } | null;
+				orgSettings: Record<string, unknown> | null;
 			};
 		}>;
 	}>;
@@ -334,6 +337,106 @@ describe("share page loading", () => {
 			}
 		},
 	);
+
+	describe("workspace call to action", () => {
+		const workspaceDefault = {
+			label: "Talk to sales",
+			url: "https://example.com/sales",
+			enabledAt: "2026-10-01T00:00:00.000Z",
+		};
+		const arrangeWorkspaceVideo = (
+			videoSettings: Record<string, unknown>,
+			createdAt: string,
+			includeExisting = false,
+		) =>
+			arrangeRows([
+				{
+					...createVideo(),
+					videoSettings: videoSettings as ReturnType<
+						typeof createVideo
+					>["videoSettings"],
+					orgSettings: {
+						disableDownloads: false,
+						defaultCallToAction: { ...workspaceDefault, includeExisting },
+					} as ReturnType<typeof createVideo>["orgSettings"],
+					createdAt: new Date(createdAt),
+				},
+			]);
+
+		beforeEach(() => {
+			mocks.ownerIsPro = true;
+		});
+
+		it("shows the default on a video made after it was set, without another query", async () => {
+			arrangeWorkspaceVideo({}, "2026-10-02T00:00:00.000Z");
+			const content = await renderAuthorizedContent();
+			const data = content.props.children.props.data;
+			expect(data.callToAction).toMatchObject({
+				label: "Talk to sales",
+				url: "https://example.com/sales",
+			});
+			expect(data.orgSettings).toEqual({ disableDownloads: false });
+			expect(data.callToActionSource).toBeNull();
+			expect(data.workspaceCallToAction).toBeNull();
+			expect(mocks.select).toHaveBeenCalledTimes(3);
+		});
+
+		it("leaves older videos alone unless the default covers existing videos", async () => {
+			arrangeWorkspaceVideo({}, "2026-09-01T00:00:00.000Z");
+			let content = await renderAuthorizedContent();
+			expect(content.props.children.props.data.callToAction).toBeNull();
+
+			arrangeWorkspaceVideo({}, "2026-09-01T00:00:00.000Z", true);
+			content = await renderAuthorizedContent();
+			expect(content.props.children.props.data.callToAction).toMatchObject({
+				label: "Talk to sales",
+			});
+		});
+
+		it("lets a video's own call to action or opt-out win", async () => {
+			arrangeWorkspaceVideo(
+				{ callToAction: { label: "Mine", url: "https://example.com/" } },
+				"2026-10-02T00:00:00.000Z",
+			);
+			let content = await renderAuthorizedContent();
+			expect(content.props.children.props.data.callToAction).toMatchObject({
+				label: "Mine",
+			});
+
+			arrangeWorkspaceVideo(
+				{ callToAction: false },
+				"2026-10-02T00:00:00.000Z",
+				true,
+			);
+			content = await renderAuthorizedContent();
+			expect(content.props.children.props.data.callToAction).toBeNull();
+		});
+
+		it("does not serve the default when the owner is not on Pro", async () => {
+			mocks.ownerIsPro = false;
+			arrangeWorkspaceVideo({}, "2026-10-02T00:00:00.000Z");
+			const content = await renderAuthorizedContent();
+			expect(content.props.children.props.data.callToAction).toBeNull();
+		});
+
+		it("tells only the owner where the call to action comes from", async () => {
+			mocks.user.mockResolvedValue({
+				id: "owner",
+				activeOrganizationId: "organization",
+			});
+			arrangeWorkspaceVideo(
+				{ callToAction: false },
+				"2026-10-02T00:00:00.000Z",
+			);
+			const content = await renderAuthorizedContent();
+			const data = content.props.children.props.data;
+			expect(data.callToAction).toBeNull();
+			expect(data.callToActionSource).toBe("off");
+			expect(data.workspaceCallToAction).toMatchObject({
+				label: "Talk to sales",
+			});
+		});
+	});
 
 	it.each([
 		{

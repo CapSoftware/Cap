@@ -24,7 +24,7 @@ import { faCircleInfo } from "@fortawesome/free-solid-svg-icons/faCircleInfo";
 import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { Check, ChevronDown, Plus } from "lucide-react";
+import { Check, ChevronsUpDown, Gift, Plus } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -229,8 +229,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 										duration: 0.2,
 									}}
 									className={clsx(
-										"mt-1.5 mx-auto rounded-xl cursor-pointer bg-gray-3",
-										sidebarCollapsed ? "w-fit px-2 py-0.5" : "w-full p-2.5",
+										"mx-auto rounded-xl transition-colors cursor-pointer dashboard-nav-hover data-[state=open]:bg-gray-3",
+										sidebarCollapsed ? "w-fit p-1.5" : "w-full px-2 py-1.5",
 									)}
 								>
 									<div
@@ -262,23 +262,28 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 													)}
 													className={clsx(
 														"relative flex-shrink-0 mx-auto",
-														sidebarCollapsed ? "size-6" : "size-7",
+														sidebarCollapsed ? "size-7" : "size-8",
 													)}
 												/>
 											</div>
-											<div className="flex flex-col flex-1 items-center h-10">
-												<div className="flex justify-between items-center w-full">
+											<div
+												className={clsx(
+													"flex flex-col flex-1 gap-0.5 justify-center min-w-0",
+													sidebarCollapsed && "hidden",
+												)}
+											>
+												<div className="flex gap-1 justify-between items-center w-full">
 													{!sidebarCollapsed && (
-														<p className="text-sm truncate leading-0 text-gray-12">
+														<p
+															title={activeOrg?.organization.name}
+															className="text-sm font-medium leading-tight truncate text-gray-12"
+														>
 															{activeOrg?.organization.name ??
 																"No organization found"}
 														</p>
 													)}
 													{!sidebarCollapsed && (
-														<ChevronDown
-															data-state={open ? "open" : "closed"}
-															className="size-4 transition-transform duration-200 text-gray-10 data-[state=open]:rotate-180"
-														/>
+														<ChevronsUpDown className="size-3.5 shrink-0 text-gray-9" />
 													)}
 												</div>
 												{!sidebarCollapsed && (
@@ -294,15 +299,15 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 																: undefined
 														}
 														target={isDomainSetupVerified ? "_blank" : "_self"}
-														className="flex truncate w-full overflow-hidden flex-1 gap-1.5 items-center self-start"
+														className="flex overflow-hidden gap-1 items-center self-start w-full truncate group/domain"
 													>
 														<FontAwesomeIcon
 															icon={
 																isDomainSetupVerified ? faLink : faCircleInfo
 															}
-															className="duration-200 size-3 text-gray-10"
+															className="size-2.5 shrink-0 text-gray-9"
 														/>
-														<p className="w-full text-[11px] flex-1 duration-200 truncate leading-0 text-gray-11">
+														<p className="flex-1 w-full text-xs leading-tight truncate transition-colors text-gray-10 group-hover/domain:text-gray-12">
 															{isDomainSetupVerified
 																? activeOrg?.organization.customDomain
 																: "No custom domain set"}
@@ -314,7 +319,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									</div>
 									<PopoverContent
 										className={clsx(
-											"p-0 w-full min-w-[287px] md:min-w-fit z-[120]",
+											"p-0 w-[300px] z-[120]",
 											sidebarCollapsed ? "ml-3" : "mx-auto",
 										)}
 									>
@@ -328,7 +333,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 										>
 											<CommandInput placeholder="Search organizations..." />
 											<CommandEmpty>No organizations found</CommandEmpty>
-											<CommandGroup>
+											<CommandGroup className="overflow-y-auto max-h-[min(60vh,440px)]">
 												{orgData?.map((organization) => {
 													const isSelected =
 														activeOrg?.organization.id ===
@@ -339,7 +344,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 																"rounded-lg transition-colors duration-300 group",
 																isSelected
 																	? "pointer-events-none"
-																	: "text-gray-10 hover:text-gray-12 hover:bg-gray-6",
+																	: "text-gray-10 hover:text-gray-12 hover:bg-gray-3",
 															)}
 															key={`${organization.organization.name}-organization-${organization.organization.id}`}
 															value={organization.organization.id}
@@ -351,7 +356,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 																router.push("/dashboard/caps");
 															}}
 														>
-															<div className="flex gap-2 items-center w-full">
+															<div className="flex gap-2 items-center w-full min-w-0">
 																<SignedImageUrl
 																	image={organization.organization.iconUrl}
 																	name={organization.organization.name}
@@ -359,8 +364,9 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 																	className="relative flex-shrink-0 size-5"
 																/>
 																<p
+																	title={organization.organization.name}
 																	className={clsx(
-																		"flex-1 text-sm transition-colors duration-200 group-hover:text-gray-12",
+																		"flex-1 min-w-0 text-sm truncate transition-colors duration-200 group-hover:text-gray-12",
 																		isSelected
 																			? "text-gray-12"
 																			: "text-gray-10",
@@ -371,24 +377,27 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 															</div>
 															{isSelected && (
 																<Check
-																	size={18}
-																	className={"ml-auto text-gray-12"}
+																	size={16}
+																	className="ml-auto shrink-0 text-gray-12"
 																/>
 															)}
 														</CommandItem>
 													);
 												})}
-												<DialogTrigger asChild>
-													<Button
-														variant="dark"
-														size="sm"
-														className="flex gap-1 items-center my-2 w-[90%] mx-auto text-sm"
-													>
-														<Plus className="w-3.5 h-auto" />
-														New organization
-													</Button>
-												</DialogTrigger>
 											</CommandGroup>
+											<div className="p-1 border-t border-gray-3">
+												<DialogTrigger asChild>
+													<button
+														type="button"
+														className="flex gap-2 items-center px-2 w-full h-9 text-sm rounded-lg transition-colors text-gray-11 hover:bg-gray-3 hover:text-gray-12"
+													>
+														<span className="flex justify-center items-center rounded-md border border-dashed size-5 border-gray-7">
+															<Plus className="size-3" />
+														</span>
+														New organization
+													</button>
+												</DialogTrigger>
+											</div>
 										</Command>
 									</PopoverContent>
 								</motion.div>
@@ -415,7 +424,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 						<div
 							ref={contentRef}
 							className={clsx(
-								"pt-5",
+								"pt-4",
 								sidebarCollapsed ? "flex flex-col items-center" : "",
 							)}
 						>
@@ -425,7 +434,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								.map((item) => (
 									<div
 										key={item.name}
-										className="flex relative justify-center items-center mb-1.5 w-full"
+										className="flex relative justify-center items-center mb-0.5 w-full"
 									>
 										{isPathActive(item.href, item.matchChildren ?? false) && (
 											<motion.div
@@ -443,7 +452,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 													},
 												}}
 												layoutId="navlinks"
-												className="absolute h-[36px] w-full rounded-xl pointer-events-none bg-gray-3"
+												className="absolute w-full h-9 rounded-lg pointer-events-none dashboard-nav-active"
 											/>
 										)}
 
@@ -463,24 +472,36 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 							<SpacesList toggleMobileNav={() => toggleMobileNav?.()} />
 						</div>
 					</div>
-					<div className="pt-2 pb-4 w-full shrink-0">
+					<div className="pt-2 pb-3 w-full shrink-0">
 						<UsageButton
 							toggleMobileNav={() => toggleMobileNav?.()}
 							subscribed={user.isPro}
 						/>
 						{buildEnv.NEXT_PUBLIC_IS_CAP && (
-							<div className="flex justify-center items-center mt-2">
+							<Tooltip
+								disable={!sidebarCollapsed}
+								position="right"
+								content="Earn 40% referral"
+							>
 								<Link
 									href="/dashboard/refer"
-									className="text-sm underline text-gray-10 hover:text-gray-12"
+									className={clsx(
+										"flex gap-2.5 items-center mt-1.5 h-9 text-sm rounded-lg transition-colors text-gray-11 hover:text-gray-12 dashboard-nav-hover",
+										sidebarCollapsed ? "justify-center mx-auto size-9" : "px-3",
+									)}
 								>
-									Earn 40% Referral
+									<Gift className="size-4 shrink-0 text-gray-10" />
+									{!sidebarCollapsed && (
+										<span className="truncate">Earn 40% referral</span>
+									)}
 								</Link>
-							</div>
+							</Tooltip>
 						)}
-						<p className="mt-2 text-xs text-center truncate text-gray-10">
-							Cap Software, Inc. {new Date().getFullYear()}.
-						</p>
+						{!sidebarCollapsed && (
+							<p className="px-3 mt-1 text-[11px] truncate text-gray-9">
+								Cap Software, Inc. {new Date().getFullYear()}
+							</p>
+						)}
 					</div>
 				</nav>
 			</div>
@@ -562,30 +583,34 @@ const NavItem = ({
 					"relative border border-transparent transition z-3",
 					sidebarCollapsed
 						? "flex justify-center items-center px-0 w-full size-9"
-						: "px-3 py-2 w-full",
+						: "px-3 w-full h-9",
 					isPathActive(href, matchChildren)
 						? "bg-transparent pointer-events-none"
-						: "hover:bg-gray-2",
-					"flex overflow-hidden justify-start items-center tracking-tight rounded-xl outline-none",
+						: "dashboard-nav-hover",
+					"flex overflow-hidden justify-start items-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-gray-6",
 				)}
 			>
 				{cloneElement(icon, {
 					ref: iconRef,
 					className: clsx(
-						sidebarCollapsed ? "text-gray-12 mx-auto" : "text-gray-10",
+						sidebarCollapsed && "mx-auto",
+						isPathActive(href, matchChildren) ? "text-gray-12" : "text-gray-10",
 					),
 					size: sidebarCollapsed ? 18 : 16,
 				})}
 				<p
 					className={clsx(
-						"text-sm text-gray-12 truncate",
+						"text-sm truncate",
+						isPathActive(href, matchChildren)
+							? "font-medium text-gray-12"
+							: "text-gray-11",
 						sidebarCollapsed ? "hidden" : "ml-2.5",
 					)}
 				>
 					{name}
 				</p>
 				{extraText !== null && !sidebarCollapsed && (
-					<p className="ml-auto text-xs font-medium text-gray-11">
+					<p className="ml-auto text-xs tabular-nums text-gray-10">
 						{extraText}
 					</p>
 				)}

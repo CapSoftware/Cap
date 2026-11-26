@@ -62,9 +62,9 @@ impl MediaAccess {
         match permission {
             OSPermission::Camera => self.camera,
             OSPermission::Microphone => self.microphone,
-            OSPermission::ScreenRecording | OSPermission::Accessibility => {
-                OSPermissionStatus::NotNeeded
-            }
+            OSPermission::ScreenRecording
+            | OSPermission::Accessibility
+            | OSPermission::InputMonitoring => OSPermissionStatus::NotNeeded,
         }
     }
 

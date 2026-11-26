@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
+import { domainToUnicode } from "node:url";
 import { STRIPE_AVAILABLE } from "@cap/utils";
 import { type ImageUpload, Organisation, User } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { Adapter } from "next-auth/adapters";
 import { nanoId } from "../helpers.ts";
 import { enqueueLoopsSync } from "../loops/queue.ts";
+import { insertPersonalOrganization } from "../organization-pointer.ts";
 import {
 	accounts,
 	organizationInvites,
@@ -31,6 +33,36 @@ type CreateUserData = Parameters<NonNullable<Adapter["createUser"]>>[0];
 type LinkAccountData = Parameters<NonNullable<Adapter["linkAccount"]>>[0];
 type UnlinkAccountData = Parameters<NonNullable<Adapter["unlinkAccount"]>>[0];
 type UpdateSessionData = Parameters<NonNullable<Adapter["updateSession"]>>[0];
+
+function isSameStoredEmail(storedEmail: string, requestedEmail: string) {
+	return storedEmail.toLowerCase() === requestedEmail;
+}
+
+// Sign-in addresses are stored with punycode domains, but accounts created
+// before that keep the Unicode spelling of the same domain.
+function getUnicodeDomainEmail(email: string) {
+	const at = email.lastIndexOf("@");
+	if (at < 1 || !email.includes("xn--", at)) return null;
+	const domain = domainToUnicode(email.slice(at + 1));
+	if (!domain) return null;
+	const unicodeEmail = `${email.slice(0, at)}@${domain}`;
+	return unicodeEmail === email ? null : unicodeEmail;
+}
+
+async function findUserByStoredEmail(db: MySql2Database, email: string) {
+	for (const candidate of [email, getUnicodeDomainEmail(email)]) {
+		if (!candidate) continue;
+		const [row] = await db
+			.select()
+			.from(users)
+			.where(eq(users.email, candidate))
+			.limit(1);
+		if (row && isSameStoredEmail(row.email, candidate)) {
+			return { row, email: candidate };
+		}
+	}
+	return null;
+}
 
 function getProvisionedUserName(email: string) {
 	return (
@@ -82,7 +114,10 @@ async function hasLinkedAccount(db: MySql2Database, userId: User.UserId) {
 
 export function DrizzleAdapter(
 	db: MySql2Database,
-	options?: { getSsoIdentity: () => ValidatedSsoIdentity | null },
+	options?: {
+		getSsoIdentity: () => ValidatedSsoIdentity | null;
+		onUserCreated?: () => void;
+	},
 ): Adapter {
 	return {
 		async createUser(userData: CreateUserData) {
@@ -91,7 +126,8 @@ export function DrizzleAdapter(
 			if (ssoIdentity && ssoIdentity.email !== normalizedEmail) {
 				throw new Error("The user does not match the verified SSO identity.");
 			}
-			let userId = User.UserId.make(nanoId());
+			const newUserId = User.UserId.make(nanoId());
+			let userId = newUserId;
 			await db.transaction(async (tx) => {
 				if (ssoIdentity) {
 					const [organization] = await tx
@@ -108,6 +144,11 @@ export function DrizzleAdapter(
 					.limit(1);
 
 				if (existingUser) {
+					if (!isSameStoredEmail(existingUser.email, normalizedEmail)) {
+						throw new Error(
+							"The stored email does not match the requested email.",
+						);
+					}
 					userId = existingUser.id;
 					const userUpdate: Partial<typeof users.$inferInsert> = {};
 
@@ -155,14 +196,19 @@ export function DrizzleAdapter(
 				});
 				if (ssoIdentity) {
 					await insertUser.onDuplicateKeyUpdate({
-						set: { email: normalizedEmail },
+						set: { email: sql`${users.email}` },
 					});
 					const [createdUser] = await tx
-						.select({ id: users.id })
+						.select({ id: users.id, email: users.email })
 						.from(users)
 						.where(eq(users.email, normalizedEmail))
 						.limit(1);
 					if (!createdUser) throw new Error("User was not created.");
+					if (!isSameStoredEmail(createdUser.email, normalizedEmail)) {
+						throw new Error(
+							"The stored email does not match the requested email.",
+						);
+					}
 					userId = createdUser.id;
 				} else {
 					await insertUser;
@@ -173,29 +219,14 @@ export function DrizzleAdapter(
 					return;
 				}
 
-				const organizationId = Organisation.OrganisationId.make(nanoId());
-
-				await tx.insert(organizations).values({
-					id: organizationId,
-					ownerId: userId,
-					name: "My Organization",
-				});
-
-				await tx.insert(organizationMembers).values({
-					id: nanoId(),
-					organizationId,
-					userId,
-					role: "owner",
-				});
-
-				await tx
-					.update(users)
-					.set({
-						activeOrganizationId: organizationId,
-						defaultOrgId: organizationId,
-					})
-					.where(eq(users.id, userId));
+				await insertPersonalOrganization(tx, userId);
 			});
+
+			if (userId === newUserId) {
+				try {
+					options?.onUserCreated?.();
+				} catch {}
+			}
 
 			const rows = await db
 				.select()
@@ -221,21 +252,13 @@ export function DrizzleAdapter(
 			return row ?? null;
 		},
 		async getUserByEmail(email) {
-			const normalizedEmail = email?.toLowerCase() ?? "";
-			const rows = await db
-				.select()
-				.from(users)
-				.where(eq(users.email, normalizedEmail))
-				.limit(1)
-				.catch((e) => {
-					throw e;
-				});
-			const row = rows[0];
-			if (!row) return null;
+			const match = await findUserByStoredEmail(db, email?.toLowerCase() ?? "");
+			if (!match) return null;
+			const { row } = match;
 
 			if (
 				!(await hasLinkedAccount(db, row.id)) &&
-				(await hasPendingProvisionedInvite(db, row.id, normalizedEmail))
+				(await hasPendingProvisionedInvite(db, row.id, match.email))
 			) {
 				return null;
 			}
@@ -472,7 +495,7 @@ export function DrizzleAdapter(
 				.where(eq(verificationTokens.identifier, normalizedIdentifier))
 				.limit(1);
 			const row = rows[0];
-			if (!row) {
+			if (!row || row.identifier.toLowerCase() !== normalizedIdentifier) {
 				console.warn("[useVerificationToken] No token found");
 				return null;
 			}

@@ -14,7 +14,7 @@ const ogImage = ogImageUrl({
 export const metadata: Metadata = {
 	title: "How to Screen Record on Mac, Windows & Chrome (2026 Guide) | Cap",
 	description:
-		"Learn how to screen record with audio on Mac, Windows, and Chrome. Free step-by-step guide covering built-in tools and Cap, the open-source screen recorder.",
+		"Learn how to screen record with audio on Mac, Windows, and Chrome. Free step-by-step guide to recording with Cap, the open-source screen recorder.",
 	openGraph: {
 		title: "How to Screen Record on Mac, Windows & Chrome (2026 Guide) | Cap",
 		description:

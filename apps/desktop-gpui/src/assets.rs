@@ -40,8 +40,11 @@ const FONTS: &[(&str, &[u8])] = assets!("fonts":
 /// element's text colour, so these must be single-colour glyphs -- a full-colour
 /// illustration would come out as a filled silhouette.
 const ICONS: &[(&str, &[u8])] = assets!("icons":
+    "volume-2.svg",
     "app-window-mac.svg",
     "app-window.svg",
+    "audio-lines.svg",
+    "calendar.svg",
     "ban.svg",
     "globe.svg",
     "area.svg",
@@ -213,6 +216,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // (`AnnotationTools.tsx`, `LayersPanel.tsx`, `Header.tsx`). Lucide 24x24
     // originals, matching the `~icons/lucide/*` imports over there.
     "pencil.svg",
+    "eraser.svg",
     "arrow-up-right.svg",
     "more-horizontal.svg",
     "save.svg",
@@ -228,6 +232,23 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "webhook.svg",
     "database.svg",
     "google-drive.svg",
+    "users.svg",
+    "cloud.svg",
+    "file-text.svg",
+    // The documents window (`meetings_ui/documents`). Lucide 24x24 originals.
+    "panel-left.svg",
+    "square-pen.svg",
+    "pin.svg",
+    "arrow-down.svg",
+    "corner-down-left.svg",
+    "notebook.svg",
+    // Meeting Mode's calendar sign-in rows (`meetings_ui/settings/accounts.rs`):
+    // the Google and Microsoft marks, flattened to one fill.
+    "google.svg",
+    "microsoft.svg",
+    // The notes window's navigation and transcript panel.
+    "folder-plus.svg",
+    "languages.svg",
 );
 
 /// Full-colour art, which `svg()` cannot draw -- it keeps only the alpha. The
@@ -319,6 +340,7 @@ mod tests {
         // from, so the table has to scan here too.
         include_str!("library.rs"),
         include_str!("controls_window.rs"),
+        include_str!("live_draw.rs"),
         include_str!("camera_window.rs"),
         include_str!("target_overlay.rs"),
         include_str!("settings_window.rs"),
@@ -350,6 +372,7 @@ mod tests {
         include_str!("editor_clips.rs"),
         // The export page's destination cards and share-status glyphs.
         include_str!("editor_export.rs"),
+        include_str!("editor_audio_only.rs"),
         // The screenshot editor's toolbar, popovers and zoom HUD; the
         // annotation module names the tool and layer glyphs.
         include_str!("screenshot_editor.rs"),
@@ -366,6 +389,25 @@ mod tests {
         // per-permission row glyphs are named on `OSPermission::icon`.
         include_str!("onboarding_window.rs"),
         include_str!("permissions.rs"),
+        include_str!("meetings_ui/main_row.rs"),
+        include_str!("meetings_ui/live/prompt.rs"),
+        include_str!("meetings_ui/live/indicator.rs"),
+        include_str!("meetings_ui/settings/page.rs"),
+        include_str!("meetings_ui/settings/calendars.rs"),
+        include_str!("meetings_ui/settings/shared.rs"),
+        include_str!("meetings_ui/setup/view.rs"),
+        include_str!("meetings_ui/settings/accounts.rs"),
+        include_str!("meetings_ui/documents/window.rs"),
+        include_str!("meetings_ui/documents/sidebar.rs"),
+        include_str!("meetings_ui/documents/pane.rs"),
+        include_str!("meetings_ui/documents/transcript.rs"),
+        include_str!("meetings_ui/documents/bar.rs"),
+        include_str!("meetings_ui/documents/ask.rs"),
+        include_str!("meetings_ui/documents/menu.rs"),
+        include_str!("meetings_ui/documents/home.rs"),
+        include_str!("meetings_ui/documents/start.rs"),
+        include_str!("meetings_ui/documents/style.rs"),
+        include_str!("meetings_ui/documents/upgrade.rs"),
     ];
 
     /// Every icon a window asks for must be in the table. gpui draws

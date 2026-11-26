@@ -111,7 +111,7 @@ quality = { text = "Recording quality", max_px = 171, size = 13 }
 recordings = { text = "Recordings", max_px = 171, size = 13 }
 screenshots = { text = "Screenshots", max_px = 171, size = 13 }
 shortcuts = { text = "Shortcuts", max_px = 171, size = 13 }
-transcription = { text = "Transcription", max_px = 171, size = 13 }
+transcription = { text = "Dictionary", context = "Settings sidebar item for the one list of names and terms Cap spells right." }
 
 [settings.general.language]
 description = "Choose the language Cap is shown in."
@@ -198,15 +198,9 @@ label = "Capture keyboard presses"
 description = "Automatically restores the notch for new screen and area recordings when the selected region contains the complete notch. External displays, partial areas, and window recordings are left alone. Each recording can override it in the editor."
 label = "Draw the MacBook notch on screen recordings"
 
-[settings.general.recording.max_fps]
-description = "Maximum framerate for screen capture."
-description_high = { text = "Maximum framerate for screen capture. Higher values may cause drops or increased CPU usage on some systems.", context = "Shown instead of the short description when more than 60 FPS is selected." }
-fps_120 = { text = "120 FPS", max_px = 180, size = 12 }
-fps_24 = { text = "24 FPS", max_px = 180, size = 12 }
-fps_25 = { text = "25 FPS", max_px = 180, size = 12 }
-fps_30 = { text = "30 FPS", max_px = 180, size = 12 }
-fps_60 = { text = "60 FPS (Recommended)", max_px = 180, size = 12 }
-label = "Max capture framerate"
+[settings.general.recording.keep_drawings]
+description = "Drawings stay until you clear them. When off, each one fades a few seconds after you draw it."
+label = "Keep drawings on screen"
 
 [settings.general.recording.marker_sound]
 description = "Plays a short sound when you add a marker during a Studio recording. Your microphone or system audio can pick it up."
@@ -302,6 +296,7 @@ open_link = "Open link"
 retry_upload = "Retry upload"
 show_all = "Show all"
 title = "Recordings"
+save_audio = "Save Audio"
 
 [settings.recordings.empty]
 all = "No recordings"
@@ -330,23 +325,48 @@ save_failed = "Couldn't save your recording settings. Please try again."
 [settings.quality.studio]
 balanced = "Balanced"
 balanced_description = "Sharp detail at a sensible file size. Right for most recordings."
+bitrate = "Bitrate"
+bitrate_description = "Higher keeps more detail and makes larger files. Very high values can be more than your computer's encoder delivers."
+bitrate_value = { text = "{value} Mbps", context = "{value} is a whole number of megabits per second, for example 30." }
 compatibility = "Smaller files"
 compatibility_description = "Saves disk space. Fine detail can soften, most of all on camera."
-description = "Saved to your computer for editing. You choose the export size later, in the editor."
+custom = "Custom"
+custom_description = "Set the screen recording bitrate yourself."
+description = "Records your screen at full resolution, up to 4K, in the highest quality, and saves it to your computer for editing. You choose the export size later, in the editor."
 recommended = "Recommended"
-title = "Studio recordings"
+resolution = "Resolution"
+resolution_description = "Your screen's full resolution, up to 4K. Windows and areas record at their own size."
+resolution_description_compatibility = "Each screen records at its full resolution, up to 4K. With a camera on, the Smaller files setting records at up to 1600 × 1000."
+resolution_description_several = "Each screen records at its own full resolution, up to 4K. Windows and areas record at their own size."
+resolution_up_to = { text = "Up to {resolution}", context = "Shown with several displays connected. {resolution} is the largest size Studio Mode records, such as 4K or 3456 × 2234." }
+title = "Studio Mode"
 ultra = "Maximum detail"
 ultra_description = "Keeps the most detail for heavy editing. Uses the most disk space."
 
+[settings.quality.studio.frame_rate]
+description = "Studio Mode records up to this rate and never faster than your display refreshes. With a camera on, it records at 30 FPS or less."
+description_high = "Recording above 60 FPS uses more CPU and disk space, and some computers encode it in software. Studio Mode never records faster than your display refreshes. With a camera on, it records at 30 FPS or less."
+description_match = { text = "Records at your display's refresh rate, up to {fps} FPS. Recording above 60 FPS uses more CPU and disk space. With a camera on, Studio Mode records at 30 FPS or less.", context = "{fps} is the highest frame rate Studio Mode records on this computer: 240 on macOS, 120 on Windows and Linux." }
+fps_120 = { text = "120 FPS", max_px = 180, size = 12 }
+fps_144 = { text = "144 FPS", max_px = 180, size = 12 }
+fps_165 = { text = "165 FPS", max_px = 180, size = 12 }
+fps_24 = { text = "24 FPS", max_px = 180, size = 12 }
+fps_240 = { text = "240 FPS", max_px = 180, size = 12 }
+fps_25 = { text = "25 FPS", max_px = 180, size = 12 }
+fps_30 = { text = "30 FPS", max_px = 180, size = 12 }
+fps_60 = { text = "60 FPS (Recommended)", max_px = 180, size = 12 }
+label = "Frame rate"
+match_display = { text = "Match display", max_px = 180, size = 12 }
+
 [settings.quality.instant]
-description = "Uploaded while you record, so the link is ready the moment you stop. For the best quality, use Studio mode: it records at the highest quality your screen allows, and you can export up to 4K."
+description = "Uploaded while you record, so the link is ready the moment you stop. For the best quality, use Studio Mode: it records at the highest quality your screen allows, and you can export up to 4K."
 free_plan = "720p on the free plan. Cap Pro records up to 4K."
 max_resolution = "Maximum resolution"
 res_1080p = "Sharp text at a practical upload size."
 res_1440p = "Extra detail for large, high-resolution screens."
 res_4k = "The most detail. Best on a fast connection."
 res_720p = "Smallest uploads, so links are ready fastest."
-title = "Instant recordings"
+title = "Instant Mode"
 
 [settings.quality.sharing]
 auto_open = "Open share links automatically"
@@ -369,7 +389,7 @@ screen_region = { text = "Screen region", max_px = 180, size = 12 }
 [settings.options.post_studio]
 do_nothing = "Do nothing"
 open_editor = "Open editor"
-show_cap = "Show Cap"
+show_overlay = "Show in overlay"
 
 [settings.options.post_screenshot]
 copy = "Copy to clipboard"
@@ -392,16 +412,19 @@ cancelling_description = "For screenshots and recordings started from a shortcut
 cancelling_title = "Cancelling"
 closing_editor_description = "For the screenshot editor and the video editor."
 closing_editor_title = "Closing the editor"
+conflict = { text = "Already used by {shortcut}.", context = "{shortcut} is the label of the shortcut that already uses the keys just pressed, such as Record an area. A Replace button sits next to it." }
 needs_modifier_macos = "Include ⌘, ⌃ or ⌥ so the shortcut doesn't get in the way of typing."
 needs_modifier_other = "Include Ctrl, Alt or Win so the shortcut doesn't get in the way of typing."
-record_shortcut = "Record shortcut"
+not_set = "Not set"
 recording_description = "Start a recording without opening Cap first."
 recording_hint = "Press the keys you want to use. Esc cancels, Delete removes it."
 recording_title = "Recording"
+replace = { text = "Replace", context = "Button: moves the keys just pressed from the other shortcut to this one." }
 saved = { text = "Saved. Press {keys} in any app to {effect}.", context = "{keys} is the shortcut, such as ⌘⇧4. {effect} is one of the settings.shortcuts.effect messages and completes the sentence." }
 saved_moved = { text = "Saved. Press {keys} in any app to {effect}. Removed from {shortcut}.", context = "Like settings.shortcuts.saved; {shortcut} is the label of the shortcut that used these keys before, such as Record an area." }
 screenshots_description = "Shortcuts work from any app. Click one to change it."
 screenshots_title = "Screenshots"
+shared = { text = "Same keys as {shortcut}, so both run.", context = "{shortcut} is the label of another shortcut bound to the same keys, such as Record an area." }
 type_shortcut = "Type shortcut…"
 unavailable = "Another app or the system already uses this shortcut. Click to choose a different one."
 unsupported_key = "That key can't be used in a shortcut. Try a letter, number or F-key."
@@ -453,8 +476,8 @@ screenshot_open_editor_hint = "Annotate first"
 studio_do_nothing = "Do nothing"
 studio_open_editor = "Open editor"
 studio_open_editor_hint = "Edit right away"
-studio_show_cap = "Show Cap"
-studio_show_cap_hint = "Back to the recorder"
+studio_show_overlay = "Show overlay"
+studio_show_overlay_hint = "Copy, share or export"
 
 [settings.shortcuts.label]
 add_marker = "Add marker"
@@ -470,8 +493,10 @@ screenshot_area = "Screenshot an area"
 screenshot_display = "Screenshot the display"
 screenshot_window = "Screenshot a window"
 start_instant = "Start Instant recording"
+start_selected = "Start in selected mode"
 start_studio = "Start Studio recording"
 stop = "Stop recording"
+toggle_drawing = "Draw on screen"
 
 [settings.shortcuts.effect]
 add_marker = "mark this moment in a Studio recording"
@@ -481,13 +506,10 @@ instant_copy_and_open = "record your selected screen or window in Instant mode, 
 open_picker = "open Cap so you can choose what to record"
 pause = "pause the current recording, or resume it"
 picker_area_instant = "select an area, then record it in Instant mode"
-picker_area_screenshot = "select an area, then take a screenshot of it"
 picker_area_studio = "select an area, then record it in Studio mode"
 picker_display_instant = "choose a display, then record it in Instant mode"
-picker_display_screenshot = "choose a display, then take a screenshot of it"
 picker_display_studio = "choose a display, then record it in Studio mode"
 picker_window_instant = "choose a window, then record it in Instant mode"
-picker_window_screenshot = "choose a window, then take a screenshot of it"
 picker_window_studio = "choose a window, then record it in Studio mode"
 restart = "throw away the current take and start again"
 screenshot_area_copy = "select an area and copy it to your clipboard"
@@ -502,9 +524,11 @@ screenshot_window_copy = "capture the window under your pointer and copy it to y
 screenshot_window_copy_and_open_editor = "capture the window under your pointer and copy it and open the editor"
 screenshot_window_open_editor = "capture the window under your pointer and open it in the editor"
 screenshot_window_save = "capture the window under your pointer and save it to your library without opening anything"
+start_selected = "start a recording or screenshot in the mode selected in Cap"
 stop = "stop the current recording"
 studio = "record your selected screen or window in Studio mode"
 studio_open_editor = "record your selected screen or window in Studio mode, then open the editor when you stop"
+toggle_drawing = "start or stop drawing on screen while recording"
 
 [settings.shortcuts.sentence]
 add_marker = "Mark this moment in a Studio recording."
@@ -514,13 +538,10 @@ instant_copy_and_open = "Record your selected screen or window in Instant mode, 
 open_picker = "Open Cap so you can choose what to record."
 pause = "Pause the current recording, or resume it."
 picker_area_instant = "Select an area, then record it in Instant mode."
-picker_area_screenshot = "Select an area, then take a screenshot of it."
 picker_area_studio = "Select an area, then record it in Studio mode."
 picker_display_instant = "Choose a display, then record it in Instant mode."
-picker_display_screenshot = "Choose a display, then take a screenshot of it."
 picker_display_studio = "Choose a display, then record it in Studio mode."
 picker_window_instant = "Choose a window, then record it in Instant mode."
-picker_window_screenshot = "Choose a window, then take a screenshot of it."
 picker_window_studio = "Choose a window, then record it in Studio mode."
 restart = "Throw away the current take and start again."
 screenshot_area_copy = "Select an area and copy it to your clipboard."
@@ -535,9 +556,11 @@ screenshot_window_copy = "Capture the window under your pointer and copy it to y
 screenshot_window_copy_and_open_editor = "Capture the window under your pointer and copy it and open the editor."
 screenshot_window_open_editor = "Capture the window under your pointer and open it in the editor."
 screenshot_window_save = "Capture the window under your pointer and save it to your library without opening anything."
+start_selected = "Start a recording or screenshot in the mode selected in Cap."
 stop = "Stop the current recording."
 studio = "Record your selected screen or window in Studio mode."
 studio_open_editor = "Record your selected screen or window in Studio mode, then open the editor when you stop."
+toggle_drawing = "Start or stop drawing on screen while recording."
 
 [settings.cli]
 command = "Command"
@@ -559,20 +582,9 @@ retry = "Retry"
 target = "Target"
 title = "Command Line"
 
-[settings.transcription]
-active_title = "Active hints"
-applied_note = "These hints are applied when you generate captions in the editor."
-clear = "Clear"
-count = { one = "{count} item", other = "{count} items" }
-description = "Add names, spellings, domains, and capitalization preferences that caption generation should keep in mind."
-placeholder = "Add a term"
-saved = "Saved"
-saving = "Saving..."
-terms_description = "Add one term at a time to reduce typos and formatting mistakes."
-terms_title = "Remembered terms"
-title = "Transcription"
-
 [settings.experimental]
+library_window = "Library window"
+library_window_description = "Open the Library button in its own window, with a sidebar, smart folders and a list or magazine layout."
 muxer = "Out-of-process muxer"
 muxer_description = "Run the fragmented-MP4 muxer in an isolated subprocess so muxer crashes can't take down your recording. Requires the bundled cap-muxer binary."
 reliability = "Reliability"
@@ -606,6 +618,9 @@ uploading = "Uploading..."
 confirm_body = { text = "Cap will take over your screen with a flashing pattern and play loud beeps for about {seconds} seconds per pipeline. Take your headphones off, leave the volume audible, and leave the machine alone until it finishes.", context = "{seconds} is a whole number of seconds." }
 confirm_title = "Run diagnostic?"
 description = "Records a short flashing/beeping test pattern, measures how far the picture and sound drift apart, and snapshots your displays, cameras, microphones, disk space and recording settings. Nothing is sent anywhere until you choose to send it."
+duration_description = "Longer runs are more sensitive to slow drift."
+duration_label = "Test duration"
+duration_option = { text = "{seconds} seconds", context = "Segment in a three-way control in the settings window; {seconds} is 20, 40 or 60." }
 mic_description = "Also record your microphone and check that it hears the beeps in time. Needs speakers the mic can actually hear."
 mic_label = "Test microphone"
 mode_description = "Which pipeline to test. Both runs the studio leg and then the instant one."
@@ -646,6 +661,8 @@ activating = "Activating..."
 active_title = "Desktop license"
 checking = "Checking…"
 deactivate = "Deactivate License"
+deactivate_failed = "Couldn't deactivate your license. Check your connection and try again."
+deactivating = "Deactivating..."
 description = "Your Cap plan and desktop license, in one place."
 desktop_description = "Your desktop license covers commercial recording and editing. Cap Pro adds cloud sharing and collaboration features."
 desktop_name = "Desktop License"
@@ -742,17 +759,22 @@ working_for = { text = "Google Drive connection is working for {email}", context
 
 [settings.automations]
 action_no_effect = "This action has no effect for the selected trigger."
+action_unsupported = "Cap doesn't run this action yet, so it is skipped."
 add_action = "Add action"
 add_condition = "Add condition"
 auto_name_empty = { text = "{trigger} automation", context = "{trigger} is a settings.automations.trigger.*.noun." }
 browse = "Browse"
 check_compatibility = "Check compatibility"
-compatibility_checked = "Compatibility checked: this automation doesn't run in Cap yet. Saved rules remain available to the Cap CLI. No actions were run."
+compatibility_checked = "Compatibility checked: every action in this automation runs in Cap. No actions were run."
+compatibility_unsupported = "Compatibility checked: text recognition doesn't run in Cap yet and will be skipped. The other actions run. No actions were run."
 condition_never_matches = "This condition never matches for the selected trigger."
 copy_link = "Copy link to clipboard"
-dangerous = "In the Cap CLI, this automation runs commands or sends network requests with your permissions. Only use values you trust."
+dangerous = "This automation runs commands or sends network requests with your permissions. Only use values you trust."
 delete = "Delete"
-description = "Rules are shared with the Cap CLI. Cap saves these rules but does not run automations yet."
+delete_guarded = "Deletes the recording only once the step above succeeds and its file is checked, and keeps the editor closed so it can. Otherwise everything is kept."
+delete_needs_copy = "Nothing will be deleted. Put an Export with profile to a folder you choose, or a Save to location, right above this step."
+notify_needs_setting = "Shows only while System notifications is on in General settings."
+description = "Rules are shared with the Cap CLI. Cap runs enabled rules automatically."
 empty_description = "Pick a template below to get started in one click, or build your own from scratch."
 empty_title = "No automations yet"
 enabled = "Enabled"
@@ -997,6 +1019,13 @@ no_microphones = "No microphones found"
 system_audio_off = { text = "No System Audio", max_px = 180, size = 14 }
 system_audio_on = { text = "Record System Audio", max_px = 180, size = 14 }
 
+[main.device.picture]
+label = { text = "Picture", max_px = 180, size = 14, context = "The camera row label when a still picture is used instead of a camera." }
+choose = "Use a picture"
+detail = "Shows in place of a camera"
+change = "Choose another picture"
+filter = "Images"
+
 [main.device.access]
 allow_access = { text = "Allow access", max_px = 130, size = 11 }
 camera_denied = "Cap can't use your camera. Turn it on in System Settings."
@@ -1029,14 +1058,16 @@ off = { text = "Off", max_px = 130, size = 11 }
 on = { text = "On", max_px = 130, size = 11 }
 
 [main.error]
+audio_only_needs_audio = "Audio only recording needs a microphone or system audio."
 camera_only_needs_camera = "Camera-only recording requires a selected camera."
 copy = "Copy error"
 devices_not_ready = "Recording devices are not ready. Open the recorder and try again."
 title = "Something went wrong"
 
 [main.header]
-changelog = "Changelog"
 help = "Help & Tour"
+library = "Library"
+notes = "Notes"
 recordings = "Recordings"
 screenshots = "Screenshots"
 settings = "Settings"
@@ -1048,10 +1079,14 @@ copy_screenshot_failed = "Could not copy screenshot"
 import_recordings = "Import"
 import_screenshots = "Import image"
 importing = "Importing"
+no_matching_notes = "No matching notes"
 no_matching_recordings = "No matching recordings"
 no_matching_screenshots = "No matching screenshots"
+no_notes = "No notes yet"
 no_recordings = "No recordings yet"
 no_screenshots = "No screenshots yet"
+notes_description = "Your notes will appear here. Write one any time, or record a meeting into one."
+open_notes = "Open Notes"
 recordings_description = "Your screen recordings will appear here. Start recording to get started!"
 screenshots_description = "Your screenshots will appear here. Take a screenshot to get started!"
 view_all_recordings = "View All Recordings"
@@ -1137,8 +1172,9 @@ record_anyway = "Record anyway"
 title = "Low storage"
 
 [main.target]
-area = { text = "Area", max_px = 140, size = 12 }
-camera_only = { text = "Camera Only", max_px = 140, size = 12 }
+area = { text = "Area", max_px = 84, size = 12 }
+audio_only = { text = "Audio Only", max_px = 84, size = 12 }
+camera_only = { text = "Camera Only", max_px = 84, size = 12 }
 choose_display = "Choose a display"
 choose_window = "Choose a window"
 display = { text = "Display", max_px = 100, size = 12 }
@@ -1148,6 +1184,35 @@ no_matching_displays = "No matching displays"
 no_matching_windows = "No matching windows"
 no_windows = "No windows found"
 window = { text = "Window", max_px = 100, size = 12 }
+
+[recordings_overlay]
+close = "Close"
+copy = "Copy to clipboard"
+copy_link = "Copy shareable link"
+create_link = "Create shareable link"
+edit = "Edit"
+export = "Export"
+open = "Open"
+retry = "Retry"
+
+[recordings_overlay.progress]
+choose_image = "Choose where to save the image"
+choose_video = "Choose where to export the video"
+copied = "Copied to clipboard"
+copy_failed = "Couldn't copy"
+copying = "Copying to clipboard"
+creating_link = "Creating shareable link"
+failed_hint = "Something went wrong. Try again."
+link_copied = "Shareable link copied"
+preparing = "Preparing"
+rendering_video = "Rendering video"
+save_failed = "Couldn't save"
+saved_image = "Image saved"
+saved_video = "Video saved"
+saving_image = "Saving image"
+saving_video = "Saving video"
+share_failed = "Couldn't create the link"
+share_failed_hint = "Check your connection and try again."
 
 [controls]
 disk_full_resume = "Not enough disk space to resume. Free up space and try again, or press Stop to save."
@@ -1177,8 +1242,31 @@ resuming = { text = "Resuming…", max_px = 73, size = 14 }
 saving = { text = "Saving…", max_px = 73, size = 14 }
 starting = { text = "Starting", max_px = 73, size = 14 }
 
+[controls.disconnected]
+camera = "Camera disconnected. Recording continues without camera overlay."
+microphone = "Microphone disconnected. Silence will be used until it reconnects."
+
 [controls.marker]
 add = "Add marker"
+
+[controls.draw]
+arrow = "Arrow, ⇧ snaps to 45°"
+clear = "Clear all"
+highlighter = "Highlighter, ⇧ for a straight line"
+pen = "Pen, ⇧ for a straight line"
+rectangle = "Rectangle, ⇧ for a square"
+start = "Draw on screen"
+stop = "Stop drawing"
+undo = "Undo"
+window_unavailable = "Drawing works in display and area recordings"
+
+[controls.settings]
+locked = "Can't change in this recording"
+not_in_recording = "Not in this recording"
+open = "Recording settings"
+show_camera_preview = "Show camera preview"
+switch_failed = "Couldn't switch to {device}. The recording continues."
+switching = "Switching…"
 
 [camera]
 waiting_title = "Waiting for camera access"
@@ -1194,12 +1282,39 @@ mirror_title = "Mirror unavailable"
 [camera.issue]
 access_message = "Click to allow Cap to use your camera in System Settings."
 access_title = "Camera access needed"
+disconnected_message = "The selected camera stopped sending video."
+disconnected_title = "Camera disconnected"
 generic = "The selected camera could not be started. Choose another camera or reconnect this one."
 invalid_format = "This camera did not report a usable capture format."
 not_found = "This camera is no longer available. Check that it is connected and allowed by system permissions."
 start_failed = "The system could not start this camera. It may be unavailable or in use by another app."
 timeout = "No frames were received from this camera. It may be closed, disconnected, covered, or in use by another app."
 unavailable_title = "Camera unavailable"
+
+[camera.toolbar]
+close = { text = "Close camera", context = "Hint title over the X button in the floating camera preview. The window is often only 230px wide." }
+larger = "Make larger"
+smaller = "Make smaller"
+size_body = "Or drag any corner to resize."
+shape = "Change shape"
+shape_to_square = "Switch to a square."
+shape_to_full = "Switch to a rectangle that shows your whole camera."
+shape_to_round = "Switch back to a circle."
+mirror = { text = "Mirror preview", context = "Hint title over the mirror button in the camera preview. Only the preview is flipped." }
+mirror_off = "Flip the preview like a mirror."
+mirror_on = "Mirrored now. Click to flip it back."
+blur = { text = "Background blur", context = "Hint title over the background blur button in the camera preview." }
+blur_off = "Off. Click for a light blur."
+blur_light = "Light. Click for a heavier blur."
+blur_heavy_then_cutout = "Heavy. Click to remove the background."
+blur_heavy_then_off = "Heavy. Click to turn it off."
+blur_cutout = "Background removed. Click to turn it off."
+picture = "Use a picture"
+picture_body = "Show a still picture instead of your camera."
+change_picture = "Change picture"
+change_picture_body = "Choose another picture to show."
+use_camera = "Use your camera"
+use_camera_body = "Show your camera again instead of the picture."
 
 [camera.blur]
 light = { text = "Light", context = "Tiny 7px label under the background blur button in the camera preview. Keep it to one short word." }
@@ -1407,6 +1522,8 @@ devices_changed_before_start = "Selected devices changed before recording starte
 shortcut_conflict = "Ctrl+Shift+F9 is assigned to another Cap action. Change that shortcut before recording."
 shortcut_description = { text = "Start or stop this Cap recording", context = "Shown by the Linux desktop when it asks the user to approve a global shortcut." }
 shortcut_hint = { text = "Press and release {shortcut} to start. Use the same shortcut to stop. This temporary shortcut does not change your settings.", context = "{shortcut} is a key combination such as Ctrl+Shift+F9." }
+source_lost = "Cap stopped recording because what it was capturing went away, for example the display went to sleep or the window closed. Everything recorded up to then was saved."
+source_lost_title = "Recording stopped"
 tray_stop_hint = "Activate the Cap Stop tray icon to start. Activate the same icon again to stop. Recording will not start until you use that control."
 window_unavailable = "The selected window is no longer available. Select it again."
 
@@ -1464,12 +1581,14 @@ placeholder = "Paste or type your script…"
 words_per_minute = { text = "{wpm} wpm", context = "Teleprompter scroll speed in words per minute; {wpm} is a number such as 150." }
 
 [import]
+audio_failed = { text = "Failed to import audio: {error}", context = "{error} is a technical error message, usually in English." }
 error_title = "Import Error"
 image_failed = { text = "Failed to import image: {error}", context = "{error} is a technical error message, usually in English." }
 unsupported = "Unsupported media file."
 video_failed = { text = "Failed to import video: {error}", context = "{error} is a technical error message, usually in English." }
 
 [import.filter]
+audio = { text = "Audio Files", context = "File type name in the file picker's filter list." }
 image = { text = "Image Files", context = "File type name in the file picker's filter list." }
 media = { text = "Media Files", context = "File type name in the file picker's filter list." }
 video = { text = "Video Files", context = "File type name in the file picker's filter list." }
@@ -1512,6 +1631,13 @@ unlock_body = "Let the area be moved, resized or drawn again."
 locked_title = "Area locked"
 locked_body = "Click to unlock it, so it can be moved, resized or drawn again."
 
+[overlay.audio_only]
+choose_source = "Choose a microphone or turn on system audio"
+description = "Record your microphone and your computer's sound, without the screen or camera"
+meter_hint = "Say something to check your level"
+system_audio = "System audio"
+system_audio_only = "Recording system audio only"
+
 [overlay.camera_only]
 description = "Record using only your camera and microphone"
 select_camera = "Please select a camera"
@@ -1531,10 +1657,10 @@ studio = { text = "Studio Mode — Record and edit locally", context = "Second l
 take_screenshot = "Take Screenshot"
 
 [overlay.window]
+size_needs_permission_body = "Click to see how to let Cap resize windows."
+size_needs_permission_title = "Resizing needs your OK"
 size_title = "Change window size"
 size_body = "Resize the window to a ratio or an exact size before you record."
-size_needs_accessibility_title = { text = "Resizing needs Accessibility", context = "Accessibility is the macOS System Settings pane; use the name macOS shows in this language." }
-size_needs_accessibility_body = { text = "Turn on Accessibility for Cap in System Settings to resize other apps' windows.", context = "Accessibility is the macOS System Settings pane; use the name macOS shows in this language." }
 size_unavailable_title = "Resizing isn't available"
 size_unavailable_body = "Wayland doesn't let apps resize other apps' windows."
 focus_title = { text = "Focus mode", context = "Card title above a switch in the window picker. Focus mode centres the picked window and records only it." }
@@ -1549,12 +1675,46 @@ center_description = { text = "Move the window to the middle when you pick it", 
 
 [permission.guide]
 accessibility_body = { text = "Drop it on the Accessibility list above, then make sure its switch is on.", context = "Accessibility is the name of the macOS System Settings pane; use the name macOS shows in this language." }
+input_monitoring_plus_body = { text = "Click + under the Input Monitoring list above, then choose Cap.", context = "Input Monitoring is the macOS System Settings pane; use the name macOS shows in this language." }
+override_body = { text = "Click + above and choose Cap. Then pick Choose Apps and add the apps Cap should resize.", context = "Choose Apps and At Any Time are macOS button and menu labels; use the names macOS shows in this language." }
+override_title = "Add Cap, then choose apps"
+plus_title = "Add Cap with the + button"
 screen_body = { text = "Drop it on the Screen & System Audio Recording list above, then make sure its switch is on.", context = "Screen & System Audio Recording is the name of the macOS System Settings pane; use the name macOS shows in this language." }
+screen_plus_body = { text = "Click + under the Screen & System Audio Recording list above, then choose Cap.", context = "Screen & System Audio Recording is the name of the macOS System Settings pane; use the name macOS shows in this language." }
 title = "Drag Cap into the list"
+
+[permission.help]
+done = "Done"
+done_keystrokes = "Your next recording will include the keys you press."
+meeting_title = "Name speakers from meeting apps"
+meeting_body = "macOS needs your OK before Cap can see who’s talking in Zoom, Teams or your browser."
+done_meeting = "Cap can name speakers from your meeting apps now."
+meeting_step_choose_apps = "Pick Choose Apps, then add Zoom, Teams or your browser."
+meeting_step_add_apps = "Click + and add Zoom, Teams or your browser."
+done_title = "You're all set"
+done_window = "Cap can resize windows now."
+keystrokes_body = "macOS needs your OK before Cap can see the keys you press while recording."
+keystrokes_title = "Show your keystrokes"
+not_now = "Not now"
+relaunch_keystrokes = "macOS turns on keystrokes once Cap restarts."
+step_accessibility = { text = "Find Cap under Accessibility and switch it on.", context = "Accessibility is the macOS System Settings pane; use the name macOS shows in this language." }
+step_choose_cap = "Choose Cap and enter your Mac password."
+step_input_monitoring = { text = "Click + under Input Monitoring.", context = "Input Monitoring is the macOS System Settings pane; use the name macOS shows in this language." }
+step_open = "Click Open System Settings below."
+window_body = "macOS needs your OK before Cap can move or resize another app's window."
+window_step_add_app = { text = "Click + and add {app}.", context = "{app} is the name of the app whose window is being resized." }
+window_step_add_apps = "Click + and add the app you're recording."
+window_step_any_time = { text = "Set it to At Any Time so macOS doesn't ask again every day.", context = "Choose Apps and At Any Time are macOS button and menu labels; use the names macOS shows in this language." }
+window_step_choose_app = { text = "Pick Choose Apps, then add {app}.", context = "Choose Apps and At Any Time are macOS button and menu labels; use the names macOS shows in this language. {app} is the name of the app whose window is being resized." }
+window_step_choose_apps = { text = "Pick Choose Apps, then add the app you're recording.", context = "Choose Apps and At Any Time are macOS button and menu labels; use the names macOS shows in this language." }
+window_step_info = "Click ⓘ next to Cap."
+window_step_override = "Click + in the pane that opens and choose Cap."
+window_title = "Let Cap resize windows"
 
 [permission.name]
 accessibility = "Accessibility"
 camera = "Camera"
+input_monitoring = { text = "Input Monitoring", context = "Input Monitoring is the macOS System Settings pane; use the name macOS shows in this language." }
 microphone = "Microphone"
 screen_recording = "Screen Recording"
 
@@ -1589,11 +1749,20 @@ regained_title = "Cap needs a permission back"
 title = "Let's get Cap ready"
 
 [permission.onboarding.hint]
+add_with_plus = "Click + under the Screen & System Audio Recording list in System Settings, then choose Cap. Already listed? Just switch it on."
 drag_into_list = "Drag Cap from the panel under System Settings into the list. Already listed? Just switch it on."
 find_in_list = "Find Cap in the list and switch it on. If macOS asked first, choose Open System Settings."
+input_monitoring_plus = { text = "Click + under the Input Monitoring list in System Settings, then choose Cap. Already listed? Just switch it on.", context = "Input Monitoring is the macOS System Settings pane; use the name macOS shows in this language." }
 no_prompt = "No prompt showed up? Switch Cap on in System Settings."
 open_settings = "Open System Settings, find Cap in the list and switch it on."
 turned_off = "It was turned off earlier, so switch Cap on in System Settings. Or skip it for now."
+
+[permission.onboarding.keystrokes]
+allow = "Set up keystrokes"
+body = { text = "Cap can show the keys you press in your recordings. macOS calls this Input Monitoring. Skip it if you don't need it.", context = "Input Monitoring is the macOS System Settings pane; use the name macOS shows in this language." }
+done_body = "Your recordings can show the keys you press."
+done_title = "Keystrokes are on"
+title = "Show your keystrokes"
 
 [permission.onboarding.microphone]
 allow = "Allow microphone"
@@ -1606,6 +1775,7 @@ title = "Let Cap hear you"
 body = "macOS turns on screen recording once Cap restarts. You'll pick up right here."
 button = { text = "Relaunch", context = "Small secondary button beside a hint." }
 hint = "Switched on but still waiting? Restart Cap to apply it."
+keystrokes_body = "macOS turns on keystrokes once Cap restarts. You'll pick up right here."
 later = "macOS applies it after Cap restarts. You can do that once you're done here."
 title = "One restart and you're set"
 
@@ -1742,6 +1912,7 @@ text_label = "Text"
 complete = "Download complete"
 failed = { text = "Download failed: {error}", context = "{error} is a technical error message, usually in English." }
 file_progress = { text = "Downloading {file}: {percent}%", context = "{file} is a model file name; {percent} is a whole number." }
+no_space = { text = "Not enough free space. Free up {size} and try again", context = "{size} is an amount of disk space such as 1.2 GB." }
 preparing = "Preparing model download"
 progress = { text = "Downloading model: {percent}%", context = "{percent} is a whole number." }
 
@@ -1769,6 +1940,20 @@ change_hint = "Pick a different track for this segment"
 change_title = "Change audio"
 done = "Done"
 import = "Import file"
+
+[editor.audio_only]
+add_visuals = "Add Visuals"
+body = "This recording has no video. Export the sound as MP3 or WAV, or add visuals to turn it into a video."
+export_audio = "Export Audio"
+show_visuals = "Show visuals"
+size_large = "Large"
+size_medium = "Medium"
+size_small = "Small"
+style_bars = "Bars"
+style_circle = "Circle"
+style_wave = "Wave"
+title = "Audio only"
+visuals = "Visuals"
 
 [editor.color]
 apply_to_cursor = "Apply to cursor"
@@ -2184,6 +2369,7 @@ manual_help = "Manual zoom stays on a fixed spot you pick below."
 mixed = "Mixed"
 mode = "Zoom Mode"
 positions_mixed = "Segments zoom into different spots. Drag to move them all to the same one."
+start_early = "Start zooms early"
 title = { text = "Zoom {number}", context = "{number} is the segment's position on the track, starting at 1." }
 
 [editor.side_panel]
@@ -2288,6 +2474,7 @@ background_blur = "Background Blur"
 custom_position = "Custom screen position (dragged on canvas)"
 motion_blur = "Motion Blur"
 padding = "Padding"
+padding_style = "Padding Style"
 rounded_corners = "Rounded Corners"
 title = "Layout"
 
@@ -2366,11 +2553,13 @@ mp4_filter = { text = "MP4 Video", context = "File type filter name in the file 
 prepare_controls_failed = "Could not prepare the recording controls: {error}"
 record = { text = "Record", context = "Button that records a new clip into this project." }
 record_new = "Record a new clip"
+removed_media = { text = "{name} (removed clips)", context = "Name of the folder moved to the system Trash that holds the media of clips deleted from a recording; {name} is the recording name." }
 save_before_recording_failed = "Could not save the current project before recording: {error}"
 split = { text = "Split {number}", context = "Default name of a later piece cut from the same clip; {number} starts at 1." }
 title = "Clips"
 
 [editor.clips.error]
+audio_only_mix = "Audio only recordings and video clips cannot be combined in one project"
 cancelled = "Import cancelled"
 cannot_decode = "Cannot decode video {path}: {error}"
 in_use = "Cannot import while this recording is in use: {error}"
@@ -2411,6 +2600,17 @@ upgrade_message = "This feature requires an upgraded plan"
 upgrade_title = "Upgrade required"
 upload_failed = "Failed to upload recording"
 
+[editor.export.audio]
+cta = "Export Audio"
+exported = "Audio exported"
+exporting = "Exporting audio"
+failed_message = "Try again, or save it somewhere else."
+failed_title = "Couldn't save the audio"
+file_type = "File type"
+format = { text = "Audio", context = "Export format: the sound alone as one MP3 or WAV file." }
+mp3_description = "Small and plays everywhere. 192 kb/s stereo."
+wav_description = "Lossless 16-bit, 48 kHz. Best for further editing."
+
 [editor.export.advanced]
 bits_per_pixel = "Bits per pixel"
 cursor_only = "Export cursor only"
@@ -2443,6 +2643,10 @@ open_link = "Open link"
 retry_copy = "Retry Copy"
 reuploaded = "Your latest edit is ready at the same link"
 uploaded = "Your Cap has been uploaded successfully"
+
+[editor.export.enhance]
+description = "Sharpens text and fine detail when your recording is zoomed in or scaled down. Exports can take longer."
+title = "Enhance quality"
 
 [editor.export.estimate]
 gigabytes = "~{value} GB"
@@ -2498,6 +2702,7 @@ format = "Format"
 frame_rate = "Frame rate"
 quality = "Quality"
 resolution = "Resolution"
+tracks = "Tracks"
 
 [editor.export.stats]
 calculating = "Calculating…"
@@ -2509,6 +2714,25 @@ output_value = { text = "{width}×{height} · {fps} fps", context = "Output size
 refining_size = "Refining size…"
 refining_time = "Refining time…"
 unavailable = "Unavailable"
+
+[editor.export.tracks]
+aligned = "Tracks follow your cuts and speed, so they line up in any video editor. Video comes out clean, without background or effects."
+audio_detail = "WAV · 48 kHz"
+camera = "Camera"
+choose_one = "Choose at least one track to export."
+cta = "Export Tracks"
+exported = "Tracks exported"
+exporting = "Exporting tracks"
+file_count = { one = "{count} file", other = "{count} files", context = "How many files a tracks export writes." }
+file_only = "Tracks are saved as separate files in a folder."
+files = "Files"
+format = { text = "Tracks", context = "Export format: separate screen, camera and audio files." }
+microphone = "Microphone"
+open_folder = "Open Folder"
+screen = "Screen"
+studio_only = "Separate tracks are only recorded in Studio Mode."
+system_audio = "System audio"
+video_detail = { text = "MP4 · {width}×{height}", context = "Video track file type and size, for example MP4 · 1920×1080." }
 
 [editor.export.turbo]
 title = "Turbo export"
@@ -2594,6 +2818,14 @@ size_during_zoom = "Size During Zoom"
 size_label = "Size"
 title = "Camera"
 
+[editor.tabs.camera.picture]
+title = "Picture"
+empty = "Add a picture to show where your camera would be."
+shown = "Shown where your camera would be."
+add = "Add picture"
+replace = "Replace"
+remove = "Remove"
+
 [editor.tabs.camera.blur]
 heavy = "Heavy Blur"
 light = "Light Blur"
@@ -2635,6 +2867,7 @@ model_downloaded = "{model} model downloaded"
 model_label = "Model"
 model_updated = "Recommended model updated"
 model_updated_description = "We recommend the new version. It is more accurate and catches short recordings the old one missed."
+new_caption = "New caption"
 position = "Position"
 refining_word_timings = "Refining word timings…"
 regenerate = "Regenerate Captions"
@@ -2712,6 +2945,7 @@ rounded = "Rounded"
 squircle = "Squircle"
 
 [editor.tabs.cursor]
+follow_hover = "Follow Hover Highlights"
 friction = "Friction"
 hide_when_idle = "Hide When Idle"
 inactivity_delay = "Inactivity Delay"
@@ -2755,6 +2989,9 @@ grouping_threshold = "Grouping Threshold"
 linger_duration = "Linger Duration"
 load_failed = "Failed to load recording data: {error}"
 no_presses = "No recorded keyboard presses were found."
+permission_action = "Show me how"
+permission_body = "Give Cap your OK so your next recordings include the keys you press."
+permission_title = "Keystrokes aren't being recorded"
 position = "Position"
 regenerate = "Regenerate Keyboard Segments"
 show_modifiers = "Show Modifiers"
@@ -2765,6 +3002,10 @@ timeline_unavailable = "The project timeline is unavailable."
 timeline_unreadable = "The project timeline could not be read."
 title = "Show keyboard"
 uppercase = "Uppercase"
+
+[editor.tabs.padding]
+even = "Even"
+proportional = "Proportional"
 
 [editor.tabs.position]
 bottom_center = "Bottom Center"
@@ -2911,13 +3152,20 @@ video = { text = "Video", context = "Timeline gutter label of the recording's vi
 zoom = "Zoom"
 
 [editor.transcript]
+add_caption = "Add caption at playhead"
+captions_save_failed = { text = "Could not save the captions: {error}", context = "{error} is a technical message that stays in English." }
+captions_saved = "Captions saved"
 cleanup = "Clean up"
 cleanup_tooltip = "Remove filler words and shorten pauses"
 delete_matches = "Delete all"
 delete_matches_tooltip = "Cut every match from the video"
+download_captions = "Download captions"
+download_srt = { text = "SubRip (.srt)", context = "Menu item that saves captions as an SRT subtitle file. SubRip is a format name; keep it." }
+download_vtt = { text = "WebVTT (.vtt)", context = "Menu item that saves captions as a WebVTT subtitle file. WebVTT is a format name; keep it." }
+edit_hint = "Enter to save, Esc to cancel, Tab for the next word"
 empty_description = "Transcribe this recording on this computer, then edit the video by editing its text."
 empty_title = "No transcript yet"
-hint = "Click a word to jump to it. Select words and press Delete to cut them from the video."
+hint = "Click a word to jump to it, double-click to fix it. Select words and press Delete to cut them from the video."
 next_match = "Next match"
 no_audio = "This recording has no audio to transcribe."
 no_speech = "No speech found in this recording"
@@ -2970,6 +3218,7 @@ audio_segment_changed = "This audio segment changed. Select it and choose a repl
 crop = "Crop"
 crop_tooltip = "Crop Video"
 no_room_for_3d_shot = "No room for another 3D shot"
+no_room_for_caption = "No room for another caption here"
 redo = "Redo"
 save_failed = { text = "Could not save {path}. Keep the editor open and try again: {error}", context = "{path} is the recording's folder; {error} is a technical message that stays in English." }
 undo = "Undo"
@@ -3147,7 +3396,11 @@ wipe_down = { text = "Wipe down", context = "Transition type: an edge sweeping d
 zoom = { text = "Zoom", context = "Transition type: the picture zooms through the cut into the next clip." }
 
 [editor.window.transport]
+compare = "Compare"
+compare_tooltip = "Hold to see the original"
 done_splitting = "Done splitting"
+enhance = "Enhance"
+enhance_tooltip = "Show the paused frame enhanced"
 play_pause = "Play/Pause video"
 speed = { text = "Preview speed", context = "Tooltip for the menu in the editor transport bar that sets how fast the preview plays. It never changes the exported video." }
 split = "Split"
@@ -3206,6 +3459,17 @@ pending = "Quit canceled because recording shutdown is still pending. Cap will s
 quit_anyway = "Quit Anyway"
 still_open = "Cap is still open"
 unconfirmed = "Quit canceled because recording shutdown could not be confirmed. Cap will stay open. Use Stop, then try Quit again."
+meeting_title = "Stop recording this meeting?"
+meeting_message = "Quitting stops the recording. Cap keeps everything so far and finishes the transcript."
+meeting_quit = "Stop and Quit"
+meeting_keep = "Keep Recording"
+
+[dialog.startup]
+failed = { text = "{error}\n\nDetails were saved in {folder}.", context = "{error} is a technical reason, usually in English. {folder} is a folder path." }
+failed_title = "Cap couldn't start"
+quit_and_reopen = { text = "Quit and Reopen", context = "Button: quit the copy of Cap that is not responding and start a new one." }
+unresponsive = "Cap is already running but isn't responding. Quit that copy and open Cap again?"
+unresponsive_title = "Cap isn't responding"
 
 [dialog.update]
 already_getting = { text = "Cap is already getting version {version} ready.", context = "{version} is a version number such as 0.6.2." }
@@ -3281,9 +3545,928 @@ changed_after = "The local recording changed after upload; it has been preserved
 already_queued = "This recording is already queued for upload"
 paused = "Upload paused; the local recording is preserved"
 worker_failed = "The upload worker failed; the local recording is preserved"
+deleted_on_web = "This recording was deleted on the web; the local recording is preserved"
 empty = "The saved recording is empty"
 no_resumable_state = "This recording has no resumable upload state"
 verification_failed = { text = "Recording verification failed: {status}", context = "{status} is a technical status, usually in English." }
 
 [message.cli]
 binary_missing = { text = "Bundled CLI binary not found at {path}", context = "{path} is a file path." }
+
+[meeting.time]
+starts_in_minutes = { text = "Starts in {minutes} min", context = "{minutes} is a whole number of minutes." }
+starts_in_seconds = { text = "Starts in {seconds} s", context = "{seconds} is a whole number of seconds." }
+range = { text = "{start} – {end}", context = "{start} and {end} are times of day, such as 14:00." }
+
+[meeting.prompt]
+meeting_detected = "Meeting detected"
+call_detected = "Call detected"
+huddle_detected = "Huddle detected"
+upcoming = "Upcoming meeting"
+take_notes = "Take notes"
+join_and_take_notes = "Join and take notes"
+recording_in = { text = "Recording in {seconds}", context = "Countdown on the button before an automatic recording starts. {seconds} is a whole number." }
+cancel = "Cancel"
+more = "More options"
+dismiss = "Dismiss"
+join_only = "Join only"
+open_cap = "Open Cap"
+mute_app = { text = "Don't notify for {app}", context = "{app} is the meeting app, such as Zoom." }
+notification_settings = "Notification settings"
+
+[meeting.live]
+stopped = "Stopped"
+stop = "Stop"
+keep_recording = "Keep recording"
+resume = "Resume"
+still_there = "Still there?"
+untitled = { text = "Meeting", context = "Fallback title for a meeting without one." }
+open_notes = "Open notes"
+call_ended = { text = "Call ended", context = "Floating indicator after the call ends; the countdown to the automatic stop shows beside it." }
+hide = "Hide the indicator"
+hidden = "Hidden. Cap is still recording."
+
+[meeting.health]
+mic_permission = "Microphone access is off"
+mic_no_device = "No microphone connected"
+mic_no_audio = "No sound from your microphone"
+mic_failed = "The microphone stopped"
+system_permission = "Computer audio access is off"
+system_unsupported = "Computer audio isn't available here"
+system_no_audio = "No sound from the call"
+system_failed = "Computer audio stopped"
+not_hearing = { text = "Not hearing {app}", context = "Short status in the recording indicator. {app} is the meeting app, like Zoom." }
+disk_full = "Disk almost full"
+sign_in = "Sign in to finish the transcript"
+offline = "Offline, the audio is saved"
+cloud_local = "Transcribing on this computer"
+words_missing = "Some words may be missing"
+
+[meeting.shortcuts]
+title = "Notes"
+new_note = "New note"
+toggle = "Record or stop a meeting"
+open = "Open Notes"
+new_note_effect = { text = "start a new note", context = "Completes settings.shortcuts.saved: Press the keys in any app to ..." }
+new_note_sentence = "Start a new note."
+toggle_effect = { text = "record or stop a meeting", context = "Completes settings.shortcuts.saved: Press the keys in any app to ..." }
+toggle_sentence = "Record or stop a meeting."
+open_effect = { text = "open your notes", context = "Completes settings.shortcuts.saved: Press the keys in any app to ..." }
+open_sentence = "Open your notes."
+
+[meeting.tray]
+new_note = "New note"
+start = "Start notes"
+stop = { text = "Stop recording · {time}", context = "{time} is the elapsed time, such as 12:04." }
+open_notes = "Open Notes"
+next = { text = "{time} {title}", context = "Menu row for the next event. {time} is a time of day, {title} the event title." }
+title_in = { text = "{title} in {minutes}m", context = "Short text next to the menu bar icon. {title} is a shortened event title; {minutes} a whole number." }
+title_now = { text = "{title} now", context = "Short text next to the menu bar icon. {title} is a shortened event title." }
+
+[settings.meetings]
+nav = { text = "Notes", context = "Settings sidebar item for Notes, including meeting recording." }
+
+[settings.meetings.overview]
+title = "Notes"
+description = "Write notes any time. When a meeting starts, Cap can record it into a note and write it up. Audio is captured on this computer. Nothing joins your call."
+enable = "Meeting detection"
+enable_description = "Notice calls and upcoming meetings and offer to record them."
+setup_needed = "Set up recording to record meetings into notes."
+run_setup = "Run setup again"
+start_setup = "Set up"
+engine_no_model = "No speech model yet"
+calendars = { one = "{count} calendar", other = "{count} calendars" }
+no_calendars = "No calendars"
+
+[settings.meetings.notifications]
+title = "Notifications"
+scheduled = "Before scheduled meetings"
+scheduled_description = "A reminder with a button to start notes."
+notify_me = "Notify me"
+lead_start = { text = "When it starts", context = "When to show the reminder for a scheduled meeting." }
+lead_30s = "30 seconds before"
+lead_1m = "1 minute before"
+lead_2m = "2 minutes before"
+lead_5m = "5 minutes before"
+lead_10m = "10 minutes before"
+lead_15m = "15 minutes before"
+show_join = "Offer to join the call"
+show_join_description = "Show a Join button when the meeting has a link."
+detected = "When a call is detected"
+detected_description = "When an app starts using the microphone for a call."
+muted = "Don't notify for"
+muted_description = "Calls in these apps never show a notification."
+add_app = "Add app"
+position = "Position"
+top_left = "Top left"
+top_right = "Top right"
+bottom_left = "Bottom left"
+bottom_right = "Bottom right"
+sound = "Play a sound"
+sound_description = "A soft chime when a notification appears."
+
+[settings.meetings.automation]
+title = "Automation"
+auto_record = "Record automatically"
+never = "Never"
+detected = "Detected calls"
+scheduled = "Scheduled meetings"
+both = "Both"
+never_description = "Cap asks before every recording."
+on_description = "Cap starts recording on its own. A countdown with Cancel appears first."
+countdown = "Countdown"
+countdown_description = "How long you have to cancel."
+seconds = { one = "{count} second", other = "{count} seconds" }
+bring_forward = "Bring Cap forward"
+bring_forward_description = "Open the note when a recording starts on its own or is about to stop."
+show_cap = "Show Cap when notes close"
+show_cap_description = "Closing the notes window brings back the Cap window."
+browsers = "Calls in browsers"
+browsers_any = { text = "Any microphone use", context = "Segmented option: any browser tab using the microphone counts as a call." }
+browsers_recognised = { text = "Only recognized meeting pages", context = "Segmented option: only known meeting sites count as a call." }
+browsers_any_description = "Any page using the microphone counts as a call. Nothing is missed, but a voice message can bring up a notification too."
+browsers_recognised_description = "Only pages like Google Meet, Zoom and Microsoft Teams count as a call. Cap reads the page address, which needs Accessibility."
+ax_granted = "Accessibility is allowed."
+ax_missing = "Accessibility is not allowed yet."
+grant = "Allow"
+open_settings = "Open System Settings"
+
+[settings.meetings.recording]
+title = "Recording"
+stop_on_end = "Stop when the call ends"
+stop_on_end_description = "A short countdown lets you keep going."
+silence = "Stop after silence"
+silence_description = "When nobody has spoken for this long, Cap asks and then stops."
+never = "Never"
+minutes = { one = "{count} minute", other = "{count} minutes" }
+keep_audio = "Keep the audio"
+keep_audio_description = "Save the recording with the notes so you can play it back."
+keep_audio_off_description = "Cap keeps a temporary copy of the audio on this computer until the transcript and notes are finished, so it can fill in missed words. Then it's deleted."
+keep_for = "Keep audio for"
+forever = "Forever"
+days = { one = "{count} day", other = "{count} days" }
+stored_at = { text = "Stored in {path}", context = "{path} is a folder path." }
+show_in_finder = "Show in Finder"
+show_in_explorer = "Show in Explorer"
+show_in_files = "Show in Files"
+microphone = "Microphone"
+microphone_description = "The microphone that hears you."
+mic_auto = { text = "Automatic", context = "Use the current or default microphone." }
+indicator = "Show the recording indicator"
+indicator_description = "A small floating control while Cap records."
+sounds = "Play start and stop sounds"
+
+[settings.meetings.transcription]
+title = "Transcription"
+local_mac = "On this Mac"
+local_pc = "On this PC"
+local_computer = "On this computer"
+local_description = "Private and works offline. Uses a speech model stored on this computer."
+cloud = "Cap Cloud"
+cloud_description = "Most accurate. Needs a connection. Included with Cap Pro."
+download = "Download"
+delete = "Delete"
+model_title = "Speech model"
+model_body = "Cap is tuned for this model. It writes 25 European languages, privately on this computer."
+model_body_intel = "This Mac can't run the main speech model, so Cap uses a lighter one. Cap Cloud is more accurate."
+model_body_language = "For this language Cap uses a lighter model. Cap Cloud is more accurate."
+model_ready = { text = "Ready", context = "The speech model is downloaded and ready to use." }
+downloading = { text = "Downloading {percent}%", context = "{percent} is a whole number." }
+download_failed = "Download failed"
+retry = "Retry"
+sign_in = "Sign in"
+upgrade = "Upgrade to Cap Pro"
+cloud_signed_out = "Sign in to use Cap Cloud."
+cloud_free = "Cap Cloud is included with Cap Pro."
+cloud_checking = "Checking your account..."
+cloud_unavailable = "Cap Cloud is not available on this server."
+cloud_offline = "Cap could not be reached. Check your connection."
+language = "Language"
+language_description = "Cap detects the spoken language unless you choose one."
+live = "Show the transcript live"
+live_description = "See words as they are spoken. Turn off to save power."
+slow_device = "This computer may be too slow to show the transcript live. Cap Cloud transcribes for you instead, so your notes keep up."
+slow_model = "This is the only model compatible with this computer's specs, and the live transcript may fall behind. On this device we recommend Cap Cloud."
+use_cloud = "Use Cap Cloud"
+old_model = "Previous speech model"
+old_model_description = { text = "Cap no longer needs it on this computer. Delete it to free {size}.", context = "{size} is a file size such as 466 MB." }
+voice = "Recognise my voice"
+voice_description = "Learnt from meetings where only you spoke into the microphone, and kept on this computer. Your lines carry your name even with others in the room."
+app_names = "Name speakers from meeting apps"
+app_names_description = "While Cap records, it reads who the meeting app shows as speaking and names the voices to match. Stays on this computer."
+app_names_setup = "Let Cap read your meeting apps"
+app_names_setup_description = "On this version of macOS, Cap needs your OK in System Settings before it can name speakers from Zoom, Teams or your browser."
+app_names_setup_button = "Show me how"
+speakers_model = "Better speaker labels"
+speakers_model_description = "A 120 MB model that tells voices apart more reliably. Kept on this computer."
+model_credits = "Speaker models"
+model_credits_description = "WeSpeaker CAM++ by the WeSpeaker project (CC BY 4.0) and NVIDIA Nemotron 3 Diarization (OpenMDW 1.1)."
+licenses = "Licenses"
+voice_learnt = { one = "Learnt from {count} meeting", other = "Learnt from {count} meetings" }
+voice_forget = "Forget my voice"
+
+[settings.meetings.notes]
+title = "Notes"
+auto = "Write notes after a meeting"
+auto_description = "When the recording ends, Cap writes a summary, decisions and action items."
+template = "Default template"
+language = "Language of the notes"
+same_as_meeting = "Same as the meeting"
+
+[settings.meetings.calendars]
+title = "Calendars"
+description = "Cap reminds you before meetings and names your notes after them."
+empty = "No calendars connected."
+add = "Add calendar"
+system = "Calendars on this Mac"
+link = "Calendar link"
+link_placeholder = "Paste an iCal or webcal link"
+name_placeholder = "Name (optional)"
+connect = "Connect"
+cancel = "Cancel"
+kind_system = { text = "This Mac", context = "Kind of calendar source: the calendars in the macOS Calendar app." }
+kind_link = { text = "Calendar link", context = "Kind of calendar source: a subscribed iCal link." }
+synced_just_now = "Synced just now"
+synced_minutes = { one = "Synced {count} minute ago", other = "Synced {count} minutes ago" }
+synced_hours = { one = "Synced {count} hour ago", other = "Synced {count} hours ago" }
+synced_days = { one = "Synced {count} day ago", other = "Synced {count} days ago" }
+syncing = "Syncing..."
+upcoming = { one = "{count} upcoming meeting", other = "{count} upcoming meetings" }
+found = { one = "{count} meeting in the next two weeks", other = "{count} meetings in the next two weeks" }
+choose_calendars = { one = "{count} calendar", other = "Choose from {count} calendars" }
+waiting_for_access = "Waiting for calendar access..."
+retry = "Retry"
+remove = "Remove"
+open_settings = "Open System Settings"
+allow_access = "Allow access"
+access_needed = "Cap needs your permission to read these calendars."
+error_offline = "Could not reach the calendar. Check your connection."
+error_rejected = "The calendar server refused this link. It may have changed or expired."
+error_server = "The calendar server had a problem. Cap will try again later."
+error_not_calendar = "That link did not return a calendar."
+error_too_large = "That calendar is too large to read."
+error_access = "Cap is not allowed to read your calendars."
+error_unsupported = "Calendars on this computer are not supported."
+error_other = "The calendar could not be read."
+invalid_link = "That does not look like a calendar link."
+duplicate = "That calendar is already connected."
+help = "Where do I find the link?"
+help_google = "Google Calendar: open the calendar's settings and copy the secret address in iCal format."
+help_outlook = "Outlook: in Calendar settings, choose Shared calendars, publish a calendar and copy the ICS link."
+help_icloud = "iCloud: share the calendar as a public calendar and copy its link."
+hide_declined = "Hide declined events"
+hide_all_day = "Hide all-day events"
+hide_solo = "Hide events without other people"
+menu_bar = "Show the next meeting in the menu bar"
+menu_bar_tray = "Show the next meeting in the tray"
+
+[meeting_setup.nav]
+next = "Continue"
+get_started = "Get started"
+skip = { text = "Skip for now", context = "Button on the calendar step when no calendar is connected yet." }
+done = "Done"
+mic_needed = "Allow the microphone to continue."
+audio_missing = "Without computer audio, only your side of the call is recorded."
+later = "You can change all of this later in Settings."
+
+[meeting_setup.welcome]
+title = "Record meetings"
+subtitle = "Cap stays out of the way until you are on a call."
+notices_title = "Cap notices a call"
+notices_body = "Zoom, Google Meet, Microsoft Teams and more."
+records_title = "Only when you say so"
+records_body = "Nothing records until you choose to."
+notes_title = "Notes when it ends"
+notes_body = "A transcript, decisions and next steps."
+privacy = "Audio is captured on this computer. Nothing joins the call."
+
+[meeting_setup.permissions]
+title = "Let Cap hear the call"
+lede = "The microphone hears you. The computer's audio carries everyone else."
+mic = "Microphone"
+audio = "Computer audio"
+ax = "Accessibility"
+required = "Required"
+optional = "Optional"
+allowed = "Allowed"
+ready = "Ready"
+off = "Turned off"
+skipped = "Skipped"
+unavailable = "Not available"
+waiting = { text = "Waiting for you", context = "Status under a permission while Cap waits for the person to answer." }
+mic_title = "Hear your side"
+mic_body = "Cap listens to the microphone only while it records."
+mic_done = "Cap can hear you"
+mic_done_body = "Your side of every call, recorded on this computer."
+mic_denied = "The microphone is turned off for Cap. Turn it on in System Settings."
+mic_settings = "Turn on Cap under Microphone, then come back here."
+allow_mic = "Allow microphone"
+audio_title = "Hear everyone else"
+audio_body = "Cap records what the call plays on this computer. Nothing joins the call."
+audio_done = "Cap can hear the others"
+audio_done_body = "Everyone else in the call, straight from this computer."
+audio_denied = "Computer audio is turned off for Cap. Turn it on in System Settings."
+audio_settings = "Turn on Cap under Screen & System Audio Recording, then come back here."
+allow_audio = "Allow computer audio"
+audio_old_macos = "This version of macOS cannot record the others in a call. Update to macOS 14.2 or later."
+audio_linux = "Not supported on Linux yet. Only your side is recorded."
+ax_title = "Recognise meeting pages"
+ax_body = "Optional. Lets Cap tell a meeting in your browser from other microphone use, and name it."
+ax_done = "Meeting pages recognized"
+ax_done_body = "Cap can name the calls in your browser."
+ax_settings = "Turn on Cap under Accessibility, then come back here."
+allow_ax = "Allow Accessibility"
+skip = "Skip"
+prompt_title = "Look for the macOS prompt"
+prompt_body = "Choose Allow in the dialog macOS just showed. It may be behind this window."
+prompt_waiting = "Waiting for your answer..."
+settings_title = "Finish in System Settings"
+settings_waiting = "Cap notices the change on its own."
+open_settings = "Open System Settings"
+open_settings_again = "Open System Settings again"
+no_answer = "macOS did not ask. Try again, or turn it on in System Settings."
+try_again = "Try again"
+done_title = "Cap can hear the call"
+done_body = "Both sides of every call, captured on this computer."
+done_mic_only = "Your side is ready. This computer cannot record the others yet."
+
+[meeting_setup.transcription]
+title = "Where should Cap transcribe?"
+subtitle = "Choose one now. You can switch any time in Settings."
+cloud_body = "Most accurate. Nothing to download."
+cloud_ready = "Included with your plan"
+local_body = "Private and works offline. Audio never leaves this computer."
+download_note = { text = "Cap needs one speech model for your notes, a one-time download of about {size}.", context = "{size} is a file size such as 870 MB." }
+download = "Download"
+continue_note = "You can continue while it downloads."
+ready = "Ready to use"
+failed = "The download did not finish."
+retry = "Retry"
+intel_note = "This Mac can't run the main speech model, so Cap uses a lighter one. Cap Cloud is more accurate."
+language_note = "For this language Cap uses a lighter model. Cap Cloud is more accurate."
+
+[meeting_setup.calendar]
+title = "Bring in your calendar"
+subtitle = "Cap reminds you before meetings and names your notes after them."
+system_description = "Every calendar in the Calendar app."
+system_waiting = "Waiting for macOS to ask..."
+connect = "Connect"
+connected = "Connected"
+link_toggle = "Use a calendar link instead"
+link_body = "Paste a private iCal link from any calendar service."
+skip_note = "Skipping is fine. Cap still takes notes for any call."
+
+[meeting_setup.behavior]
+title = "A few choices"
+subtitle = "Good defaults to start with. Change them any time in Settings."
+remind_title = "Remind me before meetings"
+remind_body = "A small reminder with a button to start notes."
+detect_title = "Notify me when a call starts"
+detect_body = "When an app starts using the microphone for a call."
+auto_title = "Record automatically"
+auto_off = "Cap always asks first."
+auto_on = { one = "Cap starts on its own after a {count} second countdown you can cancel.", other = "Cap starts on its own after a {count} second countdown you can cancel." }
+
+[meeting_setup.ready]
+title = "You're all set"
+subtitle = "Join a call and Cap will offer to take notes."
+allowed = "Allowed"
+not_allowed = "Not allowed"
+not_available = "Not available"
+only_you = "Only your side for now"
+downloading = "Downloading the speech model"
+no_calendar = "None yet"
+cap_ai = "Cap AI notes"
+fix = "Fix"
+try_title = "Try it now"
+try_body = "Record a few seconds and watch the notes come in."
+try_it = "Start a test recording"
+try_failed = "The recording could not start. Check the microphone and try again."
+
+[documents]
+untitled = "Untitled"
+meeting_at = { text = "Meeting at {time}", context = "Title of a new meeting note until it is named. {time} is the start time, for example 5:46 PM." }
+app_at = { text = "{app} at {time}", context = "Title of a new meeting note recorded from a call app until it is named. {app} is the app, for example Zoom; {time} is the start time." }
+
+[documents.templates]
+general = { text = "General meeting", context = "Name of a built-in notes template, shown in the note header and the template menus." }
+one_on_one = "One-on-one"
+stand_up = "Stand-up"
+customer_call = "Customer call"
+sales_discovery = "Sales discovery"
+interview = "Interview"
+project_kickoff = "Project kickoff"
+retrospective = "Retrospective"
+brainstorm = "Brainstorm"
+board_update = "Board or investor update"
+
+[documents.toolbar]
+toggle_sidebar = "Show or hide the sidebar"
+new_note = "New note"
+settings = "Notes settings"
+
+[documents.start]
+record_detail = "Cap listens and writes the summary"
+blank_detail = "A blank page, nothing recorded"
+more = "More ways to start"
+recording = { text = "Recording {elapsed}", context = "The start button while a meeting records: {elapsed} is how long it has been recording, like 2:47. A click opens that meeting." }
+replace_label = "Start new notes"
+replace_detail = "Stops the meeting being recorded first"
+replace_confirm = { text = "Stop this meeting and start new notes", context = "Shown after one click on Start new notes while a meeting records; a second click stops that meeting and starts new notes." }
+
+[documents.sidebar]
+recent = "Recent"
+new_folder = "New folder"
+coming_up = "Coming up"
+pinned = "Pinned"
+recording = "Recording"
+now = "Now"
+start = "Start"
+join = "Join"
+folders = "Folders"
+trash = "Trash"
+empty_trash = "Empty trash"
+folder_name = "Folder name"
+folder_empty = "Nothing here yet."
+trash_empty = "The trash is empty."
+no_results = "No matches."
+in_title = "Title"
+in_notes = "Notes"
+in_transcript = "Transcript"
+selected = { one = "{count} selected", other = "{count} selected" }
+
+[documents.date]
+today = "Today"
+yesterday = "Yesterday"
+tomorrow = "Tomorrow"
+months = { text = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", context = "Twelve abbreviated month names, January first, separated by single spaces. Keep exactly twelve words." }
+weekdays = { text = "Mon Tue Wed Thu Fri Sat Sun", context = "Seven abbreviated weekday names, Monday first, separated by single spaces. Keep exactly seven words." }
+day = { text = "{weekday}, {day} {month}", context = "A date in the sidebar headings. {weekday} and {month} are short names from the lists above, {day} is the day of the month." }
+short = { text = "{day} {month}", context = "A short date. {month} is a short month name." }
+day_year = { text = "{day} {month} {year}", context = "A date in an earlier year. {month} is a short month name." }
+
+[documents.duration]
+under_minute = "Under a minute"
+minutes = "{minutes} min"
+hours = "{hours} hr"
+hours_minutes = "{hours} hr {minutes} min"
+
+[documents.menu]
+pin = "Pin"
+unpin = "Unpin"
+rename = "Rename"
+move_to = "Move to"
+no_folder = "No folder"
+new_folder_with = "New folder…"
+duplicate = "Duplicate"
+copy_suffix = { text = "copy", context = "Added after the title of a duplicated note, as in “Reading list copy”." }
+copy_notes = "Copy notes"
+copy_transcript = "Copy transcript"
+export = "Export as Markdown…"
+reveal = "Show recording files"
+open_in_editor = "Open in editor"
+download_audio = "Download audio…"
+trash = "Move to trash"
+restore = "Restore"
+delete_forever = "Delete permanently"
+delete_folder = "Delete folder"
+
+[documents.audio]
+no_audio_title = "No audio"
+no_audio_message = "This note has no audio."
+unreadable_title = "Couldn't read the audio"
+unreadable_message = "Cap couldn't read this note's audio files."
+not_ready_title = "Couldn't prepare the audio"
+not_ready_message = "Check the free space on your disk and try again."
+
+[documents.confirm]
+delete_forever = { one = "Delete this note permanently?", other = "Delete {count} notes permanently?" }
+empty_trash = { one = "Delete the note in the trash permanently?", other = "Delete all {count} notes in the trash permanently?" }
+cannot_undo = "You can't undo this."
+delete = "Delete"
+empty = "Empty trash"
+delete_folder = { text = "Delete the folder “{name}”?", context = "{name} is the folder name." }
+delete_folder_detail = "The notes inside stay in your library."
+replace_notes = "Replace your edited notes?"
+replace_notes_detail = "Cap writes a new version from the transcript. Your own notes are kept."
+replace = "Replace"
+
+[documents.toast]
+moved_line = "Moved to {name}"
+renamed = "Renamed to {name}"
+copied = "Copied"
+nothing_to_copy = "Nothing to copy yet"
+exported = "Exported"
+export_failed = "Couldn't export the file"
+moved_to_trash = { one = "Moved to the trash", other = "{count} notes moved to the trash" }
+deleted_lines = { one = "Deleted 1 line", other = "Deleted {count} lines" }
+undo = "Undo"
+left_out = { text = "Left out of the notes", context = "Toast after leaving a voice out of the notes." }
+back_in = { text = "Back in the notes", context = "Toast after putting a voice back in the notes." }
+now_you = { text = "Marked as you", context = "Toast after saying a voice is the user after all." }
+
+[documents.header]
+ends = "Ends"
+starts = "Starts"
+add_email = "Add by email"
+no_people = "No one added yet"
+open_in_calendar = "Open in calendar"
+in_trash = "This note is in the trash."
+
+[documents.tabs]
+my_notes = "My notes"
+notes = "Summary"
+transcript = "Transcript"
+
+[documents.editor]
+editor = "Notes"
+placeholder = "Start writing"
+meeting_placeholder = "Cap writes the notes when the meeting ends. Anything you type here is kept."
+own_placeholder = "Type your own notes. They're kept with the transcript."
+generated_placeholder = "The summary appears here"
+load_failed = { text = "This note couldn't be opened, so it's read-only and nothing in it changes.", context = "Shown in place of a note whose saved text could not be read. The note stays read-only so it is never saved over." }
+template_item = { text = "Template: {name}", context = "A slash menu item that inserts a template's headings. {name} is the template name." }
+heading = "Heading"
+plain_text = "Text"
+heading_1 = "Heading 1"
+heading_2 = "Heading 2"
+heading_3 = "Heading 3"
+bullet_list = "Bullet list"
+numbered_list = "Numbered list"
+checkbox = "Checkbox"
+quote = "Quote"
+code_block = "Code block"
+divider = "Divider"
+bold = "Bold"
+italic = "Italic"
+underline = "Underline"
+strikethrough = "Strikethrough"
+code = "Code"
+highlight = "Highlight"
+link = "Link"
+link_placeholder = "Paste or type a link"
+cut = "Cut"
+copy = "Copy"
+paste = "Paste"
+select_all = "Select all"
+open_link = "Open link"
+copy_link = "Copy link"
+remove_link = "Remove link"
+find = "Find"
+no_results = "No results"
+previous = "Previous match"
+next = "Next match"
+close = "Close"
+
+[documents.notes]
+writing = "Writing summary…"
+stop = "Stop"
+ready = "Your summary is ready"
+view_notes = "View summary"
+regenerate = "Regenerate"
+with_template = "Use a template"
+instruction_placeholder = "Make it shorter"
+retry = "Try again"
+sign_in = "Sign in"
+upgrade = "Upgrade"
+error_sign_in = "Sign in to Cap to write notes from the transcript."
+error_upgrade = "Cap Pro writes notes for you with Cap's AI."
+error_rate_limited_soon = "Too many requests. Try again in a minute."
+error_rate_limited_minutes = { one = "Too many requests. Try again in {count} minute.", other = "Too many requests. Try again in {count} minutes." }
+error_not_configured = "Writing notes isn't available on this server."
+error_offline = "Cap can't be reached. Check your connection."
+error_interrupted = { text = "Cap AI stopped partway.", context = "Shown when the notes or an answer started arriving and then stopped before the end. A Try again button follows." }
+error_nothing = "There isn't enough in the transcript yet."
+error_not_found = "This note no longer exists."
+error_busy = "Notes are already being written."
+error_failed = "The notes couldn't be written."
+writing_yours = { text = "Writing the summary", context = "Faint line where the summary will start, shown while Cap AI writes it after a meeting." }
+waiting = { text = "Waiting for a connection…", context = "Shown instead of Writing summary while Cap cannot reach its server and will try again." }
+waiting_server = { text = "Cap AI is having trouble. Trying again…", context = "Shown instead of Writing summary while Cap's server answers with an error and Cap will try again by itself." }
+recovered = { text = "Recovered after Cap closed unexpectedly. Your audio and transcript are safe.", context = "One-time line on a meeting note Cap finished after it quit by itself." }
+transcript_updated = { text = "Transcript updated with words Cap recovered.", context = "One-time line on a note whose transcript grew after its notes were written." }
+missed_seconds = { one = "About {count} second of this meeting wasn’t recorded.", other = "About {count} seconds of this meeting weren’t recorded.", context = "One-time line on a finished meeting note when Cap was held up and missed some audio while recording." }
+missed_minutes = { one = "About {count} minute of this meeting wasn’t recorded.", other = "About {count} minutes of this meeting weren’t recorded." }
+update_notes = "Update notes"
+
+[documents.transcript]
+move_line = "Move line"
+rename_all = "Rename"
+suggested = "Suggested"
+just_this_line = "Just this line"
+rename_hint = "Rename"
+names_offer_allow = "Allow"
+names_offer = "Cap can name the speakers from Zoom, Teams and Meet when it may read their windows."
+maybe = { text = "{name}?", context = "A suggested name for a speaker, shown beside Person 2 in a transcript. Click to use it." }
+same_as = "Same person as"
+you = "You"
+captured = { text = "Everything Cap captured", context = "Heading above a meeting transcript shown in place of AI notes." }
+others = "Others"
+empty = "No transcript yet."
+listening = "Listening…"
+listening_slow = { text = "Listening. Lines appear after each sentence on this computer.", context = "Shown in the live transcript on a slow computer while someone speaks and no new words have appeared for a few seconds." }
+jump_to_latest = "Jump to latest"
+find = "Find in transcript"
+no_matches = "No matches"
+copy = "Copy"
+delete = "Delete"
+selected = { one = "{count} line", other = "{count} lines" }
+person = { text = "Person {n}", context = "A speaker in a meeting whose name is not known. {n} numbers them in order of first speech." }
+always_spell = { text = "Always spell “{word}” as", context = "Title of the small popover after right-clicking a word in a meeting transcript. {word} is the word as transcribed." }
+spell_note = "Fixed here and from now on"
+spell_save = "Save"
+spelled = { text = "Cap spells it “{word}” from now on", context = "Toast after Always spell as. {word} is the new spelling." }
+not_me = { text = "That's not me", context = "In the speaker popover of a meeting transcript, on the voice shown as the user: this voice is someone else." }
+is_me = { text = "That's me", context = "In the speaker popover, on a voice the user said was not them: take that back." }
+leave_out = { text = "Leave this voice out of the notes", context = "In the speaker popover: keep this voice's lines in the transcript but not in the AI summary or answers." }
+include = { text = "Put this voice back in the notes", context = "In the speaker popover, on a voice left out of the notes: include it again." }
+left_out = { text = "Left out of notes", context = "Small note beside the time of a dimmed transcript line whose voice is left out of the notes." }
+
+[documents.bar]
+record = "Record"
+record_meeting = { text = "Record {title}", context = "Record button that names the meeting it would record. {title} is a meeting title or an app name such as Zoom." }
+stop = "Stop"
+resume = "Resume"
+write_notes = "Write summary"
+starting = "Starting…"
+finishing = "Finishing the transcript…"
+show = "Show"
+recording_elsewhere = { text = "Recording “{title}”", context = "{title} is the title of the note that is recording." }
+call_ended = { text = "Call ended. Stopping in {time}", context = "{time} is a countdown such as 0:12." }
+inactive = { text = "No one has spoken for a while. Stopping in {time}", context = "{time} is a countdown such as 0:45." }
+keep_recording = "Keep recording"
+stopped_quiet = "Stopped after a quiet spell"
+record_more = "Record more"
+set_up = "Set up"
+error_start = "Recording couldn't start."
+error_not_found = "This meeting no longer exists."
+error_folder = { text = "Cap can't save to your notes folder.", context = "Body of a system notification under Recording couldn't start., when the notes folder is not writable or is no longer a folder." }
+error_audio = { text = "Cap couldn't open a microphone or the computer's audio.", context = "Body of a system notification under Recording couldn't start., when no microphone and no system audio could be opened." }
+
+[documents.health]
+system_permission = "Cap can't hear the other people on the call yet. Allow audio capture to include them."
+allow = "Allow"
+allowed = "Allowed. Resume to include the call audio."
+still_denied = "Audio capture is still off. You can turn it on in System Settings."
+no_microphone = "No microphone is connected."
+mic_permission = "Cap doesn't have access to your microphone."
+mic_silent = "Your microphone is silent. Check that it isn't muted."
+tap_unsupported = "This computer can't capture call audio, so only your microphone is recorded."
+no_call_audio = "No sound is arriving from the call."
+failed = { text = "Something went wrong with the audio: {reason}", context = "{reason} is a technical message, usually in English." }
+no_model = "Download a transcription model to see a live transcript."
+open_settings = "Open settings"
+mic_not_working = { text = "Your microphone stopped sending sound. Check that it is still connected.", context = "Banner while recording a meeting." }
+not_hearing_app = { text = "Cap isn't hearing {app}. Check that the call's sound plays on this computer.", context = "{app} is the meeting app, like Zoom." }
+disk_full = "Your disk is almost full. Free some space so Cap can keep saving this meeting."
+sign_in_again = "Sign in again to finish the transcript. Cap is keeping the audio."
+offline_catching_up = "You're offline. Cap is saving the audio and will finish the transcript when you're back."
+cloud_local = "Cap Cloud isn't answering, so this computer is transcribing for now."
+words_missing = { text = "Cap couldn't transcribe part of this meeting, so some words may be missing.", context = "Shown while recording when words were lost and the meeting keeps no audio to recover them from." }
+
+[documents.ask]
+placeholder = "Ask about this meeting"
+thinking = "Thinking…"
+suggest_decisions = "Summarize the decisions"
+suggest_actions = "List action items"
+suggest_follow_up = "Draft a follow-up email"
+
+[documents.export]
+participants = "Participants"
+folder = "Folder"
+notes = "Summary"
+my_notes = "My notes"
+transcript = "Transcript"
+
+[settings.meetings.accounts]
+google = "Google Calendar"
+outlook = "Outlook"
+google_detail = "Sign in with Google in your browser."
+outlook_detail = "Microsoft 365 or Outlook.com, in your browser."
+connect = "Connect"
+cancel = "Cancel"
+try_again = "Try again"
+connected = "Connected"
+waiting = "Finish signing in in your browser..."
+finishing = "Finishing..."
+error_not_configured = "Signing in is not available in this build."
+error_cancelled = "Sign-in was cancelled."
+error_denied = "Calendar access was not allowed."
+error_network = "Could not connect. Check your connection."
+error_rejected = "The sign-in did not go through. Try again."
+
+[settings.meetings.page]
+engine = "Transcribe"
+setup = "Setup"
+setup_description = "Go through permissions, transcription and calendars again."
+[documents.home]
+trash_count = { text = "Trash · {count}", context = "Link at the bottom of the notes list. {count} is how many notes are in the trash." }
+recording_now = "Recording"
+notes = "Notes"
+title = "All notes"
+back = "Back to all notes"
+search = "Search notes and transcripts"
+search_title = "Search"
+results = { one = "{count} match", other = "{count} matches" }
+no_events = "No meetings coming up."
+no_calendar = "Connect a calendar to see your meetings here."
+meeting_mode_off = "Turn on meeting detection to see what's coming up."
+calendar_settings = "Calendar settings"
+empty_title = "Your notes will appear here"
+empty_body = "Press Start notes when a meeting begins. Cap listens and writes it up when you stop."
+just_you = "Just you"
+note = "Note"
+start_notes = { text = "Start notes", context = "Primary button on the notes home: starts recording a new meeting note right away." }
+
+[documents.panel]
+hide = "Hide transcript"
+listening_hint = "Say something and it appears here."
+empty_hint = "The transcript appears here once someone speaks."
+mic_auto = "Automatic microphone"
+consent = "Audio stays on this computer. Let people know you're taking notes."
+
+[documents.note]
+me = "Me"
+add_folder = "Add to a folder"
+
+[cap_ai.ask]
+locked_notes_first = { text = "Ask opens once your notes are written.", context = "Shown after a question on a free meeting during the call or before Cap AI has written its notes. When they are, the question can be sent with Ask now." }
+locked_sign_in = "Sign in to ask Cap AI about this meeting."
+locked_upgrade = "Cap AI answers questions about your meetings with Cap Pro."
+ready = "Cap AI is on. Your question is ready to send."
+send_now = "Ask now"
+tag = { text = "Cap Pro", context = "Small tag next to the suggested questions for people without Cap Pro." }
+
+[cap_ai.card]
+get_pro = "Get Cap Pro"
+not_now = "Not now"
+sign_in = "Sign in"
+spent_title = { text = "You've used your free Cap AI notes", context = "Card on a meeting note when the free Cap AI notes on this account are used up, next to a Get Cap Pro button." }
+title = "Let Cap AI write up this call"
+title_people = "Let Cap AI write up your call with {names}"
+pitch = "A summary, the decisions and every action item, written for you. Then ask Cap AI anything."
+try_free = "Sign in to try it free"
+write = "Write my notes"
+too_short = "This call was too short to write up."
+unavailable_title = "Cap AI notes aren't available on this server"
+free_left = { one = "{count} free note left", other = "{count} free notes left" }
+
+[cap_ai.footer]
+last = "Written by Cap AI. That was your last free note"
+left = { one = "Written by Cap AI. {count} free note left", other = "Written by Cap AI. {count} free notes left" }
+
+[cap_ai.live]
+sign_in = "Sign in and Cap AI writes this up when the meeting ends"
+unavailable = "AI notes aren't available on this server. Cap keeps the full transcript."
+upgrade = "With Cap Pro, Cap AI writes this up when the meeting ends"
+
+[cap_ai.names]
+several = { text = "{a}, {b} and others", context = "First names of people on a call when there are four or more." }
+three = { text = "{a}, {b} and {c}", context = "First names of three people on a call." }
+two = { text = "{a} and {b}", context = "First names of two people on a call." }
+
+[cap_ai.settings]
+get_pro = "Get Cap Pro"
+ready = "Cap AI is on with Cap Pro."
+sign_in = "Sign in"
+signed_out = { text = "Sign in and Cap AI writes up your first meetings free.", context = "Cap AI status in settings for someone signed out; the server decides how many meetings are free." }
+spent = "Your free meetings are used up. Keep Cap AI with Cap Pro."
+trial = { one = "Cap AI writes up {count} more meeting free.", other = "Cap AI writes up {count} more meetings free." }
+unavailable = "Cap AI isn't available on this server."
+upgrade = "Cap AI writes your notes with Cap Pro."
+
+[cap_ai.sheet]
+ask_any = "Ask anything about any meeting and get an answer in seconds."
+ask_words = "Ask anything about the {words} words said here, or in any other call."
+cancel_anytime = "Cancel anytime."
+continue_label = "Continue"
+headline_any = "Every call, written up in seconds"
+headline_call = { one = "Your {count} minute call, written up in seconds", other = "Your {count} minute call, written up in seconds" }
+headline_people = { one = "Your {count} minute call with {names}, written up in seconds", other = "Your {count} minute call with {names}, written up in seconds" }
+not_now = "Not now"
+notes_line = "Notes the moment a call ends: a summary, decisions, action items with owners and a title."
+open_again = "Open checkout again"
+pro_line = "Plus the rest of Cap Pro: cloud sharing, 4K recording and collaboration."
+signing_in_body = "Finish signing in in your browser. Checkout opens right after."
+signing_in_title = "Sign in to continue"
+starting_title = "Opening checkout…"
+waiting_body = "This updates by itself once you're on Cap Pro."
+waiting_title = "Finish checkout in your browser"
+welcome_any = "Cap AI now writes up every call."
+welcome_note = "Writing your notes now."
+welcome_title = "You're on Cap Pro"
+
+[meeting.row]
+recording = { text = "Recording · {title} · {time}", context = "Main window row while a meeting is recorded. {title} is the note title, {time} the elapsed time such as 12:04." }
+untitled = "Meeting"
+starts_in = { text = "{title} · in {minutes} min", context = "Main window row for a meeting about to start. {minutes} is a whole number." }
+now = { text = "{title} · now", context = "Main window row for a meeting or call happening now." }
+record = "Record"
+stop = "Stop"
+
+[settings.dictionary]
+title = "Dictionary"
+description = "How names and terms are spelled in meeting notes, transcripts, captions and Ask."
+row_description = "Names and terms Cap spells right everywhere."
+placeholder = "Add a name or term, like Cap"
+sounds_placeholder = "Heard as, like Kap"
+how = "Type the right spelling. If a transcript keeps getting a word wrong, add what it writes under Sounds like, or right-click the word in a transcript."
+words = "Words"
+count = { one = "{count} word", other = "{count} words" }
+edit = "Edit"
+sounds_like = "+ Sounds like"
+
+[local_page]
+signed_in_title = { text = "You’re signed in", context = "Heading of the browser page shown after signing in to Cap from the desktop app." }
+signed_in_body = "Head back to Cap to pick up where you left off."
+calendar_title = "Calendar connected"
+calendar_body = "Your upcoming meetings now show up in Cap."
+calendar_denied_title = "Nothing was connected"
+calendar_denied_body = "Cap didn’t get access to your calendar. You can try again from Cap."
+unknown_title = "Nothing to see here"
+unknown_body = "This page only works when Cap opens it."
+close_tab = { text = "You can close this tab.", context = "Quiet footer on the browser pages Cap shows after sign-in or connecting a calendar." }
+
+[library]
+add_rule = "Add rule"
+create = "Create"
+damaged = "Can't read this note's details"
+date_after = "after {date}"
+date_before = "before {date}"
+date_between = "{from} to {to}"
+date_last_days = { one = "in the last day", other = "in the last {count} days" }
+date_today = "today"
+deleted_folder = "Deleted folder"
+earlier = "Earlier"
+edit_smart_folder = "Edit smart folder"
+field_app = "App"
+field_date = "Date"
+field_kind = "Kind"
+field_length = "Length"
+field_notes = "Notes"
+field_person = "Speaker or attendee"
+field_pinned = "Pinned"
+field_summary = "Summary"
+field_title = "Title"
+field_transcript = "Transcript"
+field_unknown = "Made by a newer Cap"
+file_read_only = "Smart folders were changed by a newer Cap, so they are read only here."
+file_unreadable = "Your smart folders could not be read. A copy was kept next to them."
+folder = "Folder"
+folders = "Folders"
+kind_meeting = "Meeting"
+kind_note = "Note"
+kind_recording = "Recording"
+kind_screenshot = "Screenshot"
+latest = "Latest"
+layout = "Layout"
+layout_list = "List"
+layout_magazine = { text = "Magazine", context = "Toolbar layout with big pictures and a lead item." }
+match_all = "all"
+match_any = "any"
+match_count = { one = "{count} item matches", other = "{count} items match" }
+match_none = "No items match yet. New ones that do will appear here on their own."
+match_prefix = { text = "Show items that match", context = "Before a menu with all/any, then match_suffix: 'Show items that match [all] of these rules'." }
+match_suffix = { text = "of these rules", context = "After the all/any menu." }
+minutes = "{minutes} min"
+name_placeholder = "Smart folder name"
+new = "New"
+new_note = "New note"
+new_smart_folder = "New smart folder"
+no = "no"
+no_matches = "No matches"
+no_matches_body = "Try another word, or clear the search."
+notes = "Notes"
+nothing_yet = "Nothing here yet"
+nothing_yet_body = "Recordings, screenshots and notes you make show up here."
+op_contains = "contains"
+op_exists = "exists"
+op_is = { text = "is", context = "Rule operator between a field and a value, e.g. 'Kind is Meeting'." }
+op_is_not = "is not"
+op_longer = "longer than"
+op_missing = "is missing"
+op_not_contains = "does not contain"
+op_shorter = "shorter than"
+op_starts_with = "starts with"
+pinned = "Pinned"
+recordings = "Recordings"
+remove_rule = "Remove rule"
+save_failed = "This smart folder could not be saved. Try again."
+save_read_only = "Smart folders are read only here, so this one was not saved."
+screenshots = "Screenshots"
+search = "Search everything"
+smart_empty = "Nothing matches yet"
+smart_empty_body = "Items that fit this folder's rules show up here on their own."
+smart_folder = "Smart folder"
+take_notes = "Take notes"
+title = "Library"
+trash = "Trash"
+trash_empty = "Trash is empty"
+trash_empty_body = "Deleted notes stay here for 30 days."
+up_next_in = "In {minutes} min"
+value_placeholder = "Type a word or name"
+yes = "yes"
+
+[documents.transcript_toggle]
+hide = "Hide transcript"
+show = "Show transcript"

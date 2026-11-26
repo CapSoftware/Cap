@@ -98,7 +98,9 @@ const { getCurrentUser } = await import("@cap/database/auth/session");
 const { deleteDeveloperApp } = await import("@/actions/developers/delete-app");
 
 const databaseUrl = process.env.CAP_INFRA_TEST_DATABASE_URL;
-const DAY_MS = 24 * 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
 const id = () => randomUUID().replaceAll("-", "").slice(0, 15);
 const database = () => fixture.database as MySql2Database;
 const day = (key: string, time = "00:41:00") => new Date(`${key}T${time}.000Z`);
@@ -533,18 +535,25 @@ describe.runIf(Boolean(databaseUrl))(
 			await makeVideo((await makeApp(1_000_000)).appId, {
 				storagePaidUntil: new Date("2026-12-12T00:00:00Z"),
 			});
+			// The cron only scans videos created after first month charges
+			// began, which is when an earlier test's charge was written, so the
+			// fixtures sit a day or two after that instead of on fixed dates.
+			const began = await firstMonthChargesBegan();
+			expect(began).not.toBeNull();
+			const afterBegan = (ms: number) =>
+				new Date((began?.getTime() ?? 0) + DAY_MS + ms);
 			const { appId, accountId } = await makeApp(1_000_000);
 			const missed = await makeVideo(appId, {
-				createdAt: new Date("2026-11-20T00:00:00Z"),
+				createdAt: afterBegan(DAY_MS),
 			});
 			const missedThenDeleted = await makeVideo(appId, {
-				createdAt: new Date("2026-11-20T01:00:00Z"),
-				deletedAt: new Date("2026-11-20T02:00:00Z"),
+				createdAt: afterBegan(DAY_MS + HOUR_MS),
+				deletedAt: afterBegan(DAY_MS + 2 * HOUR_MS),
 			});
 
 			const noEncodeState = await makeVideo(appId, {
 				processing: null,
-				createdAt: new Date("2026-11-19T00:00:00Z"),
+				createdAt: afterBegan(0),
 			});
 			const noAccount = id();
 			await database()
@@ -556,12 +565,14 @@ describe.runIf(Boolean(databaseUrl))(
 					environment: "development",
 				});
 			const unbillable = await makeVideo(noAccount, {
-				createdAt: new Date("2026-11-19T00:00:00Z"),
+				createdAt: afterBegan(0),
 			});
 
-			await chargeMissedFirstMonths(new Date("2026-11-20T06:41:00Z"), 2);
-			await chargeMissedFirstMonths(new Date("2026-11-20T12:41:00Z"), 2);
-			await chargeMissedFirstMonths(new Date("2026-11-20T18:41:00Z"), 2);
+			const cronRun = (hour: number) =>
+				afterBegan(DAY_MS + hour * HOUR_MS + 41 * MINUTE_MS);
+			await chargeMissedFirstMonths(cronRun(6), 2);
+			await chargeMissedFirstMonths(cronRun(12), 2);
+			await chargeMissedFirstMonths(cronRun(18), 2);
 
 			expect((await videoRow(noEncodeState))?.storagePaidUntil).not.toBeNull();
 			expect((await videoRow(unbillable))?.storagePaidUntil).not.toBeNull();
@@ -2362,9 +2373,11 @@ describe.runIf(Boolean(databaseUrl))(
 				tier: "2160p" as const,
 			};
 			let sentinel: string;
+			let sentinelAccountId: string;
 
 			beforeAll(async () => {
 				const { appId, accountId } = await makeApp(0);
+				sentinelAccountId = accountId;
 				sentinel = await makeVideo(appId, {
 					storagePaidUntil: new Date("2026-10-31T00:00:00Z"),
 				});
@@ -2386,7 +2399,12 @@ describe.runIf(Boolean(databaseUrl))(
 			afterAll(async () => {
 				await database()
 					.delete(developerCreditTransactions)
-					.where(eq(developerCreditTransactions.referenceId, sentinel));
+					.where(
+						and(
+							eq(developerCreditTransactions.accountId, sentinelAccountId),
+							eq(developerCreditTransactions.referenceId, sentinel),
+						),
+					);
 				await database()
 					.delete(developerVideos)
 					.where(eq(developerVideos.id, sentinel));
@@ -2673,9 +2691,27 @@ describe.runIf(Boolean(databaseUrl))(
 
 			afterEach(async () => {
 				if (created.length === 0) return;
-				await database()
-					.delete(developerCreditTransactions)
-					.where(inArray(developerCreditTransactions.referenceId, created));
+				const accounts = await database()
+					.select({ id: developerCreditAccounts.id })
+					.from(developerCreditAccounts)
+					.innerJoin(
+						developerVideos,
+						eq(developerVideos.appId, developerCreditAccounts.appId),
+					)
+					.where(inArray(developerVideos.id, created));
+				if (accounts.length > 0) {
+					await database()
+						.delete(developerCreditTransactions)
+						.where(
+							and(
+								inArray(
+									developerCreditTransactions.accountId,
+									accounts.map((account) => account.id),
+								),
+								inArray(developerCreditTransactions.referenceId, created),
+							),
+						);
+				}
 				await database()
 					.delete(developerVideos)
 					.where(inArray(developerVideos.id, created));

@@ -16,6 +16,12 @@ const mocks = vi.hoisted(() => ({
 	},
 }));
 
+vi.mock("@/app/(org)/dashboard/caps/components/CapListHeader", () => ({
+	CapListHeader: () => null,
+	PageSizeSelect: () => null,
+	SelectAllCheckbox: () => null,
+	listControlClass: "",
+}));
 vi.mock("@cap/ui", () => ({ Button: () => null }));
 vi.mock("@fortawesome/free-solid-svg-icons", () => ({
 	faFolderPlus: {},
@@ -78,6 +84,9 @@ vi.mock("@/app/(org)/dashboard/caps/components/EmptyCapState", () => ({
 }));
 vi.mock("@/app/(org)/dashboard/caps/components/FoldersSection", () => ({
 	FoldersSection: () => null,
+}));
+vi.mock("@/app/(org)/dashboard/caps/components/QuickActions", () => ({
+	QuickActions: () => null,
 }));
 
 const data: VideoData = [

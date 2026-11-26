@@ -9,6 +9,12 @@ const mocks = vi.hoisted(() => ({
 	marker: (name: string) => () => `[${name}]`,
 }));
 
+vi.mock("@/app/(org)/dashboard/caps/components/CapListHeader", () => ({
+	CapListHeader: () => null,
+	PageSizeSelect: () => null,
+	SelectAllCheckbox: () => null,
+	listControlClass: "",
+}));
 vi.mock("next/navigation", () => ({
 	usePathname: () => "/dashboard/spaces/space-1",
 	useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),

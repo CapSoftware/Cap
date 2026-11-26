@@ -5,7 +5,7 @@
 # gpui's tree does not want.
 [workspace]
 resolver = "2"
-members = [".", "kernels", "i18n-build", "glass"]
+members = [".", "kernels", "i18n-build", "glass", "notes", "notes-ui", "calendar", "meetings", "meeting-platform", "diarize"]
 
 [package]
 name = "cap-desktop-gpui"
@@ -24,10 +24,18 @@ name = "studio-finalization-benchmark"
 path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
 
 [dependencies]
+memmap2 = "0.9"
 cap-audio = { path = "../../crates/audio" }
 cap-cli-install = { path = "../../crates/cli-install" }
 cap-gpui-kernels = { path = "kernels" }
 cap-glass = { path = "glass" }
+cap-meetings = { path = "meetings" }
+cap-meeting-platform = { path = "meeting-platform" }
+cap-calendar = { path = "calendar" }
+cap-diarize = { path = "diarize" }
+cap-notes = { path = "notes" }
+cap-notes-ui = { path = "notes-ui" }
+iana-time-zone = "0.1"
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
 # which our transparent rounded main-window shell depends on.
@@ -45,7 +53,7 @@ gpui_tokio = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19be
 cap-camera = { path = "../../crates/camera" }
 scap-targets = { path = "../../crates/scap-targets" }
 # Same fork/rev as the root workspace: MicrophoneFeed enumerates through this.
-cpal = { git = "https://github.com/CapSoftware/cpal", rev = "6013cb5f8bd3" }
+cpal = { git = "https://github.com/CapSoftware/cpal", rev = "a8c4b41d719b" }
 
 # The actual recording engine: the studio/instant actors. Drags in the ffmpeg
 # encode stack; that is the point.
@@ -57,6 +65,7 @@ cap-enc-ffmpeg = { path = "../../crates/enc-ffmpeg" }
 cap-timestamp = { path = "../../crates/timestamp" }
 cap-utils = { path = "../../crates/utils" }
 cap-project = { path = "../../crates/project" }
+cap-automation = { path = "../../crates/automation" }
 # The cursor style picker draws the same SVG assets the renderer composites.
 # gpui's `svg()` keeps only a glyph's alpha, so the two-tone cursor art has to
 # be rasterised instead: `resvg` at the pin cap-rendering already builds, into
@@ -94,6 +103,7 @@ cap-export = { path = "../../crates/export" }
 # workspace pins, and cap-recording already builds it, so this is an import,
 # not an extra dependency tree.
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
+notify-rust = "4.18"
 # Camera preview frames and Recents thumbnails both become gpui `RenderImage`s,
 # and the frame container type must match gpui's image crate version exactly
 # (`image = "0.25.1"` in the zed fork's workspace) or `Frame` would be two
@@ -119,7 +129,7 @@ sys-locale = "0.3"
 # lockfile through gpui, so this makes an existing build unit direct.
 unicode-segmentation = "1"
 # spawn_blocking for finalize; the runtime itself comes from gpui_tokio.
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 # The crate 0.6.0's global-shortcut plugin wrapped, at the same pin: stored
 # bindings are W3C `KeyboardEvent.code` strings and this owns the platform
 # mapping (Carbon RegisterEventHotKey on macOS).
@@ -135,6 +145,11 @@ chrono = "0.4"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 sanitize-filename = "0.6.0"
+tempfile = "3"
+# Moves media of clips removed from a project to the OS trash, so the user
+# can still recover it. Its platform deps (objc2 0.6, windows 0.62) are
+# already in the tree.
+trash = "=5.2.9"
 semver = "1"
 base64 = "0.22"
 minisign-verify = "0.2.4"
@@ -171,6 +186,7 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
 ] }
 futures-util = "0.3"
+getrandom = "0.2"
 dirs = "6"
 dunce = "1.0.5"
 # Caption transcription (`src/transcription.rs`): the engine pin 0.6.0
@@ -207,6 +223,8 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 clipboard-rs = "0.2.4"
 raw-window-handle = "0.6"
+same-file = "1.0.6"
+scap-cpal = { path = "../../crates/scap-cpal" }
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
@@ -218,6 +236,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_IO",
     "Win32_System_Kernel",
     "Win32_System_LibraryLoader",
+    "Win32_System_Power",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
@@ -262,11 +281,16 @@ objc2-core-graphics = { version = "0.3.2", features = ["CGColor"] }
 # NSRect/NSPoint/NSSize for `setFrame:display:`. Already in the tree as
 # objc2-app-kit's own dependency, so this adds nothing to the build.
 objc2-foundation = { version = "0.3.2", features = [
+    "NSBundle",
+    "NSError",
     "NSNotification",
     "NSOperation",
     "NSString",
     "block2",
 ] }
+# Asks for notification permission when Cap first needs it (a failed automatic
+# start). Already in the tree through gpui_macos, so this adds nothing to the build.
+objc2-user-notifications = "0.3.2"
 block2 = "0.6"
 raw-window-handle = "0.6"
 core-foundation = "0.10"

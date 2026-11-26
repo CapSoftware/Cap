@@ -1,7 +1,7 @@
 "use client";
 
 import { classNames } from "@cap/utils/helpers";
-import { Check, Copy, Download } from "lucide-react";
+import { Check, Copy, Download, FileDown } from "lucide-react";
 import Link from "next/link";
 import {
 	type FormEvent,
@@ -34,6 +34,7 @@ import {
 	isLicenseKey,
 	LICENSE_KEY_SLOTS,
 	type LicenseDuration,
+	licensesCsv,
 	lookupGift,
 	lookupPurchase,
 	type PurchasedLicense,
@@ -170,8 +171,19 @@ const CopyButton = ({
 	</button>
 );
 
-const Panel = ({ children }: { children: ReactNode }) => (
-	<div className="rounded-[22px] bg-white p-5 shadow-[0_0_0_1px_rgba(17,17,17,0.06),0_24px_48px_-32px_rgba(17,17,17,0.28)] sm:p-7">
+const Panel = ({
+	children,
+	className,
+}: {
+	children: ReactNode;
+	className?: string;
+}) => (
+	<div
+		className={classNames(
+			"rounded-[22px] bg-white p-5 shadow-[0_0_0_1px_rgba(17,17,17,0.06),0_24px_48px_-32px_rgba(17,17,17,0.28)] sm:p-7",
+			className,
+		)}
+	>
 		{children}
 	</div>
 );
@@ -241,6 +253,184 @@ const KeyRow = ({
 		<CopyButton label="Copy key" active={copied} onClick={onCopy} />
 	</div>
 );
+
+const downloadCsv = (order: {
+	gift: boolean;
+	duration: LicenseDuration;
+	licenses: PurchasedLicense[];
+}) => {
+	const csv = licensesCsv({ origin: window.location.origin, ...order });
+	const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+	const link = document.createElement("a");
+	link.href = url;
+	link.download = order.gift ? "cap-gift-links.csv" : "cap-license-keys.csv";
+	document.body.append(link);
+	link.click();
+	link.remove();
+	setTimeout(() => URL.revokeObjectURL(url), 0);
+	trackEvent("license_csv_downloaded", {
+		gift: order.gift,
+		quantity: order.licenses.length,
+	});
+};
+
+const RowCopyButton = ({
+	label,
+	active,
+	onClick,
+}: {
+	label: string;
+	active: boolean;
+	onClick: () => void;
+}) => (
+	<button
+		type="button"
+		onClick={onClick}
+		aria-label={active ? "Copied" : label}
+		className="inline-flex size-7 shrink-0 items-center justify-center gap-1.5 rounded-[8px] text-[13px] font-medium text-[rgba(17,17,17,0.72)] transition-colors duration-200 hover:bg-[#E9EEF4] hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] sm:h-8 sm:w-auto sm:px-2.5"
+	>
+		{active ? (
+			<Check className="size-3.5 text-[#3F9974]" strokeWidth={2.5} />
+		) : (
+			<Copy className="size-3.5" strokeWidth={2} />
+		)}
+		<span aria-hidden="true" className="hidden sm:inline">
+			{active ? "Copied" : label}
+		</span>
+	</button>
+);
+
+const BulkLicenses = ({
+	gift,
+	duration,
+	licenses,
+	copied,
+	copy,
+}: {
+	gift: boolean;
+	duration: LicenseDuration;
+	licenses: PurchasedLicense[];
+	copied: string | null;
+	copy: (id: string, text: string) => Promise<void>;
+}) => {
+	const origin = window.location.origin;
+	const open = licenses.filter(
+		(license): license is PurchasedLicense & { licenseKey: string } =>
+			license.licenseKey !== null,
+	);
+	const copyAll = () => {
+		void copy(
+			"all",
+			open
+				.map((license) =>
+					gift ? giftLink(origin, license.licenseKey) : license.licenseKey,
+				)
+				.join("\n"),
+		);
+		trackEvent("license_copy_all", { gift, quantity: open.length });
+	};
+
+	return (
+		<>
+			<div
+				className={classNames(
+					"grid gap-2.5",
+					open.length > 0 && "sm:grid-cols-2",
+				)}
+			>
+				<button
+					type="button"
+					onClick={() => downloadCsv({ gift, duration, licenses })}
+					className={classNames(BTN_PRIMARY, "w-full cursor-pointer gap-2")}
+				>
+					<FileDown className="relative size-4" strokeWidth={2} />
+					<span className="relative">Download CSV</span>
+				</button>
+				{open.length > 0 ? (
+					<button
+						type="button"
+						onClick={copyAll}
+						className={classNames(BTN_SECONDARY, "w-full cursor-pointer gap-2")}
+					>
+						{copied === "all" ? (
+							<Check className="size-4 text-[#3F9974]" strokeWidth={2.5} />
+						) : (
+							<Copy className="size-4" strokeWidth={2} />
+						)}
+						<span aria-live="polite">
+							{copied === "all"
+								? "Copied"
+								: gift
+									? "Copy all links"
+									: "Copy all keys"}
+						</span>
+					</button>
+				) : null}
+			</div>
+
+			<div className="mt-7 flex items-baseline justify-between gap-3">
+				<span className="text-[14px] font-medium text-[#111111]">
+					{gift ? "Gift links" : "License keys"}
+				</span>
+				<span className="text-[13px] tabular-nums text-[rgba(17,17,17,0.55)]">
+					{gift && open.length === 0
+						? "All claimed"
+						: gift && open.length < licenses.length
+							? `${open.length} of ${licenses.length} not claimed yet`
+							: `${licenses.length} ${gift ? "links" : "keys"}`}
+				</span>
+			</div>
+			<ul className="mt-3 max-h-[min(460px,60vh)] divide-y divide-[#E6ECF2] overflow-y-auto rounded-[14px] border border-[#E1E7EE] bg-[#FAFBFD]">
+				{licenses.map((license) => (
+					<li
+						key={license.position}
+						className="flex h-12 items-center gap-1.5 pl-1.5 pr-1 sm:gap-3 sm:pl-3 sm:pr-1.5"
+					>
+						<span className="hidden w-6 shrink-0 min-[380px]:block sm:w-7 text-right text-[12.5px] tabular-nums text-[rgba(17,17,17,0.42)]">
+							{license.position}
+						</span>
+						{license.licenseKey ? (
+							<>
+								<span
+									className={classNames(
+										MONO,
+										"min-w-0 flex-1 truncate whitespace-nowrap text-[11.5px] text-[#111111] min-[420px]:text-[12.5px] sm:text-[13.5px]",
+									)}
+								>
+									{groupLicenseKey(license.licenseKey).map((group, index) => (
+										<span
+											key={LICENSE_KEY_SLOTS[index]}
+											className={index ? "ml-[0.3em] sm:ml-[0.7em]" : undefined}
+										>
+											{group}
+										</span>
+									))}
+								</span>
+								<RowCopyButton
+									label={gift ? "Copy link" : "Copy"}
+									active={copied === `row-${license.position}`}
+									onClick={() => {
+										const key = license.licenseKey ?? "";
+										void copy(
+											`row-${license.position}`,
+											gift ? giftLink(origin, key) : key,
+										);
+										if (gift) trackEvent("license_gift_link_copied");
+									}}
+								/>
+							</>
+						) : (
+							<span className="inline-flex flex-1 items-center gap-1.5 text-[13.5px] text-[#3F9974]">
+								<Check className="size-3.5" strokeWidth={2.5} />
+								Claimed
+							</span>
+						)}
+					</li>
+				))}
+			</ul>
+		</>
+	);
+};
 
 const fireConfetti = async (card: HTMLElement | null) => {
 	if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
@@ -484,9 +674,14 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 		setView({ kind: "enter" });
 	};
 
+	const count =
+		view.kind === "bought" || view.kind === "gifted" ? view.licenses.length : 1;
 	const firstKey =
-		view.kind === "bought" ? (view.licenses[0]?.licenseKey ?? null) : null;
+		view.kind === "bought" && count === 1
+			? (view.licenses[0]?.licenseKey ?? null)
+			: null;
 	const card = {
+		count,
 		wrapped:
 			view.kind === "enter" ||
 			view.kind === "opening" ||
@@ -551,13 +746,18 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 					body: "Your order is taking longer than usual to appear here. Your license key is also sent by email.",
 				};
 			case "bought":
+				if (view.licenses.length > 1) {
+					return {
+						title: `Your ${view.licenses.length} licenses are ready`,
+						body: view.email
+							? `Download them all as a CSV. We also sent every key to ${view.email}.`
+							: "Download them all as a CSV before you leave this page.",
+					};
+				}
 				return {
-					title:
-						view.licenses.length === 1
-							? "Your license is ready"
-							: "Your licenses are ready",
+					title: "Your license is ready",
 					body: view.email
-						? `We also sent ${view.licenses.length === 1 ? "the key" : "the keys"} to ${view.email}.`
+						? `We also sent the key to ${view.email}.`
 						: "Keep this page open until you have saved your key.",
 				};
 			case "gifted":
@@ -572,15 +772,15 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 								body: "Every link from this order has been used.",
 							};
 				}
+				if (view.licenses.length > 1) {
+					return {
+						title: `${view.licenses.length} gifts, ready to send`,
+						body: "Each link is one Cap license. Download them all as a CSV and send one link per person.",
+					};
+				}
 				return {
-					title:
-						view.licenses.length === 1
-							? "Your gift is ready to send"
-							: "Your gifts are ready to send",
-					body:
-						view.licenses.length === 1
-							? "Share the link below. Whoever opens it enters their email and the license is theirs."
-							: "Each link is one license. Whoever opens one enters their email and the license is theirs.",
+					title: "Your gift is ready to send",
+					body: "Share the link below. Whoever opens it enters their email and the license is theirs.",
 				};
 		}
 	})();
@@ -758,6 +958,20 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 					</Panel>
 				);
 			case "bought":
+				if (view.licenses.length > 1) {
+					return (
+						<Panel className="p-4">
+							<BulkLicenses
+								gift={false}
+								duration={view.duration}
+								licenses={view.licenses}
+								copied={copied}
+								copy={copy}
+							/>
+							<ActivateSteps />
+						</Panel>
+					);
+				}
 				return (
 					<Panel>
 						<div className="space-y-2.5">
@@ -783,6 +997,28 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 					</Panel>
 				);
 			case "gifted":
+				if (view.licenses.length > 1) {
+					return (
+						<Panel className="p-4">
+							<BulkLicenses
+								gift
+								duration={view.duration}
+								licenses={view.licenses}
+								copied={copied}
+								copy={copy}
+							/>
+							{view.licenses.some((license) => !license.redeemed) ? (
+								<p className={classNames(NOTE, "mt-5")}>
+									{view.email
+										? `We also emailed every link to ${view.email}. `
+										: ""}
+									Each link works once, and anyone who has it can claim it, so
+									send each one only to the person it is for.
+								</p>
+							) : null}
+						</Panel>
+					);
+				}
 				return (
 					<Panel>
 						<ul className="space-y-2.5">
@@ -855,7 +1091,7 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 	return (
 		<div
 			data-header-flat
-			className={`${htSans.className} ${htSans.variable} ${htSerif.variable} ${htMono.variable} text-[#111111]`}
+			className={`overflow-x-clip ${htSans.className} ${htSans.variable} ${htSerif.variable} ${htMono.variable} text-[#111111]`}
 			style={grainBg(SHELL)}
 		>
 			<div className="px-2.5 pb-2.5 pt-[68px] sm:px-4 sm:pb-4 lg:pt-[76px]">
@@ -894,8 +1130,13 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 					</div>
 
 					<section className="relative -mt-[132px] px-4 pb-20 sm:-mt-[156px] sm:px-5 lg:pb-28">
-						<div className="mx-auto max-w-[440px]">
-							<div ref={cardRef}>
+						<div
+							className={classNames(
+								"mx-auto",
+								count > 1 ? "max-w-[600px]" : "max-w-[440px]",
+							)}
+						>
+							<div ref={cardRef} className="mx-auto max-w-[440px]">
 								<LicenseCard {...card} />
 							</div>
 							<div data-rd-boot className="mt-8 sm:mt-10">

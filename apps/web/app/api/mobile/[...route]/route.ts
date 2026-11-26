@@ -4,8 +4,9 @@ import { isDisposableEmailSignup } from "@cap/database/auth/disposable-signup";
 import {
 	isEmailAllowedForSignup,
 	isEmailBlockedFromSignup,
-	normalizeEmailAddress,
+	normalizeSignInEmail,
 } from "@cap/database/auth/domain-utils";
+import { revokeAllCredentials } from "@cap/database/auth/revoke-credentials";
 import {
 	decrypt,
 	encrypt,
@@ -15,6 +16,7 @@ import {
 import { getEmailDeliveryStatus, sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
+import { resolveOrCreateActiveOrganization } from "@cap/database/organization-pointer";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, serverEnv } from "@cap/env";
@@ -32,6 +34,7 @@ import {
 	VideosPolicy,
 	VideosRepo,
 } from "@cap/web-backend";
+import { getCustomThumbnailKey } from "@cap/web-backend/src/Storage/custom-thumbnail";
 import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
 import {
 	Comment,
@@ -75,6 +78,7 @@ import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
+import { logNewAccountAddress } from "@/lib/ip-reputation";
 import {
 	describeLinkAccessChoice,
 	isLinkRestricted,
@@ -82,6 +86,7 @@ import {
 	resolveLinkAccessWrite,
 } from "@/lib/link-access";
 import { importLoomVideoForOwner } from "@/lib/loom-csv-import";
+import { toStoredUploadContentType } from "@/lib/media-processing-policy";
 import { mobileUserAgent, prepareMobileEvents } from "@/lib/mobile-events";
 import { pushSessionHash } from "@/lib/mobile-push";
 import {
@@ -94,8 +99,11 @@ import { clientAddress, isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { apiToHandler } from "@/lib/server";
 import { acceptsClientEvents, sendClientEvents } from "@/lib/server-analytics";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
+import { playbackUrlValidity } from "@/lib/signed-url-validity";
 import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
+import { shouldRefuseTorExit, type TorExitSurface } from "@/lib/tor-exit-gate";
+import { userPreferencesObject } from "@/lib/user-preferences-sql";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
 import {
 	restoreVideoToOriginalAsUser,
@@ -239,8 +247,12 @@ const getMobileRedirectUrl = (redirectUri: string) => {
 	}
 };
 
-const getEmailAuthAdapter = () => {
-	const adapter = authOptions().adapter;
+const getEmailAuthAdapter = (headers: Headers) => {
+	const adapter = authOptions(undefined, {
+		onUserCreated: () => {
+			logNewAccountAddress("mobile-email-session", headers);
+		},
+	}).adapter;
 	const { createUser, getUserByEmail, updateUser } = adapter ?? {};
 
 	if (!createUser || !getUserByEmail || !updateUser) {
@@ -250,8 +262,9 @@ const getEmailAuthAdapter = () => {
 	return { createUser, getUserByEmail, updateUser };
 };
 
-const createOrUpdateEmailUser = async (email: string) => {
-	const { createUser, getUserByEmail, updateUser } = getEmailAuthAdapter();
+const createOrUpdateEmailUser = async (email: string, headers: Headers) => {
+	const { createUser, getUserByEmail, updateUser } =
+		getEmailAuthAdapter(headers);
 	const existingUser = await getUserByEmail(email);
 
 	if (existingUser) {
@@ -464,7 +477,12 @@ const getMobileThumbnailUrl = Effect.fn("Mobile.getThumbnailUrl")(function* (
 
 	const [video] = maybeVideo.value;
 	const [bucket] = yield* storage.getAccessForVideo(video);
-	const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+	const publishedThumbnail =
+		getCustomThumbnailKey({
+			id: video.id,
+			ownerId: video.ownerId,
+			metadata: Option.getOrNull(video.metadata),
+		}) ?? getPublishedRecordingThumbnailKey(video);
 	if (publishedThumbnail) {
 		return yield* bucket.getSignedObjectUrl(publishedThumbnail);
 	}
@@ -474,6 +492,15 @@ const getMobileThumbnailUrl = Effect.fn("Mobile.getThumbnailUrl")(function* (
 	const thumbnailKey = findScreenshotObjectKey(response.Contents ?? []);
 	if (!thumbnailKey) return null;
 	return yield* bucket.getSignedObjectUrl(thumbnailKey);
+});
+
+const ensureNotTorExit = Effect.fn("Mobile.ensureNotTorExit")(function* (
+	surface: TorExitSurface,
+	headers: Headers,
+) {
+	if (yield* Effect.promise(() => shouldRefuseTorExit(surface, headers))) {
+		return yield* Effect.fail(new HttpApiError.Forbidden());
+	}
 });
 
 const ensureEmailSignInAllowed = Effect.fn("Mobile.ensureEmailSignInAllowed")(
@@ -566,7 +593,9 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	rawEmail: string,
 	headers: Headers,
 ) {
-	const email = normalizeEmailAddress(rawEmail);
+	const email = normalizeSignInEmail(rawEmail);
+	if (!email) return yield* Effect.fail(new HttpApiError.BadRequest());
+	yield* ensureNotTorExit("mobile-email-session", headers);
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
 
@@ -618,13 +647,14 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	}: (typeof Mobile.MobileEmailSessionVerifyInput)["Type"],
 	headers: Headers,
 ) {
-	const email = normalizeEmailAddress(rawEmail);
+	const email = normalizeSignInEmail(rawEmail);
 	const code = rawCode.trim();
 
-	if (!emailPattern.test(email) || !emailCodePattern.test(code)) {
+	if (!email || !emailPattern.test(email) || !emailCodePattern.test(code)) {
 		return yield* Effect.fail(new HttpApiError.BadRequest());
 	}
 
+	yield* ensureNotTorExit("mobile-email-session", headers);
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
 
@@ -667,7 +697,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	}
 
 	const user = yield* Effect.tryPromise({
-		try: () => createOrUpdateEmailUser(email),
+		try: () => createOrUpdateEmailUser(email, headers),
 		catch: () => new HttpApiError.InternalServerError(),
 	});
 
@@ -690,27 +720,7 @@ const requestAccountDeletion = Effect.fn("Mobile.requestAccountDeletion")(
 
 		const database = yield* Database;
 		yield* database.use((db) =>
-			db.transaction(async (tx) => {
-				await tx
-					.update(Db.users)
-					.set({
-						authSessionVersion: sql`${Db.users.authSessionVersion} + 1`,
-					})
-					.where(eq(Db.users.id, user.id));
-				await tx.delete(Db.sessions).where(eq(Db.sessions.userId, user.id));
-				await tx
-					.delete(Db.authApiKeys)
-					.where(eq(Db.authApiKeys.userId, user.id));
-				await tx
-					.update(Db.agentApiKeys)
-					.set({ revokedAt: new Date() })
-					.where(
-						and(
-							eq(Db.agentApiKeys.userId, user.id),
-							isNull(Db.agentApiKeys.revokedAt),
-						),
-					);
-			}),
+			db.transaction((tx) => revokeAllCredentials(tx, user.id)),
 		);
 
 		return { success: true as const };
@@ -795,7 +805,7 @@ const updateNotificationPreferences = Effect.fn(
 			db
 				.update(Db.users)
 				.set({
-					preferences: sql`JSON_SET(COALESCE(${Db.users.preferences}, JSON_OBJECT()), '$.notifications', JSON_MERGE_PATCH(CAST(${JSON.stringify(defaults)} AS JSON), IF(JSON_TYPE(JSON_EXTRACT(${Db.users.preferences}, '$.notifications')) = 'OBJECT', JSON_EXTRACT(${Db.users.preferences}, '$.notifications'), JSON_OBJECT()), CAST(${JSON.stringify(patch)} AS JSON)))`,
+					preferences: sql`JSON_SET(${userPreferencesObject()}, '$.notifications', JSON_MERGE_PATCH(CAST(${JSON.stringify(defaults)} AS JSON), IF(JSON_TYPE(JSON_EXTRACT(${Db.users.preferences}, '$.notifications')) = 'OBJECT', JSON_EXTRACT(${Db.users.preferences}, '$.notifications'), JSON_OBJECT()), CAST(${JSON.stringify(patch)} AS JSON)))`,
 				})
 				.where(eq(Db.users.id, user.id)),
 		);
@@ -919,7 +929,7 @@ const blockMobileUser = Effect.fn("Mobile.blockUser")(function* (
 				await tx
 					.update(Db.users)
 					.set({
-						preferences: sql`JSON_SET(COALESCE(${Db.users.preferences}, JSON_OBJECT()), '$.blockedUserIds', CAST(${JSON.stringify(blockedUserIds)} AS JSON))`,
+						preferences: sql`JSON_SET(${userPreferencesObject()}, '$.blockedUserIds', CAST(${JSON.stringify(blockedUserIds)} AS JSON))`,
 					})
 					.where(eq(Db.users.id, user.id));
 			}
@@ -1581,11 +1591,28 @@ const getBootstrap = Effect.fn("Mobile.getBootstrap")(function* () {
 	const user = yield* CurrentUser;
 	const mobileUser = yield* getMobileUser();
 
-	const organizations = yield* getAccessibleOrganizations(user.id);
-	const activeOrganization =
+	let organizations = yield* getAccessibleOrganizations(user.id);
+	let activeOrganization =
 		organizations.find((org) => org.id === mobileUser.activeOrganizationId) ??
-		organizations[0] ??
 		null;
+	// Folder, analytics and import routes use the stored active organization,
+	// so it has to match the one the app shows. An account with no
+	// organization gets a personal one, as signup and desktop uploads do.
+	if (!activeOrganization) {
+		const database = yield* Database;
+		const fallback = yield* database.use((db) =>
+			resolveOrCreateActiveOrganization(db, {
+				id: user.id,
+				activeOrganizationId: mobileUser.activeOrganizationId,
+			}),
+		);
+		if (organizations.length === 0 && fallback)
+			organizations = yield* getAccessibleOrganizations(user.id);
+		activeOrganization =
+			organizations.find((org) => org.id === fallback?.id) ??
+			organizations[0] ??
+			null;
+	}
 	const activeOrganizationId = activeOrganization?.id ?? null;
 	const [rootFolders, spaces] = activeOrganization
 		? yield* Effect.all([
@@ -3046,7 +3073,10 @@ const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 		: null;
 
 	if (source instanceof Video.Mp4Source) {
-		const signedUrl = yield* bucket.getSignedObjectUrl(source.getFileKey());
+		const signedUrl = yield* bucket.getSignedObjectUrl(
+			source.getFileKey(),
+			playbackUrlValidity(),
+		);
 		const url = resolveMobileWebResourceUrl(
 			signedUrl,
 			serverEnv().WEB_URL,
@@ -3058,6 +3088,7 @@ const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 	if (source instanceof Video.M3U8Source) {
 		const signedUrl = yield* bucket.getSignedObjectUrl(
 			source.getPlaylistFileKey(),
+			playbackUrlValidity(),
 		);
 		const url = resolveMobileWebResourceUrl(
 			signedUrl,
@@ -3419,11 +3450,12 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		},
 	);
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.${getFileExtension(input)}`;
+	const storedContentType = toStoredUploadContentType(input.contentType);
 	const upload = yield* writable.access.createUploadTarget(rawFileKey, {
-		contentType: input.contentType,
+		contentType: storedContentType,
 		method: "put",
 		fields: {
-			"Content-Type": input.contentType,
+			"Content-Type": storedContentType,
 			"x-amz-meta-userid": user.id,
 			"x-amz-meta-source": "cap-mobile-ios",
 		},
@@ -3704,6 +3736,18 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					.handle("requestSession", ({ request, urlParams }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
+								if (
+									yield* Effect.promise(() =>
+										shouldRefuseTorExit(
+											"mobile-session",
+											toHeaders(request.headers),
+										),
+									)
+								) {
+									const blockedUrl = new URL("/login", getDeploymentOrigin());
+									blockedUrl.searchParams.set("error", "SignupBlocked");
+									return HttpServerResponse.redirect(blockedUrl.toString());
+								}
 								const user = yield* getCurrentUser;
 								if (Option.isNone(user) || urlParams.provider === "workos") {
 									const loginRedirectUrl =

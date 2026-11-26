@@ -49,6 +49,7 @@ pub mod glass;
 mod glass_switch;
 mod hint;
 mod kbd;
+mod kept_text;
 pub mod keyboard_nav;
 mod menu;
 mod microphone_level;
@@ -93,6 +94,7 @@ pub use field::{Field, Subfield};
 pub use hint::{Hint, Hints, Side as HintSide};
 
 pub use kbd::{KbdChip, KbdSize, kbd_symbol};
+pub use kept_text::{KeptText, SharedTextCache, TextCache, kept_text};
 #[allow(unused_imports)]
 pub use menu::{Menu, MenuItem, MenuKey, MenuState};
 pub(crate) use microphone_level::{MicrophoneLevel, MicrophoneLevelKind, moves_a_device_pixel};

@@ -15,6 +15,7 @@ pub(crate) struct PlanePool {
 }
 
 const MAX_SPARE_PACKED_PLANES: usize = 2;
+const MAX_SPARE_PLANE_BYTES: usize = super::FULL_CHROMA_MAX_PIXELS * 4;
 
 impl PlanePool {
     pub(crate) fn new() -> Self {
@@ -45,7 +46,7 @@ impl PlanePool {
     }
 
     pub(crate) fn recycle(&self, mut buf: Vec<u8>) {
-        if buf.capacity() == 0 {
+        if buf.capacity() == 0 || buf.capacity() > MAX_SPARE_PLANE_BYTES {
             return;
         }
         buf.clear();
@@ -113,6 +114,24 @@ impl FrameConverter {
             return copy_rgba_plane_pooled(&self.planes, frame.data(0), stride, width, height);
         }
 
+        // swscale's exact 4:4:4 path took more time than decoding the frame.
+        if frame.format() == format::Pixel::YUV444P
+            && frame.color_range() != ffmpeg::color::Range::JPEG
+            && within_full_chroma_limit(frame.width(), frame.height())
+        {
+            let (width, height) = (frame.width() as usize, frame.height() as usize);
+            let mut output = self.planes.take(width * height * 4);
+            output.resize(width * height * 4, 0);
+            crate::cpu_yuv::yuv444p_to_rgba_with_matrix(
+                [0, 1, 2].map(|plane| (frame.data(plane), frame.stride(plane))),
+                width,
+                height,
+                &mut output,
+                YuvMatrix::from_color_space(frame.color_space()),
+            );
+            return output;
+        }
+
         let width = frame.width();
         let height = frame.height();
 
@@ -159,9 +178,22 @@ impl FrameConverter {
         });
 
         if needs_new {
-            let mut context =
-                software::converter((width, height), input_format, format::Pixel::RGBA)
-                    .expect("failed to create frame scaler");
+            // FAST_BILINEAR makes swscale skip work on chroma it treats as
+            // subsampled, which blurs and shifts full-resolution chroma
+            // (a 4:4:4 import drops from 53.9 to 35.8 dB against its source).
+            // BILINEAR converts it exactly; other layouts, and frames above
+            // the full-chroma limit, keep the flags they always had.
+            let flags = scaler_flags(input_format, width, height);
+            let mut context = software::scaling::Context::get(
+                input_format,
+                width,
+                height,
+                format::Pixel::RGBA,
+                width,
+                height,
+                flags,
+            )
+            .expect("failed to create frame scaler");
             if matrix == YuvMatrix::Bt709 {
                 use_bt709_source(&mut context);
             }
@@ -181,6 +213,33 @@ impl FrameConverter {
             self.rgba_frame = frame::Video::new(format::Pixel::RGBA, width, height);
         }
     }
+}
+
+fn within_full_chroma_limit(width: u32, height: u32) -> bool {
+    width as usize * height as usize <= super::FULL_CHROMA_MAX_PIXELS
+}
+
+fn scaler_flags(input_format: format::Pixel, width: u32, height: u32) -> software::scaling::Flags {
+    if format_has_full_chroma(input_format) && within_full_chroma_limit(width, height) {
+        software::scaling::Flags::BILINEAR
+    } else {
+        software::scaling::Flags::FAST_BILINEAR
+    }
+}
+
+fn format_has_full_chroma(input_format: format::Pixel) -> bool {
+    input_format.descriptor().is_some_and(|descriptor| {
+        descriptor.nb_components() >= 3
+            && descriptor.log2_chroma_w() == 0
+            && descriptor.log2_chroma_h() == 0
+            && !is_rgb(input_format)
+    })
+}
+
+fn is_rgb(input_format: format::Pixel) -> bool {
+    input_format.descriptor().is_some_and(|descriptor| unsafe {
+        (*descriptor.as_ptr()).flags & ffmpeg::ffi::AV_PIX_FMT_FLAG_RGB as u64 != 0
+    })
 }
 
 /// swscale converts YUV with BT.601 unless told otherwise: switch the source
@@ -365,6 +424,40 @@ mod tests {
     }
 
     #[test]
+    fn full_chroma_frames_keep_every_column_of_chroma() {
+        ffmpeg::init().unwrap();
+        let (width, height) = (64u32, 8u32);
+        let mut source = frame::Video::new(format::Pixel::YUV444P, width, height);
+        let chroma = |x: usize| -> (u8, u8) { if x % 2 == 0 { (60, 200) } else { (200, 60) } };
+        for plane in 0..3 {
+            let stride = source.stride(plane);
+            let data = source.data_mut(plane);
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    data[y * stride + x] = match plane {
+                        0 => 120,
+                        1 => chroma(x).0,
+                        _ => chroma(x).1,
+                    };
+                }
+            }
+        }
+        let rgba = FrameConverter::new().convert(&mut source);
+        for x in 0..width as usize {
+            let (cb, cr) = chroma(x);
+            let expected =
+                YuvMatrix::Bt601.ycbcr_to_rgb(120 - 16, i32::from(cb) - 128, i32::from(cr) - 128);
+            let actual = &rgba[x * 4..x * 4 + 3];
+            for channel in 0..3 {
+                assert!(
+                    actual[channel].abs_diff(expected[channel]) <= 2,
+                    "column {x}: {actual:?} vs {expected:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn spare_planes_are_capped_and_prefer_a_fit() {
         let pool = PlanePool::new();
         for size in [32, 64, 128, 256] {
@@ -373,6 +466,47 @@ mod tests {
         assert_eq!(pool.spare_count(), MAX_SPARE_PACKED_PLANES);
         let taken = pool.take(200);
         assert!(taken.capacity() >= 200);
+        assert_eq!(pool.spare_count(), 1);
+    }
+
+    #[test]
+    fn full_chroma_frames_above_the_limit_convert_as_before() {
+        ffmpeg::init().unwrap();
+        use software::scaling::Flags;
+        assert_eq!(
+            scaler_flags(format::Pixel::YUV444P, 8000, 5000),
+            Flags::BILINEAR
+        );
+        assert_eq!(
+            scaler_flags(format::Pixel::YUV444P, 8002, 5000),
+            Flags::FAST_BILINEAR
+        );
+        assert_eq!(
+            scaler_flags(format::Pixel::YUV420P, 8000, 5000),
+            Flags::FAST_BILINEAR
+        );
+        for ((width, height), fast_path) in [((8000, 5000), true), ((8002, 5000), false)] {
+            let mut converter = FrameConverter::new();
+            let mut source = frame::Video::new(format::Pixel::YUV444P, width, height);
+            source.set_color_range(ffmpeg::color::Range::MPEG);
+            for plane in 0..3 {
+                source
+                    .data_mut(plane)
+                    .fill(if plane == 0 { 120 } else { 128 });
+            }
+            let rgba = converter.convert(&mut source);
+            assert_eq!(rgba.len(), width as usize * height as usize * 4);
+            assert_eq!(converter.scaler.is_none(), fast_path, "{width}x{height}");
+        }
+    }
+
+    #[test]
+    fn spare_planes_never_keep_a_buffer_above_the_frame_limit() {
+        let limit = MAX_SPARE_PLANE_BYTES;
+        let pool = PlanePool::new();
+        pool.recycle(Vec::with_capacity(limit + 1));
+        assert_eq!(pool.spare_count(), 0);
+        pool.recycle(Vec::with_capacity(limit));
         assert_eq!(pool.spare_count(), 1);
     }
 }

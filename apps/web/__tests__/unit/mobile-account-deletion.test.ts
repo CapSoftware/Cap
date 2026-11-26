@@ -150,15 +150,48 @@ describe("mobile account deletion request", () => {
 			}),
 		);
 
-	it("signs the account out of every session, app key and agent key", async () => {
+	it("signs the account out of every session, app key, agent key and connected app", async () => {
 		expect((await request()).status).toBe(200);
 
-		expect(mocks.deletes).toEqual(["sessions", "auth_api_keys"]);
+		expect(mocks.deletes).toEqual([
+			"sessions",
+			"auth_api_keys",
+			"user_passkeys",
+			"email_change_requests",
+			"auth_challenges",
+		]);
 		expect(mocks.updates.map(({ table }) => table)).toEqual([
 			"users",
+			"mcp_oauth_codes",
+			"mcp_oauth_tokens",
+			"agent_api_authorization_codes",
 			"agent_api_keys",
 		]);
 		expect(mocks.updates[1]).toEqual({
+			table: "mcp_oauth_codes",
+			value: { consumedAt: expect.any(Date) },
+			where: {
+				sql: "(`mcp_oauth_codes`.`userId` = ? and `mcp_oauth_codes`.`consumedAt` is null)",
+				params: ["user-1"],
+			},
+		});
+		expect(mocks.updates[2]).toEqual({
+			table: "mcp_oauth_tokens",
+			value: { revokedAt: expect.any(Date) },
+			where: {
+				sql: "(`mcp_oauth_tokens`.`userId` = ? and `mcp_oauth_tokens`.`revokedAt` is null)",
+				params: ["user-1"],
+			},
+		});
+		expect(mocks.updates[3]).toEqual({
+			table: "agent_api_authorization_codes",
+			value: { consumedAt: expect.any(Date) },
+			where: {
+				sql: "(`agent_api_authorization_codes`.`userId` = ? and `agent_api_authorization_codes`.`consumedAt` is null)",
+				params: ["user-1"],
+			},
+		});
+		expect(mocks.updates[4]).toEqual({
 			table: "agent_api_keys",
 			value: { revokedAt: expect.any(Date) },
 			where: {

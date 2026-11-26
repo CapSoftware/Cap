@@ -1,5 +1,8 @@
+import { domainToASCII } from "node:url";
 import { serverEnv } from "@cap/env";
 import { z } from "zod";
+
+const PRINTABLE_ASCII_EMAIL = /^[!-~]+$/;
 
 export function normalizeEmailAddress(email: string): string {
 	return email.normalize("NFKC").trim().toLowerCase();
@@ -16,7 +19,10 @@ export function normalizeSignInEmail(value: unknown): string | null {
 	const [local, domain] = trimmed.toLowerCase().split("@");
 	const host = domain?.split(",")[0];
 	if (!local || !host || !host.includes(".")) return null;
-	return `${local}@${host}`;
+	const asciiHost = domainToASCII(host);
+	const email = `${local}@${asciiHost}`;
+	if (!asciiHost || !PRINTABLE_ASCII_EMAIL.test(email)) return null;
+	return email;
 }
 
 export function isEmailAllowedForSignup(

@@ -61,6 +61,7 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::panel::zoom::mode(), "Zoom Mode"),
         (tr::editor::panel::zoom::amount(), "Zoom Amount"),
         (tr::editor::panel::zoom::mixed(), "Mixed"),
+        (tr::editor::panel::zoom::start_early(), "Start zooms early"),
         (
             tr::editor::panel::zoom::positions_mixed(),
             "Segments zoom into different spots. Drag to move them all to the same one.",
@@ -496,6 +497,7 @@ fn editor_panels_match_the_literals_they_replaced() {
             "Background Blur",
         ),
         (tr::editor::sidebar::layout::padding(), "Padding"),
+        (tr::editor::sidebar::layout::padding_style(), "Padding Style"),
         (
             tr::editor::sidebar::layout::custom_position(),
             "Custom screen position (dragged on canvas)",

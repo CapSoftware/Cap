@@ -7,7 +7,7 @@ of the red pixels inside it as "x y", or nothing when there are none.
 
 GNOME Shell writes an empty screenshot when it renders on a GPU or without a
 DRM device, so with no picture to read this prints where the button sits in
-the 320x150 controls.
+the 352x150 controls.
 
 Usage: stop-locate.py <screenshot.png> <x> <y> <width> <height>
 """

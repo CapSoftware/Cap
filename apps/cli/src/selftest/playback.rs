@@ -872,6 +872,7 @@ mod fixture {
             cursor: None,
             keyboard: None,
             display_notch: None,
+            cursor_shape_version: None,
         };
         // Clip offsets exactly as the studio recorder persists them.
         let offsets = segment.calculate_audio_offsets();
@@ -881,6 +882,8 @@ mod fixture {
                 segments: vec![segment],
                 cursors: Default::default(),
                 status: Some(StudioRecordingStatus::Complete),
+                cursor_shape_version: 0,
+                audio_only: false,
             },
         };
 

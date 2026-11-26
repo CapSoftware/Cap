@@ -18,6 +18,10 @@ import {
 	it,
 	vi,
 } from "vitest";
+import {
+	DELIVERY_TABLE_LOCK_HOOK_TIMEOUT_MS,
+	lockDeliveryTable,
+} from "../fixtures/delivery-table-lock";
 
 process.env.CAP_INFRA_DELIVERY_BILLING_FROM = "2000-01-01";
 
@@ -107,6 +111,7 @@ describe.runIf(Boolean(databaseUrl))(
 	"delivery debit against a real database",
 	() => {
 		let pool: Pool;
+		let unlock: (() => Promise<void>) | undefined;
 
 		const fixtureApps: string[] = [];
 		const fixtureRowIds: string[] = [];
@@ -196,10 +201,11 @@ describe.runIf(Boolean(databaseUrl))(
 					"Delivery tests require a session-scoped local database.",
 				);
 			}
+			unlock = await lockDeliveryTable(databaseUrl);
 			pool = createPool({ uri: databaseUrl, connectionLimit: 8 });
 			fixture.database = drizzle(pool);
 			await pool.query(ROLLUP_TABLE);
-		});
+		}, DELIVERY_TABLE_LOCK_HOOK_TIMEOUT_MS);
 
 		beforeEach(async () => {
 			fixture.scheduleAutoTopUp.mockClear();
@@ -212,19 +218,23 @@ describe.runIf(Boolean(databaseUrl))(
 		});
 
 		afterAll(async () => {
-			if (fixtureRowIds.length > 0) {
-				await pool?.query(
-					"delete from developer_credit_transactions where id in (?)",
-					[fixtureRowIds],
-				);
+			try {
+				if (fixtureRowIds.length > 0) {
+					await pool?.query(
+						"delete from developer_credit_transactions where id in (?)",
+						[fixtureRowIds],
+					);
+				}
+				if (fixtureApps.length > 0) {
+					await pool?.query(
+						"delete from developer_delivery_daily where appId in (?)",
+						[fixtureApps],
+					);
+				}
+				await pool?.end();
+			} finally {
+				await unlock?.();
 			}
-			if (fixtureApps.length > 0) {
-				await pool?.query(
-					"delete from developer_delivery_daily where appId in (?)",
-					[fixtureApps],
-				);
-			}
-			await pool?.end();
 		});
 
 		it("debits nothing and writes no row while the flag is off", async () => {

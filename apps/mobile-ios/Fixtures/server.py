@@ -322,6 +322,9 @@ class H(BaseHTTPRequestHandler):
             if sub == "/playback":
                 if cid == "cap_limit": return self.send(403, {})
                 return self.send(200, {"kind": "mp4", "url": f"{BASE}/media/{'long' if cid in ('cap_stress', 'cap_rtl', 'cap_locked') else 'demo'}.mp4", "transcriptUrl": None if cid == "cap_quiet" else f"{BASE}/media/{'long' if cid in ('cap_stress', 'cap_rtl') else 'transcript'}.vtt"})
+            if sub == "/download":
+                if cid == "cap_limit": return self.send(403, {})
+                return self.send(200, {"fileName": f"{cid}.mp4", "url": f"{BASE}/media/demo.mp4"})
             if sub == "/edit" and self.command == "GET":
                 if cid == "cap_shot": return self.send(200, {"status": "not_editable", "duration": 0, "hasEdits": False})
                 processing = EDITS.get(cid, {}).get("until", 0) > datetime.now(timezone.utc).timestamp()

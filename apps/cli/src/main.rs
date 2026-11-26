@@ -453,11 +453,22 @@ struct CompletionsArgs {
 }
 
 fn main() {
+    cap_enc_ffmpeg::isolated_self_test::run_child_or_register_host();
+
     #[cfg(target_os = "linux")]
     if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {
         // Mesa counts host CPUs inside containers; configure it before creating the CLI runtime.
         unsafe {
             std::env::set_var("LP_NUM_THREADS", threads.to_string());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Some(config) = cap_utils::linux_package::bundled_alsa_config_path() {
+        // The rpm's `cap` runs this binary directly; load Cap's ALSA pulse
+        // plugin before any thread starts, as the desktop app does.
+        unsafe {
+            std::env::set_var("ALSA_CONFIG_PATH", config);
         }
     }
 

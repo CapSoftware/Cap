@@ -13,6 +13,7 @@ pub use video::*;
 mod mux;
 pub use mux::*;
 
+pub mod decode_limit;
 pub mod fragment_order;
 mod relocatable_source;
 pub mod remux;

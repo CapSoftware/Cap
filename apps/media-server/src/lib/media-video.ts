@@ -786,10 +786,15 @@ function shouldFallbackToGenericMpd(error: unknown): boolean {
 	return error instanceof Error && error.message.startsWith("DASH ");
 }
 
+export interface StreamingInputOptions {
+	allowAudioOnly?: boolean;
+}
+
 export async function materializeMpdAsHlsPlaylist(
 	manifestUrl: string,
 	dirPath: string,
 	abortSignal?: AbortSignal,
+	options: StreamingInputOptions = {},
 ): Promise<string> {
 	const response = await fetch(manifestUrl, {
 		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
@@ -818,6 +823,7 @@ export async function materializeMpdAsHlsPlaylist(
 		parseIsoDurationSeconds(mpdAttrs.mediaPresentationDuration);
 	const playlists: DashRepresentationPlaylist[] = [];
 	let segmentTotal = 0;
+	let declaresNonAudio = false;
 
 	for (const adaptation of getXmlElementBlocks(
 		periodContent,
@@ -839,6 +845,7 @@ export async function materializeMpdAsHlsPlaylist(
 				representation.attributes,
 				adaptation.attributes,
 			);
+			if (type !== "audio") declaresNonAudio = true;
 			if (!type) continue;
 
 			const representationTemplate = getFirstXmlElementBlock(
@@ -918,12 +925,18 @@ export async function materializeMpdAsHlsPlaylist(
 		(playlist) => playlist.type === "audio",
 	);
 
-	if (videoPlaylists.length === 0) {
+	const audioOnly =
+		videoPlaylists.length === 0 &&
+		!declaresNonAudio &&
+		options.allowAudioOnly === true;
+	const variants = audioOnly ? audioPlaylists.slice(0, 1) : videoPlaylists;
+
+	if (variants.length === 0) {
 		throw new Error("DASH manifest did not contain a supported video track");
 	}
 
 	const masterPath = join(dirPath, `${randomUUID()}.m3u8`);
-	const defaultAudio = audioPlaylists[0] ?? null;
+	const defaultAudio = audioOnly ? null : (audioPlaylists[0] ?? null);
 	const lines = ["#EXTM3U", "#EXT-X-VERSION:7"];
 
 	if (defaultAudio) {
@@ -932,7 +945,7 @@ export async function materializeMpdAsHlsPlaylist(
 		);
 	}
 
-	for (const video of videoPlaylists) {
+	for (const video of variants) {
 		const attributes = [
 			`BANDWIDTH=${Math.round(video.bandwidth + (defaultAudio?.bandwidth ?? 0))}`,
 		];
@@ -960,6 +973,7 @@ export async function materializeStreamingInput(
 	dirPath: string,
 	abortSignal?: AbortSignal,
 	trustedHosts?: readonly string[],
+	options: StreamingInputOptions = {},
 ): Promise<string> {
 	let inputPath: string;
 
@@ -979,6 +993,7 @@ export async function materializeStreamingInput(
 				videoUrl,
 				dirPath,
 				abortSignal,
+				options,
 			);
 		} catch (err) {
 			if (!shouldFallbackToGenericMpd(err)) throw err;
@@ -2674,6 +2689,12 @@ async function runPreviewGifAttempt(
 			attempt.startTime.toString(),
 			"-t",
 			attempt.duration.toString(),
+			// Untagged video defaults to BT.601 in FFmpeg but plays as BT.709 in
+			// browsers. These only apply when the input carries no colour tags.
+			"-colorspace",
+			"bt709",
+			"-color_range",
+			"tv",
 			"-i",
 			inputPath,
 			"-an",

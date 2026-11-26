@@ -6,18 +6,18 @@ import { ogImageUrl } from "@/lib/og/url";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 const ogImage = ogImageUrl({
-	title: "Convert MP4 to GIF — free, in your browser",
+	title: "MP4 to GIF converter",
 	tag: "Tools",
 });
 
 export const metadata: Metadata = {
-	title: "MP4 to GIF Converter — Free Online Animated GIF Maker | Cap",
+	title: "MP4 to GIF converter | Cap",
 	description:
-		"Convert MP4 videos to animated GIF images directly in your browser. Free, private, no upload needed. Adjust FPS, quality, and dimensions for the perfect GIF.",
+		"Convert MP4 to GIF with Cap. Cap is an open source screen recorder with instant share links, and its recordings can also be exported as GIFs.",
 	openGraph: {
-		title: "MP4 to GIF Converter — Free Online Animated GIF Maker | Cap",
+		title: "MP4 to GIF converter | Cap",
 		description:
-			"Convert MP4 to animated GIF directly in your browser. No uploads, no installs, 100% private. Customize FPS, quality, and size.",
+			"Convert MP4 to GIF with Cap. Cap is an open source screen recorder with instant share links, and its recordings can also be exported as GIFs.",
 		url: "https://cap.so/tools/convert/mp4-to-gif",
 		siteName: "Cap",
 		images: [
@@ -25,7 +25,7 @@ export const metadata: Metadata = {
 				url: ogImage,
 				width: 1200,
 				height: 630,
-				alt: "Convert MP4 to GIF — free, in your browser",
+				alt: "MP4 to GIF converter",
 			},
 		],
 		locale: "en_US",
@@ -33,9 +33,9 @@ export const metadata: Metadata = {
 	},
 	twitter: {
 		card: "summary_large_image",
-		title: "MP4 to GIF Converter — Free Online Animated GIF Maker | Cap",
+		title: "MP4 to GIF converter | Cap",
 		description:
-			"Convert MP4 to animated GIF directly in your browser. No uploads, no installs, 100% private.",
+			"Convert MP4 to GIF with Cap. Cap is an open source screen recorder with instant share links, and its recordings can also be exported as GIFs.",
 		images: [ogImage],
 	},
 	alternates: {

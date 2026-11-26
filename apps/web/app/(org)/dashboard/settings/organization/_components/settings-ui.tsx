@@ -97,6 +97,17 @@ export function SettingsRow({
 	);
 }
 
+export function ProChip() {
+	return (
+		<span className="inline-flex items-center px-1.5 h-[18px] text-[10px] font-semibold leading-none text-white rounded-full bg-blue-9">
+			Pro
+		</span>
+	);
+}
+
+export const settingsFieldClass =
+	"h-9 font-normal bg-gray-1 border-gray-4 rounded-lg hover:bg-gray-1 focus:bg-gray-1";
+
 const chipTones = {
 	neutral: "bg-gray-3 text-gray-11",
 	positive: "bg-green-100 text-green-800",

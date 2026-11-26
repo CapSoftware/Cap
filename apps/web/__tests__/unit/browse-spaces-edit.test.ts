@@ -106,9 +106,9 @@ const editButton = () => {
 };
 const createButton = () => {
 	const button = [...container.querySelectorAll("button")].find(
-		(element) => element.textContent?.trim() === "Create Space",
+		(element) => element.textContent?.trim() === "Create space",
 	);
-	if (!button) throw new Error("Create Space button missing");
+	if (!button) throw new Error("Create space button missing");
 	return button;
 };
 

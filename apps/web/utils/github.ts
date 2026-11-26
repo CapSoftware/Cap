@@ -3,22 +3,29 @@ interface GitHubRepoResponse {
 }
 
 export async function getGitHubStars(): Promise<number> {
-	const response = await fetch("https://api.github.com/repos/CapSoftware/Cap", {
-		headers: {
-			Accept: "application/vnd.github.v3+json",
-			"User-Agent": "Cap-Web",
-		},
-		next: {
-			revalidate: 172800,
-		},
-	});
+	try {
+		const response = await fetch(
+			"https://api.github.com/repos/CapSoftware/Cap",
+			{
+				headers: {
+					Accept: "application/vnd.github.v3+json",
+					"User-Agent": "Cap-Web",
+				},
+				next: {
+					revalidate: 172800,
+				},
+			},
+		);
 
-	if (!response.ok) {
+		if (!response.ok) {
+			return 0;
+		}
+
+		const data: GitHubRepoResponse = await response.json();
+		return data.stargazers_count;
+	} catch {
 		return 0;
 	}
-
-	const data: GitHubRepoResponse = await response.json();
-	return data.stargazers_count;
 }
 
 export function formatStarCount(count: number): string {

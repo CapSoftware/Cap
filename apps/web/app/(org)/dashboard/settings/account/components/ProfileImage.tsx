@@ -82,75 +82,69 @@ export function ProfileImage({
 	const isLoading = isUploading || isRemoving;
 
 	return (
-		<div className="rounded-xl border border-dashed bg-gray-2 h-fit border-gray-4">
-			<div className="flex gap-5 p-5">
-				<div
-					className={clsx(
-						"flex justify-center items-center rounded-full border size-14 bg-gray-3 border-gray-6",
-						previewUrl ? "border-solid" : "border-dashed",
-					)}
-				>
-					{previewUrl ? (
-						<SignedImageUrl
-							image={previewUrl}
-							name={userName || "User"}
-							letterClass="text-lg"
-							className="size-full"
-						/>
-					) : (
-						<div className="flex justify-center items-center rounded-full size-full bg-gray-5">
-							<FontAwesomeIcon
-								icon={faImage}
-								className="mx-auto size-5 text-gray-8"
-							/>
-						</div>
-					)}
-				</div>
-				<input
-					type="file"
-					className="hidden h-0"
-					accept="image/jpeg, image/jpg, image/png, image/svg+xml"
-					ref={fileInputRef}
-					onChange={handleFileChange}
-					disabled={disabled || isLoading}
-				/>
-				<div className="space-y-3">
-					<div className="flex gap-2">
-						<Button
-							type="button"
-							variant="gray"
-							disabled={disabled || isLoading || isRemoving}
-							size="xs"
-							onClick={handleUploadClick}
-							spinner={isUploading}
-						>
-							{isUploading ? "Uploading..." : "Upload Image"}
-						</Button>
-						{(previewUrl || isRemoving) && (
-							<Tooltip content="Remove image">
-								<Button
-									type="button"
-									variant="outline"
-									className="p-0 size-8"
-									disabled={disabled || isLoading || isRemoving}
-									size="icon"
-									onClick={handleRemove}
-									spinnerClassName="mr-0"
-									spinner={isRemoving}
-								>
-									{isRemoving ? null : (
-										<FontAwesomeIcon
-											icon={faTrash}
-											className="size-2.5 text-gray-12 mx-auto"
-										/>
-									)}
-								</Button>
-							</Tooltip>
-						)}
-					</div>
-					<p className="text-xs text-gray-10">Recommended size: 120x120</p>
-				</div>
+		<div className="flex gap-3 items-center">
+			<div
+				className={clsx(
+					"flex overflow-hidden justify-center items-center rounded-full border size-10 shrink-0 bg-gray-3 border-gray-4",
+					previewUrl ? "border-solid" : "border-dashed",
+				)}
+			>
+				{previewUrl ? (
+					<SignedImageUrl
+						image={previewUrl}
+						name={userName || "User"}
+						letterClass="text-base"
+						className="size-full"
+					/>
+				) : (
+					<FontAwesomeIcon icon={faImage} className="size-4 text-gray-8" />
+				)}
 			</div>
+			<input
+				type="file"
+				className="hidden h-0"
+				accept="image/jpeg, image/jpg, image/png, image/svg+xml"
+				ref={fileInputRef}
+				onChange={handleFileChange}
+				disabled={disabled || isLoading}
+			/>
+			<Button
+				type="button"
+				variant="secondary"
+				className="px-3.5 h-8"
+				disabled={disabled || isLoading || isRemoving}
+				size="xs"
+				onClick={handleUploadClick}
+				spinner={isUploading}
+				spinnerColor="#646464"
+				spinnerBorderColor="rgba(0,0,0,0.1)"
+			>
+				{isUploading ? "Uploading..." : "Upload image"}
+			</Button>
+			{(previewUrl || isRemoving) && (
+				<Tooltip content="Remove image">
+					<Button
+						type="button"
+						variant="secondary"
+						className="p-0 rounded-full size-8"
+						disabled={disabled || isLoading || isRemoving}
+						size="icon"
+						onClick={handleRemove}
+						aria-label="Remove image"
+						spinnerClassName="mr-0"
+						spinnerColor="#646464"
+						spinnerBorderColor="rgba(0,0,0,0.1)"
+						spinner={isRemoving}
+					>
+						{isRemoving ? null : (
+							<FontAwesomeIcon
+								icon={faTrash}
+								className="mx-auto size-2.5 text-gray-11"
+							/>
+						)}
+					</Button>
+				</Tooltip>
+			)}
 		</div>
 	);
 }

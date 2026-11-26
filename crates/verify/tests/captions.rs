@@ -257,6 +257,7 @@ fn model_migrate(
                         })
                     })
                     .collect(),
+                recording_clip: None,
             })
         })
         .collect();
@@ -368,6 +369,7 @@ fn random_captions(rng: &mut Rng, total: f64) -> Vec<CaptionSegment> {
                 end: end as f32,
                 text: format!("plain text {}", captions.len()),
                 words: Vec::new(),
+                recording_clip: None,
             });
             t = end + rng.f64() * 0.5;
             continue;
@@ -410,6 +412,7 @@ fn random_captions(rng: &mut Rng, total: f64) -> Vec<CaptionSegment> {
             end,
             text: join_words(words.iter().map(|w| w.text.as_str())),
             words,
+            recording_clip: None,
         });
         t += rng.f64() * 1.2;
     }
@@ -617,6 +620,7 @@ fn projection_hold_boundaries() {
             end: 2.0,
             text: "apple river".into(),
             words: vec![word("apple", 1.0, 1.5), word("river", 1.5, 2.0)],
+            recording_clip: None,
         },
         CaptionSegment {
             id: "starts-at-hold".into(),
@@ -624,6 +628,7 @@ fn projection_hold_boundaries() {
             end: 3.0,
             text: "cloud stone".into(),
             words: vec![word("cloud", 2.0, 2.5), word("stone", 2.5, 3.0)],
+            recording_clip: None,
         },
         CaptionSegment {
             id: "text-only-ends-at-second-hold".into(),
@@ -631,6 +636,7 @@ fn projection_hold_boundaries() {
             end: 4.0,
             text: "maple tiger".into(),
             words: Vec::new(),
+            recording_clip: None,
         },
     ];
     set_captions(&mut config, captions.clone(), true);
@@ -671,6 +677,7 @@ fn track_as_captions(track: &[CaptionTrackSegment]) -> Vec<CaptionSegment> {
             end: t.end as f32,
             text: t.text.clone(),
             words: t.words.clone(),
+            recording_clip: None,
         })
         .collect()
 }
@@ -799,6 +806,7 @@ fn legacy_migration_caption_at_timeline_end() {
                 end,
             },
         ],
+        recording_clip: None,
     }];
     let expected = model_migrate(&legacy, &config, &durations);
     set_captions(&mut config, legacy, false);
@@ -1294,6 +1302,7 @@ fn transcription_audio_words() {
             end: chunk[chunk.len() - 1].end,
             text: join_words(chunk.iter().map(|w| w.text.as_str())),
             words: chunk.to_vec(),
+            recording_clip: None,
         })
         .collect();
     let mut config = project.config();
@@ -1374,6 +1383,7 @@ fn scripted_captions(total: f64) -> Vec<CaptionSegment> {
             end: words[2].end,
             text: join_words(words.iter().map(|w| w.text.as_str())),
             words,
+            recording_clip: None,
         });
         t += 1.35;
     }
@@ -1483,6 +1493,7 @@ fn templates(
             end: (i as f64 * slot + slot - 0.05) as f32,
             text: text.clone(),
             words: Vec::new(),
+            recording_clip: None,
         })
         .collect();
     config.captions = Some(CaptionsData {
@@ -1733,6 +1744,7 @@ fn back_to_back_captions(total: f64) -> Vec<CaptionSegment> {
             end: words[1].end,
             text: join_words(words.iter().map(|w| w.text.as_str())),
             words,
+            recording_clip: None,
         });
         start += 1.0;
     }

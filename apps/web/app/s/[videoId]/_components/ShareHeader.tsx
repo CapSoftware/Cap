@@ -11,6 +11,7 @@ import {
 	Logo,
 } from "@cap/ui";
 import type { ViewerSettingKey } from "@cap/web-backend";
+import { getCustomThumbnailMetadata } from "@cap/web-backend/src/Storage/custom-thumbnail";
 import { faChartSimple } from "@fortawesome/free-solid-svg-icons/faChartSimple";
 import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
 import { faEllipsis } from "@fortawesome/free-solid-svg-icons/faEllipsis";
@@ -28,6 +29,7 @@ import {
 	Download,
 	FolderInput,
 	Globe2,
+	ImageIcon,
 	Lock,
 	MousePointer2,
 	Pencil,
@@ -122,6 +124,10 @@ const CallToActionDialog = dynamic(
 		),
 	{ ssr: false },
 );
+const CustomThumbnailDialog = dynamic(
+	() => import("@/components/custom-thumbnail/CustomThumbnailDialog"),
+	{ ssr: false },
+);
 const DuplicateCapMenuItem = dynamic(() => import("./DuplicateCapMenuItem"), {
 	ssr: false,
 });
@@ -163,6 +169,7 @@ export const ShareHeader = ({
 	spacesData = null,
 	branding,
 	canManageSharePageBranding = false,
+	brandColor = null,
 	canDownload = false,
 	canMoveToFolder = false,
 	hasEdits = false,
@@ -197,6 +204,7 @@ export const ShareHeader = ({
 	spacesData?: Spaces[] | null;
 	branding?: SharePageBranding | null;
 	canManageSharePageBranding?: boolean;
+	brandColor?: string | null;
 	canDownload?: boolean;
 	canMoveToFolder?: boolean;
 	hasEdits?: boolean;
@@ -234,6 +242,8 @@ export const ShareHeader = ({
 	const [deleteDialogMounted, setDeleteDialogMounted] = useState(false);
 	const [ctaDialogMounted, setCtaDialogMounted] = useState(false);
 	const [isCtaDialogOpen, setIsCtaDialogOpenRaw] = useState(false);
+	const [thumbnailDialogMounted, setThumbnailDialogMounted] = useState(false);
+	const [isThumbnailDialogOpen, setIsThumbnailDialogOpenRaw] = useState(false);
 	const [isSettingsDialogOpen, setIsSettingsDialogOpenRaw] = useState(false);
 	const [isPasswordDialogOpen, setIsPasswordDialogOpenRaw] = useState(false);
 	const [isDeleteDialogOpen, setIsDeleteDialogOpenRaw] = useState(false);
@@ -260,6 +270,10 @@ export const ShareHeader = ({
 	const setIsCtaDialogOpen = (open: boolean) => {
 		if (open) setCtaDialogMounted(true);
 		setIsCtaDialogOpenRaw(open);
+	};
+	const setIsThumbnailDialogOpen = (open: boolean) => {
+		if (open) setThumbnailDialogMounted(true);
+		setIsThumbnailDialogOpenRaw(open);
 	};
 	const [passwordProtected, setPasswordProtected] = useState(
 		Boolean(data.hasPassword),
@@ -672,6 +686,10 @@ export const ShareHeader = ({
 		!data.isScreenshot &&
 		!data.hasActiveUpload &&
 		(data.source.type === "desktopMP4" || data.source.type === "webMP4");
+	const customThumbnail = getCustomThumbnailMetadata(data.metadata);
+	const canPickThumbnailFrame =
+		!data.hasActiveUpload &&
+		(data.source.type === "desktopMP4" || data.source.type === "webMP4");
 	const handleEditVideo = () => {
 		if (userIsOwnerAndNotPro) {
 			setUpgradeModalOpen(true);
@@ -882,6 +900,7 @@ export const ShareHeader = ({
 						setIsShareLinkDialogOpen(false);
 						setIsSharingDialogOpen(true);
 					}}
+					ownerIsPro={data.owner.isPro}
 				/>
 			)}
 			{isOwner && (
@@ -925,10 +944,26 @@ export const ShareHeader = ({
 						<CallToActionDialog
 							open={isCtaDialogOpen}
 							onOpenChange={setIsCtaDialogOpen}
-							videoId={data.id}
+							target={{
+								kind: "video",
+								videoId: data.id,
+								source: data.callToActionSource ?? null,
+								workspaceCallToAction: data.workspaceCallToAction ?? null,
+							}}
 							callToAction={data.callToAction ?? null}
 							onSaved={refresh}
 							onUpgradeRequest={() => setUpgradeModalOpen(true)}
+							brandColor={brandColor}
+						/>
+					)}
+					{thumbnailDialogMounted && (
+						<CustomThumbnailDialog
+							open={isThumbnailDialogOpen}
+							onOpenChange={setIsThumbnailDialogOpen}
+							videoId={data.id}
+							hasCustomThumbnail={customThumbnail !== null}
+							canPickFrame={canPickThumbnailFrame}
+							initialFrameTime={customThumbnail?.time ?? null}
 						/>
 					)}
 					{deleteDialogMounted && (
@@ -1281,12 +1316,35 @@ export const ShareHeader = ({
 															<span className="ml-auto pl-3 text-xs text-gray-10">
 																Pro
 															</span>
+														) : data.callToActionSource === "workspace" ? (
+															<span className="ml-auto pl-3 text-xs text-gray-10">
+																Default
+															</span>
 														) : data.callToAction ? (
 															<span className="ml-auto pl-3 text-xs text-gray-10">
 																On
 															</span>
+														) : data.callToActionSource === "off" &&
+															data.workspaceCallToAction ? (
+															<span className="ml-auto pl-3 text-xs text-gray-10">
+																Off
+															</span>
 														) : null}
 													</DropdownMenuItem>
+													{!data.isScreenshot && (
+														<DropdownMenuItem
+															onClick={() => setIsThumbnailDialogOpen(true)}
+															className="flex items-center gap-2 rounded-lg"
+														>
+															<ImageIcon className="size-3.5" />
+															<p className="text-sm text-gray-12">Thumbnail</p>
+															{customThumbnail && (
+																<span className="ml-auto pl-3 text-xs text-gray-10">
+																	Custom
+																</span>
+															)}
+														</DropdownMenuItem>
+													)}
 													<DropdownMenuItem
 														onClick={() => {
 															if (!user.isPro) setUpgradeModalOpen(true);

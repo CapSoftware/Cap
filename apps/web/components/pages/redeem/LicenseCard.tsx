@@ -140,12 +140,14 @@ const Bow = () => {
 
 export const LicenseCard = ({
 	wrapped,
+	count = 1,
 	licenseKey,
 	owner,
 	duration,
 	className,
 }: {
 	wrapped: boolean;
+	count?: number;
 	licenseKey: string | null;
 	owner: string | null;
 	duration: LicenseDuration | null;
@@ -190,6 +192,12 @@ export const LicenseCard = ({
 				ref={tiltRef}
 				className={classNames("rd-card", wrapped ? "rd-wrapped" : "rd-open")}
 			>
+				{count > 1 ? (
+					<>
+						<span aria-hidden="true" className="rd-stack rd-stack-2" />
+						<span aria-hidden="true" className="rd-stack rd-stack-1" />
+					</>
+				) : null}
 				<div
 					className="rd-face absolute inset-0 flex flex-col justify-between overflow-hidden rounded-[22px] p-5 sm:p-6"
 					style={meshStyle(MODE_THEME.screenshot)}
@@ -208,18 +216,24 @@ export const LicenseCard = ({
 						) : null}
 					</div>
 
-					<p
-						aria-hidden="true"
-						className={classNames(
-							MONO,
-							"grid w-fit grid-cols-3 gap-x-[0.7em] gap-y-2 text-[15px] leading-none text-[#111111] min-[380px]:text-[16px] sm:flex sm:text-[16.5px]",
-							shownKey ? "" : "text-[rgba(17,17,17,0.34)]",
-						)}
-					>
-						{LICENSE_KEY_SLOTS.map((slot, index) => (
-							<span key={slot}>{groups[index]}</span>
-						))}
-					</p>
+					{count > 1 ? (
+						<p className="text-[26px] font-medium leading-none tracking-[-0.02em] text-[#111111] min-[380px]:text-[30px]">
+							{count} licenses
+						</p>
+					) : (
+						<p
+							aria-hidden="true"
+							className={classNames(
+								MONO,
+								"grid w-fit grid-cols-3 gap-x-[0.7em] gap-y-2 text-[15px] leading-none text-[#111111] min-[380px]:text-[16px] sm:flex sm:text-[16.5px]",
+								shownKey ? "" : "text-[rgba(17,17,17,0.34)]",
+							)}
+						>
+							{LICENSE_KEY_SLOTS.map((slot, index) => (
+								<span key={slot}>{groups[index]}</span>
+							))}
+						</p>
+					)}
 
 					<div className="flex items-end justify-between gap-3">
 						<span className="min-w-0">
@@ -245,6 +259,11 @@ export const LicenseCard = ({
 					<span className="rd-ribbon rd-ribbon-h" />
 					<Bow />
 				</div>
+				{count > 1 && wrapped ? (
+					<span className="absolute right-3 top-3 rounded-full bg-white px-3 py-[7px] text-[13px] font-medium leading-none tracking-[-0.01em] text-[#2A5C9A] shadow-[0_2px_6px_rgba(31,75,135,0.2)] sm:right-4 sm:top-4">
+						{count} gifts
+					</span>
+				) : null}
 			</div>
 		</div>
 	);
@@ -278,6 +297,18 @@ const CSS = `
 	from { opacity: 0; transform: translate3d(0, 22px, 0) scale(0.96); }
 	to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
 }
+
+.rd-stack {
+	position: absolute;
+	inset: 0;
+	border-radius: 22px;
+	background: linear-gradient(160deg, #FFFFFF 0%, #EEF3F9 100%);
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.9), 0 0 0 1px rgba(31, 62, 110, 0.06);
+	transition: background 0.6s ease;
+}
+.rd-wrapped .rd-stack { background: linear-gradient(160deg, #B5D3F7 0%, #9DC1EF 100%); }
+.rd-stack-1 { transform: translate3d(0, 19px, 0) scale(0.94); }
+.rd-stack-2 { transform: translate3d(0, 36px, 0) scale(0.88); opacity: 0.75; }
 
 .rd-face {
 	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.75), inset 0 1px 0 1px rgba(255, 255, 255, 0.9);

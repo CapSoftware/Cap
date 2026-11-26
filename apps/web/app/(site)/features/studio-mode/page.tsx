@@ -13,6 +13,41 @@ export const metadata: Metadata = buildMarketingMetadata({
 	ogTag: "Features",
 });
 
+const studioModePageSchema = {
+	"@context": "https://schema.org",
+	"@graph": [
+		{
+			"@type": "WebPage",
+			"@id": "https://cap.so/features/studio-mode#webpage",
+			url: "https://cap.so/features/studio-mode",
+			name: "Studio Mode",
+			description:
+				"Studio Mode records to your computer and opens the editor when you stop.",
+			isPartOf: { "@id": "https://cap.so/#website" },
+			about: { "@id": "https://cap.so/#software" },
+			inLanguage: "en",
+		},
+		{
+			"@type": "SoftwareApplication",
+			"@id": "https://cap.so/#software",
+			name: "Cap",
+			url: "https://cap.so",
+			description: "Cap Desktop is a native app for macOS, Windows and Linux.",
+			applicationCategory: "MultimediaApplication",
+			operatingSystem: ["macOS", "Windows", "Linux"],
+			downloadUrl: "https://cap.so/download",
+			publisher: { "@id": "https://cap.so/#organization" },
+		},
+	],
+};
+
 export default function Page() {
-	return <StudioModePage />;
+	return (
+		<>
+			<script type="application/ld+json">
+				{JSON.stringify(studioModePageSchema).replace(/</g, "\\u003c")}
+			</script>
+			<StudioModePage />
+		</>
+	);
 }

@@ -17,7 +17,7 @@ use super::OnboardingWindow;
 use crate::doodle::{self, Doodle, Palette};
 use crate::i18n::tr;
 use crate::onboarding_doodles as art;
-use crate::permissions::{self, OSPermission, OSPermissionStatus};
+use crate::permissions::{self, OSPermission, OSPermissionStatus, PERMISSION_COUNT};
 use crate::permissions_ui::RowAction;
 use crate::theme::Theme;
 
@@ -101,17 +101,20 @@ pub(super) struct StageState {
     pub(super) waiting_on: Option<OSPermission>,
     shown: Option<(Stage, bool)>,
     shown_at: Instant,
-    marks: [(Mark, Instant); 4],
-    granted: [bool; 4],
+    marks: [(Mark, Instant); PERMISSION_COUNT],
+    granted: [bool; PERMISSION_COUNT],
     page_at: Instant,
     /// Screen Recording was already granted when Cap launched. A grant that
     /// lands mid-session only reaches capture after a restart.
     screen_at_launch: bool,
+    /// Same for Input Monitoring: macOS says an app "will not be able to
+    /// monitor input from your keyboard until it is quit" (27.3 beta 2).
+    keys_at_launch: bool,
     advance: Option<gpui::Task<()>>,
 }
 
 impl StageState {
-    pub(super) fn new(granted: [bool; 4]) -> Self {
+    pub(super) fn new(granted: [bool; PERMISSION_COUNT]) -> Self {
         let now = Instant::now();
         Self {
             focused: None,
@@ -119,10 +122,12 @@ impl StageState {
             waiting_on: None,
             shown: None,
             shown_at: now,
-            marks: [(Mark::Pending, now); 4],
+            marks: [(Mark::Pending, now); PERMISSION_COUNT],
             granted,
             page_at: now,
             screen_at_launch: granted[0],
+            keys_at_launch: granted[index(OSPermission::InputMonitoring)]
+                && permissions::note_launch_grants(),
             advance: None,
         }
     }
@@ -162,6 +167,14 @@ fn copy_for(permission: OSPermission) -> Copy {
             allow: tr::permission::onboarding::accessibility::allow(),
             doodle: &art::CURSOR,
         },
+        OSPermission::InputMonitoring => Copy {
+            title: tr::permission::onboarding::keystrokes::title(),
+            body: tr::permission::onboarding::keystrokes::body(),
+            done_title: tr::permission::onboarding::keystrokes::done_title(),
+            done_body: tr::permission::onboarding::keystrokes::done_body(),
+            allow: tr::permission::onboarding::keystrokes::allow(),
+            doodle: &art::KEYBOARD,
+        },
         OSPermission::Microphone => Copy {
             title: tr::permission::onboarding::microphone::title(),
             body: tr::permission::onboarding::microphone::body(),
@@ -183,9 +196,30 @@ fn copy_for(permission: OSPermission) -> Copy {
 
 impl OnboardingWindow {
     pub(super) fn needs_relaunch(&self) -> bool {
-        !self.stage.screen_at_launch
-            && self.state.status(OSPermission::ScreenRecording).permitted()
-            && self.state.status(OSPermission::ScreenRecording) != OSPermissionStatus::NotNeeded
+        self.needs_relaunch_for(OSPermission::ScreenRecording)
+            || self.needs_relaunch_for(OSPermission::InputMonitoring)
+    }
+
+    /// A grant that landed this session and only reaches a new process.
+    fn needs_relaunch_for(&self, permission: OSPermission) -> bool {
+        let at_launch = match permission {
+            OSPermission::ScreenRecording => self.stage.screen_at_launch,
+            OSPermission::InputMonitoring => self.stage.keys_at_launch,
+            _ => return false,
+        };
+        let status = self.state.status(permission);
+        !at_launch && status.permitted() && status != OSPermissionStatus::NotNeeded
+    }
+
+    /// The card is waiting on System Settings for `permission`. On macOS
+    /// 27.3 a Screen Recording grant made with + only lands after a restart,
+    /// so once the user has been sent there the card keeps saying so (with
+    /// the Relaunch hint) even after they visit another step and come back.
+    fn waiting_for(&self, permission: OSPermission) -> bool {
+        self.stage.waiting_on == Some(permission)
+            || (permission == OSPermission::ScreenRecording
+                && self.state.settings_only()
+                && self.state.relaunch_hint())
     }
 
     fn is_skipped(&self, permission: OSPermission) -> bool {
@@ -210,7 +244,7 @@ impl OnboardingWindow {
     /// Called from `render`, so every path that folds in a sweep is covered.
     pub(super) fn sync_stage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = Instant::now();
-        let granted: [bool; 4] =
+        let granted: [bool; PERMISSION_COUNT] =
             std::array::from_fn(|i| self.state.status(OSPermission::ALL[i]).permitted());
         for (i, &permission) in OSPermission::ALL.iter().enumerate() {
             if !granted[i] || self.stage.granted[i] {
@@ -508,7 +542,11 @@ impl OnboardingWindow {
                 ))
                 .child(stage_body(
                     paper,
-                    tr::permission::onboarding::relaunch::body(),
+                    if self.needs_relaunch_for(OSPermission::ScreenRecording) {
+                        tr::permission::onboarding::relaunch::body()
+                    } else {
+                        tr::permission::onboarding::relaunch::keystrokes_body()
+                    },
                 ))
                 .child(div().mt(px(24.)).child(paper_button(
                     paper,
@@ -556,20 +594,18 @@ impl OnboardingWindow {
                         paper,
                         if granted {
                             copy.done_title
-                        } else if self.stage.waiting_on == Some(permission) && permission.required()
-                        {
+                        } else if self.waiting_for(permission) && permission.required() {
                             tr::permission::onboarding::switch_on_title()
                         } else {
                             copy.title
                         },
                     ));
                 if granted {
-                    let done_body =
-                        if permission == OSPermission::ScreenRecording && self.needs_relaunch() {
-                            tr::permission::onboarding::relaunch::later()
-                        } else {
-                            copy.done_body
-                        };
+                    let done_body = if self.needs_relaunch_for(permission) {
+                        tr::permission::onboarding::relaunch::later()
+                    } else {
+                        copy.done_body
+                    };
                     card.child(stage_body(paper, done_body)).child(allowed_pill(
                         paper,
                         self.stage.marks[index(permission)].1,
@@ -595,16 +631,22 @@ impl OnboardingWindow {
     ) -> gpui::Stateful<Div> {
         let action = self.state.action(permission);
         let busy = self.pending.is_some();
-        let waiting = self.stage.waiting_on == Some(permission);
+        let waiting = self.waiting_for(permission);
         let guided = crate::permission_guide::eligible(permission);
         let waiting_required = waiting && permission.required();
-        let body = if waiting_required && guided {
+        let settings_only = self.state.settings_only();
+        let body = if waiting && permission == OSPermission::InputMonitoring {
+            tr::permission::onboarding::hint::input_monitoring_plus()
+        } else if waiting_required && settings_only {
+            tr::permission::onboarding::hint::add_with_plus()
+        } else if waiting_required && guided {
             tr::permission::onboarding::hint::drag_into_list()
         } else if waiting_required {
             tr::permission::onboarding::hint::find_in_list()
         } else if status == OSPermissionStatus::Denied && !permission.required() {
             tr::permission::onboarding::hint::turned_off()
-        } else if action == Some(RowAction::OpenSettings) && permission.required() {
+        } else if action == Some(RowAction::OpenSettings) && permission.required() && !settings_only
+        {
             tr::permission::onboarding::hint::open_settings()
         } else {
             copy.body
@@ -651,6 +693,7 @@ impl OnboardingWindow {
         // the pane, instead of waiting on a dialog that is not there.
         let no_prompt = waiting
             && !permission.required()
+            && action != Some(RowAction::OpenSettings)
             && !busy
             && !self.media_request_pending
             && status == OSPermissionStatus::NotDetermined;
@@ -804,7 +847,7 @@ fn allowed_pill(paper: &Paper, shown_at: Instant, still: bool) -> Div {
 
 /// The extension's `.cta`: an ink pill. Primary is filled; secondary is the
 /// outlined `ghost`.
-pub(super) fn paper_button(
+pub(crate) fn paper_button(
     paper: &Paper,
     id: impl Into<gpui::ElementId>,
     label: &'static str,
@@ -846,4 +889,149 @@ pub(super) fn paper_button(
                 })
                 .on_click(on_click)
         })
+}
+
+/// A paper page's 28px heading, the hand-drawn underline drawn on from
+/// `shown_at`, and the soft subtitle under it.
+pub(crate) fn paper_heading(
+    paper: &Paper,
+    title: impl Into<SharedString>,
+    subtitle: Option<SharedString>,
+    shown_at: Instant,
+    still: bool,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .max_w(px(500.))
+        .text_center()
+        .child(
+            div()
+                .text_size(px(28.))
+                .text_color(paper.ink)
+                .font_weight(FontWeight::MEDIUM)
+                .line_height(px(34.))
+                .child(title.into()),
+        )
+        .child(div().mt(px(4.)).child(doodle::doodle(
+            &art::UNDERLINE,
+            paper.palette(),
+            shown_at,
+            still,
+            132.,
+            12.,
+        )))
+        .children(subtitle.map(|subtitle| {
+            div()
+                .mt(px(10.))
+                .text_size(px(15.))
+                .text_color(paper.soft)
+                .font_weight(FontWeight::NORMAL)
+                .line_height(px(22.))
+                .child(subtitle)
+        }))
+}
+
+pub(crate) fn paper_card(paper: &Paper) -> Div {
+    div()
+        .rounded(px(20.))
+        .border(px(1.5))
+        .border_color(paper.track)
+        .bg(paper.card)
+}
+
+/// The step pager: one dot per step, the current one stretched.
+pub(crate) fn pager(paper: &Paper, total: usize, current: usize) -> Div {
+    let paper = *paper;
+    div()
+        .flex()
+        .items_center()
+        .gap(px(5.))
+        .when(total > 1, |el| {
+            el.children((0..total).map(move |index| {
+                div()
+                    .h(px(6.))
+                    .w(px(if current == index { 22. } else { 6. }))
+                    .rounded_full()
+                    .bg(if current == index {
+                        paper.ink
+                    } else if current > index {
+                        paper.soft
+                    } else {
+                        paper.track
+                    })
+            }))
+        })
+}
+
+/// The navigation bar's dark pill: label, then a glyph. Disabled turns it
+/// into an outline with soft text.
+pub(crate) fn primary_pill(
+    paper: &Paper,
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    icon: &'static str,
+    disabled: bool,
+) -> gpui::Stateful<Div> {
+    div()
+        .id(id.into())
+        .tab_index(0)
+        .h(px(46.))
+        .px(px(26.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(8.))
+        .border(px(1.5))
+        .border_color(if disabled { paper.track } else { paper.ink })
+        .bg(if disabled {
+            gpui::transparent_black()
+        } else {
+            paper.ink
+        })
+        .text_color(if disabled { paper.soft } else { paper.bg })
+        .when(!disabled, |el| {
+            el.cursor_pointer().hover(|el| el.opacity(0.88))
+        })
+        .child(
+            div()
+                .text_size(px(14.))
+                .font_weight(FontWeight::MEDIUM)
+                .child(label.into()),
+        )
+        .child(
+            gpui::svg()
+                .path(icon)
+                .size(px(15.))
+                .text_color(if disabled { paper.soft } else { paper.bg }),
+        )
+}
+
+/// The red close dot that stands in for the traffic lights on a paper window.
+pub(crate) fn close_dot(id: &'static str) -> gpui::Stateful<Div> {
+    div()
+        .id(id)
+        .group(id)
+        .tab_index(0)
+        .size(px(14.))
+        .ml(px(12.))
+        .rounded_full()
+        .bg(rgb(Theme::TRAFFIC_CLOSE))
+        .hover(|el| el.bg(rgb(0xf25a53)))
+        .active(|el| el.bg(rgb(0xe6564e)))
+        .cursor_default()
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(
+            gpui::svg()
+                .path("icons/traffic-close.svg")
+                .size(px(10.))
+                .text_color(rgba(0x00000080))
+                .invisible()
+                .group_hover(id, |el| el.visible()),
+        )
 }

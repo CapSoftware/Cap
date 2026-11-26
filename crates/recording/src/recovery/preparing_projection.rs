@@ -294,12 +294,22 @@ fn validate_configuration(
     }) {
         return Err("Timeline overlays require ordinary loading".into());
     }
-    let expected = ProjectConfiguration {
-        timeline: config.timeline.clone(),
-        clips: config.clips.clone(),
-        ..ProjectConfiguration::default()
-    };
-    if persisted_json_value(config)? != persisted_json_value(&expected)? {
+    // The recorder writes `for_new_project()`; a plain default is what
+    // earlier builds and tests stop with. Anything else was edited.
+    let written = persisted_json_value(config)?;
+    let mut untouched = false;
+    for base in [
+        ProjectConfiguration::for_new_project(),
+        ProjectConfiguration::default(),
+    ] {
+        let expected = ProjectConfiguration {
+            timeline: config.timeline.clone(),
+            clips: config.clips.clone(),
+            ..base
+        };
+        untouched |= written == persisted_json_value(&expected)?;
+    }
+    if !untouched {
         return Err("Edited or legacy configuration requires ordinary loading".into());
     }
     let mut indexes = HashSet::new();
@@ -852,6 +862,7 @@ mod tests {
                     cursor: None,
                     keyboard: None,
                     display_notch: None,
+                    cursor_shape_version: None,
                 });
                 recovered.push(super::super::RecoverableSegment {
                     index,
@@ -875,6 +886,8 @@ mod tests {
                             segments,
                             cursors: Cursors::default(),
                             status: Some(StudioRecordingStatus::NeedsRemux),
+                            cursor_shape_version: 0,
+                            audio_only: false,
                         },
                     },
                 )),
@@ -1223,6 +1236,23 @@ mod tests {
             assert!(project(&fixture.recording, &claim).is_err());
             assert_eq!(before, fixture.snapshot());
         }
+    }
+
+    #[test]
+    fn preparing_projection_accepts_the_new_project_configuration_but_not_edits_to_it() {
+        let mut fixture = Fixture::new(1);
+        fixture.configuration = ProjectConfiguration {
+            timeline: fixture.configuration.timeline.clone(),
+            ..ProjectConfiguration::for_new_project()
+        };
+        fixture.persist();
+        assert!(fixture.project().is_ok());
+
+        fixture.configuration.background.padding = 10.0;
+        fixture.persist();
+        let before = fixture.snapshot();
+        assert!(fixture.project().is_err());
+        assert_eq!(before, fixture.snapshot());
     }
 
     #[test]

@@ -9,6 +9,8 @@ import {
 
 export class UnsupportedStreamError extends Error {}
 
+export class EmptyHlsPlaylistError extends UnsupportedStreamError {}
+
 export interface HlsVariant {
 	bandwidth: number;
 	pixels: number;
@@ -154,8 +156,28 @@ export function listMediaPlaylistResources(
 		resources.push({ url: line, lineIndex, attribute: false });
 	}
 	if (!resources.some((resource) => !resource.attribute))
-		throw new UnsupportedStreamError("HLS playlist has no media segments");
+		throw new EmptyHlsPlaylistError("HLS playlist has no media segments");
 	return resources;
+}
+
+export function withoutAudioRendition(
+	selection: SelectedTracks,
+): SelectedTracks {
+	return {
+		...selection,
+		audio: null,
+		masterLines: selection.masterLines
+			.filter((line) => !line.startsWith("#EXT-X-MEDIA:"))
+			.map((line) => {
+				if (!line.startsWith("#EXT-X-STREAM-INF:")) return line;
+				const attributes = [
+					...tagValue(line).matchAll(/([A-Z0-9-]+)=("[^"]*"|[^,]*)/g),
+				]
+					.filter((match) => match[1] !== "AUDIO")
+					.map((match) => match[0]);
+				return `#EXT-X-STREAM-INF:${attributes.join(",")}`;
+			}),
+	};
 }
 
 function segmentExtension(url: string): string {
@@ -239,7 +261,7 @@ export async function prefetchMaterializedHls(
 	options: PrefetchOptions,
 ): Promise<PrefetchResult> {
 	const master = await readFile(masterPath, "utf8");
-	const selection = selectHlsTracks(master) ?? {
+	let selection = selectHlsTracks(master) ?? {
 		video: masterPath,
 		audio: null,
 		masterLines: [],
@@ -248,10 +270,17 @@ export async function prefetchMaterializedHls(
 		{ name: "video", path: selection.video },
 		...(selection.audio ? [{ name: "audio", path: selection.audio }] : []),
 	];
-	const playlists = await Promise.all(
+	const loaded = await Promise.all(
 		tracks.map(async (track) => {
 			const content = await readFile(track.path, "utf8");
-			const resources = listMediaPlaylistResources(content);
+			let resources: MediaPlaylistResource[];
+			try {
+				resources = listMediaPlaylistResources(content);
+			} catch (error) {
+				if (track.name === "audio" && error instanceof EmptyHlsPlaylistError)
+					return null;
+				throw error;
+			}
 			const lines = content.split(/\r?\n/);
 			return {
 				...track,
@@ -263,6 +292,9 @@ export async function prefetchMaterializedHls(
 			};
 		}),
 	);
+	const playlists = loaded.filter((playlist) => playlist !== null);
+	if (playlists.length < loaded.length)
+		selection = withoutAudioRendition(selection);
 	const downloads = playlists.flatMap((playlist) =>
 		playlist.resources.map((resource, index) => ({
 			playlist,

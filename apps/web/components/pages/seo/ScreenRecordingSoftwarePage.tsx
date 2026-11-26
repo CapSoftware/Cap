@@ -2,7 +2,6 @@
 
 import { Clapperboard, Zap } from "lucide-react";
 import Script from "next/script";
-import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -84,32 +83,6 @@ export const screenRecordingSoftwareContent: SeoPageContent = {
 		],
 	},
 
-	comparisonTitle: "How Cap Compares to Other Screen Recording Software",
-	comparisonDescription:
-		"See how Cap stacks up against popular screen recording tools on the features that matter most",
-
-	comparison: [
-		{
-			title: "Cap vs Loom",
-			description: `Cap starts at $${PRICING.pro.annualPerMonth}/month compared to Loom's $18/month. Cap is open-source, lets you connect your own S3 storage for full data ownership, and offers a more generous free plan with Studio Mode included. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
-		},
-		{
-			title: "Cap vs OBS Studio",
-			description:
-				"OBS is powerful but complex. Cap delivers a simpler experience with instant sharing links, cloud storage, and a clean interface — no configuration needed. Both are open-source and free, but Cap is built for sharing, not just recording.",
-		},
-		{
-			title: "Cap vs Windows Built-in (Xbox Game Bar)",
-			description:
-				"Xbox Game Bar only records the active window and cannot capture full-screen desktop recordings. Cap records your entire screen, specific windows, or custom regions with system and microphone audio. <a href='/screen-recorder-windows'>Learn more about screen recording on Windows</a>.",
-		},
-		{
-			title: "Cap vs Mac Built-in (Cmd+Shift+5)",
-			description:
-				"The macOS built-in recorder lacks system audio capture, webcam overlay, and instant sharing. Cap handles all of these natively with no extra plugins or extensions required. <a href='/screen-recorder-mac'>Learn more about screen recording on Mac</a>.",
-		},
-	],
-
 	useCasesTitle: "Popular Uses for Screen Recording Software",
 	useCasesDescription:
 		"Explore how professionals, educators, and teams use Cap's screen recording software every day",
@@ -159,16 +132,6 @@ export const screenRecordingSoftwareContent: SeoPageContent = {
 			question: "Can I share recordings with others?",
 			answer:
 				"Yes, Cap generates instant shareable links the moment you stop recording. Share with colleagues, clients, or students in seconds. Cap Pro includes built-in thread commenting so recipients can leave feedback directly on your videos.",
-		},
-		{
-			question: "How does Cap compare to other screen recording software?",
-			answer:
-				"Cap is the only screen recording software that is open-source, offers instant sharing, and lets you own your data with custom S3 storage. It is more affordable than <a href='/loom-alternative'>Loom</a>, simpler than OBS, and more powerful than built-in OS tools.",
-		},
-		{
-			question: "What is the best screen recording software in 2026?",
-			answer:
-				"Cap is the best screen recording software for users who want a balance of quality, simplicity, and value. It records in up to 4K at 60fps, shares instantly via link, is open-source, and offers a generous free plan. For teams, Cap Pro adds cloud storage, thread commenting, and custom domains at a fraction of competitors' prices.",
 		},
 		{
 			question: "How does screen recording software work?",

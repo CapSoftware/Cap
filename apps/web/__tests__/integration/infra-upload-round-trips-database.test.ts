@@ -5,8 +5,9 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 	developerVideos,
+	users,
 } from "@cap/database/schema";
-import type { User } from "@cap/web-domain";
+import { Organisation, type User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { Effect } from "effect";
@@ -231,6 +232,7 @@ describe.runIf(Boolean(databaseUrl))(
 		const appId = `rt${id()}`;
 		const ownerId = `rt${id()}` as User.UserId;
 		const videoIds: string[] = [];
+		const accountId = `rt${id()}`;
 
 		beforeAll(async () => {
 			pool = createPool({ uri: databaseUrl, connectionLimit: 4 });
@@ -241,20 +243,25 @@ describe.runIf(Boolean(databaseUrl))(
 				value: async () => countStatements(await getConnection()),
 			});
 			fixture.database = drizzle(pool);
+			await database()
+				.insert(users)
+				.values({
+					id: ownerId,
+					email: `${ownerId}@example.com`,
+					activeOrganizationId: Organisation.OrganisationId.make(`rt${id()}`),
+				});
 			await database().insert(developerApps).values({
 				id: appId,
 				ownerId,
 				name: "round trips",
 				environment: "development",
 			});
-			await database()
-				.insert(developerCreditAccounts)
-				.values({
-					id: `rt${id()}`,
-					appId,
-					ownerId,
-					balanceMicroCredits: 1_000_000_000,
-				});
+			await database().insert(developerCreditAccounts).values({
+				id: accountId,
+				appId,
+				ownerId,
+				balanceMicroCredits: 1_000_000_000,
+			});
 		});
 
 		afterEach(async () => {
@@ -274,11 +281,9 @@ describe.runIf(Boolean(databaseUrl))(
 			await database()
 				.delete(developerApiKeys)
 				.where(eq(developerApiKeys.appId, appId));
-			for (const videoId of videoIds) {
-				await database()
-					.delete(developerCreditTransactions)
-					.where(eq(developerCreditTransactions.referenceId, videoId));
-			}
+			await database()
+				.delete(developerCreditTransactions)
+				.where(eq(developerCreditTransactions.accountId, accountId));
 			await database()
 				.delete(developerVideos)
 				.where(eq(developerVideos.appId, appId));
@@ -286,6 +291,7 @@ describe.runIf(Boolean(databaseUrl))(
 				.delete(developerCreditAccounts)
 				.where(eq(developerCreditAccounts.appId, appId));
 			await database().delete(developerApps).where(eq(developerApps.id, appId));
+			await database().delete(users).where(eq(users.id, ownerId));
 			await pool.end();
 		});
 

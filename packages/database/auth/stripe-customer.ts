@@ -1,4 +1,5 @@
 import { isProSubscription, stripe } from "@cap/utils";
+import { User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import type Stripe from "stripe";
@@ -13,9 +14,22 @@ export async function provisionStripeCustomer(
 		limit: 1,
 	});
 
+	const candidate = existingCustomers.data[0];
+	const claimedBy = candidate?.metadata?.userId;
+	const ownedByAnotherUser =
+		!!claimedBy &&
+		claimedBy !== row.id &&
+		(
+			await db
+				.select({ id: users.id })
+				.from(users)
+				.where(eq(users.id, User.UserId.make(claimedBy)))
+				.limit(1)
+		).length > 0;
+
 	let customer: Stripe.Customer;
-	if (existingCustomers.data.length > 0 && existingCustomers.data[0]) {
-		customer = existingCustomers.data[0];
+	if (candidate && !ownedByAnotherUser) {
+		customer = candidate;
 
 		customer = await stripe().customers.update(customer.id, {
 			...(row.name?.trim()

@@ -42,7 +42,7 @@ export function SettingsNav() {
 	];
 
 	return (
-		<div className="flex overflow-x-auto gap-4 items-center border-b border-gray-4 custom-scroll">
+		<div className="flex overflow-x-auto gap-5 items-center border-b border-gray-3 custom-scroll">
 			{tabs.map((tab) => {
 				const isActive = pathname === tab.href;
 
@@ -54,10 +54,10 @@ export function SettingsNav() {
 						>
 							<p
 								className={clsx(
-									"text-[13px] transition-colors",
+									"text-[13px] transition-colors whitespace-nowrap",
 									isActive
-										? "text-gray-12"
-										: "text-gray-10 group-hover:text-gray-11",
+										? "font-medium text-gray-12"
+										: "text-gray-10 group-hover:text-gray-12",
 								)}
 							>
 								{tab.label}

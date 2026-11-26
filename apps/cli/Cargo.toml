@@ -11,6 +11,7 @@ cap-recording = { path = "../../crates/recording" }
 cap-rendering = { path = "../../crates/rendering" }
 cap-editor = { path = "../../crates/editor" }
 cap-export = { path = "../../crates/export" }
+cap-enc-ffmpeg = { path = "../../crates/enc-ffmpeg" }
 cap-media-info = { path = "../../crates/media-info" }
 cap-timestamp = { path = "../../crates/timestamp" }
 cap-utils = { path = "../../crates/utils" }

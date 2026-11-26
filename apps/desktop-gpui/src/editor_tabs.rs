@@ -24,8 +24,8 @@ use cap_project::CaptionsData;
 use cap_project::{
     BackgroundBlurConfig, BackgroundBlurMode, CameraShape, CameraXPosition, CameraYPosition,
     CaptionSegment, CaptionSettings, CornerStyle, CursorAnimationStyle, CursorRippleConfig,
-    KeyboardData, KeyboardSettings, ProjectConfiguration, RecordingMeta, ShadowConfiguration,
-    StereoMode, transcription_ranges_cover, transcription_source_ranges,
+    KeyboardData, KeyboardSettings, PaddingMode, ProjectConfiguration, RecordingMeta,
+    ShadowConfiguration, StereoMode, transcription_ranges_cover, transcription_source_ranges,
 };
 use gpui::{
     AnyElement, Bounds, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -78,6 +78,14 @@ pub const CAMERA_BLUR_MODES: &[(BackgroundBlurMode, Label)] = &[
 pub const CORNER_STYLES: [(CornerStyle, Label); 2] = [
     (CornerStyle::Squircle, tr::editor::tabs::corner::squircle),
     (CornerStyle::Rounded, tr::editor::tabs::corner::rounded),
+];
+
+pub const PADDING_MODES: [(PaddingMode, Label); 2] = [
+    (PaddingMode::Even, tr::editor::tabs::padding::even),
+    (
+        PaddingMode::Proportional,
+        tr::editor::tabs::padding::proportional,
+    ),
 ];
 
 /// `STEREO_MODES` (`:375-379`).
@@ -781,6 +789,7 @@ fn with_keyboard_settings(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarMenu {
     BackgroundCornerStyle,
+    BackgroundPaddingMode,
     CameraBlur,
     CameraShape,
     CameraCornerStyle,
@@ -823,6 +832,12 @@ impl EditorWindow {
                 .iter()
                 .map(|(style, label)| {
                     ui::MenuItem::new(label(), *style == project.background.rounding_type)
+                })
+                .collect(),
+            SidebarMenu::BackgroundPaddingMode => PADDING_MODES
+                .iter()
+                .map(|(mode, label)| {
+                    ui::MenuItem::new(label(), *mode == project.background.padding_mode)
                 })
                 .collect(),
             SidebarMenu::CameraBlur => CAMERA_BLUR_MODES
@@ -1006,6 +1021,12 @@ impl EditorWindow {
                     project.background.rounding_type = style;
                     true
                 });
+            }
+            SidebarMenu::BackgroundPaddingMode => {
+                let Some((mode, _)) = PADDING_MODES.get(index) else {
+                    return;
+                };
+                self.set_padding_mode(*mode, window, cx);
             }
             SidebarMenu::CameraBlur => {
                 let Some((mode, _)) = CAMERA_BLUR_MODES.get(index) else {
@@ -1497,10 +1518,183 @@ impl EditorWindow {
     // -- Camera --------------------------------------------------------------
 
     /// `CameraConfig` (`ConfigSidebar.tsx:2978-3330`).
+    fn render_camera_picture(&self, picture: Option<String>, cx: &mut Context<Self>) -> AnyElement {
+        use gpui::StyledImage as _;
+        let theme = self.theme;
+        let has_picture = picture.is_some();
+        let thumbnail = match picture {
+            Some(relative) => gpui::img(self.project_path.join(relative))
+                .size(px(56.))
+                .flex_none()
+                .rounded(px(12.))
+                .object_fit(gpui::ObjectFit::Cover)
+                .into_any_element(),
+            None => div()
+                .size(px(56.))
+                .flex_none()
+                .rounded(px(12.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(Hsla::from(theme.gray_3))
+                .child(
+                    svg()
+                        .path("icons/image.svg")
+                        .size(px(20.))
+                        .text_color(Hsla::from(theme.gray_10)),
+                )
+                .into_any_element(),
+        };
+        ui::Field::section(&theme, tr::editor::tabs::camera::picture::title())
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(thumbnail)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .text_color(Hsla::from(theme.gray_11))
+                                    .child(if has_picture {
+                                        tr::editor::tabs::camera::picture::shown()
+                                    } else {
+                                        tr::editor::tabs::camera::picture::empty()
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap(px(6.))
+                                    .child(
+                                        ui::EditorButton::plain(&theme, "camera-picture-choose")
+                                            .label(if has_picture {
+                                                tr::editor::tabs::camera::picture::replace()
+                                            } else {
+                                                tr::editor::tabs::camera::picture::add()
+                                            })
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.pick_camera_picture(window, cx);
+                                            })),
+                                    )
+                                    .when(has_picture, |this| {
+                                        this.child(
+                                            ui::EditorButton::plain(
+                                                &theme,
+                                                "camera-picture-remove",
+                                            )
+                                            .label(tr::editor::tabs::camera::picture::remove())
+                                            .on_click(
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.edit_project(
+                                                        "camera-picture",
+                                                        window,
+                                                        cx,
+                                                        |project| {
+                                                            project.camera_picture.take().is_some()
+                                                        },
+                                                    );
+                                                }),
+                                            ),
+                                        )
+                                    }),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    pub(crate) fn pick_camera_picture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar.picking_image {
+            return;
+        }
+        self.end_field_edit(cx);
+        self.close_color_picker(cx);
+        self.sidebar.image_import_error = None;
+        self.sidebar.picking_image = true;
+        let project_path = self.project_path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            #[cfg(target_os = "linux")]
+            let source = crate::platform::open_file_panel_async(
+                &[(
+                    tr::editor::window::image::filter(),
+                    crate::camera_picture::EXTENSIONS,
+                )],
+                None,
+                cx,
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
+            let source = crate::import::pick_import_file(
+                &[(
+                    tr::editor::window::image::filter(),
+                    crate::camera_picture::EXTENSIONS,
+                )],
+                cx,
+            )
+            .await;
+            if this.update_in(cx, |_, _, _| ()).is_err() {
+                return;
+            }
+            let imported = match source {
+                Some(source) => Some(
+                    cx.background_executor()
+                        .spawn(async move {
+                            crate::camera_picture::import_into_project(&project_path, &source)
+                        })
+                        .await,
+                ),
+                None => None,
+            };
+            this.update_in(cx, |this, window, cx| {
+                this.sidebar.picking_image = false;
+                match imported {
+                    Some(Ok(relative)) => {
+                        this.edit_project("camera-picture", window, cx, move |project| {
+                            project.camera_picture = Some(relative);
+                            project.camera.hide = false;
+                            true
+                        });
+                    }
+                    Some(Err(error)) => {
+                        this.sidebar.image_import_error = Some(error);
+                        cx.notify();
+                    }
+                    None => cx.notify(),
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     pub(crate) fn render_camera_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let camera = &self.project.camera;
         let manual = camera.manual_position;
+        let recorded = self.summary().is_some_and(|summary| summary.has_camera);
+        let picture = (!recorded)
+            .then(|| self.project.camera_picture.clone())
+            .flatten();
+        if !recorded && picture.is_none() {
+            return div()
+                .flex()
+                .flex_col()
+                .gap(px(14.))
+                .child(self.render_camera_picture(None, cx))
+                .into_any_element();
+        }
 
         let shape_label = CAMERA_SHAPES
             .iter()
@@ -1523,6 +1717,7 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .gap(px(14.))
+            .children(picture.map(|picture| self.render_camera_picture(Some(picture), cx)))
             .child(
                 ui::Field::section(&theme, tr::editor::tabs::camera::title()).child(
                     div()
@@ -1556,15 +1751,19 @@ impl EditorWindow {
                                 ),
                             ),
                         )
-                        .child(
-                            ui::Subfield::plain(&theme, tr::editor::tabs::camera::background())
-                                .child(div().w(px(160.)).child(self.menu_select(
-                                    SidebarMenu::CameraBlur,
-                                    "camera-blur",
-                                    blur_label,
-                                    cx,
-                                ))),
-                        )
+                        // A picture is drawn as is: there is no background to
+                        // blur or cut out.
+                        .when(recorded, |this| {
+                            this.child(
+                                ui::Subfield::plain(&theme, tr::editor::tabs::camera::background())
+                                    .child(div().w(px(160.)).child(self.menu_select(
+                                        SidebarMenu::CameraBlur,
+                                        "camera-blur",
+                                        blur_label,
+                                        cx,
+                                    ))),
+                            )
+                        })
                         .child(
                             ui::Subfield::plain(&theme, tr::editor::tabs::camera::shape_label())
                                 .child(div().w(px(160.)).child(self.menu_select(
@@ -2300,6 +2499,29 @@ impl EditorWindow {
                     )),
             );
 
+        if smooth {
+            let hover = cursor.interaction_anchors && cursor.hover_anchors;
+            body = body.child(
+                ui::Field::inline(&theme, tr::editor::tabs::cursor::follow_hover()).value(
+                    ui::Toggle::plain(&theme, "cursor-hover-anchors", hover)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let next = {
+                                let cursor = &this.style_control_project().cursor;
+                                !(cursor.interaction_anchors && cursor.hover_anchors)
+                            };
+                            this.edit_project("cursor-hover-anchors", window, cx, move |p| {
+                                p.cursor.hover_anchors = next;
+                                if next {
+                                    p.cursor.interaction_anchors = true;
+                                }
+                                true
+                            });
+                        }))
+                        .into_any_element(),
+                ),
+            );
+        }
+
         // An explicit family forces the SVG assets, so the toggle would be
         // showing a setting the renderer is already overriding.
         if cursor.cursor_type().family().is_none() {
@@ -2720,8 +2942,65 @@ impl EditorWindow {
                     }))
                     .into_any_element(),
             )
+            .children(Self::keystroke_permission_callout(&theme))
             .child(body)
             .into_any_element()
+    }
+
+    /// From macOS 27.3 keystrokes need Input Monitoring (before, the
+    /// Accessibility grant onboarding asks for). Without it a recording has no
+    /// key presses to show, so the tab says why and walks through the fix.
+    fn keystroke_permission_callout(theme: &crate::theme::Theme) -> Option<AnyElement> {
+        if !crate::permission_help::keystrokes_missing() {
+            return None;
+        }
+        Some(
+            div()
+                .id("keyboard-permission")
+                .mb(px(4.))
+                .p(px(12.))
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(Hsla::from(theme.gray_5))
+                .bg(Hsla::from(theme.gray_3))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(Hsla::from(theme.gray_12))
+                        .child(tr::editor::tabs::keyboard::permission_title()),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .line_height(px(17.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(tr::editor::tabs::keyboard::permission_body()),
+                )
+                .child(
+                    div().pt(px(6.)).child(
+                        ui::Button::plain(
+                            theme,
+                            "keyboard-permission-help",
+                            ui::ButtonVariant::Dark,
+                            ui::ButtonSize::Sm,
+                        )
+                        .label(tr::editor::tabs::keyboard::permission_action())
+                        .on_click(|_, _, cx| {
+                            cx.defer(|cx| {
+                                crate::permission_help::show(
+                                    crate::permission_help::Need::Keystrokes,
+                                    cx,
+                                )
+                            })
+                        }),
+                    ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// A slider with a `text-xs text-right` readout underneath -- the shape the
@@ -3998,7 +4277,7 @@ impl EditorWindow {
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(Hsla::from(theme.editor.text_2))
-                                .child(SharedString::from(tr::editor::tabs::sync::clip(clip)))
+                                .child(SharedString::from(tr::editor::tabs::sync::clip(clip + 1)))
                                 .into_any_element()
                         }))
                         .children(auto.then(|| {

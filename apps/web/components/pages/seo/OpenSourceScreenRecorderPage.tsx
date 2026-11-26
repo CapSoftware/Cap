@@ -6,7 +6,7 @@ import type { SeoPageContent } from "../../seo/types";
 export const openSourceScreenRecorderContent: SeoPageContent = {
 	title: "Open Source Screen Recorder — Free, Private, and Community-Built",
 	description:
-		"Cap is the leading open-source screen recorder for Mac and Windows. Audit the code, self-host your recordings, and stay in full control of your data. Free forever with no vendor lock-in.",
+		"Cap is an open-source screen recorder for Mac and Windows. Audit the code, self-host your recordings, and stay in full control of your data.",
 
 	featuresTitle: "Why Choose an Open Source Screen Recorder",
 	featuresDescription:
@@ -26,7 +26,7 @@ export const openSourceScreenRecorderContent: SeoPageContent = {
 		{
 			title: "No Vendor Lock-In",
 			description:
-				"With a closed-source tool, you're dependent on a company's pricing, policies, and survival. Cap is open source — fork it, modify it, or self-host the entire platform. Your workflow is never held hostage.",
+				"Cap is open source. Fork it, modify it, or self-host the entire platform.",
 		},
 		{
 			title: "Community-Driven Development",
@@ -81,95 +81,6 @@ export const openSourceScreenRecorderContent: SeoPageContent = {
 		],
 	},
 
-	comparisonTable: {
-		title: "Open Source vs Closed Source Screen Recorders",
-		headers: ["Feature", "Cap (Open Source)", "Loom", "Vidyard", "Camtasia"],
-		rows: [
-			[
-				"Open source",
-				{ text: "Yes — AGPLv3 and MIT crates", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Self-hostable",
-				{ text: "Yes — any S3 storage", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Auditable code",
-				{ text: "Yes — full codebase", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Free to use",
-				{ text: "Yes — free plan + Studio Mode", status: "positive" },
-				{ text: "Limited", status: "warning" },
-				{ text: "Limited", status: "warning" },
-				{ text: "$299.99 one-time", status: "negative" },
-			],
-			[
-				"No watermark",
-				{ text: "Yes", status: "positive" },
-				{ text: "Paid only", status: "warning" },
-				{ text: "Paid only", status: "warning" },
-				{ text: "Yes (paid)", status: "warning" },
-			],
-			[
-				"4K recording",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "Yes (paid)", status: "warning" },
-			],
-			[
-				"Instant share link",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"AI captions",
-				{ text: "Yes", status: "positive" },
-				{ text: "Paid only", status: "warning" },
-				{ text: "Paid only", status: "warning" },
-				{ text: "Paid only", status: "warning" },
-			],
-		],
-	},
-
-	comparisonTitle: "How Cap Stands Apart as an Open Source Screen Recorder",
-	comparisonDescription:
-		"The open-source difference goes beyond price — it's about trust, control, and long-term sustainability",
-
-	comparison: [
-		{
-			title: "Cap vs Loom",
-			description: `Loom is a closed-source SaaS that owns your recording data and can change pricing at any time. Cap is open source with custom storage support, starting at $${PRICING.pro.annualPerMonth}/month versus Loom's $18/month — and Cap's Studio Mode is completely free. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
-		},
-		{
-			title: "Cap vs OBS Studio",
-			description:
-				"OBS is also open source but built for live streaming, not async screen sharing. Cap brings the open-source ethos to everyday recording with instant shareable links, cloud storage, and built-in commenting — features OBS doesn't offer.",
-		},
-		{
-			title: "Cap vs Vidyard",
-			description:
-				"Vidyard is a closed-source enterprise video platform with pricing to match. Cap gives teams the same async video capabilities with full transparency, no vendor lock-in, and a free tier that covers most use cases.",
-		},
-		{
-			title: "Cap vs Camtasia",
-			description:
-				"Camtasia is a powerful but closed-source editor costing $299.99. Cap is open source and covers the full recording-to-sharing workflow for free. If you need advanced editing, combine Cap's free recording with your editor of choice.",
-		},
-	],
-
 	useCasesTitle: "Who Uses Cap as Their Open Source Screen Recorder",
 	useCasesDescription:
 		"From privacy-conscious developers to enterprises with compliance requirements — Cap fits every team that values transparency",
@@ -220,19 +131,8 @@ export const openSourceScreenRecorderContent: SeoPageContent = {
 				"Yes. Cap supports any S3-compatible storage provider, including AWS S3, Cloudflare R2, Backblaze B2, and self-hosted MinIO. Configure your own bucket in Cap's settings and your recordings are stored entirely within your infrastructure — Cap's servers never see your content.",
 		},
 		{
-			question: "What is the best open source screen recorder?",
-			answer:
-				"Cap is the best open source screen recorder for most users because it combines full transparency with practical features: 4K recording, instant shareable links, webcam overlay, AI captions, and built-in thread commenting. OBS Studio is also open source but designed for streaming rather than async screen sharing and instant link generation.",
-		},
-		{
 			question: "Is Cap's open source version free?",
 			answer: `Yes. Cap's Studio Mode is completely free for personal use with no time limits and no watermarks. Instant Mode on the free plan supports recordings up to 5 minutes. Cap Pro ($${PRICING.pro.annualPerMonth}/month) removes Instant Mode time limits and adds team features. The core software will always be open source and free to use.`,
-		},
-		{
-			question:
-				"How does Cap compare to OBS Studio as an open source recorder?",
-			answer:
-				"Both Cap and OBS Studio are open source, but they serve different workflows. OBS requires significant setup and is built for live streaming. Cap is designed for async screen sharing — you record, get a shareable link in seconds, and viewers can leave timestamped comments. Cap is the better open source screen recorder for teams and everyday recording.",
 		},
 		{
 			question: "Can I contribute to Cap's development?",

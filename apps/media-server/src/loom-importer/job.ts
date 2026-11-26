@@ -28,9 +28,11 @@ import {
 	type Semaphore,
 } from "./fetch";
 import {
+	type AudioHandling,
 	buildAudioOnlyArgs,
 	buildRemuxArgs,
 	chooseContainer,
+	isAudioCopyFailure,
 	PLAYLIST_INPUT_ARGS,
 	probeCodecs,
 	probeOutput,
@@ -216,6 +218,7 @@ async function prepareSource(
 		manifestDir,
 		signal,
 		settings.allowedHosts,
+		{ allowAudioOnly: true },
 	);
 	if (!master.endsWith(".m3u8"))
 		throw new UnsupportedStreamError("This Loom DASH layout is not supported");
@@ -368,27 +371,45 @@ export async function runLoomImport(
 				workDir,
 				container === "webm" ? "original.webm" : "result.mp4",
 			);
-			await runCommand(
-				container === "audio-only" && codecs.audio
-					? buildAudioOnlyArgs(
-							source.inputArgs,
-							source.input,
-							outputPath,
-							codecs.audio,
-							codecs.duration === null
-								? null
-								: codecs.duration + source.skippedSeconds,
-						)
-					: buildRemuxArgs(
-							source.inputArgs,
-							source.input,
-							outputPath,
-							container === "webm" ? "webm" : "mp4",
-							codecs.audio !== null,
-						),
-				settings.remuxTimeoutMs,
-				signal,
-			);
+			const audioCodec = codecs.audio;
+			const packageOutput = (audio: AudioHandling) =>
+				runCommand(
+					container === "audio-only" && audioCodec
+						? buildAudioOnlyArgs(
+								source.inputArgs,
+								source.input,
+								outputPath,
+								audioCodec,
+								codecs.duration === null
+									? null
+									: codecs.duration + source.skippedSeconds,
+								audio,
+							)
+						: buildRemuxArgs(
+								source.inputArgs,
+								source.input,
+								outputPath,
+								container === "webm" ? "webm" : "mp4",
+								audioCodec !== null,
+								audio,
+							),
+					settings.remuxTimeoutMs,
+					signal,
+				);
+			try {
+				await packageOutput("copy");
+			} catch (error) {
+				if (
+					signal.aborted ||
+					audioCodec !== "aac" ||
+					!isAudioCopyFailure(error)
+				)
+					throw error;
+				console.warn(
+					`[loom-importer] ${job.jobId} AAC stream copy failed, re-encoding audio`,
+				);
+				await packageOutput("encode");
+			}
 			if (container === "webm") deferredSourceKey = request.originalUpload?.key;
 		}
 		const metadata = await probeOutput(outputPath, signal);

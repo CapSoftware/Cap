@@ -356,14 +356,16 @@ impl RecoveryManager {
             return Ok(false);
         }
 
-        // Without a preparing editor nothing reads the originals once they are
-        // published, so the backup goes with the stop instead of doubling the
-        // recording's size on disk for good -- unless it holds a legacy
-        // omitted track, which publication leaves out and only the backup
-        // keeps.
-        let unread = preparing.is_none()
-            && legacy_omitted_tracks(&incomplete.meta, project_path)
-                .is_ok_and(|tracks| tracks.is_empty());
+        // Unless a preparing editor was handed the originals, nothing reads
+        // them once they are published, so the backup goes with the stop
+        // instead of doubling the recording's size on disk for good -- unless
+        // it holds a legacy omitted track, which publication leaves out and
+        // only the backup keeps. A preparing job that declined (a stopped
+        // config with markers, for one) never shares the lease, so the lease
+        // can't retire the backup and this is the only path that does.
+        let keeps_no_omitted_track = legacy_omitted_tracks(&incomplete.meta, project_path)
+            .is_ok_and(|tracks| tracks.is_empty());
+        let preparing_identity = preparing.as_ref().map(|job| job.identity().clone());
         let published_workspace = std::cell::RefCell::new(None);
         Self::finalize_with_publication(
             &incomplete,
@@ -378,6 +380,8 @@ impl RecoveryManager {
             RecoveryLock::acquire,
             preparing,
         )?;
+        let unread = keeps_no_omitted_track
+            && !preparing_identity.is_some_and(|identity| identity.publication_succeeded());
         if unread && let Some(workspace) = published_workspace.into_inner() {
             let retired = RecoveryLock::acquire(project_path)
                 .and_then(|_lock| retirement::retire_unread_originals(project_path, &workspace));
@@ -451,6 +455,9 @@ impl RecoveryManager {
 
         let mut recoverable_segments = Vec::new();
         let mut total_duration = Duration::ZERO;
+        let audio_only = meta
+            .studio_meta()
+            .is_some_and(StudioRecordingMeta::is_audio_only);
 
         let mut segment_dirs: Vec<_> = std::fs::read_dir(&segments_dir)
             .ok()?
@@ -473,6 +480,10 @@ impl RecoveryManager {
                 .strip_prefix("segment-")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
+
+            if audio_only {
+                Self::restore_audio_only_standin(&segment_path);
+            }
 
             let display_info = Self::segment_track_fragments(&segment_path, "display", true);
             let display_fragments = display_info.fragments;
@@ -531,6 +542,27 @@ impl RecoveryManager {
             recoverable_segments,
             estimated_duration: total_duration,
         })
+    }
+
+    /// An audio-only segment's display stand-in is written when the segment
+    /// finishes, so a recording that was killed has none. It is rebuilt here
+    /// as long as the audio the segment kept.
+    fn restore_audio_only_standin(segment_path: &Path) {
+        let standin = segment_path.join("display.mp4");
+        if standin.is_file() {
+            return;
+        }
+        let duration = ["audio-input", "system_audio"]
+            .iter()
+            .filter_map(|track| Self::find_audio_fragments(&segment_path.join(track)))
+            .filter_map(|fragments| Self::estimate_fragments_duration(&fragments))
+            .max();
+        let Some(duration) = duration else {
+            return;
+        };
+        if let Err(error) = crate::sources::standin_for_span(&standin, duration) {
+            warn!(%error, segment = %segment_path.display(), "Could not rebuild the audio-only display track");
+        }
     }
 
     fn find_studio_fragments_with_init(dir: &Path) -> FragmentsInfo {
@@ -2886,6 +2918,7 @@ impl RecoveryManager {
                         None
                     },
                     display_notch: original_segment.and_then(|s| s.display_notch),
+                    cursor_shape_version: original_segment.and_then(|s| s.cursor_shape_version),
                 }
             })
             .collect();
@@ -2897,6 +2930,14 @@ impl RecoveryManager {
                 segments,
                 cursors: existing_cursors,
                 status: Some(StudioRecordingStatus::Complete),
+                cursor_shape_version: recording
+                    .meta
+                    .studio_meta()
+                    .map_or(0, StudioRecordingMeta::cursor_shape_version),
+                audio_only: recording
+                    .meta
+                    .studio_meta()
+                    .is_some_and(StudioRecordingMeta::is_audio_only),
             },
         })
     }
@@ -2958,7 +2999,7 @@ impl RecoveryManager {
             Ok(config) => config,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => ProjectConfiguration {
                 markers: Self::recovered_markers(recording, inner, &timeline_segments),
-                ..Default::default()
+                ..ProjectConfiguration::for_new_project()
             },
             Err(error) => return Err(error.into()),
         };
@@ -5244,9 +5285,12 @@ mod clean_studio_snapshot_tests {
                         cursor: None,
                         keyboard: None,
                         display_notch: None,
+                        cursor_shape_version: None,
                     }],
                     cursors: Cursors::default(),
                     status: Some(status),
+                    cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         }
@@ -5868,6 +5912,7 @@ mod clean_studio_snapshot_tests {
             meta: metadata.studio_meta().unwrap().clone(),
             cursor_data: Default::default(),
             clean_stopped: CleanStoppedStudio::for_test(metadata, configuration),
+            screen_frames: None,
         }
     }
 
@@ -5910,6 +5955,7 @@ mod clean_studio_snapshot_tests {
                     metadata,
                     configuration,
                 ),
+                screen_frames: None,
             };
             PreparingStudioJob::claim(&alternate_completed, 73).unwrap()
         } else {
@@ -6302,6 +6348,52 @@ mod clean_studio_snapshot_tests {
         };
         let display = meta.path(&inner.segments[0].display.path);
         assert!(cap_enc_ffmpeg::remux::get_video_fps(&display).is_some());
+    }
+
+    #[test]
+    fn a_stop_whose_preparing_editor_declines_retires_the_original_media_backup() {
+        use super::preparing_observer::PreparingStudioTestTransition;
+        use crate::studio_recording::CleanStoppedStudio;
+
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let mut completed = completed_preparing_fixture(project);
+        let mut configuration = ProjectConfiguration::load(project).unwrap();
+        configuration.markers = vec![cap_project::TimelineMarker::new(0, 0.5)];
+        configuration.write(project).unwrap();
+        completed.clean_stopped = CleanStoppedStudio::for_test(
+            RecordingMeta::load_for_project(project).unwrap(),
+            configuration,
+        );
+        let (job, observer) = PreparingStudioJob::claim(&completed, 11).unwrap();
+        let transitions = job.test_transitions();
+
+        assert!(RecoveryManager::remux_stopped_with_preparing(&completed, job).unwrap());
+
+        assert_eq!(
+            *transitions.lock().unwrap(),
+            vec![
+                PreparingStudioTestTransition::Unavailable(
+                    "Edited or legacy configuration requires ordinary loading".into(),
+                ),
+                PreparingStudioTestTransition::Ended,
+            ]
+        );
+        assert!(!observer.publication_succeeded());
+        let workspaces: Vec<_> = fs::read_dir(project)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(".recovery-")
+            })
+            .collect();
+        assert_eq!(workspaces.len(), 1);
+        assert!(!workspaces[0].join("original-segments").exists());
+        assert!(probe_video_can_decode(&project.join(OUTPUT)).unwrap());
+        assert!(RecoveryLock::acquire(project).is_ok());
     }
 
     #[test]
@@ -7283,6 +7375,7 @@ mod empty_orphan_segment_tests {
                 cursor: None,
                 keyboard: None,
                 display_notch: None,
+                cursor_shape_version: None,
             })
             .collect();
 
@@ -7297,6 +7390,8 @@ mod empty_orphan_segment_tests {
                     segments,
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         };
@@ -7710,6 +7805,8 @@ mod transactional_recovery_tests {
                     segments: Vec::new(),
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         };
@@ -8411,6 +8508,8 @@ mod transactional_recovery_tests {
                     segments: Vec::new(),
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         };

@@ -4,10 +4,13 @@ import type { HttpApi } from "@effect/platform";
 import type { Layer as EffectLayer } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ purge: vi.fn() }));
+const mocks = vi.hoisted(() => ({ purge: vi.fn(), reap: vi.fn() }));
 
 vi.mock("@/lib/developer-video-purge", () => ({
 	purgeDeletedDeveloperVideos: mocks.purge,
+}));
+vi.mock("@/lib/infra-video-import", () => ({
+	reapStalledImports: mocks.reap,
 }));
 
 type ApiLayer = EffectLayer.Layer<HttpApi.Api>;
@@ -39,6 +42,8 @@ describe("developer video purge cron", () => {
 		vi.stubEnv("CRON_SECRET", "test-cron-secret");
 		mocks.purge.mockReset();
 		mocks.purge.mockResolvedValue({ purged: 0, failed: 0 });
+		mocks.reap.mockReset();
+		mocks.reap.mockResolvedValue({ reaped: 0, failed: 0 });
 		vi.spyOn(console, "error").mockImplementation(() => undefined);
 	});
 
@@ -53,6 +58,7 @@ describe("developer video purge cron", () => {
 
 			expect(response.status).toBe(401);
 			expect(mocks.purge).not.toHaveBeenCalled();
+			expect(mocks.reap).not.toHaveBeenCalled();
 		},
 	);
 
@@ -62,8 +68,41 @@ describe("developer video purge cron", () => {
 		const response = await runCron("Bearer test-cron-secret");
 
 		expect(response.status).toBe(200);
-		expect(await response.json()).toEqual({ purged: 3, failed: 0 });
+		expect(await response.json()).toEqual({
+			purged: 3,
+			failed: 0,
+			reapedImports: 0,
+		});
 		expect(mocks.purge).toHaveBeenCalledTimes(1);
+	});
+
+	it("ends imports whose download stopped and reports how many", async () => {
+		mocks.reap.mockResolvedValue({ reaped: 2, failed: 0 });
+
+		const response = await runCron("Bearer test-cron-secret");
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			purged: 0,
+			failed: 0,
+			reapedImports: 2,
+		});
+		expect(mocks.reap).toHaveBeenCalledTimes(1);
+	});
+
+	it("still purges when ending stalled imports throws, and reports the failure", async () => {
+		mocks.reap.mockRejectedValue(new Error("database unavailable"));
+
+		const response = await runCron("Bearer test-cron-secret");
+
+		expect(response.status).toBe(500);
+		expect(mocks.purge).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports a failure when a stalled import could not be ended", async () => {
+		mocks.reap.mockResolvedValue({ reaped: 1, failed: 1 });
+
+		expect((await runCron("Bearer test-cron-secret")).status).toBe(500);
 	});
 
 	it("reports a failure when files could not be removed, so it is seen", async () => {

@@ -1087,6 +1087,7 @@ dependencies = [
  "cap-camera",
  "cap-cli-install",
  "cap-editor",
+ "cap-enc-ffmpeg",
  "cap-export",
  "cap-media-info",
  "cap-project",
@@ -1386,6 +1387,7 @@ dependencies = [
 name = "cap-enc-ffmpeg"
 version = "0.1.0"
 dependencies = [
+ "cap-enc-mediafoundation",
  "cap-frame-converter",
  "cap-media-info",
  "ffmpeg-next",
@@ -1691,12 +1693,15 @@ dependencies = [
  "base64 0.22.1",
  "cap-audio",
  "cap-editor",
+ "cap-enc-ffmpeg",
  "cap-export",
  "cap-project",
  "cap-rendering",
  "ffmpeg-next",
+ "libc",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2489,7 +2494,7 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.15.3"
-source = "git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3#6013cb5f8bd34ddfbf7b215b9540fd211ce829fc"
+source = "git+https://github.com/CapSoftware/cpal?rev=a8c4b41d719b#a8c4b41d719bf82c2a93d72f38de7f03cbb12f06"
 dependencies = [
  "alsa",
  "core-foundation-sys",

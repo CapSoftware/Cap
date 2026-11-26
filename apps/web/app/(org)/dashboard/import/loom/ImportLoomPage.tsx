@@ -30,7 +30,7 @@ import { faFileCsv } from "@fortawesome/free-solid-svg-icons/faFileCsv";
 import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
 import { faTriangleExclamation } from "@fortawesome/free-solid-svg-icons/faTriangleExclamation";
 import { faUpload } from "@fortawesome/free-solid-svg-icons/faUpload";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -74,6 +74,7 @@ import {
 } from "@/lib/permissions/roles";
 import { LoomAgentPromptRow } from "./LoomAgentPromptRow";
 import { LoomConciergeRow } from "./LoomConciergeRow";
+import { LoomImportStatus } from "./LoomImportStatus";
 
 type Mode = "single" | "csv";
 
@@ -300,6 +301,7 @@ export const ImportLoomPage = ({
 }) => {
 	const { user, activeOrganization, spacesData } = useDashboardContext();
 	const router = useRouter();
+	const queryClient = useQueryClient();
 	const searchParams = useSearchParams();
 	const prefilledLoomUrl = searchParams?.get("url")?.trim() ?? "";
 	const prefilledMode: Mode =
@@ -670,6 +672,9 @@ export const ImportLoomPage = ({
 					)} started.`,
 				);
 				router.refresh();
+				void queryClient.invalidateQueries({
+					queryKey: ["loom-import-overview"],
+				});
 			} else {
 				toast.error(finalResult.error || "No Loom videos were imported.");
 			}
@@ -710,15 +715,12 @@ export const ImportLoomPage = ({
 					<FontAwesomeIcon className="size-3" icon={faArrowLeft} />
 					Back to Import
 				</Link>
-				<div className="flex gap-4 items-start">
+				<div className="flex gap-4 items-center">
 					<div className="flex flex-shrink-0 justify-center items-center rounded-full size-12 bg-gray-3">
 						<LoomMark size={20} />
 					</div>
 					<div>
-						<h1 className="text-2xl font-medium text-gray-12">
-							Import from Loom
-						</h1>
-						<p className="mt-1 max-w-xl text-sm text-gray-10">
+						<p className="max-w-xl text-sm text-gray-10">
 							{canUseCsvImport
 								? "Bring a single Loom video into Cap, or bulk import recordings for organization members and new users from a CSV."
 								: "Paste a Loom share link to bring it into Cap."}
@@ -1243,6 +1245,12 @@ export const ImportLoomPage = ({
 							</div>
 						)}
 					</div>
+				)}
+
+				{canUseCsvImport && activeOrganization?.organization.id && (
+					<LoomImportStatus
+						organizationId={activeOrganization.organization.id}
+					/>
 				)}
 
 				{canUseCsvImport &&

@@ -2,8 +2,9 @@
 
 import { Button } from "@cap/ui";
 import { faUpload } from "@fortawesome/free-solid-svg-icons/faUpload";
+import clsx from "clsx";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { UpgradeModal } from "@/components/UpgradeModal";
@@ -14,9 +15,11 @@ import {
 
 export const UploadCapButton = ({
 	size = "md",
+	renderTrigger,
 }: {
 	size?: "sm" | "lg" | "md";
 	grey?: boolean;
+	renderTrigger?: (onClick: () => void) => ReactNode;
 }) => {
 	const { user } = useDashboardContext();
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
@@ -38,15 +41,22 @@ export const UploadCapButton = ({
 
 	return (
 		<>
-			<Button
-				onClick={handleClick}
-				variant="dark"
-				className="flex gap-2 items-center"
-				size={size}
-			>
-				<FontAwesomeIcon className="size-3.5" icon={faUpload} />
-				Import Media
-			</Button>
+			{renderTrigger ? (
+				renderTrigger(handleClick)
+			) : (
+				<Button
+					onClick={handleClick}
+					variant="secondary"
+					className={clsx(
+						"flex gap-2 items-center",
+						size === "sm" && "px-4 h-9",
+					)}
+					size={size}
+				>
+					<FontAwesomeIcon className="size-3.5 text-gray-10" icon={faUpload} />
+					Import media
+				</Button>
+			)}
 			<UpgradeModal
 				open={upgradeModalOpen}
 				onOpenChange={setUpgradeModalOpen}
