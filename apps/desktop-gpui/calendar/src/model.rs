@@ -125,7 +125,6 @@ impl CalendarEvent {
         self
     }
 
-    /// Roughly how much memory the event holds, in bytes.
     pub fn approx_bytes(&self) -> usize {
         let text = |s: &Option<String>| s.as_ref().map_or(0, String::len);
         let person = |p: &Person| text(&p.name) + text(&p.email) + 48;

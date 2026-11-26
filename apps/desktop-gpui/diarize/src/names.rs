@@ -253,7 +253,6 @@ impl SpeakerNames {
         self.observe(speakers);
     }
 
-    /// The smallest number no voice holds.
     fn free_number(&self) -> u32 {
         (1..)
             .find(|n| !self.numbers.values().any(|v| v == n))
