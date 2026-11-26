@@ -3938,6 +3938,7 @@ async fn create_segment_pipeline(
                 .with_start_gate(start_gate.clone())
                 .build::<WindowsFragmentedM4SCameraMuxer>(WindowsFragmentedM4SCameraMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
+                    offload_segment_bookkeeping: true,
                     ..Default::default()
                 })
                 .instrument(error_span!("camera-out"))

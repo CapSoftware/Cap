@@ -1553,15 +1553,27 @@ mod tests {
         current_index: u32,
     }
 
+    fn bookkeeping_test_config(camera: bool) -> SegmentedVideoEncoderConfig {
+        if camera {
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_secs(3),
+                ..Default::default()
+            }
+        } else {
+            SegmentedVideoEncoderConfig::default()
+        }
+    }
+
     fn libx264_encoder(
         base_path: &Path,
         timed_fragments: bool,
         background: bool,
+        camera: bool,
     ) -> (SegmentedVideoEncoder, mpsc::Receiver<SegmentCompletedEvent>) {
         let mut encoder = SegmentedVideoEncoder::init_with_options(
             base_path.to_path_buf(),
             test_video_info(),
-            SegmentedVideoEncoderConfig::default(),
+            bookkeeping_test_config(camera),
             timed_fragments,
             false,
             Some(&["libx264"]),
@@ -1672,8 +1684,9 @@ mod tests {
         timed_fragments: bool,
         background: bool,
         codec_failure_after: Option<usize>,
+        camera: bool,
     ) -> RecordedOutput {
-        let (mut encoder, rx) = libx264_encoder(base_path, timed_fragments, background);
+        let (mut encoder, rx) = libx264_encoder(base_path, timed_fragments, background, camera);
         if let Some(healthy_frames) = codec_failure_after {
             encoder.force_runtime_fallback(true);
             encoder.encoder.inject_codec_failure_after(
@@ -1735,8 +1748,7 @@ mod tests {
         names
     }
 
-    #[test]
-    fn background_bookkeeping_writes_the_same_bytes_and_events_as_inline() {
+    fn background_bookkeeping_writes_the_same_bytes_and_events_as_inline_for(camera: bool) {
         ffmpeg::init().unwrap();
         for (timed_fragments, codec_failure_after) in
             [(false, None), (true, None), (true, Some(50))]
@@ -1744,7 +1756,13 @@ mod tests {
             let temp = tempfile::tempdir().unwrap();
             let run = |name: &str, background: bool| {
                 let path = temp.path().join(name);
-                record_libx264(&path, timed_fragments, background, codec_failure_after)
+                record_libx264(
+                    &path,
+                    timed_fragments,
+                    background,
+                    codec_failure_after,
+                    camera,
+                )
             };
             let inline = run("inline", false);
             let inline_again = run("inline-again", false);
@@ -1763,14 +1781,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn queue_frame_keeps_returning_while_bookkeeping_is_stalled() {
+    fn queue_frame_keeps_returning_while_bookkeeping_is_stalled_for(camera: bool) {
         ffmpeg::init().unwrap();
         let temp = tempfile::tempdir().unwrap();
-        let expected = record_libx264(&temp.path().join("inline"), true, false, None);
+        let expected = record_libx264(&temp.path().join("inline"), true, false, None, camera);
 
         let base_path = temp.path().join("stalled");
-        let (mut encoder, rx) = libx264_encoder(&base_path, true, true);
+        let (mut encoder, rx) = libx264_encoder(&base_path, true, true, camera);
         let initial_manifest = std::fs::read(base_path.join("manifest.json")).unwrap();
         let shared = background_shared(&encoder);
         let stalled = lock(&shared.ledger);
@@ -1792,14 +1809,13 @@ mod tests {
         assert_same_output(&expected, &actual);
     }
 
-    #[test]
-    fn finish_waits_for_bookkeeping_in_flight() {
+    fn finish_waits_for_bookkeeping_in_flight_for(camera: bool) {
         ffmpeg::init().unwrap();
         let temp = tempfile::tempdir().unwrap();
-        let expected = record_libx264(&temp.path().join("inline"), true, false, None);
+        let expected = record_libx264(&temp.path().join("inline"), true, false, None, camera);
 
         let base_path = temp.path().join("stalled");
-        let (mut encoder, rx) = libx264_encoder(&base_path, true, true);
+        let (mut encoder, rx) = libx264_encoder(&base_path, true, true, camera);
         queue_test_frames(&mut encoder, 0..RECORDED_FRAMES - 1);
         let shared = background_shared(&encoder);
         let stalled = lock(&shared.ledger);
@@ -1825,12 +1841,11 @@ mod tests {
         assert_same_output(&expected, &actual);
     }
 
-    #[test]
-    fn bookkeeping_that_never_returns_leaves_a_recoverable_recording() {
+    fn bookkeeping_that_never_returns_leaves_a_recoverable_recording_for(camera: bool) {
         ffmpeg::init().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let base_path = temp.path().to_path_buf();
-        let (mut encoder, rx) = libx264_encoder(&base_path, true, true);
+        let (mut encoder, rx) = libx264_encoder(&base_path, true, true, camera);
         let initial_manifest = std::fs::read(base_path.join("manifest.json")).unwrap();
         let shared = background_shared(&encoder);
         let stalled = lock(&shared.ledger);
@@ -1858,12 +1873,13 @@ mod tests {
         assert!(base_path.join(INIT_SEGMENT_NAME).is_file());
     }
 
-    #[test]
-    fn finish_within_gives_up_on_stalled_bookkeeping_and_leaves_a_recoverable_recording() {
+    fn finish_within_gives_up_on_stalled_bookkeeping_and_leaves_a_recoverable_recording_for(
+        camera: bool,
+    ) {
         ffmpeg::init().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let base_path = temp.path().to_path_buf();
-        let (mut encoder, rx) = libx264_encoder(&base_path, true, true);
+        let (mut encoder, rx) = libx264_encoder(&base_path, true, true, camera);
         let initial_manifest = std::fs::read(base_path.join("manifest.json")).unwrap();
         let shared = background_shared(&encoder);
         let stalled = lock(&shared.ledger);
@@ -1898,14 +1914,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn finish_within_waits_for_bookkeeping_that_returns_in_time() {
+    fn finish_within_waits_for_bookkeeping_that_returns_in_time_for(camera: bool) {
         ffmpeg::init().unwrap();
         let temp = tempfile::tempdir().unwrap();
-        let expected = record_libx264(&temp.path().join("inline"), true, false, None);
+        let expected = record_libx264(&temp.path().join("inline"), true, false, None, camera);
 
         let base_path = temp.path().join("limited");
-        let (mut encoder, rx) = libx264_encoder(&base_path, true, true);
+        let (mut encoder, rx) = libx264_encoder(&base_path, true, true, camera);
         queue_test_frames(&mut encoder, 0..RECORDED_FRAMES);
         encoder.finish_within(Duration::from_secs(30)).unwrap();
         let completed = encoder
@@ -1925,10 +1940,70 @@ mod tests {
     }
 
     #[test]
+    fn background_bookkeeping_writes_the_same_bytes_and_events_as_inline() {
+        background_bookkeeping_writes_the_same_bytes_and_events_as_inline_for(false);
+    }
+
+    #[test]
+    fn camera_background_bookkeeping_writes_the_same_bytes_and_events_as_inline() {
+        background_bookkeeping_writes_the_same_bytes_and_events_as_inline_for(true);
+    }
+
+    #[test]
+    fn queue_frame_keeps_returning_while_bookkeeping_is_stalled() {
+        queue_frame_keeps_returning_while_bookkeeping_is_stalled_for(false);
+    }
+
+    #[test]
+    fn camera_queue_frame_keeps_returning_while_bookkeeping_is_stalled() {
+        queue_frame_keeps_returning_while_bookkeeping_is_stalled_for(true);
+    }
+
+    #[test]
+    fn finish_waits_for_bookkeeping_in_flight() {
+        finish_waits_for_bookkeeping_in_flight_for(false);
+    }
+
+    #[test]
+    fn camera_finish_waits_for_bookkeeping_in_flight() {
+        finish_waits_for_bookkeeping_in_flight_for(true);
+    }
+
+    #[test]
+    fn bookkeeping_that_never_returns_leaves_a_recoverable_recording() {
+        bookkeeping_that_never_returns_leaves_a_recoverable_recording_for(false);
+    }
+
+    #[test]
+    fn camera_bookkeeping_that_never_returns_leaves_a_recoverable_recording() {
+        bookkeeping_that_never_returns_leaves_a_recoverable_recording_for(true);
+    }
+
+    #[test]
+    fn finish_within_gives_up_on_stalled_bookkeeping_and_leaves_a_recoverable_recording() {
+        finish_within_gives_up_on_stalled_bookkeeping_and_leaves_a_recoverable_recording_for(false);
+    }
+
+    #[test]
+    fn camera_finish_within_gives_up_on_stalled_bookkeeping_and_leaves_a_recoverable_recording() {
+        finish_within_gives_up_on_stalled_bookkeeping_and_leaves_a_recoverable_recording_for(true);
+    }
+
+    #[test]
+    fn finish_within_waits_for_bookkeeping_that_returns_in_time() {
+        finish_within_waits_for_bookkeeping_that_returns_in_time_for(false);
+    }
+
+    #[test]
+    fn camera_finish_within_waits_for_bookkeeping_that_returns_in_time() {
+        finish_within_waits_for_bookkeeping_that_returns_in_time_for(true);
+    }
+
+    #[test]
     fn idle_background_bookkeeping_joins_on_drop() {
         ffmpeg::init().unwrap();
         let temp = tempfile::tempdir().unwrap();
-        let (encoder, _rx) = libx264_encoder(temp.path(), true, true);
+        let (encoder, _rx) = libx264_encoder(temp.path(), true, true, false);
         let shared = background_shared(&encoder);
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while {

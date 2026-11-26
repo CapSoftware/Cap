@@ -732,6 +732,7 @@ pub struct WindowsFragmentedM4SCameraMuxer {
     frame_drops: FrameDropTracker,
     started: bool,
     disk_space_callback: Option<DiskSpaceCallback>,
+    offload_segment_bookkeeping: bool,
     health_tx: SharedHealthSender,
 }
 
@@ -742,6 +743,7 @@ pub struct WindowsFragmentedM4SCameraMuxerConfig {
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub disk_space_callback: Option<DiskSpaceCallback>,
+    pub offload_segment_bookkeeping: bool,
 }
 
 impl Default for WindowsFragmentedM4SCameraMuxerConfig {
@@ -753,6 +755,7 @@ impl Default for WindowsFragmentedM4SCameraMuxerConfig {
             output_size: None,
             shared_pause_state: None,
             disk_space_callback: None,
+            offload_segment_bookkeeping: false,
         }
     }
 }
@@ -797,6 +800,7 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
             ),
             started: false,
             disk_space_callback: config.disk_space_callback,
+            offload_segment_bookkeeping: config.offload_segment_bookkeeping,
             health_tx: SharedHealthSender::new(),
         };
 
@@ -905,6 +909,11 @@ impl WindowsFragmentedM4SCameraMuxer {
         )?;
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
+        }
+        if self.offload_segment_bookkeeping
+            && let Err(error) = encoder.offload_segment_bookkeeping()
+        {
+            warn!(%error, "Camera segment bookkeeping thread unavailable, keeping it on the encoder thread");
         }
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
