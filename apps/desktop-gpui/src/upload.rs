@@ -303,6 +303,7 @@ pub async fn prepare_instant_upload(
         None,
         organization_id,
         recording_mode,
+        false,
     )
     .await
     .map_err(|error| match error {
@@ -1385,6 +1386,7 @@ pub async fn upload_exported_video(
             cancel,
             false,
             true,
+            false,
         ))
         .await
         .map(|(result, _)| result);
@@ -1401,6 +1403,9 @@ async fn upload_exported_video_inner(
     cancel: Arc<AtomicBool>,
     defer_completion: bool,
     replace_shared_video: bool,
+    // The queue's Instant upload: the cap was created when recording started,
+    // so the server refuses to create it again if the owner deleted it.
+    require_existing_share: bool,
 ) -> Result<(UploadResult, Option<String>), String> {
     check_export_cancelled(&cancel).map_err(|error| error.to_string())?;
     if store_auth_missing() {
@@ -1463,13 +1468,20 @@ async fn upload_exported_video_inner(
         }
     };
 
+    let require_existing = require_existing_share
+        && meta
+            .sharing
+            .as_ref()
+            .is_some_and(|sharing| sharing.id == video_id);
     let s3_config = match checked_upload_step(&cancel, || {
-        create_or_get_video(
+        create_or_get_video_with_mode(
             false,
             Some(video_id.clone()),
             Some(meta.pretty_name.clone()),
             Some(&metadata),
             organization_id,
+            "desktopMP4",
+            require_existing,
         )
     })
     .await
@@ -1479,6 +1491,9 @@ async fn upload_exported_video_inner(
             return Ok((UploadResult::NotAuthenticated, None));
         }
         Err(AuthApiError::UpgradeRequired) => return Ok((UploadResult::UpgradeRequired, None)),
+        Err(AuthApiError::Status(StatusCode::NOT_FOUND, _)) if require_existing => {
+            return Err(queue::RECORDING_DELETED_ON_WEB.into());
+        }
         Err(error) => return Err(error.to_string()),
     };
     let created_link = s3_config.share_url;
@@ -1602,10 +1617,12 @@ async fn create_or_get_video(
         meta,
         organization_id,
         "desktopMP4",
+        false,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn create_or_get_video_with_mode(
     is_screenshot: bool,
     video_id: Option<String>,
@@ -1613,6 +1630,7 @@ async fn create_or_get_video_with_mode(
     meta: Option<&VideoMeta>,
     organization_id: Option<String>,
     recording_mode: &str,
+    require_existing: bool,
 ) -> Result<CreatedVideo, AuthApiError> {
     let mut path = format!(
         "/api/desktop/video/create?recordingMode={}",
@@ -1621,6 +1639,9 @@ async fn create_or_get_video_with_mode(
     if let Some(id) = video_id {
         path.push_str(&format!("&videoId={id}"));
         path.push_str("&createWithId=true");
+        if require_existing {
+            path.push_str("&requireExisting=true");
+        }
     }
     if is_screenshot {
         path.push_str("&isScreenshot=true");
@@ -1646,6 +1667,9 @@ async fn create_or_get_video_with_mode(
         let body = response.text().await.unwrap_or_default();
         if status == StatusCode::FORBIDDEN && body.contains("upgrade_required") {
             return Err(AuthApiError::UpgradeRequired);
+        }
+        if require_existing && status == StatusCode::NOT_FOUND && body.contains("Video not found") {
+            return Err(AuthApiError::Status(status, body));
         }
         return Err(AuthApiError::Other(format!(
             "create_or_get_video/error/{status}"
