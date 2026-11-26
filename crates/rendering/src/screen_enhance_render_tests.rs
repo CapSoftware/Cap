@@ -44,6 +44,7 @@ async fn fixture(screen: XY<u32>) -> Fixture {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            camera_picture: Default::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: false,
             audio_levels: Default::default(),

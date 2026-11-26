@@ -51,7 +51,10 @@ const isOwnSiteOrigin = (origin: URL, request: SiteCheckedRequest) => {
 // here — an invalid bearer that falls back to the cookie still gets checked.
 export const isCrossSiteCookieWrite = (request: SiteCheckedRequest) => {
 	if (READ_ONLY_METHODS.has(request.method.toUpperCase())) return false;
+	return isCrossSiteRequest(request);
+};
 
+export const isCrossSiteRequest = (request: SiteCheckedRequest) => {
 	// Sec-Fetch-Site is set by the browser and cannot be forged by page script,
 	// so it decides when present. Origin is the fallback for clients that
 	// predate fetch metadata and for plain-http self-hosted installs, where

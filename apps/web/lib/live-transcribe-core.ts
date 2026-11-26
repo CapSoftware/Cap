@@ -47,7 +47,141 @@ export const LIVE_TRANSCRIBE = {
 	HANDOVER_SEARCH_MS: 1_000,
 	/** Two chunks' copies of a word may disagree on its start by this much. */
 	HANDOVER_MATCH_MS: 300,
+	/** One step keeps taking chunks until this long after it started, so
+	 * text still lands after every chunk but the workflow pays one step per
+	 * window instead of one per chunk. Equal to MAX_POLL_MS_PER_STEP so a
+	 * step never runs longer than a single waiting step could. */
+	MAX_BATCH_MS_PER_STEP: 120_000,
+	/** AssemblyAI rejects audio this short ("Audio duration is too short";
+	 * measured: 100 ms rejected, 150 ms accepted), and a recording's last
+	 * segment can be a few milliseconds. Such a chunk is sent with already
+	 * transcribed audio in front of it so its words still land instead of
+	 * leaving a gap. Longer chunks are sent exactly as before. */
+	MIN_SENT_SECONDS: 0.5,
 } as const;
+
+export type LiveChunkResult =
+	| {
+			outcome: "chunk";
+			lastAudioSegmentIndex: number;
+			transcribedDurationMs: number;
+			languageCode: string | null;
+			/** This chunk was the recording's final one: the manifest is complete
+			 * and coverage is now full, so promotion can start immediately
+			 * without another poll round-trip. */
+			recordingComplete?: boolean;
+	  }
+	| { outcome: "chunk-failed"; failedAtIndex: number; reason: string }
+	| { outcome: "waiting" }
+	| { outcome: "done" }
+	| { outcome: "no-audio" }
+	| { outcome: "canonical-done" }
+	| { outcome: "gone" };
+
+export interface LiveChunkCursor {
+	lastAudioSegmentIndex: number;
+	transcribedDurationMs: number;
+	languageCode: string | null;
+	chunkCount: number;
+}
+
+export type LiveChunkBatchResult = {
+	cursor: LiveChunkCursor;
+	chunks: number;
+	/** `progress`: the batch stopped on its own time or chunk budget with
+	 * nothing left to report; the caller should simply start the next one. */
+	last:
+		| Exclude<LiveChunkResult, { outcome: "chunk" }>
+		| { outcome: "progress" };
+};
+
+export function liveChunkTargetSeconds(chunkCount: number) {
+	return chunkCount < LIVE_TRANSCRIBE.GROW_AFTER_CHUNKS
+		? LIVE_TRANSCRIBE.INITIAL_CHUNK_SECONDS
+		: LIVE_TRANSCRIBE.MAX_CHUNK_SECONDS;
+}
+
+/**
+ * Transcribe chunks back to back for up to MAX_BATCH_MS_PER_STEP. Every
+ * chunk is still written as soon as it is transcribed; batching only saves
+ * the workflow round trip between chunks. Only the first chunk can be a
+ * retry or a skip. After a chunk has landed, a later failure or throw ends
+ * the batch with that progress kept, so the caller's per-chunk retry
+ * accounting sees exactly the sequence one-chunk steps would produce.
+ */
+export async function runLiveChunkBatch(options: {
+	cursor: LiveChunkCursor;
+	skipPastFailedChunk: boolean;
+	withContext: boolean;
+	now: () => number;
+	processChunk: (args: {
+		lastProcessedIndex: number;
+		targetSeconds: number;
+		languageCode: string | null;
+		skipPastFailedChunk: boolean;
+		withContext: boolean;
+		pollUntil: number;
+	}) => Promise<LiveChunkResult>;
+	onError?: (error: unknown) => void;
+}): Promise<LiveChunkBatchResult> {
+	const startedAt = options.now();
+	const deadline = startedAt + LIVE_TRANSCRIBE.MAX_BATCH_MS_PER_STEP;
+	let cursor = { ...options.cursor };
+	let chunks = 0;
+
+	while (true) {
+		const first = chunks === 0;
+		const pollStart = first ? startedAt : options.now();
+		if (
+			!first &&
+			(pollStart >= deadline ||
+				cursor.chunkCount >= LIVE_TRANSCRIBE.MAX_CHUNKS ||
+				cursor.transcribedDurationMs >=
+					LIVE_TRANSCRIBE.MAX_TRANSCRIBED_SECONDS * 1000)
+		) {
+			return { cursor, chunks, last: { outcome: "progress" } };
+		}
+
+		const fullPollUntil = pollStart + LIVE_TRANSCRIBE.MAX_POLL_MS_PER_STEP;
+		const pollUntil = first ? fullPollUntil : Math.min(fullPollUntil, deadline);
+
+		let result: LiveChunkResult;
+		try {
+			result = await options.processChunk({
+				lastProcessedIndex: cursor.lastAudioSegmentIndex,
+				targetSeconds: liveChunkTargetSeconds(cursor.chunkCount),
+				languageCode: cursor.languageCode,
+				skipPastFailedChunk: first ? options.skipPastFailedChunk : false,
+				withContext: first ? options.withContext : true,
+				pollUntil,
+			});
+		} catch (error) {
+			if (first) throw error;
+			options.onError?.(error);
+			return { cursor, chunks, last: { outcome: "progress" } };
+		}
+
+		if (result.outcome === "chunk") {
+			cursor = {
+				lastAudioSegmentIndex: result.lastAudioSegmentIndex,
+				transcribedDurationMs: result.transcribedDurationMs,
+				languageCode: cursor.languageCode ?? result.languageCode,
+				chunkCount: cursor.chunkCount + 1,
+			};
+			chunks++;
+			if (result.recordingComplete) {
+				return { cursor, chunks, last: { outcome: "done" } };
+			}
+			continue;
+		}
+
+		if (!first && result.outcome === "waiting" && pollUntil < fullPollUntil) {
+			return { cursor, chunks, last: { outcome: "progress" } };
+		}
+
+		return { cursor, chunks, last: result };
+	}
+}
 
 export function chunkHandoverMs(chunkStartMs: number, contextMs: number) {
 	if (contextMs <= 0) return 0;
@@ -81,9 +215,9 @@ export function planNextLiveChunk(options: {
 	targetSeconds: number;
 	maxTakeSeconds?: number;
 	contextSeconds?: number;
+	minSentSeconds?: number;
 }): LiveChunkDecision {
 	const { manifest, lastProcessedIndex, targetSeconds } = options;
-	const contextSeconds = options.contextSeconds ?? 0;
 	const maxTakeSeconds =
 		options.maxTakeSeconds ?? LIVE_TRANSCRIBE.MAX_CHUNK_TAKE_SECONDS;
 
@@ -134,6 +268,10 @@ export function planNextLiveChunk(options: {
 		return { action: "wait" };
 	}
 
+	const contextSeconds = Math.max(
+		options.contextSeconds ?? 0,
+		(options.minSentSeconds ?? 0) - takenSeconds,
+	);
 	const context: NormalizedSegmentEntry[] = [];
 	let contextTaken = 0;
 	for (let i = processed.length - 1; i >= 0; i--) {

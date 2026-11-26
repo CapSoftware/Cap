@@ -58,6 +58,7 @@ const FORMATTED: &[&str] = &[
     "screenshot_editor.error.upload_task",
     "transcription.download.failed",
     "transcription.download.file_progress",
+    "transcription.download.no_space",
     "transcription.download.progress",
     "dialog.quit.canceled",
     "dialog.startup.failed",
@@ -817,6 +818,26 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Let Cap resize windows",
         ),
         (
+            tr::permission::help::meeting_title(),
+            "Name speakers from meeting apps",
+        ),
+        (
+            tr::permission::help::meeting_body(),
+            "macOS needs your OK before Cap can see who’s talking in Zoom, Teams or your browser.",
+        ),
+        (
+            tr::permission::help::done_meeting(),
+            "Cap can name speakers from your meeting apps now.",
+        ),
+        (
+            tr::permission::help::meeting_step_choose_apps(),
+            "Pick Choose Apps, then add Zoom, Teams or your browser.",
+        ),
+        (
+            tr::permission::help::meeting_step_add_apps(),
+            "Click + and add Zoom, Teams or your browser.",
+        ),
+        (
             tr::screenshot_editor::loading_preview(),
             "Loading preview...",
         ),
@@ -1002,6 +1023,16 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Everything recorded so far stays in the recording's folder.",
         ),
         (tr::dialog::quit::keep_open(), "Keep Cap Open"),
+        (
+            tr::dialog::quit::meeting_title(),
+            "Stop recording this meeting?",
+        ),
+        (
+            tr::dialog::quit::meeting_message(),
+            "Quitting stops the recording. Cap keeps everything so far and finishes the transcript.",
+        ),
+        (tr::dialog::quit::meeting_quit(), "Stop and Quit"),
+        (tr::dialog::quit::meeting_keep(), "Keep Recording"),
         (tr::dialog::quit::quit_anyway(), "Quit Anyway"),
         (
             tr::dialog::quit::pending(),
@@ -1353,6 +1384,12 @@ fn dialog_messages_format_like_the_code_they_replaced() {
         assert_eq!(
             tr::transcription::download::file_progress(filename, format!("{progress:.0}")),
             format!("Downloading {filename}: {progress:.0}%")
+        );
+    }
+    for size in ["420 MB", "1.3 GB"] {
+        assert_eq!(
+            tr::transcription::download::no_space(size),
+            format!("Not enough free space. Free up {size} and try again")
         );
     }
     for progress in [0.0_f64, 0.5, 0.999, 1.0] {

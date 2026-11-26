@@ -87,6 +87,7 @@ final class CapDetailModel {
     /// Captured when composing starts so it doesn't drift.
     var composerTimestamp: Double?
     var highlightedCommentID: String?
+    var sectionRevealRequests = 0
     var commentOrder: CommentOrder = .oldest
     var captionsEnabled: Bool {
         didSet { UserDefaults.standard.set(captionsEnabled, forKey: Self.captionsKey) }

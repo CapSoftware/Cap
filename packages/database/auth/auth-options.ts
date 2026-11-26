@@ -63,12 +63,15 @@ export async function decodeSessionToken(
 	if (!userId) return token;
 
 	const [user] = await db()
-		.select({ authSessionVersion: users.authSessionVersion })
+		.select({
+			authSessionVersion: users.authSessionVersion,
+			email: users.email,
+		})
 		.from(users)
 		.where(eq(users.id, User.UserId.make(userId)))
 		.limit(1);
 
-	if (!user) return null;
+	if (!user || isBlockedAccountEmail(user.email)) return null;
 
 	const sessionVersion =
 		typeof token.sessionVersion === "number" ? token.sessionVersion : 0;
@@ -130,7 +133,12 @@ type OidcClaims = {
 	picture?: string;
 };
 
-export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
+export type AuthHooks = { onUserCreated?: () => void };
+
+export const authOptions = (
+	ssoContext?: SsoAuthContext,
+	hooks?: AuthHooks,
+): NextAuthOptions => {
 	let _adapter: Adapter | undefined;
 	let _providers: Provider[] | undefined;
 	let validatedSsoIdentity: ValidatedSsoIdentity | null = null;
@@ -140,6 +148,7 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 			if (_adapter) return _adapter;
 			_adapter = DrizzleAdapter(db(), {
 				getSsoIdentity: () => validatedSsoIdentity,
+				onUserCreated: hooks?.onUserCreated,
 			});
 			return _adapter;
 		},

@@ -36,7 +36,7 @@ use crate::{
     store::{
         self, Action, AutomationExportCompression, AutomationRecordingMode, AutomationRule,
         AutomationsStore, CaptureTargetKind, ClipboardSource, Condition, ExportDestination,
-        ExportFormat, ExportProfile, GENERAL_SETTINGS, Hotkey, MatchMode, Trigger,
+        ExportFormat, ExportProfile, Hotkey, MatchMode, Trigger,
     },
     theme::Theme,
     ui,
@@ -64,18 +64,9 @@ const COMMAND_MARKER: &str = "\u{1}";
 /// input these pages own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PageField {
-    Hint,
     Feedback,
     LicenseKey,
     S3(usize),
-}
-
-/// `saveState` in transcription.tsx.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HintSave {
-    Idle,
-    Saving,
-    Saved,
 }
 
 /// `useSubmission(sendFeedbackAction)`'s phases.
@@ -317,13 +308,6 @@ pub(crate) struct PagesState {
     cli_copied: bool,
     cli_copied_reset: Option<gpui::Task<()>>,
 
-    // Transcription (transcription.tsx)
-    hints: Vec<String>,
-    hint_input: Entity<ui::TextInputState>,
-    hint_draft: String,
-    hint_save: HintSave,
-    hint_save_task: Option<gpui::Task<()>>,
-
     // Feedback (feedback.tsx)
     feedback_input: Entity<ui::TextInputState>,
     feedback_draft: String,
@@ -375,12 +359,13 @@ pub(crate) struct PagesState {
     rule_editor: Option<RuleEditor>,
     compatibility_checks: HashSet<String>,
 
+    pub(crate) meetings: crate::meetings_ui::settings::PageState,
+
     _subscriptions: Vec<gpui::Subscription>,
 }
 
 impl PagesState {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Self {
-        let hint_input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
         let feedback_input = cx.new(|cx| ui::TextInputState::multi_line(window, cx));
         let license_input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
         let s3_inputs = std::array::from_fn(|index| {
@@ -393,9 +378,6 @@ impl PagesState {
         });
 
         let mut subscriptions = vec![
-            cx.subscribe(&hint_input, |this, input, event, cx| {
-                this.page_field_event(PageField::Hint, input, event, cx)
-            }),
             cx.subscribe(&feedback_input, |this, input, event, cx| {
                 this.page_field_event(PageField::Feedback, input, event, cx)
             }),
@@ -428,11 +410,6 @@ impl PagesState {
             cli_error: None,
             cli_copied: false,
             cli_copied_reset: None,
-            hints: store::transcription_hints(),
-            hint_input,
-            hint_draft: String::new(),
-            hint_save: HintSave::Idle,
-            hint_save_task: None,
             feedback_input,
             feedback_draft: String::new(),
             feedback: FeedbackStatus::Idle,
@@ -483,6 +460,7 @@ impl PagesState {
             expanded_rule: None,
             rule_editor: None,
             compatibility_checks: HashSet::new(),
+            meetings: crate::meetings_ui::settings::PageState::new(window, cx),
             _subscriptions: subscriptions,
         }
     }
@@ -505,12 +483,11 @@ impl SettingsWindow {
             }
             Page::Cli => self.cli_refresh(window, cx),
             Page::Transcription => {
-                self.pages.hints = store::transcription_hints();
-                self.pages.hint_draft.clear();
-                self.pages.hint_save = HintSave::Idle;
-                self.pages.hint_save_task = None;
-                let input = self.pages.hint_input.clone();
-                input.update(cx, |input, cx| input.set_text("", cx));
+                // The one dictionary lives in the meetings settings.
+                if let Some(meetings) = crate::meetings::Meetings::try_global(cx) {
+                    self.pages.meetings.settings = meetings.read(cx).settings().clone();
+                }
+                self.pages.meetings.sounds_for = None;
             }
             Page::Feedback => {
                 self.pages.feedback = FeedbackStatus::Idle;
@@ -520,6 +497,7 @@ impl SettingsWindow {
                 self.feedback_load_os_version(window, cx);
             }
             Page::Changelog => self.changelog_fetch(window, cx),
+            Page::Meetings => self.meetings_page_shown(window, cx),
             Page::License => {
                 self.pages.license_draft.clear();
                 self.pages.license_activating = false;
@@ -556,16 +534,11 @@ impl SettingsWindow {
             ui::TextInputEvent::Changed => {
                 let value = input.read(cx).text().to_string();
                 match field {
-                    PageField::Hint => self.pages.hint_draft = value,
                     PageField::Feedback => self.pages.feedback_draft = value,
                     PageField::LicenseKey => self.pages.license_draft = value,
                     PageField::S3(index) => self.pages.s3.drafts[index] = value,
                 }
                 cx.notify();
-            }
-            // `onKeyDown` in transcription.tsx: Enter adds the pending term.
-            ui::TextInputEvent::Confirmed if field == PageField::Hint => {
-                self.transcription_add_hint(cx);
             }
             _ => {}
         }
@@ -968,6 +941,12 @@ const WHILE_RECORDING_SHORTCUTS: &[&str] = &[
     store::RECORDING_MARKER_HOTKEY,
 ];
 
+const MEETING_SHORTCUTS: [&str; 3] = [
+    crate::hotkeys::NEW_NOTE_HOTKEY,
+    crate::hotkeys::MEETING_TOGGLE_HOTKEY,
+    crate::hotkeys::MEETING_OPEN_HOTKEY,
+];
+
 const SHORTCUT_SAVED_NOTICE: std::time::Duration = std::time::Duration::from_secs(6);
 
 fn page_shortcuts() -> impl Iterator<Item = &'static str> {
@@ -975,6 +954,7 @@ fn page_shortcuts() -> impl Iterator<Item = &'static str> {
         .iter()
         .chain(RECORDING_SHORTCUTS.iter())
         .chain(WHILE_RECORDING_SHORTCUTS.iter())
+        .chain(MEETING_SHORTCUTS.iter())
         .copied()
 }
 
@@ -1162,6 +1142,9 @@ fn shortcut_label(action: &str) -> &'static str {
         "restartRecording" => tr::settings::shortcuts::label::restart(),
         store::RECORDING_MARKER_HOTKEY => tr::settings::shortcuts::label::add_marker(),
         store::DRAW_HOTKEY => tr::settings::shortcuts::label::toggle_drawing(),
+        crate::hotkeys::MEETING_TOGGLE_HOTKEY => tr::meeting::shortcuts::toggle(),
+        crate::hotkeys::MEETING_OPEN_HOTKEY => tr::meeting::shortcuts::open(),
+        crate::hotkeys::NEW_NOTE_HOTKEY => tr::meeting::shortcuts::new_note(),
         _ => tr::settings::shortcuts::label::fallback(),
     }
 }
@@ -1310,6 +1293,18 @@ fn shortcut_effect(
         store::DRAW_HOTKEY => ShortcutEffect {
             phrase: tr::settings::shortcuts::effect::toggle_drawing,
             sentence: tr::settings::shortcuts::sentence::toggle_drawing,
+        },
+        crate::hotkeys::MEETING_TOGGLE_HOTKEY => ShortcutEffect {
+            phrase: tr::meeting::shortcuts::toggle_effect,
+            sentence: tr::meeting::shortcuts::toggle_sentence,
+        },
+        crate::hotkeys::MEETING_OPEN_HOTKEY => ShortcutEffect {
+            phrase: tr::meeting::shortcuts::open_effect,
+            sentence: tr::meeting::shortcuts::open_sentence,
+        },
+        crate::hotkeys::NEW_NOTE_HOTKEY => ShortcutEffect {
+            phrase: tr::meeting::shortcuts::new_note_effect,
+            sentence: tr::meeting::shortcuts::new_note_sentence,
         },
         _ => return None,
     };
@@ -1921,6 +1916,18 @@ impl SettingsWindow {
             )
             .into_any_element(),
         );
+        if crate::meetings_ui::live::settings(cx).is_some_and(|settings| settings.enabled) {
+            let meeting = rows_for(&MEETING_SHORTCUTS, cx);
+            sections.push(
+                self.section(
+                    tr::meeting::shortcuts::title(),
+                    None,
+                    None,
+                    vec![card("shortcuts-meetings", meeting, cx)],
+                )
+                .into_any_element(),
+            );
+        }
         sections
     }
 
@@ -2707,240 +2714,12 @@ impl SettingsWindow {
 }
 
 // ---------------------------------------------------------------------------
-// Transcription (transcription.tsx)
+// Transcription: the one dictionary for all of Cap
 // ---------------------------------------------------------------------------
 
 impl SettingsWindow {
-    /// `addHint()`.
-    fn transcription_add_hint(&mut self, cx: &mut Context<Self>) {
-        let value = self.pages.hint_draft.replace('\0', "");
-        let value = value.trim().to_string();
-        if value.is_empty() {
-            return;
-        }
-
-        let mut next = self.pages.hints.clone();
-        next.push(value);
-        let next = store::normalize_transcription_hints(next);
-        let input = self.pages.hint_input.clone();
-        input.update(cx, |input, cx| input.set_text("", cx));
-        self.pages.hint_draft.clear();
-        if next.len() == self.pages.hints.len() {
-            cx.notify();
-            return;
-        }
-        self.pages.hints = next.clone();
-        self.transcription_persist(next, cx);
-    }
-
-    /// `persist()`: 250ms debounce, then the store write, then the 1.2s
-    /// "Saved" hold. Assigning over the task drops the pending write, which
-    /// is `clearTimeout`.
-    fn transcription_persist(&mut self, hints: Vec<String>, cx: &mut Context<Self>) {
-        let normalized = store::normalize_transcription_hints(hints);
-        self.pages.hint_save = HintSave::Saving;
-        self.pages.hint_save_task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(250))
-                .await;
-            let ok = this
-                .update(cx, |this, cx| {
-                    let ok = store::set_store_setting(
-                        GENERAL_SETTINGS,
-                        "transcriptionHints",
-                        Value::Array(normalized.iter().cloned().map(Value::String).collect()),
-                    );
-                    this.pages.hint_save = if ok { HintSave::Saved } else { HintSave::Idle };
-                    cx.notify();
-                    ok
-                })
-                .unwrap_or(false);
-            if !ok {
-                return;
-            }
-            cx.background_executor()
-                .timer(Duration::from_millis(1200))
-                .await;
-            this.update(cx, |this, cx| {
-                if this.pages.hint_save == HintSave::Saved {
-                    this.pages.hint_save = HintSave::Idle;
-                    cx.notify();
-                }
-            })
-            .ok();
-        }));
-        cx.notify();
-    }
-
-    fn transcription_remove_hint(&mut self, hint: String, cx: &mut Context<Self>) {
-        self.pages.hints.retain(|existing| *existing != hint);
-        let next = self.pages.hints.clone();
-        self.transcription_persist(next, cx);
-    }
-
     pub(crate) fn render_transcription(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-        let theme = self.theme;
-        let hints = self.pages.hints.clone();
-        let save_label = match self.pages.hint_save {
-            HintSave::Saving => tr::settings::transcription::saving(),
-            HintSave::Saved => tr::settings::transcription::saved(),
-            HintSave::Idle => "",
-        };
-        self.pages.hint_input.update(cx, |input, _| {
-            input.set_placeholder(tr::settings::transcription::placeholder())
-        });
-
-        let header = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap(px(12.))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .min_w_0()
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .child(tr::settings::transcription::terms_title()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .line_height(px(16.))
-                            .text_color(theme.settings_muted())
-                            .child(tr::settings::transcription::terms_description()),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(8.))
-                    .when(!hints.is_empty(), |this| {
-                        this.child(self.button(
-                            "hints-clear",
-                            (ui::ButtonVariant::Gray, None),
-                            tr::settings::transcription::clear(),
-                            false,
-                            cx,
-                            |this, _window, cx| {
-                                this.pages.hints.clear();
-                                this.transcription_persist(Vec::new(), cx);
-                            },
-                        ))
-                    })
-                    .child(
-                        // `min-w-15 text-right text-xs text-gray-11`.
-                        div()
-                            .min_w(px(60.))
-                            .text_size(px(12.))
-                            .text_color(theme.settings_muted())
-                            .child(save_label),
-                    ),
-            );
-
-        let add_disabled = self.pages.hint_draft.trim().is_empty();
-        let input_row = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(8.))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(self.pages_input("hint-input", &self.pages.hint_input)),
-            )
-            .child(self.button(
-                "hints-add",
-                (ui::ButtonVariant::Primary, Some("icons/plus.svg")),
-                tr::common::add(),
-                add_disabled,
-                cx,
-                |this, _window, cx| this.transcription_add_hint(cx),
-            ));
-
-        let card = self
-            .card(true)
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .child(header)
-            .child(input_row)
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .line_height(px(18.))
-                    .text_color(theme.settings_muted())
-                    .child(tr::settings::transcription::applied_note()),
-            );
-
-        let mut sections = vec![
-            self.section(
-                tr::settings::transcription::title(),
-                Some(tr::settings::transcription::description()),
-                None,
-                vec![card.into_any_element()],
-            )
-            .into_any_element(),
-        ];
-
-        if !hints.is_empty() {
-            let count = div()
-                .text_size(px(12.))
-                .text_color(theme.settings_muted())
-                .child(tr::settings::transcription::count(hints.len()))
-                .into_any_element();
-            let chips = div().flex().flex_row().flex_wrap().gap(px(8.)).children(
-                hints.into_iter().enumerate().map(|(index, hint)| {
-                    let remove = hint.clone();
-                    // `px-2.5 py-1 rounded-full text-xs bg-gray-3 border
-                    //  border-gray-4 hover:bg-gray-4`.
-                    div()
-                        .id(("hint-chip", index))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(6.))
-                        .px(px(10.))
-                        .py(px(4.))
-                        .rounded_full()
-                        .bg(theme.settings_fill())
-                        .border_1()
-                        .border_color(theme.settings_border())
-                        .text_size(px(12.))
-                        .cursor_pointer()
-                        .hover(|style| style.bg(theme.settings_selection()))
-                        .child(hint)
-                        .child(
-                            svg()
-                                .path("icons/x.svg")
-                                .size(px(12.))
-                                .text_color(theme.settings_muted()),
-                        )
-                        .on_click(cx.listener(move |this, _, _window, cx| {
-                            this.transcription_remove_hint(remove.clone(), cx);
-                        }))
-                }),
-            );
-
-            sections.push(
-                self.section(
-                    tr::settings::transcription::active_title(),
-                    None,
-                    Some(count),
-                    vec![self.card(true).child(chips).into_any_element()],
-                )
-                .into_any_element(),
-            );
-        }
-
-        sections
+        self.render_dictionary(cx)
     }
 }
 
@@ -2974,6 +2753,22 @@ impl SettingsWindow {
                                         !this.settings.out_of_process_muxer;
                                     let value = this.settings.out_of_process_muxer;
                                     this.write_bool("outOfProcessMuxer", value, cx);
+                                },
+                            )
+                            .into_any_element(),
+                        ),
+                        self.setting_row(
+                            tr::settings::experimental::library_window(),
+                            Some(tr::settings::experimental::library_window_description()),
+                            self.toggle(
+                                "library-window",
+                                tr::settings::experimental::library_window(),
+                                self.settings.library_window,
+                                cx,
+                                |this, cx| {
+                                    this.settings.library_window = !this.settings.library_window;
+                                    let value = this.settings.library_window;
+                                    this.write_bool("libraryWindow", value, cx);
                                 },
                             )
                             .into_any_element(),
@@ -8851,9 +8646,10 @@ mod tests {
             .iter()
             .chain(RECORDING_SHORTCUTS.iter())
             .chain(WHILE_RECORDING_SHORTCUTS.iter())
+            .chain(MEETING_SHORTCUTS.iter())
             .copied()
             .collect();
-        assert_eq!(shown.len(), 15 + usize::from(crate::live_draw::SUPPORTED));
+        assert_eq!(shown.len(), 18 + usize::from(crate::live_draw::SUPPORTED));
         let settings = store::GeneralSettings::default();
         for action in &shown {
             assert_eq!(shown.iter().filter(|other| *other == action).count(), 1);

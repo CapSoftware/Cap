@@ -77,6 +77,28 @@ export function sharedRateLimitDecision(
 	);
 }
 
+/**
+ * Charges `units` against a firewall rule by issuing that many checks at once,
+ * so a request can cost more than one hit in a single round trip. Returns
+ * `true` when any check is limited, `false` when every check was allowed, and
+ * `undefined` when the firewall could not answer at least one of them (the
+ * caller then applies its own fallback).
+ */
+export async function checkFirewallRateLimitUnits(
+	ruleId: string,
+	opts: { key: string; units: number; headers: Headers },
+): Promise<boolean | undefined> {
+	if (opts.units < 1) return false;
+	const headersList = firewallRequestHeaders(opts.headers);
+	const decisions = await Promise.all(
+		Array.from({ length: opts.units }, () =>
+			checkFirewallRateLimit(ruleId, headersList, opts.key),
+		),
+	);
+	if (decisions.includes(true)) return true;
+	return decisions.includes(undefined) ? undefined : false;
+}
+
 async function appRouterHeaders(): Promise<Headers> {
 	try {
 		return new Headers(await nextHeaders());
@@ -189,6 +211,10 @@ export const RATE_LIMIT_IDS = {
 	GUEST_CHECKOUT: "rl_guest_checkout",
 	/** Unauthed desktop log → Discord forwarding (spam). Suggested: 10 / 1m per IP. */
 	DESKTOP_LOGS: "rl_desktop_logs",
+	/** Signed-in desktop feedback emails. Suggested: 10 / 1h per key (user). */
+	DESKTOP_FEEDBACK: "rl_desktop_feedback",
+	/** Desktop app keys issued per account, counted apart from the keys that sign-out deletes. Suggested: 20 / 1h per key (user). */
+	DESKTOP_KEY_MINT: "rl_desktop_key_mint",
 	/** Mobile share password attempts (brute-force guard). Suggested: 20 / 10m per key (user). */
 	MOBILE_VIDEO_PASSWORD: "rl_mobile_video_password",
 	/** Unauthed docs Ask AI questions (Anthropic cost). Suggested: 10 / 1m per IP. */
@@ -244,6 +270,16 @@ export const RATE_LIMIT_IDS = {
 	DEVELOPER_API_OWNER: "rl_developer_api_owner",
 	/** Developer API requests whose key or upload token was not accepted. 300 / 1m per IP. */
 	DEVELOPER_AUTH_FAILURE: "rl_developer_auth_failure",
+	/** Desktop meeting clip transcription (speech provider cost). Suggested: 1200 / 1h per key (user). */
+	MEETINGS_TRANSCRIBE: "rl_meetings_transcribe",
+	/** Desktop meeting notes generation (LLM cost): one unit per request plus one per started 100 KB of body past the first. Suggested: 60 / 1h per key (user). */
+	MEETINGS_NOTES: "rl_meetings_notes",
+	/** Desktop meeting questions (LLM cost): one unit per request plus one per started 100 KB of body past the first. Suggested: 120 / 1h per key (user). */
+	MEETINGS_ASK: "rl_meetings_ask",
+	/** Desktop meeting audio, charged one unit per started 10 s of audio (see `checkFirewallRateLimitUnits`). Suggested: 720 / 1h per key (user). Firewall windows stop at one hour; the daily cap is kept in the database (lib/meetings/audio-usage.ts). */
+	MEETINGS_AUDIO: "rl_meetings_audio",
+	/** Desktop meeting requests whose sign-in was not accepted. Suggested: 60 / 1m per IP. */
+	MEETINGS_AUTH_FAILURE: "rl_meetings_auth_failure",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };
@@ -266,6 +302,8 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.ANALYTICS_TRACK]: { limit: 120, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.GUEST_CHECKOUT]: { limit: 20, windowMs: 10 * MINUTE_MS },
 	[RATE_LIMIT_IDS.DESKTOP_LOGS]: { limit: 10, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.DESKTOP_FEEDBACK]: { limit: 10, windowMs: 60 * MINUTE_MS },
+	[RATE_LIMIT_IDS.DESKTOP_KEY_MINT]: { limit: 20, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.MOBILE_VIDEO_PASSWORD]: {
 		limit: 20,
 		windowMs: 10 * MINUTE_MS,
@@ -311,12 +349,27 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 		limit: DEVELOPER_AUTH_FAILURES_PER_MINUTE,
 		windowMs: MINUTE_MS,
 	},
+	[RATE_LIMIT_IDS.MEETINGS_TRANSCRIBE]: {
+		limit: 1200,
+		windowMs: 60 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.MEETINGS_NOTES]: { limit: 60, windowMs: 60 * MINUTE_MS },
+	[RATE_LIMIT_IDS.MEETINGS_ASK]: { limit: 120, windowMs: 60 * MINUTE_MS },
+	[RATE_LIMIT_IDS.MEETINGS_AUDIO]: {
+		limit: 5_760,
+		windowMs: 24 * 60 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.MEETINGS_AUTH_FAILURE]: { limit: 60, windowMs: MINUTE_MS },
 };
 
 const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {
 	limit: 60,
 	windowMs: MINUTE_MS,
 };
+
+export function getFallbackRateLimit(ruleId: string): FallbackRateLimit {
+	return FALLBACK_RATE_LIMITS[ruleId] ?? DEFAULT_FALLBACK_RATE_LIMIT;
+}
 
 // Off Vercel the app may be reached without a proxy, where every forwarded
 // address is client-supplied, so keyless requests there also share one bucket
@@ -335,7 +388,7 @@ async function isLocallyRateLimited(
 	key: string | undefined,
 	headersList: Headers,
 ): Promise<boolean> {
-	const rule = FALLBACK_RATE_LIMITS[ruleId] ?? DEFAULT_FALLBACK_RATE_LIMIT;
+	const rule = getFallbackRateLimit(ruleId);
 	if (key) {
 		return countLocalRequest(
 			`${ruleId}|key|${await compactBucketKey(key)}`,
@@ -401,4 +454,105 @@ async function compactBucketKey(key: string): Promise<string> {
 		new TextEncoder().encode(key),
 	);
 	return `sha256:${Buffer.from(digest).toString("hex")}`;
+}
+
+export type RollingBudgetRule = { limit: number; windowMs: number };
+
+export type RollingBudgetDecision =
+	| { allowed: true; used: number }
+	| { allowed: false; retryAfterSeconds: number };
+
+const ROLLING_BUDGET_SLOTS_PER_WINDOW = 60;
+
+const rollingBudgetBuckets = new Map<string, Map<number, number>>();
+
+export function rollingBudgetSlotMs(rule: RollingBudgetRule): number {
+	return Math.max(
+		1,
+		Math.ceil(rule.windowMs / ROLLING_BUDGET_SLOTS_PER_WINDOW),
+	);
+}
+
+// A slot keeps counting while any part of it overlaps the window, so usage is
+// over-counted by at most one slot and never under-counted.
+function isRollingSlotLive(
+	slot: number,
+	slotMs: number,
+	rule: RollingBudgetRule,
+	now: number,
+): boolean {
+	return (slot + 1) * slotMs > now - rule.windowMs;
+}
+
+export function decideRollingBudget(
+	slots: ReadonlyMap<number, number>,
+	rule: RollingBudgetRule,
+	cost: number,
+	now: number,
+): RollingBudgetDecision {
+	const slotMs = rollingBudgetSlotMs(rule);
+	const live = [...slots]
+		.filter(([slot]) => isRollingSlotLive(slot, slotMs, rule, now))
+		.sort(([left], [right]) => left - right);
+	const used = live.reduce((total, [, value]) => total + value, 0);
+	if (used + cost <= rule.limit) return { allowed: true, used: used + cost };
+
+	let remaining = used;
+	for (const [slot, value] of live) {
+		remaining -= value;
+		if (remaining + cost <= rule.limit) {
+			const freedAt = (slot + 1) * slotMs + rule.windowMs;
+			return {
+				allowed: false,
+				retryAfterSeconds: Math.max(1, Math.ceil((freedAt - now) / 1000)),
+			};
+		}
+	}
+	return {
+		allowed: false,
+		retryAfterSeconds: Math.max(1, Math.ceil(rule.windowMs / 1000)),
+	};
+}
+
+/**
+ * Cost-weighted rolling-window budget kept in this process. Unlike the
+ * firewall rules it can charge a request by its cost (for example seconds of
+ * audio) and reports when enough of the window frees up, but it is per
+ * instance like the `isRateLimited` fallback.
+ */
+export async function consumeRollingBudget(
+	ruleId: string,
+	opts: { key: string; rule: RollingBudgetRule; cost?: number; now?: number },
+): Promise<RollingBudgetDecision> {
+	const cost = opts.cost ?? 1;
+	const bucketKey = `${ruleId}|key|${await compactBucketKey(opts.key)}`;
+	const now = opts.now ?? Date.now();
+	const slotMs = rollingBudgetSlotMs(opts.rule);
+	const existing = rollingBudgetBuckets.get(bucketKey);
+	const slots = existing ?? new Map<number, number>();
+	for (const slot of slots.keys()) {
+		if (!isRollingSlotLive(slot, slotMs, opts.rule, now)) slots.delete(slot);
+	}
+
+	const decision = decideRollingBudget(slots, opts.rule, cost, now);
+	if (!decision.allowed) return decision;
+
+	const slot = Math.floor(now / slotMs);
+	slots.set(slot, (slots.get(slot) ?? 0) + cost);
+	if (!existing) {
+		reserveRollingBudgetBucket();
+		rollingBudgetBuckets.set(bucketKey, slots);
+	}
+	return decision;
+}
+
+function reserveRollingBudgetBucket() {
+	if (rollingBudgetBuckets.size < MAX_LOCAL_BUCKETS) return;
+	for (const [key, slots] of rollingBudgetBuckets) {
+		if (slots.size === 0) rollingBudgetBuckets.delete(key);
+	}
+	for (const key of rollingBudgetBuckets.keys()) {
+		if (rollingBudgetBuckets.size < MAX_LOCAL_BUCKETS) return;
+		rollingBudgetBuckets.delete(key);
+	}
 }
