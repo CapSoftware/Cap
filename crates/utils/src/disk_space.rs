@@ -452,7 +452,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn the_system_volume_clones_files() {
-        assert!(volume_is_apfs(&std::env::temp_dir()));
+        assert!(volume_is_apfs(Path::new("/")));
     }
 
     #[test]
