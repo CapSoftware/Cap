@@ -401,6 +401,24 @@ pub fn video_duration(path: &Path) -> Option<f64> {
     (input.duration() > 0).then(|| input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE))
 }
 
+/// How many frames the video stream holds: the stream's own count, else its
+/// packets counted without decoding.
+pub fn video_frame_count(path: &Path) -> Option<u64> {
+    ffmpeg::init().ok();
+    let mut input = ffmpeg::format::input(path).ok()?;
+    let stream = input.streams().best(ffmpeg::media::Type::Video)?;
+    if stream.frames() > 0 {
+        return u64::try_from(stream.frames()).ok();
+    }
+    let index = stream.index();
+    Some(
+        input
+            .packets()
+            .filter(|(stream, _)| stream.index() == index)
+            .count() as u64,
+    )
+}
+
 /// `size-mtime-hash` of the display video: file size (all fragments for a
 /// fragmented recording), newest modification time, and a hash of the first
 /// frame's luma.

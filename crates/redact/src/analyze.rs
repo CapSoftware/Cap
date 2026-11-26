@@ -601,11 +601,6 @@ impl LiveSegment {
         Ok(sent)
     }
 
-    /// Frames dropped so far.
-    pub fn dropped(&self) -> u64 {
-        self.dropped
-    }
-
     /// Ends the segment: analyses what is queued, then compiles its regions
     /// with `duration` as the segment's length (the finished video's, as a
     /// decode of it would report) and `fingerprint` as its identity.
@@ -977,6 +972,10 @@ mod tests {
         assert_eq!(result.dropped, 0);
         let (segment, regions) = result.segment.unwrap();
         assert_eq!(segment, offline.segments[0]);
+        assert_eq!(
+            frames::video_frame_count(&video),
+            Some(segment.source_frames)
+        );
         assert!(!regions.is_empty());
         assert_eq!(
             serde_json::to_vec(&regions).unwrap(),
