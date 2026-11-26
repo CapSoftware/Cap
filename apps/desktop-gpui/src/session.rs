@@ -434,6 +434,20 @@ fn storage_check(storage: RecordingStorage) -> StorageCheck {
     }
 }
 
+/// The save a recording's storage is budgeted for while it records. A muxer
+/// that can restart is budgeted for the joined save from the start, so a
+/// restart late in a recording never asks for space that is already used.
+fn monitor_finalization_kind(
+    mode: Option<recording::RecordingMode>,
+    muxer_can_restart: bool,
+) -> FinalizationKind {
+    match mode {
+        Some(recording::RecordingMode::Instant) => FinalizationKind::Instant,
+        _ if muxer_can_restart => FinalizationKind::StudioJoined,
+        _ => FinalizationKind::Studio,
+    }
+}
+
 fn log_storage(storage: RecordingStorage, event: &'static str) {
     tracing::warn!(
         available_bytes = storage.available_bytes,
@@ -1186,10 +1200,12 @@ impl RecordingSession {
 
     fn monitor_storage(&mut self, project_dir: std::path::PathBuf, cx: &mut Context<Self>) {
         self.storage_monitor = None;
-        let kind = match self.mode() {
-            Some(recording::RecordingMode::Instant) => FinalizationKind::Instant,
-            _ => FinalizationKind::Studio,
-        };
+        let kind = monitor_finalization_kind(
+            self.mode(),
+            self.active
+                .as_ref()
+                .is_some_and(|active| active.out_of_process_muxer()),
+        );
         let task = cx.spawn(async move |this, cx| {
             let mut check_failed = false;
             let mut storage_monitor = RecordingStorageMonitor::new(kind);
@@ -2357,6 +2373,34 @@ mod storage_check_tests {
                 );
                 assert_eq!(check(0, recording_bytes, copies), StorageCheck::Stop);
             }
+        }
+    }
+
+    #[test]
+    fn a_muxer_that_can_restart_is_budgeted_for_the_joined_save() {
+        use crate::recording::RecordingMode;
+
+        for (mode, muxer_can_restart, kind) in [
+            (Some(RecordingMode::Studio), false, FinalizationKind::Studio),
+            (
+                Some(RecordingMode::Studio),
+                true,
+                FinalizationKind::StudioJoined,
+            ),
+            (None, false, FinalizationKind::Studio),
+            (None, true, FinalizationKind::StudioJoined),
+            (
+                Some(RecordingMode::Instant),
+                false,
+                FinalizationKind::Instant,
+            ),
+            (
+                Some(RecordingMode::Instant),
+                true,
+                FinalizationKind::Instant,
+            ),
+        ] {
+            assert_eq!(monitor_finalization_kind(mode, muxer_can_restart), kind);
         }
     }
 
