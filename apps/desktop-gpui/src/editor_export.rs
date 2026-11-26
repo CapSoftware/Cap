@@ -409,11 +409,10 @@ impl ClipboardExport {
             Self::File => platform::copy_file_to_clipboard(path, cx)?,
             Self::Path => {
                 let path = std::path::absolute(path).map_err(|error| error.to_string())?;
-                let path = path
-                    .into_os_string()
-                    .into_string()
-                    .map_err(|_| tr::editor::export::destination::invalid_path().to_string())?;
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(path));
+                let path = dunce::simplified(&path)
+                    .to_str()
+                    .ok_or_else(|| tr::editor::export::destination::invalid_path().to_string())?;
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(path.to_owned()));
             }
         }
         Ok(())
@@ -5436,6 +5435,18 @@ mod tests {
             .read_from_clipboard()
             .and_then(|clipboard| clipboard.text());
         assert_eq!(copied.as_deref(), expected.to_str());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[gpui::test]
+    fn clipboard_path_export_copies_a_regular_windows_path(cx: &mut gpui::TestAppContext) {
+        let output = PathBuf::from(r"\\?\C:\Demo\finished recording.mp4");
+        cx.update(|cx| super::ClipboardExport::Path.copy(&output, cx).unwrap());
+
+        let copied = cx
+            .read_from_clipboard()
+            .and_then(|clipboard| clipboard.text());
+        assert_eq!(copied.as_deref(), Some(r"C:\Demo\finished recording.mp4"));
     }
 
     #[cfg(target_os = "linux")]
