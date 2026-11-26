@@ -2620,14 +2620,17 @@ title = "Avancé"
 transparent_mov = "Exporte en MOV transparent. Les fichiers sont volumineux et conviennent surtout à la composition ou au montage."
 
 [editor.export.cta]
+copy_file = "Exporter et copier le fichier"
+copy_file_path = "Exporter et copier le chemin du fichier"
 cancel_sign_in = "Annuler la connexion"
-clipboard = "Exporter vers le presse-papiers"
 create_link = "Créer un lien de partage"
 file = "Exporter vers un fichier"
 reupload = "Remettre en ligne sur le même lien"
 sign_in = "Se connecter pour partager"
 
 [editor.export.destination]
+file_path = "Chemin du fichier"
+invalid_path = "Le chemin d’exportation ne peut pas être copié en tant que texte."
 clipboard = "Presse-papiers"
 file = "Fichier"
 link = "Lien de partage"

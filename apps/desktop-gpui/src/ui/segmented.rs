@@ -19,9 +19,11 @@
 //! transform, so the selected item paints its own fill -- which is what the
 //! settings window has always done here.
 
+use std::{cell::Cell, rc::Rc};
+
 use gpui::{
-    App, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    App, Bounds, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
+    Pixels, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px, svg,
 };
 
@@ -74,6 +76,26 @@ pub fn option_at<T: Copy>(values: &[T], index: usize) -> Option<T> {
 /// argument, and the index *is* the event here.
 type SegmentHandler = Box<dyn Fn(&usize, &mut Window, &mut App) + 'static>;
 
+fn editor_selected_bg(theme: &Theme) -> Hsla {
+    if theme.is_dark() {
+        gpui::hsla(0., 0., 1., 0.12)
+    } else {
+        Hsla::from(theme.editor.card)
+    }
+}
+
+/// The opaque colour an editor segment shows on an `ed-card` panel, for a
+/// surface that has to continue it seamlessly.
+pub fn editor_segment_surface(theme: &Theme, selected: bool) -> Hsla {
+    let editor = theme.editor;
+    let trough = Hsla::from(editor.card).blend(Hsla::from(editor.ctl));
+    if selected {
+        trough.blend(editor_selected_bg(theme))
+    } else {
+        trough
+    }
+}
+
 #[derive(IntoElement)]
 pub struct SegmentedControl {
     id: ElementId,
@@ -100,6 +122,9 @@ pub struct SegmentedControl {
     stretch: bool,
     tab_stops: bool,
     on_select: Option<SegmentHandler>,
+    trailing: Option<(usize, gpui::AnyElement)>,
+    trailing_bounds: Option<Rc<Cell<Option<Bounds<Pixels>>>>>,
+    trailing_attached_below: Option<bool>,
 }
 
 impl SegmentedControl {
@@ -129,6 +154,9 @@ impl SegmentedControl {
             stretch: false,
             tab_stops: false,
             on_select: None,
+            trailing: None,
+            trailing_bounds: None,
+            trailing_attached_below: None,
         }
     }
 
@@ -187,11 +215,7 @@ impl SegmentedControl {
             item_padding_x: px(10.),
             item_padding_y: px(0.),
             item_height: Some(px(24.)),
-            selected_bg: Some(if theme.is_dark() {
-                gpui::hsla(0., 0., 1., 0.12)
-            } else {
-                Hsla::from(editor.card)
-            }),
+            selected_bg: Some(editor_selected_bg(theme)),
             selected_text: Hsla::from(editor.text_1),
             idle_text: Hsla::from(editor.text_2),
             hover_bg: Some(Hsla::from(editor.ctl_hover)),
@@ -253,6 +277,21 @@ impl SegmentedControl {
         self
     }
 
+    pub fn trailing(mut self, index: usize, element: impl IntoElement) -> Self {
+        self.trailing = Some((index, element.into_any_element()));
+        self
+    }
+
+    pub fn trailing_bounds(mut self, bounds: Rc<Cell<Option<Bounds<Pixels>>>>) -> Self {
+        self.trailing_bounds = Some(bounds);
+        self
+    }
+
+    pub fn trailing_attached(mut self, below: Option<bool>) -> Self {
+        self.trailing_attached_below = below;
+        self
+    }
+
     pub fn on_select(mut self, handler: impl Fn(&usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Box::new(handler));
         self
@@ -286,6 +325,9 @@ impl RenderOnce for SegmentedControl {
             stretch,
             tab_stops,
             on_select,
+            mut trailing,
+            trailing_bounds,
+            trailing_attached_below,
         } = self;
 
         let handler: Option<std::rc::Rc<SegmentHandler>> = on_select.map(std::rc::Rc::new);
@@ -309,6 +351,16 @@ impl RenderOnce for SegmentedControl {
                 let handler = handler.clone();
                 let selected = option.selected;
                 let disabled = option.disabled;
+                let trailing = if trailing
+                    .as_ref()
+                    .is_some_and(|(target, _)| *target == index)
+                {
+                    trailing.take().map(|(_, element)| element)
+                } else {
+                    None
+                };
+
+                let has_trailing = trailing.is_some();
 
                 div()
                     .id(SharedString::from(format!("{prefix}-{index}")))
@@ -318,11 +370,17 @@ impl RenderOnce for SegmentedControl {
                     .justify_center()
                     .gap(item_gap)
                     .px(item_padding_x)
+                    .when(has_trailing, |this| this.px(px(4.)).gap(px(4.)))
                     .when(f32::from(item_padding_y) > 0., |this| {
                         this.py(item_padding_y)
                     })
                     .when_some(item_height, |this, height| this.h(height))
                     .rounded(item_radius)
+                    .when(has_trailing, |this| match trailing_attached_below {
+                        Some(true) => this.rounded_b(px(0.)),
+                        Some(false) => this.rounded_t(px(0.)),
+                        None => this,
+                    })
                     .text_size(text_size)
                     .when(stretch, |this| this.flex_1().min_w_0())
                     .when(tab_stops && !disabled, |this| {
@@ -362,11 +420,30 @@ impl RenderOnce for SegmentedControl {
                     }))
                     .children(option.label.map(|label| {
                         if stretch {
-                            div().min_w_0().truncate().child(label).into_any_element()
+                            div()
+                                .min_w_0()
+                                .when(has_trailing, |this| this.flex_1().text_center())
+                                .truncate()
+                                .child(label)
+                                .into_any_element()
                         } else {
                             label.into_any_element()
                         }
                     }))
+                    .when_some(
+                        trailing_bounds.clone().filter(|_| has_trailing),
+                        |this, measured| {
+                            this.relative().child(
+                                gpui::canvas(
+                                    move |bounds, _, _| measured.set(Some(bounds)),
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .inset_0(),
+                            )
+                        },
+                    )
+                    .children(trailing)
                     .when_some(handler.filter(|_| !disabled), |this, handler| {
                         this.on_click(move |_, window, cx| handler(&index, window, cx))
                     })
