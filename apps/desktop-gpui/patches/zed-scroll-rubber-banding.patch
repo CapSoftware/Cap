@@ -1,12 +1,12 @@
 diff --git a/crates/gpui/Cargo.toml b/crates/gpui/Cargo.toml
-index 0702650..468b002 100644
+index 0702650..36f6816 100644
 --- a/crates/gpui/Cargo.toml
 +++ b/crates/gpui/Cargo.toml
 @@ -39,6 +39,7 @@ screen-capture = [
  windows-manifest = ["dep:embed-resource"]
  input-latency-histogram = ["dep:hdrhistogram"]
  profiler = []
-+rubber-band = []
++scroll-rubber-banding = []
  
  [lib]
  path = "src/gpui.rs"
@@ -23,7 +23,7 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..e896daf 100644
+index c02bd16..8e879b6 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -997,6 +997,56 @@ pub trait InteractiveElement: Sized {
@@ -31,7 +31,7 @@ index c02bd16..e896daf 100644
          self
      }
 +    /// Enable or disable macOS-style rubber-band overscroll on both axes.
-+    #[cfg(feature = "rubber-band")]
++    #[cfg(feature = "scroll-rubber-banding")]
 +    fn scroll_rubber_band(self, enabled: bool) -> Self {
 +        let behavior = if enabled {
 +            crate::OverscrollBehavior::Auto
@@ -42,40 +42,40 @@ index c02bd16..e896daf 100644
 +    }
 +
 +    /// Set overscroll rubber-banding behavior on both axes (CSS `overscroll-behavior`).
-+    #[cfg(feature = "rubber-band")]
++    #[cfg(feature = "scroll-rubber-banding")]
 +    fn overscroll_behavior(mut self, behavior: crate::OverscrollBehavior) -> Self {
 +        self.interactivity().overscroll_behavior = point(behavior, behavior);
 +        self
 +    }
 +
 +    /// Set horizontal overscroll rubber-banding behavior (CSS `overscroll-behavior-x`).
-+    #[cfg(feature = "rubber-band")]
++    #[cfg(feature = "scroll-rubber-banding")]
 +    fn overscroll_behavior_x(mut self, behavior: crate::OverscrollBehavior) -> Self {
 +        self.interactivity().overscroll_behavior.x = behavior;
 +        self
 +    }
 +
 +    /// Set vertical overscroll rubber-banding behavior (CSS `overscroll-behavior-y`).
-+    #[cfg(feature = "rubber-band")]
++    #[cfg(feature = "scroll-rubber-banding")]
 +    fn overscroll_behavior_y(mut self, behavior: crate::OverscrollBehavior) -> Self {
 +        self.interactivity().overscroll_behavior.y = behavior;
 +        self
 +    }
 +
 +    /// Disable overscroll rubber-banding on both axes.
-+    #[cfg(feature = "rubber-band")]
++    #[cfg(feature = "scroll-rubber-banding")]
 +    fn overscroll_none(self) -> Self {
 +        self.overscroll_behavior(crate::OverscrollBehavior::None)
 +    }
 +
 +    /// Disable horizontal overscroll rubber-banding.
-+    #[cfg(feature = "rubber-band")]
++    #[cfg(feature = "scroll-rubber-banding")]
 +    fn overscroll_x_none(self) -> Self {
 +        self.overscroll_behavior_x(crate::OverscrollBehavior::None)
 +    }
 +
 +    /// Disable vertical overscroll rubber-banding.
-+    #[cfg(feature = "rubber-band")]
++    #[cfg(feature = "scroll-rubber-banding")]
 +    fn overscroll_y_none(self) -> Self {
 +        self.overscroll_behavior_y(crate::OverscrollBehavior::None)
 +    }
@@ -87,9 +87,9 @@ index c02bd16..e896daf 100644
      pub(crate) tracked_scroll_handle: Option<ScrollHandle>,
      pub(crate) scroll_anchor: Option<ScrollAnchor>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
-+    #[cfg(feature = "rubber-band")]
++    #[cfg(feature = "scroll-rubber-banding")]
 +    pub(crate) overscroll_behavior: Point<crate::OverscrollBehavior>,
-+    #[cfg(feature = "rubber-band")]
++    #[cfg(feature = "scroll-rubber-banding")]
 +    pub(crate) rubber_band_state: Option<Rc<RefCell<crate::RubberBandScrollState>>>,
      pub(crate) group: Option<SharedString>,
      /// The base style of the element, before any modifications are applied
@@ -98,7 +98,7 @@ index c02bd16..e896daf 100644
                      );
                  }
  
-+                #[cfg(feature = "rubber-band")]
++                #[cfg(feature = "scroll-rubber-banding")]
 +                if self.scroll_offset.is_some()
 +                    && (self.overscroll_behavior.x != crate::OverscrollBehavior::None
 +                        || self.overscroll_behavior.y != crate::OverscrollBehavior::None)
@@ -119,14 +119,14 @@ index c02bd16..e896daf 100644
                  .max(&Default::default());
              // Clamp scroll offset in case scroll max is smaller now (e.g., if children
              // were removed or the bounds became larger).
-+            #[cfg(feature = "rubber-band")]
++            #[cfg(feature = "scroll-rubber-banding")]
 +            let scroll_offset_ptr = Rc::as_ptr(scroll_offset) as usize;
              let mut scroll_offset = scroll_offset.borrow_mut();
  
 -            scroll_offset.x = scroll_offset.x.clamp(-scroll_max.x, px(0.));
 -            if scroll_to_bottom {
 -                scroll_offset.y = -scroll_max.y;
-+            #[cfg(feature = "rubber-band")]
++            #[cfg(feature = "scroll-rubber-banding")]
 +            if let Some(rb_state) = self.rubber_band_state.as_ref() {
 +                let mut rb = rb_state.borrow_mut();
 +                let handle_changed =
@@ -189,7 +189,7 @@ index c02bd16..e896daf 100644
 +                }
 +            }
 +
-+            #[cfg(not(feature = "rubber-band"))]
++            #[cfg(not(feature = "scroll-rubber-banding"))]
 +            {
 +                scroll_offset.x = scroll_offset.x.clamp(-scroll_max.x, px(0.));
 +                if scroll_to_bottom {
@@ -204,9 +204,9 @@ index c02bd16..e896daf 100644
              let line_height = window.line_height();
              let hitbox = hitbox.clone();
              let current_view = window.current_view();
-+            #[cfg(feature = "rubber-band")]
++            #[cfg(feature = "scroll-rubber-banding")]
 +            let rubber_band_state = self.rubber_band_state.clone();
-+            #[cfg(feature = "rubber-band")]
++            #[cfg(feature = "scroll-rubber-banding")]
 +            let overscroll_behavior = self.overscroll_behavior;
              window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                  if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
@@ -259,7 +259,7 @@ index c02bd16..e896daf 100644
 +                            }
 +                        }
 +                    }
-+                    #[cfg(feature = "rubber-band")]
++                    #[cfg(feature = "scroll-rubber-banding")]
 +                    if let Some(rb_state) = rubber_band_state.as_ref()
 +                        && event.is_precise_trackpad_scroll()
 +                    {
@@ -413,7 +413,7 @@ index c02bd16..e896daf 100644
 +                            rb.last_applied_offset = Some(*scroll_offset);
 +                        }
 +                    }
-+                    #[cfg(not(feature = "rubber-band"))]
++                    #[cfg(not(feature = "scroll-rubber-banding"))]
 +                    {
 +                        scroll_offset.y += delta_y;
 +                        scroll_offset.x += delta_x;
@@ -422,7 +422,7 @@ index c02bd16..e896daf 100644
 -                    scroll_offset.x += delta_x;
                      if *scroll_offset != old_scroll_offset {
                          cx.notify(current_view);
-+                        #[cfg(feature = "rubber-band")]
++                        #[cfg(feature = "scroll-rubber-banding")]
 +                        cx.stop_propagation();
                      }
                  }
@@ -431,20 +431,20 @@ index c02bd16..e896daf 100644
      /// blur). `None` means no activation key is pending.
      pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
-+    #[cfg(feature = "rubber-band")]
++    #[cfg(feature = "scroll-rubber-banding")]
 +    pub(crate) rubber_band: Option<Rc<RefCell<crate::RubberBandScrollState>>>,
      pub(crate) active_tooltip: Option<Rc<RefCell<Option<ActiveTooltip>>>>,
  }
  
 diff --git a/crates/gpui/src/elements/uniform_list.rs b/crates/gpui/src/elements/uniform_list.rs
-index 94ac002..f21da26 100644
+index 94ac002..a2a8a91 100644
 --- a/crates/gpui/src/elements/uniform_list.rs
 +++ b/crates/gpui/src/elements/uniform_list.rs
 @@ -378,6 +378,9 @@ impl Element for UniformList {
              handle.deferred_scroll_to_item.take()
          });
  
-+        #[cfg(feature = "rubber-band")]
++        #[cfg(feature = "scroll-rubber-banding")]
 +        let rubber_band_state = self.interactivity.rubber_band_state.clone();
 +
          self.interactivity.prepaint(
@@ -457,12 +457,12 @@ index 94ac002..f21da26 100644
 -                    let max_scroll_offset = padded_bounds.size.height - content_height;
 +                    let max_scroll_offset = (padded_bounds.size.height - content_height).min(Pixels::ZERO);
 +
-+                    #[cfg(feature = "rubber-band")]
++                    #[cfg(feature = "scroll-rubber-banding")]
 +                    let is_rubber_banding = rubber_band_state.as_ref().is_some_and(|state| {
 +                        let rb = state.borrow();
 +                        rb.is_springing() || rb.y.raw_overscroll != 0.0
 +                    });
-+                    #[cfg(not(feature = "rubber-band"))]
++                    #[cfg(not(feature = "scroll-rubber-banding"))]
 +                    let is_rubber_banding = false;
  
 -                    if is_scrolled_vertically && scroll_offset.y < max_scroll_offset {
@@ -471,14 +471,14 @@ index 94ac002..f21da26 100644
                          scroll_offset.y = max_scroll_offset;
                      }
 diff --git a/crates/gpui/src/gpui.rs b/crates/gpui/src/gpui.rs
-index a143fab..bbaac69 100644
+index a143fab..87e0d7a 100644
 --- a/crates/gpui/src/gpui.rs
 +++ b/crates/gpui/src/gpui.rs
 @@ -29,6 +29,8 @@ mod global;
  mod input;
  mod inspector;
  mod interactive;
-+#[cfg(feature = "rubber-band")]
++#[cfg(feature = "scroll-rubber-banding")]
 +mod rubber_band;
  mod key_dispatch;
  mod keymap;
@@ -487,7 +487,7 @@ index a143fab..bbaac69 100644
  pub use input::*;
  pub use inspector::*;
  pub use interactive::*;
-+#[cfg(feature = "rubber-band")]
++#[cfg(feature = "scroll-rubber-banding")]
 +pub use rubber_band::*;
  use key_dispatch::*;
  pub use keymap::*;
@@ -1167,6 +1167,91 @@ index 71bcb10..931769f 100644
                  })
              }),
              NSEventType::NSLeftMouseDragged
+diff --git a/crates/gpui_macos/src/text_system.rs b/crates/gpui_macos/src/text_system.rs
+index c45ad68..fbc4886 100644
+--- a/crates/gpui_macos/src/text_system.rs
++++ b/crates/gpui_macos/src/text_system.rs
+@@ -39,7 +39,7 @@ use gpui::{
+     RenderGlyphParams, Result, Rgba, SUBPIXEL_VARIANTS_X, ShapedGlyph, ShapedRun, SharedString,
+     Size, TextRenderingMode, point, px, size, swap_rgba_pa_to_bgra,
+ };
+-use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
++use parking_lot::{RwLock, RwLockUpgradableReadGuard};
+ use pathfinder_geometry::{
+     rect::{RectF, RectI},
+     transform2d::Transform2F,
+@@ -71,15 +71,8 @@ struct MacTextSystemState {
+     font_ids_by_postscript_name: HashMap<String, FontId>,
+     font_ids_by_font_key: HashMap<FontKey, SmallVec<[FontId; 4]>>,
+     postscript_names_by_font_id: HashMap<FontId, String>,
+-    /// Each font at each size a line was shaped or a glyph was drawn at. A
+-    /// fresh copy per line or glyph made CoreText build the font's glyph and
+-    /// advance caches (and, for a variable font, its instance) again each time.
+-    sized_fonts: Mutex<HashMap<(FontId, u32), CTFont>>,
+ }
+ 
+-/// Font and size pairs `sized_fonts` keeps before it starts over.
+-const MAX_SIZED_FONTS: usize = 512;
+-
+ impl MacTextSystem {
+     /// Create a new MacTextSystem.
+     pub fn new() -> Self {
+@@ -91,7 +84,6 @@ impl MacTextSystem {
+             font_ids_by_postscript_name: HashMap::default(),
+             font_ids_by_font_key: HashMap::default(),
+             postscript_names_by_font_id: HashMap::default(),
+-            sized_fonts: Mutex::default(),
+         }))
+     }
+ }
+@@ -426,21 +418,6 @@ impl MacTextSystemState {
+             })
+     }
+ 
+-    fn sized_font(&self, font_id: FontId, font_size: f32) -> CTFont {
+-        let mut sized = self.sized_fonts.lock();
+-        if let Some(font) = sized.get(&(font_id, font_size.to_bits())) {
+-            return font.clone();
+-        }
+-        if sized.len() >= MAX_SIZED_FONTS {
+-            sized.clear();
+-        }
+-        let font = self.fonts[font_id.0]
+-            .native_font()
+-            .clone_with_font_size(font_size as CGFloat);
+-        sized.insert((font_id, font_size.to_bits()), font.clone());
+-        font
+-    }
+-
+     fn raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
+         let font = &self.fonts[params.font_id.0];
+         let scale = Transform2F::from_scale(params.scale_factor);
+@@ -529,7 +506,9 @@ impl MacTextSystemState {
+             } else {
+                 cx.set_gray_fill_color(0.0, 1.0);
+             }
+-            self.sized_font(params.font_id, f32::from(params.font_size))
++            self.fonts[params.font_id.0]
++                .native_font()
++                .clone_with_font_size(f32::from(params.font_size) as CGFloat)
+                 .draw_glyphs(
+                     &[params.glyph_id.0 as CGGlyph],
+                     &[CGPoint::new(
+@@ -582,9 +561,12 @@ impl MacTextSystemState {
+                 } else {
+                     font_size
+                 };
+-                let sized = self.sized_font(run.font_id, f32::from(font_size));
+                 unsafe {
+-                    string.set_attribute(cf_range, kCTFontAttributeName, &sized);
++                    string.set_attribute(
++                        cf_range,
++                        kCTFontAttributeName,
++                        &font.native_font().clone_with_font_size(font_size.into()),
++                    );
+                 }
+                 break_ligature = !break_ligature;
+             }
 diff --git a/crates/gpui_web/src/events.rs b/crates/gpui_web/src/events.rs
 index 08434aa..8a61d6b 100644
 --- a/crates/gpui_web/src/events.rs

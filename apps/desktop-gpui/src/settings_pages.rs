@@ -2779,7 +2779,7 @@ impl SettingsWindow {
             )
             .into_any_element(),
         ];
-        #[cfg(all(debug_assertions, feature = "gpui-rubber-band"))]
+        #[cfg(all(debug_assertions, feature = "gpui-scroll-rubber-banding"))]
         let sections = {
             let mut sections = sections;
             let cfg = gpui::rubber_band_config();
@@ -3701,11 +3701,11 @@ impl SettingsWindow {
             .border_color(theme.settings_border())
             .overflow_y_scroll()
             .map(|el| {
-                #[cfg(feature = "gpui-rubber-band")]
+                #[cfg(feature = "gpui-scroll-rubber-banding")]
                 {
                     el.overscroll_behavior(gpui::OverscrollBehavior::Chain)
                 }
-                #[cfg(not(feature = "gpui-rubber-band"))]
+                #[cfg(not(feature = "gpui-scroll-rubber-banding"))]
                 {
                     el
                 }
