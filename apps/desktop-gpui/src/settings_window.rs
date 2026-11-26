@@ -3720,7 +3720,10 @@ impl SettingsWindow {
             .find(|(value, _, _)| *value == active_resolution)
             .map(|(_, label, _)| *label)
             .unwrap_or("720p");
-        let description = if network_cap.is_some() {
+        // All three arms are `&'static str` (`summary` comes from the tier's
+        // `Label`, which is `fn() -> &'static str`), but `description` is
+        // rendered into an element that owns its text, so own it once here.
+        let description: String = if network_cap.is_some() {
             let speed_note = crate::network_health::status()
                 .upload_mbps
                 .map(crate::network_health::format_upload_mbps)
@@ -3729,9 +3732,9 @@ impl SettingsWindow {
                 "Temporarily capped at {active_label} ({speed_note}) so live uploads keep up. Configured maximum: {configured_label}."
             )
         } else if self.has_cap_pro {
-            summary
+            summary.to_string()
         } else {
-            tr::settings::quality::instant::free_plan()
+            tr::settings::quality::instant::free_plan().to_string()
         };
 
         let options = INSTANT_RESOLUTION_TIERS
