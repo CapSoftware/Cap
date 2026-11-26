@@ -894,7 +894,7 @@ async fn finish_failed_capture(
 }
 
 impl ActiveRecording {
-    /// Whether a separate muxer process writes this recording. One that
+    /// Whether a separate muxer process may write this recording. One that
     /// restarts leaves groups the save has to join.
     pub(crate) fn out_of_process_muxer(&self) -> bool {
         self.out_of_process_muxer
@@ -2885,7 +2885,9 @@ async fn start_attempt_with_upload(
         out_of_process_muxer: settings.out_of_process_muxer,
         instant_mode_max_resolution: cap_recording::DEFAULT_INSTANT_MODE_MAX_RESOLUTION,
     };
-    let out_of_process_muxer = defaults.out_of_process_muxer;
+    // Linux capture always muxes in process, whatever the setting says.
+    let out_of_process_muxer =
+        cfg!(any(target_os = "macos", windows)) && defaults.out_of_process_muxer;
     // The instant output cap is plan-gated at start time, not at settings
     // time (`recording.rs:1634-1639`): free stays at the free cap even if a
     // stale store value says otherwise.
