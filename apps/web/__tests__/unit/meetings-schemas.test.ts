@@ -198,16 +198,18 @@ describe("meeting request limits count characters", () => {
 		expect(notes({ participants: [{ name: chars(200) }] }).ok).toBe(true);
 		expect(notes({ vocabulary: [chars(100)] }).ok).toBe(true);
 		expect(
-			notes({ template: { name: chars(100), sections: [{ heading: chars(120) }] } })
-				.ok,
+			notes({
+				template: { name: chars(100), sections: [{ heading: chars(120) }] },
+			}).ok,
 		).toBe(true);
-		expect(ask({ history: [{ role: "assistant", content: chars(8_000) }] }).ok).toBe(
-			true,
-		);
+		expect(
+			ask({ history: [{ role: "assistant", content: chars(8_000) }] }).ok,
+		).toBe(true);
 		expect(ask({ question: chars(4_000) }).ok).toBe(true);
 		expect(ask({ notesMarkdown: chars(100_000) }).ok).toBe(true);
 		expect(
-			parseTranscribeQuery({ keywordsHeader: encodeURIComponent(chars(50)) }).ok,
+			parseTranscribeQuery({ keywordsHeader: encodeURIComponent(chars(50)) })
+				.ok,
 		).toBe(true);
 	});
 
@@ -217,7 +219,8 @@ describe("meeting request limits count characters", () => {
 			false,
 		);
 		expect(
-			parseTranscribeQuery({ keywordsHeader: encodeURIComponent(chars(51)) }).ok,
+			parseTranscribeQuery({ keywordsHeader: encodeURIComponent(chars(51)) })
+				.ok,
 		).toBe(false);
 	});
 });
