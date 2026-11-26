@@ -576,7 +576,7 @@ fn recover_incomplete_recording_in(
     })?;
     crate::recording::ensure_finalization_storage(
         &canonical_path,
-        cap_utils::disk_space::FinalizationKind::StudioJoined,
+        cap_utils::disk_space::FinalizationKind::Studio,
     )
     .map_err(|error| {
         tr::main::recovery::error::storage(format!("{error:#}"), canonical_path.display())

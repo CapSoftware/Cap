@@ -420,34 +420,6 @@ async fn run_clean_control(
     CleanControlOutcome { paused, error }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum StorageCheck {
-    Continue { warning: bool },
-    Stop,
-}
-
-fn storage_check(storage: RecordingStorage) -> StorageCheck {
-    match storage.status() {
-        DiskSpaceStatus::Exhausted => StorageCheck::Stop,
-        DiskSpaceStatus::Low => StorageCheck::Continue { warning: true },
-        DiskSpaceStatus::Ok => StorageCheck::Continue { warning: false },
-    }
-}
-
-/// The save a recording's storage is budgeted for while it records. A muxer
-/// that can restart is budgeted for the joined save from the start, so a
-/// restart late in a recording never asks for space that is already used.
-fn monitor_finalization_kind(
-    mode: Option<recording::RecordingMode>,
-    muxer_can_restart: bool,
-) -> FinalizationKind {
-    match mode {
-        Some(recording::RecordingMode::Instant) => FinalizationKind::Instant,
-        _ if muxer_can_restart => FinalizationKind::StudioJoined,
-        _ => FinalizationKind::Studio,
-    }
-}
-
 fn log_storage(storage: RecordingStorage, event: &'static str) {
     tracing::warn!(
         available_bytes = storage.available_bytes,
@@ -1200,12 +1172,11 @@ impl RecordingSession {
 
     fn monitor_storage(&mut self, project_dir: std::path::PathBuf, cx: &mut Context<Self>) {
         self.storage_monitor = None;
-        let kind = monitor_finalization_kind(
-            self.mode(),
-            self.active
-                .as_ref()
-                .is_some_and(|active| active.out_of_process_muxer()),
-        );
+        let kind = if self.mode() == Some(recording::RecordingMode::Studio) {
+            FinalizationKind::Studio
+        } else {
+            FinalizationKind::Instant
+        };
         let task = cx.spawn(async move |this, cx| {
             let mut check_failed = false;
             let mut storage_monitor = RecordingStorageMonitor::new(kind);
@@ -1248,8 +1219,8 @@ impl RecordingSession {
                         if !is_current(this) {
                             return false;
                         }
-                        match storage_check(storage) {
-                            StorageCheck::Stop => {
+                        match storage.status() {
+                            DiskSpaceStatus::Exhausted => {
                                 log_storage(
                                     storage,
                                     "Recording storage is low; stopping to save the recording",
@@ -1260,7 +1231,8 @@ impl RecordingSession {
                                 this.stop(cx);
                                 false
                             }
-                            StorageCheck::Continue { warning } => {
+                            status => {
+                                let warning = status == DiskSpaceStatus::Low;
                                 if warning != this.storage_warning {
                                     log_storage(
                                         storage,
@@ -2317,117 +2289,6 @@ fn capture_ended_cleanly<E>(
 
 fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> bool {
     current == completed && matches!(phase, Phase::Recording { .. })
-}
-
-#[cfg(test)]
-mod storage_check_tests {
-    use super::*;
-    use cap_utils::disk_space::{RECORDING_DISK_RESERVE_BYTES, RECORDING_DISK_WARN_BYTES};
-
-    const GIB: u64 = 1024 * 1024 * 1024;
-
-    fn check(available_bytes: u64, recording_bytes: u64, finalization_copies: u64) -> StorageCheck {
-        storage_check(RecordingStorage {
-            available_bytes,
-            recording_bytes,
-            finalization_copies,
-        })
-    }
-
-    #[test]
-    fn a_recording_stops_while_its_save_still_fits_and_saves() {
-        let directory = tempfile::tempdir().unwrap();
-        for recording_bytes in [0, GIB, 30 * GIB] {
-            for copies in 1..=3 {
-                let save = copies * recording_bytes;
-                assert_eq!(
-                    check(
-                        save + RECORDING_DISK_WARN_BYTES + 1,
-                        recording_bytes,
-                        copies
-                    ),
-                    StorageCheck::Continue { warning: false }
-                );
-                assert_eq!(
-                    check(save + RECORDING_DISK_WARN_BYTES, recording_bytes, copies),
-                    StorageCheck::Continue { warning: true }
-                );
-                assert_eq!(
-                    check(
-                        save + RECORDING_DISK_RESERVE_BYTES + 1,
-                        recording_bytes,
-                        copies
-                    ),
-                    StorageCheck::Continue { warning: true }
-                );
-                let stop = RecordingStorage {
-                    available_bytes: save + RECORDING_DISK_RESERVE_BYTES,
-                    recording_bytes,
-                    finalization_copies: copies,
-                };
-                assert_eq!(storage_check(stop), StorageCheck::Stop);
-                crate::recording::finalization_storage_verdict(directory.path(), Ok(stop)).unwrap();
-                assert_eq!(
-                    check(RECORDING_DISK_RESERVE_BYTES, recording_bytes, copies),
-                    StorageCheck::Stop
-                );
-                assert_eq!(check(0, recording_bytes, copies), StorageCheck::Stop);
-            }
-        }
-    }
-
-    #[test]
-    fn a_muxer_that_can_restart_is_budgeted_for_the_joined_save() {
-        use crate::recording::RecordingMode;
-
-        for (mode, muxer_can_restart, kind) in [
-            (Some(RecordingMode::Studio), false, FinalizationKind::Studio),
-            (
-                Some(RecordingMode::Studio),
-                true,
-                FinalizationKind::StudioJoined,
-            ),
-            (None, false, FinalizationKind::Studio),
-            (None, true, FinalizationKind::StudioJoined),
-            (
-                Some(RecordingMode::Instant),
-                false,
-                FinalizationKind::Instant,
-            ),
-            (
-                Some(RecordingMode::Instant),
-                true,
-                FinalizationKind::Instant,
-            ),
-        ] {
-            assert_eq!(monitor_finalization_kind(mode, muxer_can_restart), kind);
-        }
-    }
-
-    #[test]
-    fn a_studio_recording_runs_past_the_old_stop_point() {
-        let recording_bytes = 30 * GIB;
-        let old_stop = 3 * recording_bytes + RECORDING_DISK_RESERVE_BYTES;
-        assert_eq!(check(old_stop, recording_bytes, 3), StorageCheck::Stop);
-        for copies in [1, 2] {
-            assert_eq!(
-                check(old_stop, recording_bytes, copies),
-                StorageCheck::Continue { warning: false }
-            );
-        }
-    }
-
-    #[test]
-    fn a_recording_with_room_to_save_shows_no_warning() {
-        assert_eq!(
-            check(100 * GIB, 10 * GIB, 2),
-            StorageCheck::Continue { warning: false }
-        );
-        assert_eq!(
-            check(u64::MAX, 0, 3),
-            StorageCheck::Continue { warning: false }
-        );
-    }
 }
 
 #[cfg(test)]
