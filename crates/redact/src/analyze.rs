@@ -444,6 +444,54 @@ struct LiveOutcome {
     stats: Stats,
 }
 
+/// A live segment with every frame analysed: the model back, and the
+/// analysis waiting for [`DrainedSegment::close`].
+pub struct Drained {
+    pub model: OcrModel,
+    pub segment: DrainedSegment,
+    /// Pushed frames that were dropped because the queue was full; the
+    /// result is complete only when this is zero.
+    pub dropped: u64,
+}
+
+/// A live segment's analysis before its regions are compiled.
+pub struct DrainedSegment {
+    analysed: anyhow::Result<(Scan, RedactionSegment)>,
+    stats: Stats,
+    started: Instant,
+}
+
+impl DrainedSegment {
+    pub fn stats(&self) -> &Stats {
+        &self.stats
+    }
+
+    /// Compiles the regions with `duration` as the segment's length (the
+    /// finished video's, as a decode of it would report) and `fingerprint`
+    /// as its identity.
+    pub fn close(
+        self,
+        fingerprint: String,
+        duration: Option<f64>,
+    ) -> (
+        anyhow::Result<(RedactionSegment, Vec<RedactionRegion>)>,
+        Stats,
+    ) {
+        let DrainedSegment {
+            analysed,
+            mut stats,
+            started,
+        } = self;
+        let segment = analysed.map(|(mut scan, mut segment_info)| {
+            scan.end_time = duration;
+            segment_info.fingerprint = fingerprint;
+            let (segment, regions) = close_segment(scan, segment_info, &mut stats, started);
+            (segment, regions.into_iter().map(round_region).collect())
+        });
+        (segment, stats)
+    }
+}
+
 /// A finished live segment: the model back, and its regions unless the
 /// analysis failed.
 pub struct LiveResult {
@@ -561,26 +609,42 @@ impl LiveSegment {
     /// Ends the segment: analyses what is queued, then compiles its regions
     /// with `duration` as the segment's length (the finished video's, as a
     /// decode of it would report) and `fingerprint` as its identity.
-    pub fn finish(
-        mut self,
-        fingerprint: String,
-        duration: Option<f64>,
-    ) -> anyhow::Result<LiveResult> {
+    pub fn finish(self, fingerprint: String, duration: Option<f64>) -> anyhow::Result<LiveResult> {
+        let Drained {
+            model,
+            segment,
+            dropped,
+        } = self.drain()?;
+        let (segment, stats) = segment.close(fingerprint, duration);
+        Ok(LiveResult {
+            model,
+            segment,
+            dropped,
+            stats,
+        })
+    }
+
+    /// Ends the segment's input and analyses what is queued, handing the
+    /// model back at once; the regions are compiled later by
+    /// [`DrainedSegment::close`], when the finished video's length is known.
+    pub fn drain(mut self) -> anyhow::Result<Drained> {
         let started = Instant::now();
         self.frames = None;
-        self.wait(|outcome| {
-            let LiveOutcome {
-                model,
-                analysed,
-                mut stats,
-            } = outcome;
-            let segment = analysed.map(|(mut scan, mut segment_info)| {
-                scan.end_time = duration;
-                segment_info.fingerprint = fingerprint;
-                let (segment, regions) = close_segment(scan, segment_info, &mut stats, started);
-                (segment, regions.into_iter().map(round_region).collect())
-            });
-            (model, segment, stats)
+        let handle = self
+            .worker
+            .take()
+            .context("live segment already finished")?;
+        let outcome = handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("live analysis thread panicked"))?;
+        Ok(Drained {
+            model: outcome.model,
+            segment: DrainedSegment {
+                analysed: outcome.analysed,
+                stats: outcome.stats,
+                started,
+            },
+            dropped: self.dropped,
         })
     }
 
