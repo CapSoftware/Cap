@@ -1541,6 +1541,11 @@ impl AudioResampler {
         // Clamp output info for FFmpeg compatibility (max 8 channels)
         let output_info = output_info.for_ffmpeg_output();
 
+        let mut options = high_quality_resampler_options();
+        // FFmpeg's default stereo to mono matrix sums at equal power (+3 dB), which clips
+        // centred speech on 1-channel outputs. Capping each output row at unity averages the
+        // pair instead and leaves stereo and the upmixes (rows already at unity) untouched.
+        options.set("rematrix_maxval", "1");
         let context = resampling::Context::get_with(
             AudioData::SAMPLE_FORMAT,
             ChannelLayout::STEREO,
@@ -1548,7 +1553,7 @@ impl AudioResampler {
             output_info.sample_format,
             output_info.channel_layout(),
             output_info.sample_rate,
-            high_quality_resampler_options(),
+            options,
         )?;
 
         info!(
@@ -6160,59 +6165,106 @@ mod tests {
         }
     }
 
-    #[test]
-    fn audio_resampler_mono_downmix_produces_audible_samples_across_multiple_frames() {
-        let _ = ffmpeg::init();
-        let output_info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 1);
-        let mut resampler = AudioResampler::new(output_info).unwrap();
-        let samples_per_frame = 1024;
-        let mut frame = FFAudio::new(
-            AudioData::SAMPLE_FORMAT,
-            samples_per_frame,
-            ChannelLayout::STEREO,
-        );
-        frame.set_rate(48_000);
-        let sample_count = samples_per_frame * usize::from(AudioRenderer::CHANNELS);
-        let values = vec![0.5f32; sample_count];
-        frame.data_mut(0)[..sample_count * f32::BYTE_SIZE]
+    fn stereo_frame(frame_index: usize, samples: usize, left: f32, right: f32) -> FFAudio {
+        let mut frame = FFAudio::new(AudioData::SAMPLE_FORMAT, samples, ChannelLayout::STEREO);
+        frame.set_rate(AudioData::SAMPLE_RATE);
+        let values = (0..samples)
+            .flat_map(|i| {
+                let t = (frame_index * samples + i) as f32 / AudioData::SAMPLE_RATE as f32;
+                let wave = (2.0 * std::f32::consts::PI * 440.0 * t).sin();
+                [left * wave, right * wave]
+            })
+            .collect::<Vec<_>>();
+        frame.data_mut(0)[..values.len() * f32::BYTE_SIZE]
             .copy_from_slice(unsafe { cast_f32_slice_to_bytes(&values) });
+        frame
+    }
 
-        let mut total_samples = 0;
-        let mut non_zero_samples = 0;
-        for frame_idx in 0..5 {
-            let bytes = resampler.queue_and_process_frame(&frame);
-            let frame_samples = bytes.len() / f32::BYTE_SIZE;
-            assert!(
-                frame_samples > 0,
-                "Resampler frame {frame_idx} must produce samples and not stall"
-            );
-            total_samples += frame_samples;
-            for chunk in bytes.chunks_exact(f32::BYTE_SIZE) {
-                let val = f32::from_bytes(chunk);
-                if val.abs() > 0.01 {
-                    non_zero_samples += 1;
-                }
+    fn resampled(bytes: &[u8]) -> Vec<f32> {
+        bytes
+            .chunks_exact(f32::BYTE_SIZE)
+            .map(f32::from_bytes)
+            .collect()
+    }
+
+    #[test]
+    fn audio_resampler_downmixes_every_frame_to_mono_at_unity_level() {
+        ffmpeg::init().unwrap();
+        for (left, right, expected) in [(0.9, 0.9, 0.9), (0.8, 0.0, 0.4)] {
+            let mut resampler =
+                AudioResampler::new(AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 1))
+                    .unwrap();
+            for frame_index in 0..8 {
+                let frame = stereo_frame(frame_index, 1024, left, right);
+                let out = resampled(resampler.queue_and_process_frame(&frame));
+                assert_eq!(out.len(), 1024, "frame {frame_index} must not stall");
+                let peak = out.iter().fold(0f32, |peak, v| peak.max(v.abs()));
+                assert!(
+                    (peak - expected).abs() < 0.01,
+                    "frame {frame_index}: peak {peak}, expected {expected} for L {left} R {right}"
+                );
             }
+        }
+    }
+
+    #[test]
+    fn audio_resampler_keeps_stereo_and_surround_channels_at_unity() {
+        ffmpeg::init().unwrap();
+        for channels in [2u16, 6] {
+            let mut resampler = AudioResampler::new(AudioInfo::new_raw(
+                AudioData::SAMPLE_FORMAT,
+                48_000,
+                channels,
+            ))
+            .unwrap();
+            let frame = stereo_frame(0, 1024, 0.5, 0.25);
+            let out = resampled(resampler.queue_and_process_frame(&frame));
+            let channels = usize::from(channels);
+            assert_eq!(out.len(), 1024 * channels);
+            for channel in 0..channels {
+                let peak = out
+                    .iter()
+                    .skip(channel)
+                    .step_by(channels)
+                    .fold(0f32, |peak, v| peak.max(v.abs()));
+                let expected = [0.5, 0.25].get(channel).copied().unwrap_or(0.0);
+                assert!(
+                    (peak - expected).abs() < 0.01,
+                    "{channels} channels: channel {channel} peak {peak}, expected {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audio_resampler_output_keeps_pace_with_input_when_the_rate_changes() {
+        ffmpeg::init().unwrap();
+        let frames = 200usize;
+        let mut resampler =
+            AudioResampler::new(AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 44_100, 2)).unwrap();
+        let mut total = 0usize;
+        for frame_index in 0..frames {
+            let frame = stereo_frame(frame_index, 1024, 0.5, 0.5);
+            total += resampled(resampler.queue_and_process_frame(&frame)).len() / 2;
+            let backlog = resampler
+                .context
+                .delay()
+                .map_or(0, |delay| delay.output.max(0) as usize);
+            assert!(
+                backlog < 1024,
+                "frame {frame_index}: {backlog} output frames held back inside the resampler"
+            );
         }
         while let Some(flushed) = resampler.flush_frame() {
             if flushed.is_empty() {
                 break;
             }
-            for chunk in flushed.chunks_exact(f32::BYTE_SIZE) {
-                total_samples += 1;
-                let val = f32::from_bytes(chunk);
-                if val.abs() > 0.01 {
-                    non_zero_samples += 1;
-                }
-            }
+            total += flushed.len() / f32::BYTE_SIZE / 2;
         }
+        let expected = frames * 1024 * 44_100 / 48_000;
         assert!(
-            total_samples >= 5 * samples_per_frame,
-            "Resampler downmix to mono must output at least all queued samples after flush"
-        );
-        assert!(
-            non_zero_samples > 0,
-            "Resampler downmix to mono must not be silent across frames"
+            total.abs_diff(expected) <= 2,
+            "resampled {total} frames, expected {expected}"
         );
     }
 }
