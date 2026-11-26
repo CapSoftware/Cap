@@ -7,6 +7,7 @@ import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { Adapter } from "next-auth/adapters";
 import { nanoId } from "../helpers.ts";
 import { enqueueLoopsSync } from "../loops/queue.ts";
+import { insertPersonalOrganization } from "../organization-pointer.ts";
 import {
 	accounts,
 	organizationInvites,
@@ -113,7 +114,10 @@ async function hasLinkedAccount(db: MySql2Database, userId: User.UserId) {
 
 export function DrizzleAdapter(
 	db: MySql2Database,
-	options?: { getSsoIdentity: () => ValidatedSsoIdentity | null },
+	options?: {
+		getSsoIdentity: () => ValidatedSsoIdentity | null;
+		onUserCreated?: () => void;
+	},
 ): Adapter {
 	return {
 		async createUser(userData: CreateUserData) {
@@ -122,7 +126,8 @@ export function DrizzleAdapter(
 			if (ssoIdentity && ssoIdentity.email !== normalizedEmail) {
 				throw new Error("The user does not match the verified SSO identity.");
 			}
-			let userId = User.UserId.make(nanoId());
+			const newUserId = User.UserId.make(nanoId());
+			let userId = newUserId;
 			await db.transaction(async (tx) => {
 				if (ssoIdentity) {
 					const [organization] = await tx
@@ -214,29 +219,14 @@ export function DrizzleAdapter(
 					return;
 				}
 
-				const organizationId = Organisation.OrganisationId.make(nanoId());
-
-				await tx.insert(organizations).values({
-					id: organizationId,
-					ownerId: userId,
-					name: "My Organization",
-				});
-
-				await tx.insert(organizationMembers).values({
-					id: nanoId(),
-					organizationId,
-					userId,
-					role: "owner",
-				});
-
-				await tx
-					.update(users)
-					.set({
-						activeOrganizationId: organizationId,
-						defaultOrgId: organizationId,
-					})
-					.where(eq(users.id, userId));
+				await insertPersonalOrganization(tx, userId);
 			});
+
+			if (userId === newUserId) {
+				try {
+					options?.onUserCreated?.();
+				} catch {}
+			}
 
 			const rows = await db
 				.select()

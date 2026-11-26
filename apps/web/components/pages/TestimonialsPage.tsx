@@ -13,6 +13,7 @@ export const TestimonialsPage = ({ amount }: TestimonialsPageProps) => {
 			<div className="py-32 md:py-40 wrapper">
 				<Testimonials
 					amount={amount}
+					titleAs="h1"
 					title="Teams & creators love Cap"
 					subtitle="Don't just take our word for it. Here's what our users are saying about their experience with Cap."
 				/>

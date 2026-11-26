@@ -112,8 +112,8 @@ export async function verifyVideoPassword(
 			await isPasswordAttemptLimited(
 				{
 					perClient: RATE_LIMIT_IDS.VIDEO_PASSWORD,
-					perViewer: RATE_LIMIT_IDS.VIDEO_PASSWORD_PER_VIEWER,
-					perResource: RATE_LIMIT_IDS.VIDEO_PASSWORD_PER_VIDEO,
+					perViewer: RATE_LIMIT_IDS.PASSWORD_PER_VIEWER,
+					perResource: RATE_LIMIT_IDS.PASSWORD_PER_RESOURCE,
 				},
 				`video:${resourceKey}`,
 			)

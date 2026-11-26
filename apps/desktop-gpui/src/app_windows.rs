@@ -87,7 +87,7 @@ pub(crate) fn display_work_area(
 }
 
 #[cfg(target_os = "linux")]
-fn uses_wayland() -> bool {
+pub(crate) fn uses_wayland() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some()
         && (std::env::var_os("DISPLAY").is_none()
             || std::env::var("XDG_SESSION_TYPE")
@@ -922,6 +922,15 @@ pub fn broadcast_theme(cx: &mut App) {
             cx.notify();
         });
     }
+    let meeting_windows = crate::meetings_ui::MeetingWindows::dock_windows(cx)
+        .into_iter()
+        .chain(crate::meetings_ui::MeetingWindows::panel_windows(cx));
+    for handle in meeting_windows.collect::<Vec<_>>() {
+        let _ = handle.update(cx, |_, window, cx| {
+            refresh(window, cx);
+            window.refresh();
+        });
+    }
 }
 
 /// `makeKeyAndOrderFront:` re-enters gpui's window callbacks, so it runs from
@@ -1085,6 +1094,15 @@ pub fn heal_main_window_style(cx: &mut App) {
         })
         .detach();
     });
+}
+
+/// The main window floats above normal windows, so a meeting window opened
+/// from it would sit underneath: put the main window away first, the way
+/// Settings does.
+pub fn hide_main_for_meeting_window(cx: &mut App) {
+    if cx.has_global::<AppWindows>() {
+        cx.defer(hide_main_window);
+    }
 }
 
 /// `getCurrentWindow().hide()` -- same rule, same reason.
@@ -1650,12 +1668,50 @@ pub fn onboarding_is_open(cx: &App) -> bool {
     cx.has_global::<AppWindows>() && cx.global::<AppWindows>().onboarding.is_some()
 }
 
+/// The notes window is going away. Opening it put Cap's window away, so it
+/// comes back, the way it does after Settings; not when the user turned that
+/// off, closed Cap's window themselves, already brought it back, has Settings
+/// open, or a recording keeps it away on purpose.
+pub fn notes_closed(cx: &mut App) {
+    let wanted = crate::meetings_ui::live::settings(cx)
+        .is_none_or(|settings| settings.automation.show_cap_on_close);
+    let windows = cx.global::<AppWindows>();
+    let reveal = show_cap_after_notes(
+        wanted,
+        windows.main_hidden_by_app,
+        windows.main_closed_by_user,
+        windows.settings.is_some(),
+        RecordingSession::global(cx).read(cx).phase == Phase::Idle,
+    );
+    if reveal {
+        show_main_window(cx);
+    } else {
+        crate::menus::schedule_dock_sync(cx);
+    }
+}
+
+fn show_cap_after_notes(
+    wanted: bool,
+    main_hidden_by_app: bool,
+    main_closed_by_user: bool,
+    settings_open: bool,
+    idle: bool,
+) -> bool {
+    wanted && main_hidden_by_app && !main_closed_by_user && !settings_open && idle
+}
+
 fn restore_after_settings(cx: &mut App) {
     // A Shortcuts row may have been recording when the window went away.
     crate::hotkeys::resume(cx);
+    // Settings opened over the notes hands back to the notes; Cap's window
+    // returns when they close (`notes_closed`).
+    let notes_open = cx
+        .try_global::<crate::meetings_ui::MeetingWindows>()
+        .is_some_and(|windows| windows.documents.is_some());
     // Not while recording: the main window is deliberately hidden then, and
     // the session observer brings it back when the recording ends.
-    if RecordingSession::global(cx).read(cx).phase == Phase::Idle
+    if !notes_open
+        && RecordingSession::global(cx).read(cx).phase == Phase::Idle
         && !cx.global::<AppWindows>().main_closed_by_user
     {
         show_main_window(cx);
@@ -3029,6 +3085,10 @@ pub enum OwnWindow {
     Editor,
     ScreenshotEditor,
     Onboarding,
+    Notes,
+    MeetingSetup,
+    MeetingPrompt,
+    MeetingIndicator,
 }
 
 impl OwnWindow {
@@ -3036,7 +3096,7 @@ impl OwnWindow {
     /// (`WindowCaptureOccluder`, `CaptureArea`, `RecordingsOverlay`, `Upgrade`,
     /// `Debug`) have no counterpart in this app; their default rules are still
     /// honoured for *other* processes by `resolve_excluded_window_ids`.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 14] = [
         Self::Main,
         Self::Settings,
         Self::Controls,
@@ -3047,6 +3107,18 @@ impl OwnWindow {
         Self::Editor,
         Self::ScreenshotEditor,
         Self::Onboarding,
+        Self::Notes,
+        Self::MeetingSetup,
+        Self::MeetingPrompt,
+        Self::MeetingIndicator,
+    ];
+
+    /// Chrome that floats over whatever is being recorded and is never part of
+    /// the picture, whatever the saved rule list says.
+    const ALWAYS_EXCLUDED: [Self; 3] = [
+        Self::Teleprompter,
+        Self::MeetingPrompt,
+        Self::MeetingIndicator,
     ];
 
     pub fn title(self) -> &'static str {
@@ -3061,6 +3133,10 @@ impl OwnWindow {
             Self::Editor => "Cap Editor",
             Self::ScreenshotEditor => "Cap Screenshot Editor",
             Self::Onboarding => "Welcome to Cap",
+            Self::Notes => crate::meetings_ui::documents::TITLE,
+            Self::MeetingSetup => crate::meetings_ui::setup::TITLE,
+            Self::MeetingPrompt => crate::meetings_ui::live::prompt::TITLE,
+            Self::MeetingIndicator => crate::meetings_ui::live::indicator::TITLE,
         }
     }
 }
@@ -3079,13 +3155,15 @@ fn own_window_exclusion_rules(
     if mode == RecordingMode::Instant {
         rules.retain(|rule| rule.window_title.as_deref() != Some(OwnWindow::Camera.title()));
     }
-    let teleprompter = crate::store::WindowExclusion {
-        bundle_identifier: None,
-        owner_name: None,
-        window_title: Some(OwnWindow::Teleprompter.title().to_string()),
-    };
-    if !rules.contains(&teleprompter) {
-        rules.push(teleprompter);
+    for kind in OwnWindow::ALWAYS_EXCLUDED {
+        let rule = crate::store::WindowExclusion {
+            bundle_identifier: None,
+            owner_name: None,
+            window_title: Some(kind.title().to_string()),
+        };
+        if !rules.contains(&rule) {
+            rules.push(rule);
+        }
     }
     rules
 }
@@ -3133,6 +3211,21 @@ struct OwnWindowHandle {
     number: Option<isize>,
     visible: bool,
     native: Option<platform::NativeWindow>,
+}
+
+fn probe_meeting_window(
+    kind: OwnWindow,
+    handle: gpui::AnyWindowHandle,
+    cx: &mut App,
+) -> Option<OwnWindowHandle> {
+    handle
+        .update(cx, |_, window, _| OwnWindowHandle {
+            kind,
+            number: platform::window_number(window),
+            visible: platform::window_is_visible(window),
+            native: platform::native_window(window),
+        })
+        .ok()
 }
 
 fn probe_own_window<V: 'static + gpui::Render>(
@@ -3216,6 +3309,26 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
     }
     for handle in screenshot_editors {
         windows.extend(probe_own_window(OwnWindow::ScreenshotEditor, handle, cx));
+    }
+    let meeting: Vec<(OwnWindow, gpui::AnyWindowHandle)> = cx
+        .try_global::<crate::meetings_ui::MeetingWindows>()
+        .map(|meeting| {
+            let one = |kind, handle: &Option<gpui::AnyWindowHandle>| handle.map(|h| (kind, h));
+            one(OwnWindow::Notes, &meeting.documents)
+                .into_iter()
+                .chain(one(OwnWindow::MeetingSetup, &meeting.setup))
+                .chain(one(OwnWindow::MeetingIndicator, &meeting.indicator))
+                .chain(
+                    meeting
+                        .prompts
+                        .iter()
+                        .map(|handle| (OwnWindow::MeetingPrompt, *handle)),
+                )
+                .collect()
+        })
+        .unwrap_or_default();
+    for (kind, handle) in meeting {
+        windows.extend(probe_meeting_window(kind, handle, cx));
     }
     windows
 }
@@ -3489,6 +3602,27 @@ fn linux_camera_presentation(
     Ok(presentation)
 }
 
+/// The picture is drawn where its bubble sits, as a camera is.
+#[cfg(target_os = "linux")]
+fn refresh_linux_instant_picture(config: &mut StartConfig, cx: &mut App) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !cap_recording::screenshot::uses_wayland_portal(),
+        tr::dialog::capture::camera_needs_x11()
+    );
+    let camera = cx
+        .global::<AppWindows>()
+        .camera
+        .ok_or_else(|| anyhow::anyhow!(tr::dialog::capture::camera_preview_closed()))?;
+    let snapshot = camera.update(cx, |camera, window, _| camera.recording_snapshot(window))??;
+    let capture = linux_capture_bounds(&config.target)?;
+    let presentation = linux_camera_presentation(snapshot, capture)?;
+    config.linux_instant_picture = Some(crate::recording::LinuxInstantPictureRequest {
+        presentation,
+        reference_size: (capture.width, capture.height),
+    });
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn refresh_linux_instant_camera(
     config: &mut StartConfig,
@@ -3498,10 +3632,16 @@ pub(crate) fn refresh_linux_instant_camera(
     use cap_recording::instant_recording::{LinuxCameraBlur, LinuxCameraProcessing};
 
     config.linux_instant_camera = None;
+    config.linux_instant_picture = None;
     if config.mode != RecordingMode::Instant
-        || config.camera.is_none()
         || matches!(config.target, ScreenCaptureTarget::CameraOnly)
     {
+        return Ok(());
+    }
+    if config.camera.is_none() {
+        if config.camera_picture.is_some() && !config.target.is_audio_only() {
+            refresh_linux_instant_picture(config, cx)?;
+        }
         return Ok(());
     }
     anyhow::ensure!(
@@ -4238,7 +4378,7 @@ pub fn begin_recording(mut config: StartConfig, cx: &mut App) {
         if clean_capture_supported(
             config.mode,
             &config.target,
-            config.camera.is_some(),
+            config.camera.is_some() || config.camera_picture.is_some(),
             wayland,
         ) {
             if let Err(error) = prepare_clean_capture(config, cx) {
@@ -4389,8 +4529,7 @@ pub fn open_camera_window(cx: &mut App) {
     }
 
     let state = crate::store::load().camera_window.unwrap_or_default();
-    let (width, height) =
-        camera_window::window_size(&state, camera_window::retained_preview_aspect(cx));
+    let (width, height) = camera_window::opening_window_size(&state, cx);
 
     let main = cx.global::<AppWindows>().main;
     let main_geometry = main
@@ -5754,7 +5893,7 @@ fn start_preparing_editor(
                         &preparing.identity,
                         preparing.request.sequence,
                         editor_window::EditorFrame {
-                            frame,
+                            frame: editor_window::ArrivingFrame::Ready(frame),
                             layout: preparing.layout,
                             number: preparing.request.frame_number,
                         },
@@ -6060,14 +6199,25 @@ fn load_editor_project_candidate(
             return;
         }
 
-        // The pump: convert on the background executor (un-padding plus the
-        // BGRA swap is a few megabytes per frame), deliver on the main one.
         cx.spawn({
+            #[cfg(target_os = "macos")]
             let stats = stats.clone();
             let pump_instance = Arc::downgrade(&instance);
             async move |cx| {
                 while let Ok((output, layout)) = frame_rx.recv_async().await {
                     let (frame, number) = match output {
+                        #[cfg(not(target_os = "macos"))]
+                        cap_editor::EditorFrameOutput::Rgba(rgba) => {
+                            if !editor_window::frame_can_stream(&rgba) {
+                                tracing::warn!(
+                                    "a rendered frame could not be converted for display"
+                                );
+                                continue;
+                            }
+                            let number = rgba.frame_number;
+                            (editor_window::ArrivingFrame::Rgba(rgba), number)
+                        }
+                        #[cfg(target_os = "macos")]
                         cap_editor::EditorFrameOutput::Rgba(rgba) => {
                             let stats = stats.clone();
                             let number = rgba.frame_number;
@@ -6083,7 +6233,12 @@ fn load_editor_project_candidate(
                                 );
                                 continue;
                             };
-                            (editor_window::EditorPreviewFrame::Image(image), number)
+                            (
+                                editor_window::ArrivingFrame::Ready(
+                                    editor_window::EditorPreviewFrame::Image(image),
+                                ),
+                                number,
+                            )
                         }
                         cap_editor::EditorFrameOutput::Nv12(frame) => {
                             tracing::warn!(
@@ -6095,7 +6250,12 @@ fn load_editor_project_candidate(
                         #[cfg(target_os = "macos")]
                         cap_editor::EditorFrameOutput::Surface(surface) => {
                             let number = surface.frame_number;
-                            (editor_window::surface_preview_frame(surface), number)
+                            (
+                                editor_window::ArrivingFrame::Ready(
+                                    editor_window::surface_preview_frame(surface),
+                                ),
+                                number,
+                            )
                         }
                     };
                     if handle
@@ -8614,6 +8774,22 @@ mod tests {
         });
     }
 
+    /// A start held for its shortcut already carries the picture, so the
+    /// picture cannot change under it.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn the_picture_cannot_change_while_a_clean_capture_holds_a_start(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            cx.set_global(test_app_windows(Vec::new()));
+            assert!(crate::camera_picture::can_change(cx));
+            cx.global_mut::<AppWindows>().clean_capture =
+                Some(pending_clean_capture(RecordingMode::Instant, false));
+            assert!(!crate::camera_picture::can_change(cx));
+        });
+    }
+
     /// A clean capture keeps the bubble closed until its lease is released.
     /// Asking to show the preview while the lease holds must keep it hidden,
     /// so the reopen after the lease is released still brings it back.
@@ -8826,6 +9002,7 @@ mod tests {
                 },
                 microphone: None,
                 camera: None,
+                camera_picture: None,
                 device_settings: crate::store::RecordingDeviceSettings::default(),
                 input_readiness: crate::feeds::InputReadiness::default(),
                 system_audio: false,
@@ -8834,6 +9011,7 @@ mod tests {
                 mic_feed: None,
                 mic_meter: None,
                 linux_instant_camera: None,
+                linux_instant_picture: None,
                 start_gate: None,
             }),
             gate: CleanCaptureGate::default(),
@@ -9449,6 +9627,19 @@ mod tests {
         assert_eq!(capture, (-1910, 20, 800, 600));
     }
 
+    /// Notes put Cap's window away; closing them brings it back unless the
+    /// setting is off, the user closed or reopened Cap's window themselves,
+    /// Settings is open, or a recording keeps it hidden.
+    #[test]
+    fn closing_the_notes_brings_cap_back_only_when_notes_put_it_away() {
+        assert!(show_cap_after_notes(true, true, false, false, true));
+        assert!(!show_cap_after_notes(false, true, false, false, true));
+        assert!(!show_cap_after_notes(true, false, false, false, true));
+        assert!(!show_cap_after_notes(true, true, true, false, true));
+        assert!(!show_cap_after_notes(true, true, false, true, true));
+        assert!(!show_cap_after_notes(true, true, false, false, false));
+    }
+
     /// `restore_main_windows_if_no_editors` (`lib.rs:6242-6262`): the main
     /// window comes back only when the closing editor was the last one of
     /// either kind *and* no Settings window exists. Settings -> Recordings ->
@@ -9685,6 +9876,10 @@ mod tests {
             (OwnWindow::Editor, "Cap Editor"),
             (OwnWindow::ScreenshotEditor, "Cap Screenshot Editor"),
             (OwnWindow::Onboarding, "Welcome to Cap"),
+            (OwnWindow::Notes, "Cap Notes"),
+            (OwnWindow::MeetingSetup, "Cap Meeting Setup"),
+            (OwnWindow::MeetingPrompt, "Cap Meeting Prompt"),
+            (OwnWindow::MeetingIndicator, "Cap Meeting Indicator"),
         ];
         assert_eq!(OwnWindow::ALL.len(), expected.len());
         for (kind, title) in expected {
@@ -9743,6 +9938,10 @@ mod tests {
                 OwnWindow::Editor,
                 OwnWindow::ScreenshotEditor,
                 OwnWindow::Onboarding,
+                OwnWindow::Notes,
+                OwnWindow::MeetingSetup,
+                OwnWindow::MeetingPrompt,
+                OwnWindow::MeetingIndicator,
             ]
         );
     }
@@ -9764,6 +9963,8 @@ mod tests {
                 OwnWindow::Camera,
                 OwnWindow::ModeSelect,
                 OwnWindow::Teleprompter,
+                OwnWindow::MeetingPrompt,
+                OwnWindow::MeetingIndicator,
             ]
         );
 
@@ -9777,6 +9978,8 @@ mod tests {
                 OwnWindow::Controls,
                 OwnWindow::ModeSelect,
                 OwnWindow::Teleprompter,
+                OwnWindow::MeetingPrompt,
+                OwnWindow::MeetingIndicator,
             ]
         );
     }
@@ -9786,15 +9989,23 @@ mod tests {
     #[test]
     fn the_teleprompter_rule_is_always_present_and_never_duplicated() {
         let from_nothing = own_window_exclusion_rules(Vec::new(), RecordingMode::Instant);
-        assert_eq!(from_nothing, vec![title_rule("Cap Teleprompter")]);
+        let always = vec![
+            title_rule("Cap Teleprompter"),
+            title_rule("Cap Meeting Prompt"),
+            title_rule("Cap Meeting Indicator"),
+        ];
+        assert_eq!(from_nothing, always);
         assert_eq!(
             excluded_own_windows(&from_nothing),
-            vec![OwnWindow::Teleprompter]
+            vec![
+                OwnWindow::Teleprompter,
+                OwnWindow::MeetingPrompt,
+                OwnWindow::MeetingIndicator,
+            ]
         );
 
-        let already_configured =
-            own_window_exclusion_rules(vec![title_rule("Cap Teleprompter")], RecordingMode::Studio);
-        assert_eq!(already_configured, vec![title_rule("Cap Teleprompter")]);
+        let already_configured = own_window_exclusion_rules(always.clone(), RecordingMode::Studio);
+        assert_eq!(already_configured, always);
     }
 
     /// Our own windows are matched on title *alone*
@@ -9833,6 +10044,8 @@ mod tests {
                 OwnWindow::Controls,
                 OwnWindow::ModeSelect,
                 OwnWindow::Teleprompter,
+                OwnWindow::MeetingPrompt,
+                OwnWindow::MeetingIndicator,
             ]
         );
 
@@ -9852,7 +10065,11 @@ mod tests {
         let emptied = own_window_exclusion_rules(Vec::new(), RecordingMode::Studio);
         assert_eq!(
             content_protection_targets(&emptied),
-            vec![OwnWindow::Teleprompter]
+            vec![
+                OwnWindow::Teleprompter,
+                OwnWindow::MeetingPrompt,
+                OwnWindow::MeetingIndicator,
+            ]
         );
     }
 

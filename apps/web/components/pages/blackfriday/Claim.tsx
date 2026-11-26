@@ -73,7 +73,7 @@ export function Claim({
 	);
 }
 
-function Sheen() {
+export function Sheen() {
 	return (
 		<span
 			aria-hidden="true"
@@ -82,7 +82,7 @@ function Sheen() {
 	);
 }
 
-function Arrow({ small }: { small?: boolean }) {
+export function Arrow({ small }: { small?: boolean }) {
 	return (
 		<span
 			aria-hidden="true"
@@ -93,6 +93,7 @@ function Arrow({ small }: { small?: boolean }) {
 		>
 			<svg
 				viewBox="0 0 16 16"
+				aria-hidden="true"
 				className={classNames(
 					"transition-transform duration-300 group-hover/claim:translate-x-0.5 motion-reduce:transition-none",
 					small ? "size-3" : "size-3.5",

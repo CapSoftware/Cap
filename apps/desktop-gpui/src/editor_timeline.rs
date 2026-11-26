@@ -1135,7 +1135,7 @@ pub struct TrackLanes {
 }
 
 pub(crate) fn scene_available(config: &ProjectConfiguration, has_camera: bool) -> bool {
-    has_camera
+    (has_camera || config.camera_picture.is_some())
         && (config.requires_camera()
             || config
                 .timeline

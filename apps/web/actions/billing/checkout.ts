@@ -18,6 +18,7 @@ import {
 	type CheckoutEnvironment,
 	type CheckoutPlan,
 	isCheckoutPlan,
+	isYearlyOnlyPromotion,
 	parseCheckoutSeats,
 	pickCheckoutCurrency,
 	planForPriceId,
@@ -225,9 +226,14 @@ export async function changeProCheckoutPlan(input: {
 	try {
 		const session = await checkoutStripe().checkout.sessions.retrieve(
 			sessionId,
-			{ expand: ["line_items"] },
+			{ expand: ["line_items", "discounts.promotion_code"] },
 		);
 		const lineItem = session.line_items?.data[0];
+		const yearlyOnlyCode = session.discounts?.some(
+			(discount) =>
+				typeof discount.promotion_code === "object" &&
+				isYearlyOnlyPromotion(discount.promotion_code?.code),
+		);
 
 		// The client secret is the only credential a guest holds for their
 		// session, so it is what authorizes changing the plan on it.
@@ -238,7 +244,8 @@ export async function changeProCheckoutPlan(input: {
 			session.metadata?.checkoutUi !== "elements" ||
 			session.line_items?.data.length !== 1 ||
 			!lineItem ||
-			!planForPriceId(lineItem.price?.id, environment)
+			!planForPriceId(lineItem.price?.id, environment) ||
+			(yearlyOnlyCode && input.plan !== "yearly")
 		) {
 			return { ok: false };
 		}

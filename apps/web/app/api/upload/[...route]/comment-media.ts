@@ -350,6 +350,16 @@ app.post(
 				}),
 			);
 
+			// Part sizes are client-reported, so the earlier check alone does not
+			// bound the stored object.
+			if ((head.ContentLength ?? 0) > MAX_MEDIA_OBJECT_BYTES) {
+				yield* bucket
+					.deleteObject(claims.key)
+					.pipe(Effect.catchAll(Effect.logError));
+				c.status(413);
+				return c.json({ error: "Recording is too large" });
+			}
+
 			// No videos-row update, no transcription queue, no videoUploads delete:
 			// comment media is a leaf object, not a Cap video.
 			return c.json({

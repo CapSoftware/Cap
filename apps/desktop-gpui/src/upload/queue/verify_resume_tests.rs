@@ -586,6 +586,30 @@ fn cap_deleted_on_the_web_after_upload_stops_confirming() {
     });
 }
 
+/// The owner deletes the cap on the web while its upload waits for cloud
+/// verification, and the delete is still in progress: the server answers the
+/// completion call with 409 code "video-deleting". The queue stops there, as
+/// for a finished delete, instead of uploading the recording again.
+#[test]
+fn cap_being_deleted_on_the_web_is_not_uploaded_again() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_deleting_on_web_during_verification");
+    virtual_time(async {
+        let mock = MockCap::start(vec![rule(Route::Api("recording-complete"), Fault::Hang)]).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        upload_then_quit_before_verification(&mock, &project).await;
+        let initiated = mock.count("POST", "multipart/initiate");
+
+        mock.start_deleting_on_web(VIDEO_ID);
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        let window = Duration::from_secs(30 * 60);
+        run_queue(&manager, &project, window).await;
+        assert_eq!(mock.count("POST", "multipart/initiate"), initiated);
+        assert_deleted_on_web(&mock, &project, window);
+    });
+}
+
 /// A cap deleted on the web before its upload starts gets 404 from the upload
 /// URL routes, so the queue never reaches cloud verification and retries the
 /// transfer with the usual bounded backoff.
@@ -708,5 +732,65 @@ fn verification_pending_past_the_fast_rechecks_still_verifies() {
         run_queue(&manager, &project, Duration::from_secs(60 * 60)).await;
         assert_verified(&mock, &project, &video, &audio);
         assert_eq!(mock.count("POST", "recording-complete"), 36);
+    });
+}
+
+/// A camera-only Instant recording saves its share link when it stops and
+/// uploads one MP4 through the queue. That upload is the recording itself,
+/// not a replacement of a published video, so it verifies once and is never
+/// sent again.
+#[test]
+fn camera_only_instant_upload_verifies_without_replacing_its_own_link() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_camera_only_instant_upload");
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        let mut meta = RecordingMeta::load_for_project(&project).unwrap();
+        let Some(UploadMeta::SegmentUpload {
+            pre_created_video, ..
+        }) = meta.upload.take()
+        else {
+            panic!("fixture is not a saved Instant upload");
+        };
+        meta.upload = Some(UploadMeta::MultipartUpload {
+            video_id: VIDEO_ID.into(),
+            file_path: project.join("content/output.mp4"),
+            pre_created_video,
+            recording_dir: project.clone(),
+        });
+        meta.save_for_project().unwrap();
+        let mut state = read_state(&project).unwrap().unwrap();
+        state.kind = UploadKind::Mp4;
+        write_state(&project, &state).unwrap();
+
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        run_queue(&manager, &project, Duration::from_secs(20 * 60)).await;
+
+        let state = read_state(&project).unwrap().unwrap();
+        assert_eq!(
+            state.phase,
+            UploadPhase::Verified,
+            "{state:?}\n{}",
+            mock.timeline()
+        );
+        assert!(mock.replaced().is_empty(), "{}", mock.timeline());
+        assert_eq!(
+            mock.count("POST", "multipart/initiate"),
+            1,
+            "{}",
+            mock.timeline()
+        );
+        assert_eq!(mock.count("POST", "recording-complete"), 1);
+        assert_eq!(
+            mock.object(&format!("{VIDEO_ID}/result.mp4")).as_deref(),
+            Some(SAMPLE_MP4)
+        );
+        assert!(matches!(
+            RecordingMeta::load_for_project(&project).unwrap().upload,
+            Some(UploadMeta::Complete)
+        ));
+        mock.assert_clean();
     });
 }

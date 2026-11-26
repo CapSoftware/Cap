@@ -890,3 +890,148 @@ pub(crate) fn paper_button(
                 .on_click(on_click)
         })
 }
+
+/// A paper page's 28px heading, the hand-drawn underline drawn on from
+/// `shown_at`, and the soft subtitle under it.
+pub(crate) fn paper_heading(
+    paper: &Paper,
+    title: impl Into<SharedString>,
+    subtitle: Option<SharedString>,
+    shown_at: Instant,
+    still: bool,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .max_w(px(500.))
+        .text_center()
+        .child(
+            div()
+                .text_size(px(28.))
+                .text_color(paper.ink)
+                .font_weight(FontWeight::MEDIUM)
+                .line_height(px(34.))
+                .child(title.into()),
+        )
+        .child(div().mt(px(4.)).child(doodle::doodle(
+            &art::UNDERLINE,
+            paper.palette(),
+            shown_at,
+            still,
+            132.,
+            12.,
+        )))
+        .children(subtitle.map(|subtitle| {
+            div()
+                .mt(px(10.))
+                .text_size(px(15.))
+                .text_color(paper.soft)
+                .font_weight(FontWeight::NORMAL)
+                .line_height(px(22.))
+                .child(subtitle)
+        }))
+}
+
+pub(crate) fn paper_card(paper: &Paper) -> Div {
+    div()
+        .rounded(px(20.))
+        .border(px(1.5))
+        .border_color(paper.track)
+        .bg(paper.card)
+}
+
+/// The step pager: one dot per step, the current one stretched.
+pub(crate) fn pager(paper: &Paper, total: usize, current: usize) -> Div {
+    let paper = *paper;
+    div()
+        .flex()
+        .items_center()
+        .gap(px(5.))
+        .when(total > 1, |el| {
+            el.children((0..total).map(move |index| {
+                div()
+                    .h(px(6.))
+                    .w(px(if current == index { 22. } else { 6. }))
+                    .rounded_full()
+                    .bg(if current == index {
+                        paper.ink
+                    } else if current > index {
+                        paper.soft
+                    } else {
+                        paper.track
+                    })
+            }))
+        })
+}
+
+/// The navigation bar's dark pill: label, then a glyph. Disabled turns it
+/// into an outline with soft text.
+pub(crate) fn primary_pill(
+    paper: &Paper,
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    icon: &'static str,
+    disabled: bool,
+) -> gpui::Stateful<Div> {
+    div()
+        .id(id.into())
+        .tab_index(0)
+        .h(px(46.))
+        .px(px(26.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(8.))
+        .border(px(1.5))
+        .border_color(if disabled { paper.track } else { paper.ink })
+        .bg(if disabled {
+            gpui::transparent_black()
+        } else {
+            paper.ink
+        })
+        .text_color(if disabled { paper.soft } else { paper.bg })
+        .when(!disabled, |el| {
+            el.cursor_pointer().hover(|el| el.opacity(0.88))
+        })
+        .child(
+            div()
+                .text_size(px(14.))
+                .font_weight(FontWeight::MEDIUM)
+                .child(label.into()),
+        )
+        .child(
+            gpui::svg()
+                .path(icon)
+                .size(px(15.))
+                .text_color(if disabled { paper.soft } else { paper.bg }),
+        )
+}
+
+/// The red close dot that stands in for the traffic lights on a paper window.
+pub(crate) fn close_dot(id: &'static str) -> gpui::Stateful<Div> {
+    div()
+        .id(id)
+        .group(id)
+        .tab_index(0)
+        .size(px(14.))
+        .ml(px(12.))
+        .rounded_full()
+        .bg(rgb(Theme::TRAFFIC_CLOSE))
+        .hover(|el| el.bg(rgb(0xf25a53)))
+        .active(|el| el.bg(rgb(0xe6564e)))
+        .cursor_default()
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(
+            gpui::svg()
+                .path("icons/traffic-close.svg")
+                .size(px(10.))
+                .text_color(rgba(0x00000080))
+                .invisible()
+                .group_hover(id, |el| el.visible()),
+        )
+}

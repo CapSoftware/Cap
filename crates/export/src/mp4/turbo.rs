@@ -615,14 +615,12 @@ fn stitch<F: FnMut(u32) -> bool>(
         ),
         None => None,
     };
-    if settings.optimize_filesize {
-        let mut options = ffmpeg::Dictionary::new();
-        options.set("movflags", "+faststart");
-        output.write_header_with(options).map(|_| ())
-    } else {
-        output.write_header()
-    }
-    .map_err(|error| failure(error.to_string()))?;
+    let mut options = ffmpeg::Dictionary::new();
+    options.set("movflags", "+faststart");
+    output
+        .write_header_with(options)
+        .map(|_| ())
+        .map_err(|error| failure(error.to_string()))?;
 
     let mut audio_output = match (audio, audio_encoder) {
         (Some((source, project)), Some(audio_encoder)) => {
