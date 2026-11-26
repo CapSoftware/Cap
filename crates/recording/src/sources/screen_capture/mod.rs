@@ -810,6 +810,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn capture_rate_follows_the_display_up_to_the_studio_ceiling() {
+        let ceiling = crate::defaults::MAX_STUDIO_FPS;
+        for (refresh, expected) in [
+            (60.0, 60),
+            (59.94, 60),
+            (120.0, 120),
+            (144.0, 144),
+            (165.0, 165),
+            (240.0, 240),
+            (360.0, 240),
+            (0.0, 60),
+            (f64::NAN, 60),
+        ] {
+            assert_eq!(
+                capture_fps(ceiling, refresh),
+                expected.min(ceiling),
+                "{refresh} Hz"
+            );
+        }
+        for (max_fps, refresh, expected) in [
+            (60, 144.0, 60),
+            (144, 60.0, 60),
+            (144, 165.0, 144),
+            (24, 60.0, 24),
+            (0, 60.0, 1),
+        ] {
+            assert_eq!(
+                capture_fps(max_fps, refresh),
+                expected,
+                "{max_fps} fps on {refresh} Hz"
+            );
+        }
+    }
+
+    #[test]
     fn h264_bounded_capture_matches_the_encoder_downscale() {
         for (width, height) in [
             (5120, 2880),

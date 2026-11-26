@@ -2544,7 +2544,7 @@ impl ActorBuilder {
     }
 
     pub fn with_max_fps(mut self, max_fps: u32) -> Self {
-        self.max_fps = max_fps.clamp(1, 120);
+        self.max_fps = max_fps.clamp(1, crate::defaults::MAX_STUDIO_FPS);
         self
     }
 
@@ -7032,6 +7032,42 @@ mod tests {
         assert_eq!(
             segment.mic.as_ref().and_then(|mic| mic.start_time),
             Some(0.0)
+        );
+    }
+
+    #[test]
+    fn studio_frame_rate_is_clamped_to_the_studio_ceiling() {
+        let builder = |fps| {
+            ActorBuilder::new(
+                PathBuf::from("unused.cap"),
+                screen_capture::ScreenCaptureTarget::CameraOnly,
+            )
+            .with_max_fps(fps)
+            .max_fps
+        };
+        let ceiling = if cfg!(target_os = "macos") { 240 } else { 120 };
+        assert_eq!(crate::defaults::MAX_STUDIO_FPS, ceiling);
+        assert_eq!(builder(0), 1);
+        for fps in [24, 25, 30, 60, 120, 144, 165, 240] {
+            assert_eq!(builder(fps), fps.min(ceiling));
+        }
+        assert_eq!(builder(241), ceiling);
+        assert_eq!(builder(u32::MAX), ceiling);
+    }
+
+    #[test]
+    fn camera_cap_still_applies_at_high_frame_rates() {
+        let defaults = crate::RecordingDefaults::default();
+        for fps in [60, 120, 144, 165, 240] {
+            assert_eq!(
+                defaults.studio_max_fps(true, Some(fps)),
+                crate::defaults::CAMERA_ACTIVE_STUDIO_MAX_FPS
+            );
+            assert_eq!(defaults.studio_max_fps(false, Some(fps)), fps);
+        }
+        assert_eq!(
+            defaults.studio_max_fps(false, None),
+            crate::defaults::DEFAULT_STUDIO_MAX_FPS
         );
     }
 

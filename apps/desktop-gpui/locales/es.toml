@@ -196,16 +196,6 @@ label = "Capturar pulsaciones de teclas"
 description = "Restaura automáticamente la muesca en las nuevas grabaciones de pantalla y de área cuando la región seleccionada incluye la muesca completa. Las pantallas externas, las áreas parciales y las grabaciones de ventana no se modifican. Cada grabación puede cambiarlo en el editor."
 label = "Dibujar la muesca del MacBook en las grabaciones de pantalla"
 
-[settings.general.recording.max_fps]
-description = "Velocidad de fotogramas máxima de la captura de pantalla."
-description_high = "Velocidad de fotogramas máxima de la captura de pantalla. Los valores altos pueden provocar pérdida de fotogramas o un mayor uso de CPU en algunos sistemas."
-fps_120 = "120 FPS"
-fps_24 = "24 FPS"
-fps_25 = "25 FPS"
-fps_30 = "30 FPS"
-fps_60 = "60 FPS (recomendado)"
-label = "Velocidad de fotogramas máxima"
-
 [settings.general.recording.keep_drawings]
 description = "Los dibujos se quedan hasta que los borras. Si está desactivado, cada uno se desvanece unos segundos después de dibujarlo."
 label = "Mantener los dibujos en pantalla"
@@ -350,6 +340,21 @@ resolution_up_to = "Hasta {resolution}"
 title = "Modo Studio"
 ultra = "Máximo detalle"
 ultra_description = "Conserva el máximo detalle para ediciones intensas. Usa más espacio en disco."
+
+[settings.quality.studio.frame_rate]
+description = "El modo Studio graba como máximo a esta velocidad y nunca más rápido de lo que se actualiza tu pantalla. Con la cámara activada, graba a 30 FPS o menos."
+description_high = "Grabar a más de 60 FPS usa más CPU y espacio en disco, y algunos ordenadores lo codifican por software. El modo Studio nunca graba más rápido de lo que se actualiza tu pantalla. Con la cámara activada, graba a 30 FPS o menos."
+description_match = "Graba a la frecuencia de actualización de tu pantalla, hasta {fps} FPS. Grabar a más de 60 FPS usa más CPU y espacio en disco. Con la cámara activada, el modo Studio graba a 30 FPS o menos."
+fps_120 = "120 FPS"
+fps_144 = "144 FPS"
+fps_165 = "165 FPS"
+fps_24 = "24 FPS"
+fps_240 = "240 FPS"
+fps_25 = "25 FPS"
+fps_30 = "30 FPS"
+fps_60 = "60 FPS (recomendado)"
+label = "Velocidad de fotogramas"
+match_display = "Igual que la pantalla"
 
 [settings.quality.instant]
 description = "Se suben mientras grabas, así que el enlace está listo en cuanto paras. Para la mejor calidad, usa el modo Studio: graba con la máxima calidad que permite tu pantalla y puedes exportar hasta 4K."
