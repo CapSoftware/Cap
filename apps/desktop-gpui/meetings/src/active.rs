@@ -79,7 +79,9 @@ pub fn read_labels(labels: &[String]) -> (Vec<String>, Option<String>) {
     let mut me = None;
     for label in labels {
         let label = label.trim();
-        let lower = label.to_lowercase();
+        // ASCII lowercasing keeps every byte offset, so a marker found in
+        // `lower` can slice `label`; full lowercasing can grow a letter ("İ").
+        let lower = label.to_ascii_lowercase();
         for marker in ["(you)", "(me)"] {
             if let Some(at) = lower.find(marker)
                 && let Some(name) = clean_name(&label[..at])
