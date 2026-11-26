@@ -271,7 +271,8 @@ pub struct FrameLossCarry {
 /// writer discards or fails to write, count as lost in the encoder. Repeats
 /// of the last frame are only appended at stop, so a lost tail loses them
 /// first: only packets beyond the real frames that encoded count as written
-/// repeats.
+/// repeats. Writer losses are only taken until the first repeat encodes, so
+/// they are all real frames.
 #[derive(Debug, Default)]
 pub struct ScreenFrameAccounting {
     attached: AtomicBool,
@@ -357,7 +358,9 @@ impl ScreenFrameAccounting {
     }
 
     pub fn record_writer_lost(&self, lost: u64) {
-        self.writer_lost.store(lost, Ordering::Relaxed);
+        if self.repeats_encoded.load(Ordering::Relaxed) == 0 {
+            self.writer_lost.store(lost, Ordering::Relaxed);
+        }
     }
 
     pub fn record_finished(&self, packets_written: Option<u64>) {
@@ -383,17 +386,13 @@ impl ScreenFrameAccounting {
         let repeats_written = packets
             .saturating_sub(self.real_encoded.load(Ordering::Relaxed))
             .min(self.repeats_encoded.load(Ordering::Relaxed));
-        let written = (packets - repeats_written).min(handed_to_encoder);
         let encoder_failed = self.encoder_failed.load(Ordering::Relaxed);
+        let known_lost = encoder_failed + self.writer_lost.load(Ordering::Relaxed);
+        let written = (packets - repeats_written).min(handed_to_encoder.saturating_sub(known_lost));
         let lost_in_encoder = if self.finished.load(Ordering::Relaxed) {
             handed_to_encoder.saturating_sub(written)
         } else {
-            let repeats = self.repeats_encoded.load(Ordering::Relaxed);
-            encoder_failed
-                + self
-                    .writer_lost
-                    .load(Ordering::Relaxed)
-                    .saturating_sub(repeats)
+            known_lost
         };
         ScreenFrameTotals {
             displayed: delivered + callback_dropped + lost_in_capture,
@@ -969,21 +968,43 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_repeat_the_writer_loses_is_not_a_lost_real_frame() {
-        let accounting = ScreenFrameAccounting::default();
-        for i in 0..10u64 {
-            accounting.record_accepted(FrameLossCarry::default(), i == 0);
-            hand(&accounting, false);
+    fn stop_repeats_do_not_change_the_writer_losses() {
+        let run = |real_lost_at: Option<u64>, repeat_lost: bool| {
+            let accounting = ScreenFrameAccounting::default();
+            let mut packets = 0;
+            let mut lost = 0;
+            for i in 0..10u64 {
+                accounting.record_accepted(FrameLossCarry::default(), i == 0);
+                hand(&accounting, false);
+                let repeat = accounting.next_is_repeat();
+                if real_lost_at == Some(i) {
+                    lost += 1;
+                } else {
+                    packets += 1;
+                }
+                accounting.record_encoded(repeat, true, Some(packets));
+                accounting.record_writer_lost(lost);
+            }
+            hand(&accounting, true);
             let repeat = accounting.next_is_repeat();
-            accounting.record_encoded(repeat, true, Some(i + 1));
-        }
-        hand(&accounting, true);
-        let repeat = accounting.next_is_repeat();
-        accounting.record_encoded(repeat, true, Some(10));
-        accounting.record_writer_lost(1);
-        assert_eq!(accounting.totals().lost_in_encoder, 0);
-        accounting.record_writer_lost(3);
-        assert_eq!(accounting.totals().lost_in_encoder, 2);
+            if repeat_lost {
+                lost += 1;
+            } else {
+                packets += 1;
+            }
+            accounting.record_encoded(repeat, true, Some(packets));
+            accounting.record_writer_lost(lost);
+            let live = accounting.totals().lost_in_encoder;
+            accounting.record_finished(Some(packets));
+            (live, accounting.totals().lost_in_encoder)
+        };
+        assert_eq!(run(None, true), (0, 0), "a lost repeat is not a lost frame");
+        assert_eq!(
+            run(Some(3), false),
+            (1, 1),
+            "a written repeat does not hide a lost frame"
+        );
+        assert_eq!(run(Some(3), true), (1, 1));
     }
 
     #[test]
