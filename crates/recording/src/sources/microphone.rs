@@ -34,6 +34,10 @@ const SYSTEM_AUDIO_STOP_FLUSH: Duration = Duration::from_secs(2);
 #[cfg(target_os = "linux")]
 const SYSTEM_AUDIO_STOP_DRAIN: Duration = Duration::from_millis(50);
 
+fn stop_drain_deadline(until: Option<tokio::time::Instant>) -> tokio::time::Instant {
+    until.unwrap_or_else(tokio::time::Instant::now)
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
 pub(crate) enum LinuxSourceLoss {
@@ -811,9 +815,8 @@ impl Microphone {
                                 continue;
                             }
                             r = tokio::time::timeout(silence_timeout, rx.recv_async()) => r,
-                            _ = tokio::time::sleep_until(
-                                system_stop_drain_until.unwrap_or_else(tokio::time::Instant::now),
-                            ), if system_stop_drain_until.is_some() => break,
+                            _ = tokio::time::sleep_until(stop_drain_deadline(system_stop_drain_until)),
+                                if system_stop_drain_until.is_some() => break,
                         };
                         match recv_result {
                             Ok(Ok(frame)) => {
