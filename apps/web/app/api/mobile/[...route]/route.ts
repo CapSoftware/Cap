@@ -16,6 +16,7 @@ import {
 import { getEmailDeliveryStatus, sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
+import { resolveOrCreateActiveOrganization } from "@cap/database/organization-pointer";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, serverEnv } from "@cap/env";
@@ -77,6 +78,7 @@ import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
+import { logNewAccountAddress } from "@/lib/ip-reputation";
 import {
 	describeLinkAccessChoice,
 	isLinkRestricted,
@@ -100,6 +102,7 @@ import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { playbackUrlValidity } from "@/lib/signed-url-validity";
 import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
+import { shouldRefuseTorExit, type TorExitSurface } from "@/lib/tor-exit-gate";
 import { userPreferencesObject } from "@/lib/user-preferences-sql";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
 import {
@@ -244,8 +247,12 @@ const getMobileRedirectUrl = (redirectUri: string) => {
 	}
 };
 
-const getEmailAuthAdapter = () => {
-	const adapter = authOptions().adapter;
+const getEmailAuthAdapter = (headers: Headers) => {
+	const adapter = authOptions(undefined, {
+		onUserCreated: () => {
+			logNewAccountAddress("mobile-email-session", headers);
+		},
+	}).adapter;
 	const { createUser, getUserByEmail, updateUser } = adapter ?? {};
 
 	if (!createUser || !getUserByEmail || !updateUser) {
@@ -255,8 +262,9 @@ const getEmailAuthAdapter = () => {
 	return { createUser, getUserByEmail, updateUser };
 };
 
-const createOrUpdateEmailUser = async (email: string) => {
-	const { createUser, getUserByEmail, updateUser } = getEmailAuthAdapter();
+const createOrUpdateEmailUser = async (email: string, headers: Headers) => {
+	const { createUser, getUserByEmail, updateUser } =
+		getEmailAuthAdapter(headers);
 	const existingUser = await getUserByEmail(email);
 
 	if (existingUser) {
@@ -486,6 +494,15 @@ const getMobileThumbnailUrl = Effect.fn("Mobile.getThumbnailUrl")(function* (
 	return yield* bucket.getSignedObjectUrl(thumbnailKey);
 });
 
+const ensureNotTorExit = Effect.fn("Mobile.ensureNotTorExit")(function* (
+	surface: TorExitSurface,
+	headers: Headers,
+) {
+	if (yield* Effect.promise(() => shouldRefuseTorExit(surface, headers))) {
+		return yield* Effect.fail(new HttpApiError.Forbidden());
+	}
+});
+
 const ensureEmailSignInAllowed = Effect.fn("Mobile.ensureEmailSignInAllowed")(
 	function* (email: string) {
 		if (!emailPattern.test(email)) {
@@ -578,6 +595,7 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 ) {
 	const email = normalizeSignInEmail(rawEmail);
 	if (!email) return yield* Effect.fail(new HttpApiError.BadRequest());
+	yield* ensureNotTorExit("mobile-email-session", headers);
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
 
@@ -636,6 +654,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 		return yield* Effect.fail(new HttpApiError.BadRequest());
 	}
 
+	yield* ensureNotTorExit("mobile-email-session", headers);
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
 
@@ -678,7 +697,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	}
 
 	const user = yield* Effect.tryPromise({
-		try: () => createOrUpdateEmailUser(email),
+		try: () => createOrUpdateEmailUser(email, headers),
 		catch: () => new HttpApiError.InternalServerError(),
 	});
 
@@ -1572,11 +1591,28 @@ const getBootstrap = Effect.fn("Mobile.getBootstrap")(function* () {
 	const user = yield* CurrentUser;
 	const mobileUser = yield* getMobileUser();
 
-	const organizations = yield* getAccessibleOrganizations(user.id);
-	const activeOrganization =
+	let organizations = yield* getAccessibleOrganizations(user.id);
+	let activeOrganization =
 		organizations.find((org) => org.id === mobileUser.activeOrganizationId) ??
-		organizations[0] ??
 		null;
+	// Folder, analytics and import routes use the stored active organization,
+	// so it has to match the one the app shows. An account with no
+	// organization gets a personal one, as signup and desktop uploads do.
+	if (!activeOrganization) {
+		const database = yield* Database;
+		const fallback = yield* database.use((db) =>
+			resolveOrCreateActiveOrganization(db, {
+				id: user.id,
+				activeOrganizationId: mobileUser.activeOrganizationId,
+			}),
+		);
+		if (organizations.length === 0 && fallback)
+			organizations = yield* getAccessibleOrganizations(user.id);
+		activeOrganization =
+			organizations.find((org) => org.id === fallback?.id) ??
+			organizations[0] ??
+			null;
+	}
 	const activeOrganizationId = activeOrganization?.id ?? null;
 	const [rootFolders, spaces] = activeOrganization
 		? yield* Effect.all([
@@ -3700,6 +3736,18 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					.handle("requestSession", ({ request, urlParams }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
+								if (
+									yield* Effect.promise(() =>
+										shouldRefuseTorExit(
+											"mobile-session",
+											toHeaders(request.headers),
+										),
+									)
+								) {
+									const blockedUrl = new URL("/login", getDeploymentOrigin());
+									blockedUrl.searchParams.set("error", "SignupBlocked");
+									return HttpServerResponse.redirect(blockedUrl.toString());
+								}
 								const user = yield* getCurrentUser;
 								if (Option.isNone(user) || urlParams.provider === "workos") {
 									const loginRedirectUrl =

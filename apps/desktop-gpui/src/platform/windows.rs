@@ -716,8 +716,6 @@ pub fn install_url_scheme_handler() {
     url_scheme::install();
 }
 
-pub fn set_dock_icon(_png: &[u8]) {}
-
 pub fn save_file_panel(suggested: &str, extensions: &[&str]) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new().set_file_name(suggested);
     if !extensions.is_empty() {

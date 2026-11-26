@@ -2573,10 +2573,11 @@ mod mac {
     /// treatment included, so the installed Cap.app's is used when it exists
     /// and the raw asset only as a fallback. A future .app bundle with its
     /// own (Icon Composer) icon supersedes all of this.
-    pub fn set_dock_icon(fallback_png: &[u8]) {
+    pub fn load_dock_icon(fallback_png: &[u8]) -> Option<DockIcon> {
+        use objc2::rc::autoreleasepool;
         use objc2::{class, msg_send};
         use objc2_foundation::NSString;
-        unsafe {
+        autoreleasepool(|_| unsafe {
             let mut image: Option<Retained<AnyObject>> = None;
 
             let cap_app = NSString::from_str("/Applications/Cap.app");
@@ -2614,14 +2615,33 @@ mod mac {
                 }
             }
 
-            let Some(image) = image else { return };
+            image.map(|image| DockIcon {
+                image,
+                from_installed_app: exists,
+            })
+        })
+    }
+
+    pub fn set_dock_icon(icon: DockIcon) {
+        use objc2::{class, msg_send};
+        unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             if !app.is_null() {
-                let _: () = msg_send![app, setApplicationIconImage: &*image];
+                let _: () = msg_send![app, setApplicationIconImage: &*icon.image];
             }
-            tracing::info!(from_installed_app = exists, "dock icon set");
         }
+        tracing::info!(
+            from_installed_app = icon.from_installed_app,
+            "dock icon set"
+        );
     }
+
+    pub struct DockIcon {
+        image: Retained<AnyObject>,
+        from_installed_app: bool,
+    }
+
+    unsafe impl Send for DockIcon {}
 
     pub fn close_native(native: &NativeWindow) {
         use objc2::{msg_send, sel};
@@ -3712,7 +3732,6 @@ mod stub {
     }
 
     pub fn close_native(_native: &NativeWindow) {}
-    pub fn set_dock_icon(_png: &[u8]) {}
     pub fn show_about_panel(_name: &str, _version: &str) {}
     pub fn escape_hotkey_events() -> flume::Receiver<()> {
         // A channel whose sender is dropped immediately: the drain task's

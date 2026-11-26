@@ -11,8 +11,10 @@ anyhow = { version = "1.0.86" }
 # This includes a currently-unreleased fix that ensures the audio stream is actually
 # stopped and released on drop on macOS, plus zeroing of WASAPI capture
 # packets flagged AUDCLNT_BUFFERFLAGS_SILENT (loopback of an idle endpoint
-# otherwise surfaces unspecified buffer contents as audio).
-cpal = { git = "https://github.com/CapSoftware/cpal", rev = "6013cb5f8bd3" }
+# otherwise surfaces unspecified buffer contents as audio), and ALSA taking the
+# nearest buffer size a sound card accepts instead of failing on an exact one,
+# and reading the timestamp clock when a device reports a zero timestamp.
+cpal = { git = "https://github.com/CapSoftware/cpal", rev = "a8c4b41d719b" }
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
 tokio = { version = "1.39.3", features = [
     "macros",

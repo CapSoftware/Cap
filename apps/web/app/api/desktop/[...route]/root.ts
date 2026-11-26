@@ -279,7 +279,20 @@ app.post(
 	),
 	async (c) => {
 		const { feedback, os, version } = c.req.valid("form");
-		const userEmail = c.get("user").email;
+		const user = c.get("user");
+		const userEmail = user.email;
+
+		if (
+			await isRateLimited(RATE_LIMIT_IDS.DESKTOP_FEEDBACK, {
+				headers: c.req.raw.headers,
+				key: `desktop-feedback:${user.id}`,
+			})
+		) {
+			return c.json(
+				{ error: "Too many feedback submissions" },
+				{ status: 429 },
+			);
+		}
 
 		try {
 			await sendEmail({

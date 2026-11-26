@@ -1162,6 +1162,11 @@ fn microphone_available(name: &str) -> bool {
         MicrophoneFeed::list_names()
             .iter()
             .any(|device| device == name)
+    } else if cfg!(target_os = "linux") {
+        // Listing opens every ALSA device as the recording starts, which takes
+        // a bare-card default from the sound server; it also misses a card
+        // the open microphone already holds.
+        MicrophoneFeed::is_connected(name)
     } else {
         MicrophoneFeed::list().contains_key(name)
     }

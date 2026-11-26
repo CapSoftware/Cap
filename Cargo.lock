@@ -2494,7 +2494,7 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.15.3"
-source = "git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3#6013cb5f8bd34ddfbf7b215b9540fd211ce829fc"
+source = "git+https://github.com/CapSoftware/cpal?rev=a8c4b41d719b#a8c4b41d719bf82c2a93d72f38de7f03cbb12f06"
 dependencies = [
  "alsa",
  "core-foundation-sys",
