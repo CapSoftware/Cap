@@ -2,7 +2,7 @@
 
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	PREFERRED_MICROPHONE_KEY,
 	REMEMBER_DEVICES_KEY,
@@ -19,6 +19,16 @@ const globals = globalThis as typeof globalThis & {
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 let latest: Prefs | null = null;
+let storage = new Map<string, string>();
+
+const stubStorage = () => {
+	storage = new Map();
+	vi.stubGlobal("localStorage", {
+		getItem: (key: string) => storage.get(key) ?? null,
+		setItem: (key: string, value: string) => storage.set(key, value),
+		removeItem: (key: string) => storage.delete(key),
+	});
+};
 
 const Harness = ({ mics }: { mics: Mic[] }) => {
 	latest = useDevicePreferences({
@@ -52,7 +62,7 @@ const systemDefault = { deviceId: "default" };
 describe("web recorder microphone auto-select", () => {
 	beforeEach(() => {
 		globals.IS_REACT_ACT_ENVIRONMENT = true;
-		window.localStorage.clear();
+		stubStorage();
 	});
 
 	afterEach(async () => {
@@ -63,7 +73,7 @@ describe("web recorder microphone auto-select", () => {
 		root = null;
 		container = null;
 		latest = null;
-		window.localStorage.clear();
+		vi.unstubAllGlobals();
 	});
 
 	it("selects the default mic once the list fills after a permission grant", async () => {
@@ -100,8 +110,8 @@ describe("web recorder microphone auto-select", () => {
 	});
 
 	it("prefers the remembered mic over the default", async () => {
-		window.localStorage.setItem(REMEMBER_DEVICES_KEY, "true");
-		window.localStorage.setItem(PREFERRED_MICROPHONE_KEY, "built-in-mic");
+		storage.set(REMEMBER_DEVICES_KEY, "true");
+		storage.set(PREFERRED_MICROPHONE_KEY, "built-in-mic");
 
 		await render([]);
 		await render([systemDefault, usb, builtIn]);
@@ -109,8 +119,8 @@ describe("web recorder microphone auto-select", () => {
 	});
 
 	it("ignores a remembered mic that is no longer connected", async () => {
-		window.localStorage.setItem(REMEMBER_DEVICES_KEY, "true");
-		window.localStorage.setItem(PREFERRED_MICROPHONE_KEY, "unplugged-mic");
+		storage.set(REMEMBER_DEVICES_KEY, "true");
+		storage.set(PREFERRED_MICROPHONE_KEY, "unplugged-mic");
 
 		await render([usb, systemDefault]);
 		expect(prefs().selectedMicId).toBe("default");
