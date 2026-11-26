@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 export const REMEMBER_DEVICES_KEY = "cap-web-recorder-remember-devices";
 export const PREFERRED_CAMERA_KEY = "cap-web-recorder-preferred-camera";
 export const PREFERRED_MICROPHONE_KEY = "cap-web-recorder-preferred-microphone";
+const MICROPHONE_OFF_KEY = "cap-web-recorder-microphone-off";
 const SYSTEM_AUDIO_ENABLED_KEY = "cap-web-recorder-system-audio";
 
 interface DevicePreferencesOptions {
@@ -31,6 +32,8 @@ export const useDevicePreferences = ({
 			const storedRemember = window.localStorage.getItem(REMEMBER_DEVICES_KEY);
 			if (storedRemember === "true") {
 				setRememberDevices(true);
+				micExplicitlyOffRef.current =
+					window.localStorage.getItem(MICROPHONE_OFF_KEY) === "true";
 			}
 			const storedSystemAudio = window.localStorage.getItem(
 				SYSTEM_AUDIO_ENABLED_KEY,
@@ -134,8 +137,10 @@ export const useDevicePreferences = ({
 		try {
 			if (micId) {
 				window.localStorage.setItem(PREFERRED_MICROPHONE_KEY, micId);
+				window.localStorage.removeItem(MICROPHONE_OFF_KEY);
 			} else {
 				window.localStorage.removeItem(PREFERRED_MICROPHONE_KEY);
+				window.localStorage.setItem(MICROPHONE_OFF_KEY, "true");
 			}
 		} catch (error) {
 			console.error("Failed to persist preferred microphone", error);
@@ -184,9 +189,16 @@ export const useDevicePreferences = ({
 				} else {
 					window.localStorage.removeItem(PREFERRED_MICROPHONE_KEY);
 				}
+
+				if (micExplicitlyOffRef.current) {
+					window.localStorage.setItem(MICROPHONE_OFF_KEY, "true");
+				} else {
+					window.localStorage.removeItem(MICROPHONE_OFF_KEY);
+				}
 			} else {
 				window.localStorage.removeItem(PREFERRED_CAMERA_KEY);
 				window.localStorage.removeItem(PREFERRED_MICROPHONE_KEY);
+				window.localStorage.removeItem(MICROPHONE_OFF_KEY);
 			}
 		} catch (error) {
 			console.error("Failed to update recorder preferences", error);

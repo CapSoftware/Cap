@@ -118,6 +118,27 @@ describe("web recorder microphone auto-select", () => {
 		expect(prefs().selectedMicId).toBe("built-in-mic");
 	});
 
+	it("remembers No Microphone across visits when devices are remembered", async () => {
+		storage.set(REMEMBER_DEVICES_KEY, "true");
+
+		await render([systemDefault, usb]);
+		expect(prefs().selectedMicId).toBe("default");
+		await act(async () => {
+			prefs().handleMicChange(null);
+		});
+
+		await act(async () => {
+			root?.unmount();
+		});
+		container?.remove();
+		root = null;
+		container = null;
+
+		await render([]);
+		await render([systemDefault, usb]);
+		expect(prefs().selectedMicId).toBeNull();
+	});
+
 	it("ignores a remembered mic that is no longer connected", async () => {
 		storage.set(REMEMBER_DEVICES_KEY, "true");
 		storage.set(PREFERRED_MICROPHONE_KEY, "unplugged-mic");
