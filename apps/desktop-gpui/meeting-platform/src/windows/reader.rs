@@ -37,9 +37,12 @@ use windows::{
 use super::follow::{ComGuard, Stream, drain, wanted_format};
 
 /// Screen readers whose speech never belongs in a meeting's computer audio,
-/// by executable (lowercase). Narrator plays its speech from its own process
-/// (measured: its audio session belongs to Narrator.exe).
-const READERS: &[&str] = &["narrator.exe"];
+/// by executable (lowercase): Narrator, NVDA and JAWS. Narrator and NVDA play
+/// their speech from their own process (measured: the audio session belongs
+/// to Narrator.exe, and to nvda.exe with its eSpeak NG voice); the loopback
+/// leaves out the whole process tree, so a speech helper a reader starts is
+/// left out too.
+const READERS: &[&str] = &["narrator.exe", "nvda.exe", "jfw.exe"];
 
 /// The process id of a running screen reader, if one runs.
 pub fn running_reader() -> Option<u32> {
