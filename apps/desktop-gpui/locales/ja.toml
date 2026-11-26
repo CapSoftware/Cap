@@ -2620,6 +2620,8 @@ title = "詳細設定"
 transparent_mov = "透過MOVとして書き出します。ファイルサイズは大きくなりますが、合成や編集に最適です。"
 
 [editor.export.cta]
+copy_file = "書き出してファイルをコピー"
+copy_file_path = "書き出してファイルパスをコピー"
 cancel_sign_in = "サインインをキャンセル"
 clipboard = "クリップボードに書き出す"
 create_link = "共有リンクを作成"
@@ -2628,6 +2630,8 @@ reupload = "同じリンクに再アップロード"
 sign_in = "サインインして共有"
 
 [editor.export.destination]
+file_path = "ファイルパス"
+invalid_path = "書き出し先のパスをテキストとしてコピーできません。"
 clipboard = "クリップボード"
 file = "ファイル"
 link = "共有リンク"

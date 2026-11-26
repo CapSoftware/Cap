@@ -2620,6 +2620,8 @@ title = "高级"
 transparent_mov = "导出为透明 MOV。文件较大，最适合合成或剪辑。"
 
 [editor.export.cta]
+copy_file = "导出并复制文件"
+copy_file_path = "导出并复制文件路径"
 cancel_sign_in = "取消登录"
 clipboard = "导出到剪贴板"
 create_link = "创建分享链接"
@@ -2628,6 +2630,8 @@ reupload = "重新上传到同一链接"
 sign_in = "登录以分享"
 
 [editor.export.destination]
+file_path = "文件路径"
+invalid_path = "无法将导出路径复制为文本。"
 clipboard = "剪贴板"
 file = "文件"
 link = "分享链接"

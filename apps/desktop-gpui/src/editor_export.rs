@@ -383,8 +383,48 @@ fn screen_enhancement(enhance: bool) -> cap_project::ScreenEnhancement {
     }
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum ClipboardExport {
+    #[default]
+    File,
+    Path,
+}
+
+impl ClipboardExport {
+    const ALL: [Self; 2] = [Self::File, Self::Path];
+
+    fn menu_items(self) -> Vec<ui::MenuItem> {
+        [
+            tr::editor::export::destination::file(),
+            tr::editor::export::destination::file_path(),
+        ]
+        .into_iter()
+        .zip(Self::ALL)
+        .map(|(label, mode)| ui::MenuItem::new(label, self == mode))
+        .collect()
+    }
+
+    fn copy(self, path: &Path, cx: &mut gpui::App) -> Result<(), String> {
+        match self {
+            Self::File => platform::copy_file_to_clipboard(path, cx)?,
+            Self::Path => {
+                let path = std::path::absolute(path).map_err(|error| error.to_string())?;
+                let path = path
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| tr::editor::export::destination::invalid_path().to_string())?;
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(path));
+            }
+        }
+        crate::app_sounds::play_notification();
+        Ok(())
+    }
+}
+
 pub struct ExportUi {
     pub destination: ExportDestination,
+    clipboard_export: ClipboardExport,
+    clipboard_menu: Option<ui::MenuState>,
     pub format: ExportFormatKind,
     pub resolution: ExportResolution,
     pub fps: u32,
@@ -545,6 +585,8 @@ impl ExportUi {
         };
         Self {
             destination,
+            clipboard_export: ClipboardExport::default(),
+            clipboard_menu: None,
             format: ExportFormatKind::from_slug(&prefs.format),
             resolution: ExportResolution::from_slug(&prefs.resolution),
             fps: prefs.fps,
@@ -1310,6 +1352,8 @@ impl EditorWindow {
             .map(estimated_working_bytes)
             .unwrap_or(0);
         let destination = ui.destination;
+        let clipboard_export = ui.clipboard_export;
+        ui.clipboard_menu = None;
         let format = ui.format;
         let cursor_only = ui.cursor_only;
         let fps = ui.fps;
@@ -1473,9 +1517,7 @@ impl EditorWindow {
                         let _ = this.update(cx, |this, cx| {
                             if let Some(ui) = this.export.as_mut() {
                                 ui.copy_completed_export(path, |path| {
-                                    let result = platform::copy_file_to_clipboard(path, cx);
-                                    crate::app_sounds::play_notification();
-                                    result
+                                    clipboard_export.copy(path, cx)
                                 });
                             }
                             cx.notify();
@@ -2022,11 +2064,8 @@ impl EditorWindow {
             return;
         };
         ui.cancel = Arc::new(AtomicBool::new(false));
-        ui.copy_completed_export(path, |path| {
-            let result = platform::copy_file_to_clipboard(path, cx);
-            crate::app_sounds::play_notification();
-            result
-        });
+        let clipboard_export = ui.clipboard_export;
+        ui.copy_completed_export(path, |path| clipboard_export.copy(path, cx));
         cx.notify();
         self.finish_requested_export_close(window, cx);
     }
@@ -2486,6 +2525,39 @@ impl EditorWindow {
                         this.child(div().absolute().inset_0().occlude())
                     }),
             )
+            .when_some(ui.clipboard_menu.as_ref(), |this, menu| {
+                this.on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                    let Some(menu) = this
+                        .export
+                        .as_mut()
+                        .and_then(|ui| ui.clipboard_menu.as_mut())
+                    else {
+                        return;
+                    };
+                    match menu.on_key(event.keystroke.key.as_str()) {
+                        ui::MenuKey::Commit(index) => {
+                            this.choose_clipboard_export(index, window, cx)
+                        }
+                        ui::MenuKey::Dismiss => this.dismiss_clipboard_menu(cx),
+                        ui::MenuKey::Moved => cx.notify(),
+                        ui::MenuKey::Ignored => return,
+                    }
+                    cx.stop_propagation();
+                }))
+                .child(
+                    ui::Menu::editor(
+                        &theme,
+                        "export-clipboard-menu",
+                        ui.clipboard_export.menu_items(),
+                        menu,
+                    )
+                    .min_width(px(120.))
+                    .on_select(cx.listener(|this, index: &usize, window, cx| {
+                        this.choose_clipboard_export(*index, window, cx);
+                    }))
+                    .on_dismiss(cx.listener(|this, _, _, cx| this.dismiss_clipboard_menu(cx))),
+                )
+            })
             .when(ui.bpp_dragging, |this| {
                 this.child(ui::Slider::drag_layer(
                     "export-bpp-drag",
@@ -2995,7 +3067,10 @@ impl EditorWindow {
                 true,
             ),
             ExportDestination::Clipboard => (
-                tr::editor::export::cta::clipboard(),
+                match ui.clipboard_export {
+                    ClipboardExport::File => tr::editor::export::cta::copy_file(),
+                    ClipboardExport::Path => tr::editor::export::cta::copy_file_path(),
+                },
                 Some("icons/copy.svg"),
                 true,
             ),
@@ -3074,6 +3149,35 @@ impl EditorWindow {
             .gap(px(8.))
     }
 
+    fn dismiss_clipboard_menu(&mut self, cx: &mut Context<Self>) {
+        if let Some(ui) = self.export.as_mut() {
+            ui.clipboard_menu = None;
+            cx.notify();
+        }
+    }
+
+    fn choose_clipboard_export(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mode) = ui::option_at(&ClipboardExport::ALL, index) else {
+            return;
+        };
+        let Some(ui) = self.export.as_mut() else {
+            return;
+        };
+        ui.clipboard_menu = None;
+        ui.clipboard_export = mode;
+        if ui.destination != ExportDestination::Clipboard {
+            ui.set_destination(ExportDestination::Clipboard);
+            ui.persist();
+            self.refresh_export_preview(window, cx);
+        }
+        cx.notify();
+    }
+
     fn export_destination_field(
         &self,
         ui: &ExportUi,
@@ -3082,61 +3186,100 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
+        let clipboard_available = ui.format.writes_video();
+        let control = ui::SegmentedControl::editor(
+            &theme,
+            "export-destination",
+            ExportDestination::ALL
+                .iter()
+                .map(|dest| {
+                    let label = if *dest == ExportDestination::Link && self.sharing.is_some() {
+                        tr::editor::export::reupload()
+                    } else {
+                        dest.label()
+                    };
+                    let mut option = ui::SegmentOption::new(label, ui.destination == *dest)
+                        .disabled(
+                            (*dest == ExportDestination::Link && link_disabled)
+                                || (*dest == ExportDestination::Clipboard && !clipboard_available),
+                        );
+                    if *dest != ExportDestination::Clipboard {
+                        option.icon = Some(dest.icon().into());
+                    }
+                    option
+                })
+                .collect(),
+        )
+        .stretch()
+        .item_height(px(30.))
+        .on_select(cx.listener(|this, index: &usize, window, cx| {
+            let Some(dest) = ui::option_at(ExportDestination::ALL, *index) else {
+                return;
+            };
+            if let Some(ui) = this.export.as_mut() {
+                ui.clipboard_menu = None;
+                if ui.format == ExportFormatKind::Tracks && dest != ExportDestination::File {
+                    return;
+                }
+                if dest == ExportDestination::Link
+                    && (has_transparent_background(&this.project) || ui.cursor_only)
+                {
+                    return;
+                }
+                ui.set_destination(dest);
+                if dest == ExportDestination::Link && ui.format == ExportFormatKind::Gif {
+                    ui.format = ExportFormatKind::Mp4;
+                }
+            }
+            this.normalize_loaded_export_options();
+            if let Some(ui) = this.export.as_mut() {
+                ui.persist();
+            }
+            this.refresh_export_preview(window, cx);
+            cx.notify();
+        }));
+        let control = if clipboard_available {
+            control.trailing(
+                1,
+                ui::Menu::trigger(
+                    ui::keyboard_nav::ring(
+                        div()
+                            .id("export-clipboard-trigger")
+                            .w(px(20.))
+                            .h_full()
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
+                            .child(svg().path("icons/chevron-down.svg").size(px(11.))),
+                    ),
+                    cx.listener(|this, bounds: &gpui::Bounds<gpui::Pixels>, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(ui) = this.export.as_mut() {
+                            ui.clipboard_menu = if ui.clipboard_menu.is_some() {
+                                None
+                            } else {
+                                Some(ui::MenuState::anchored(
+                                    *bounds,
+                                    &ui.clipboard_export.menu_items(),
+                                ))
+                            };
+                            cx.notify();
+                        }
+                    }),
+                ),
+            )
+        } else {
+            control
+        };
         self.export_section(
             tr::editor::export::section::destination(),
             "icons/upload-arrow.svg",
         )
-        .child(
-            ui::SegmentedControl::editor(
-                &theme,
-                "export-destination",
-                ExportDestination::ALL
-                    .iter()
-                    .map(|dest| {
-                        let label = if *dest == ExportDestination::Link && self.sharing.is_some() {
-                            tr::editor::export::reupload()
-                        } else {
-                            dest.label()
-                        };
-                        let mut option = ui::SegmentOption::new(label, ui.destination == *dest)
-                            .disabled(
-                                (*dest == ExportDestination::Link && link_disabled)
-                                    || (*dest == ExportDestination::Clipboard
-                                        && ui.format == ExportFormatKind::Tracks),
-                            );
-                        option.icon = Some(dest.icon().into());
-                        option
-                    })
-                    .collect(),
-            )
-            .stretch()
-            .item_height(px(30.))
-            .on_select(cx.listener(|this, index: &usize, window, cx| {
-                let Some(dest) = ui::option_at(ExportDestination::ALL, *index) else {
-                    return;
-                };
-                if let Some(ui) = this.export.as_mut() {
-                    if ui.format == ExportFormatKind::Tracks && dest != ExportDestination::File {
-                        return;
-                    }
-                    if dest == ExportDestination::Link
-                        && (has_transparent_background(&this.project) || ui.cursor_only)
-                    {
-                        return;
-                    }
-                    ui.set_destination(dest);
-                    if dest == ExportDestination::Link && ui.format == ExportFormatKind::Gif {
-                        ui.format = ExportFormatKind::Mp4;
-                    }
-                }
-                this.normalize_loaded_export_options();
-                if let Some(ui) = this.export.as_mut() {
-                    ui.persist();
-                }
-                this.refresh_export_preview(window, cx);
-                cx.notify();
-            })),
-        )
+        .child(control)
         .when(link_disabled, |field| {
             field.child(
                 div()
@@ -4189,7 +4332,9 @@ impl EditorWindow {
                     })
                     .when(
                         (ui.phase == ExportPhase::Done
-                            && ui.destination == ExportDestination::File)
+                            && (ui.destination == ExportDestination::File
+                                || (ui.destination == ExportDestination::Clipboard
+                                    && ui.clipboard_export == ClipboardExport::Path)))
                             || ui.clipboard_retry_path().is_some(),
                         |this| {
                             let path = ui.output_path.clone();

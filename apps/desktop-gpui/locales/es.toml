@@ -2620,6 +2620,8 @@ title = "Avanzado"
 transparent_mov = "Exporta como MOV transparente. Los archivos son grandes y sirven mejor para composición o edición."
 
 [editor.export.cta]
+copy_file = "Exportar y copiar archivo"
+copy_file_path = "Exportar y copiar ruta del archivo"
 cancel_sign_in = "Cancelar inicio de sesión"
 clipboard = "Exportar al portapapeles"
 create_link = "Crear enlace para compartir"
@@ -2628,6 +2630,8 @@ reupload = "Volver a subir al mismo enlace"
 sign_in = "Inicia sesión para compartir"
 
 [editor.export.destination]
+file_path = "Ruta del archivo"
+invalid_path = "No se puede copiar la ruta de exportación como texto."
 clipboard = "Portapapeles"
 file = "Archivo"
 link = "Enlace para compartir"

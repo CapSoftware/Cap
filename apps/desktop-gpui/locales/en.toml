@@ -2622,6 +2622,8 @@ title = "Advanced"
 transparent_mov = "Exports as a transparent MOV. Files are large and best for compositing or editing."
 
 [editor.export.cta]
+copy_file = "Export and copy file"
+copy_file_path = "Export and copy file path"
 cancel_sign_in = "Cancel Sign In"
 clipboard = "Export to Clipboard"
 create_link = "Create shareable link"
@@ -2630,6 +2632,8 @@ reupload = "Reupload to same link"
 sign_in = "Sign in to share"
 
 [editor.export.destination]
+file_path = "File path"
+invalid_path = "The export path cannot be copied as text."
 clipboard = { text = "Clipboard", context = "Export destination." }
 file = { text = "File", context = "Export destination." }
 link = { text = "Shareable Link", context = "Export destination." }

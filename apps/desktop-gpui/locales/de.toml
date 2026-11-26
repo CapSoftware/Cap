@@ -2620,6 +2620,8 @@ title = "Erweitert"
 transparent_mov = "Exportiert als transparente MOV-Datei. Die Dateien sind groß und eignen sich am besten zum Compositing oder Bearbeiten."
 
 [editor.export.cta]
+copy_file = "Exportieren und Datei kopieren"
+copy_file_path = "Exportieren und Dateipfad kopieren"
 cancel_sign_in = "Anmeldung abbrechen"
 clipboard = "In die Zwischenablage exportieren"
 create_link = "Link zum Teilen erstellen"
@@ -2628,6 +2630,8 @@ reupload = "Unter demselben Link erneut hochladen"
 sign_in = "Zum Teilen anmelden"
 
 [editor.export.destination]
+file_path = "Dateipfad"
+invalid_path = "Der Exportpfad kann nicht als Text kopiert werden."
 clipboard = "Zwischenablage"
 file = "Datei"
 link = "Link zum Teilen"

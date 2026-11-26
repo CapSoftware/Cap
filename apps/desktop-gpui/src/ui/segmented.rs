@@ -100,6 +100,7 @@ pub struct SegmentedControl {
     stretch: bool,
     tab_stops: bool,
     on_select: Option<SegmentHandler>,
+    trailing: Option<(usize, gpui::AnyElement)>,
 }
 
 impl SegmentedControl {
@@ -129,6 +130,7 @@ impl SegmentedControl {
             stretch: false,
             tab_stops: false,
             on_select: None,
+            trailing: None,
         }
     }
 
@@ -253,6 +255,11 @@ impl SegmentedControl {
         self
     }
 
+    pub fn trailing(mut self, index: usize, element: impl IntoElement) -> Self {
+        self.trailing = Some((index, element.into_any_element()));
+        self
+    }
+
     pub fn on_select(mut self, handler: impl Fn(&usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Box::new(handler));
         self
@@ -286,6 +293,7 @@ impl RenderOnce for SegmentedControl {
             stretch,
             tab_stops,
             on_select,
+            mut trailing,
         } = self;
 
         let handler: Option<std::rc::Rc<SegmentHandler>> = on_select.map(std::rc::Rc::new);
@@ -309,6 +317,14 @@ impl RenderOnce for SegmentedControl {
                 let handler = handler.clone();
                 let selected = option.selected;
                 let disabled = option.disabled;
+                let trailing = if trailing
+                    .as_ref()
+                    .is_some_and(|(target, _)| *target == index)
+                {
+                    trailing.take().map(|(_, element)| element)
+                } else {
+                    None
+                };
 
                 div()
                     .id(SharedString::from(format!("{prefix}-{index}")))
@@ -318,6 +334,7 @@ impl RenderOnce for SegmentedControl {
                     .justify_center()
                     .gap(item_gap)
                     .px(item_padding_x)
+                    .when(trailing.is_some(), |this| this.px(px(4.)).gap(px(4.)))
                     .when(f32::from(item_padding_y) > 0., |this| {
                         this.py(item_padding_y)
                     })
@@ -367,6 +384,7 @@ impl RenderOnce for SegmentedControl {
                             label.into_any_element()
                         }
                     }))
+                    .children(trailing)
                     .when_some(handler.filter(|_| !disabled), |this, handler| {
                         this.on_click(move |_, window, cx| handler(&index, window, cx))
                     })
