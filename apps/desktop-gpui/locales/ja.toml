@@ -196,16 +196,6 @@ label = "キー入力を記録"
 description = "選択した範囲にノッチ全体が含まれる場合、新しい画面録画と範囲録画でノッチを自動的に復元します。外部ディスプレイ、部分的な範囲、ウィンドウ録画には適用されません。録画ごとにエディタで変更できます。"
 label = "画面録画にMacBookのノッチを描画"
 
-[settings.general.recording.max_fps]
-description = "画面キャプチャの最大フレームレート。"
-description_high = "画面キャプチャの最大フレームレート。値を高くすると、一部のシステムでフレーム落ちやCPU使用率の上昇が起こる場合があります。"
-fps_120 = "120 FPS"
-fps_24 = "24 FPS"
-fps_25 = "25 FPS"
-fps_30 = "30 FPS"
-fps_60 = "60 FPS（推奨）"
-label = "最大キャプチャフレームレート"
-
 [settings.general.recording.keep_drawings]
 description = "描画は消去するまで残ります。オフにすると、描いてから数秒で消えます。"
 label = "描画を画面に残す"
@@ -350,6 +340,21 @@ resolution_up_to = "最大{resolution}"
 title = "Studioモード"
 ultra = "最大限のディテール"
 ultra_description = "本格的な編集のためにディテールを最大限残します。ディスク容量を最も多く使います。"
+
+[settings.quality.studio.frame_rate]
+description = "Studioモードはこのフレームレートを上限に録画し、ディスプレイのリフレッシュレートを超えることはありません。カメラがオンのときは30 FPS以下で録画します。"
+description_high = "60 FPSを超える録画はCPUとディスク容量を多く使い、コンピュータによってはソフトウェアでエンコードされます。Studioモードがディスプレイのリフレッシュレートを超えて録画することはありません。カメラがオンのときは30 FPS以下で録画します。"
+description_match = "ディスプレイのリフレッシュレートで録画します（最大{fps} FPS）。60 FPSを超える録画はCPUとディスク容量を多く使います。カメラがオンのときは、Studioモードは30 FPS以下で録画します。"
+fps_120 = "120 FPS"
+fps_144 = "144 FPS"
+fps_165 = "165 FPS"
+fps_24 = "24 FPS"
+fps_240 = "240 FPS"
+fps_25 = "25 FPS"
+fps_30 = "30 FPS"
+fps_60 = "60 FPS（推奨）"
+label = "フレームレート"
+match_display = "ディスプレイに合わせる"
 
 [settings.quality.instant]
 description = "録画しながらアップロードされるため、停止した瞬間にリンクが使えます。最高画質が必要な場合はStudioモードを使ってください。画面が許す最高画質で録画し、最大4Kで書き出せます。"

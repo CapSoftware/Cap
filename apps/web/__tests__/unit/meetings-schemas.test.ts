@@ -115,8 +115,17 @@ describe("meeting notes request schema", () => {
 		expect(notes({ startedAt: "2026-11-12T09:30:00+01:00" }).ok).toBe(true);
 		expect(notes({ startedAt: "yesterday" }).ok).toBe(false);
 		expect(notes({ timezone: "Mars/Olympus" }).ok).toBe(false);
+		expect(notes({ timezone: "posix/Mars/Olympus" }).ok).toBe(false);
 		expect(notes({ summaryLanguage: "de" }).ok).toBe(true);
 		expect(notes({ summaryLanguage: "xx" }).ok).toBe(false);
+	});
+
+	it("reads a zoneinfo posix or right link as its zone", () => {
+		for (const zone of ["posix/Europe/Berlin", "right/Europe/Berlin"]) {
+			const result = notes({ timezone: zone });
+			expect(result.ok).toBe(true);
+			if (result.ok) expect(result.data.timezone).toBe("Europe/Berlin");
+		}
 	});
 
 	it("needs a transcript or the user's notes", () => {
