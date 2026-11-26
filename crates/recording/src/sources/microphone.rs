@@ -423,6 +423,9 @@ impl RequiredMicrophoneHealth {
     }
 
     fn stop(&self) {
+        if let Some(report) = self.source.missing_report() {
+            warn!("{report}");
+        }
         if let Some(error) = self.source.stop_error() {
             self.scope.fail_required(error);
         }

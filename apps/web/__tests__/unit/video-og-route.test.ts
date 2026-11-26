@@ -6,6 +6,10 @@ const mocks = vi.hoisted(() => ({
 	renders: 0,
 	lookups: [] as string[],
 	videos: new Map<string, Record<string, unknown>>(),
+	spacePasswords: new Map<string, string[]>(),
+	allowedEmailDomains: new Map<string, string>(),
+	openLinks: new Set<string>(),
+	cookiePasswords: [] as string[],
 }));
 
 vi.mock("next/og", async (importOriginal) => {
@@ -40,22 +44,79 @@ vi.mock("drizzle-orm", async (importOriginal) => ({
 	eq: (_column: unknown, videoId: unknown) => ({ videoId }),
 }));
 
-vi.mock("@cap/web-backend", () => ({
-	findScreenshotObjectKey: () => undefined,
-	Storage: {
-		getAccessForVideo: () => Effect.fail(new Error("no storage in tests")),
-	},
-}));
+vi.mock("@cap/web-backend", async () => {
+	const { Option } = await import("effect");
+	const { buildCanViewLoaded, VideosPolicy } = await import(
+		"@cap/web-backend/src/Videos/VideosPolicy"
+	);
+	const deps = {
+		repo: {
+			getById: () => Effect.succeed(Option.none()),
+			hasViewerGrant: () => Effect.succeed(false),
+			isLinkOpenToAnyone: (id: string) =>
+				Effect.succeed(mocks.openLinks.has(id)),
+		},
+		orgsRepo: {
+			membershipForVideo: () => Effect.succeed([]),
+			allowedEmailDomain: (orgId: string) =>
+				Effect.succeed(
+					Option.fromNullable(mocks.allowedEmailDomains.get(orgId)),
+				),
+		},
+		spacesRepo: {
+			membershipForVideo: () => Effect.succeed(Option.none()),
+			passwordsForVideo: (id: string) =>
+				Effect.succeed(
+					(mocks.spacePasswords.get(id) ?? []).map((password) => ({
+						password,
+					})),
+				),
+		},
+	} as unknown as Parameters<typeof buildCanViewLoaded>[0];
+	return {
+		findScreenshotObjectKey: () => undefined,
+		Storage: {
+			getAccessForVideo: () => Effect.fail(new Error("no storage in tests")),
+		},
+		VideosPolicy,
+		testVideosPolicy: VideosPolicy.make({
+			canViewLoaded: (
+				video: Parameters<typeof buildCanViewLoaded>[1],
+				password: Parameters<typeof buildCanViewLoaded>[2],
+			) => buildCanViewLoaded(deps, video, password),
+		} as unknown as ConstructorParameters<typeof VideosPolicy>[0]),
+	};
+});
 vi.mock("@cap/web-backend/src/Storage/recording-output", () => ({
 	getPublishedRecordingThumbnailKey: () => null,
 }));
 vi.mock("@/lib/og/poster-frame", () => ({
 	extractPosterFrameDataUri: async () => undefined,
 }));
-vi.mock("@/lib/server", () => ({
-	runPromise: (effect: Effect.Effect<unknown, unknown>) =>
-		Effect.runPromise(effect),
-}));
+vi.mock("@/lib/server", async () => {
+	const { Video } = await import("@cap/web-domain");
+	const { VideosPolicy } = await import(
+		"@cap/web-backend/src/Videos/VideosPolicy"
+	);
+	const { testVideosPolicy } = (await import(
+		"@cap/web-backend"
+	)) as unknown as {
+		testVideosPolicy: InstanceType<typeof VideosPolicy>;
+	};
+	return {
+		runPromise: (effect: Effect.Effect<unknown, unknown>) =>
+			Effect.runPromise(effect),
+		runPromiseExit: (effect: Effect.Effect<unknown, unknown, never>) =>
+			Effect.runPromiseExit(
+				effect.pipe(
+					Effect.provideService(Video.VideoPasswordAttachment, {
+						passwords: mocks.cookiePasswords,
+					}),
+					Effect.provideService(VideosPolicy, testVideosPolicy),
+				) as Effect.Effect<unknown, unknown, never>,
+			),
+	};
+});
 vi.mock("@/lib/video-storage", () => ({
 	decodeStorageVideo: (video: unknown) => video,
 }));
@@ -82,6 +143,10 @@ describe("/api/video/og", () => {
 		mocks.renders = 0;
 		mocks.lookups = [];
 		mocks.videos = new Map();
+		mocks.spacePasswords = new Map();
+		mocks.allowedEmailDomains = new Map();
+		mocks.openLinks = new Set();
+		mocks.cookiePasswords = [];
 	});
 
 	it("renders the missing video image once for any number of unknown ids", async () => {
@@ -250,5 +315,40 @@ describe("/api/video/og", () => {
 		expect(passwordImage.bytes.equals(missing.bytes)).toBe(false);
 		expect(passwordImage.bytes.equals(privateImage.bytes)).toBe(false);
 		expect(mocks.renders).toBe(3);
+	});
+
+	it("follows the viewing rules a space and organization add to a video", async () => {
+		const base = {
+			ownerId: "owner",
+			orgId: "org1",
+			name: "Roadmap",
+			public: true,
+			password: null,
+			duration: 42,
+		};
+		mocks.videos.set("open1", { ...base, id: "open1" });
+		mocks.videos.set("pass1", { ...base, id: "pass1", password: "hash" });
+		mocks.videos.set("space1", { ...base, id: "space1" });
+		mocks.spacePasswords.set("space1", ["space-hash"]);
+		mocks.videos.set("domain1", { ...base, id: "domain1", orgId: "org2" });
+		mocks.videos.set("domain2", { ...base, id: "domain2", orgId: "org2" });
+		mocks.allowedEmailDomains.set("org2", "example.com");
+		mocks.openLinks.add("domain2");
+		mocks.videos.set("private1", { ...base, id: "private1", public: false });
+		mocks.cookiePasswords = ["space-hash"];
+		const GET = await loadRoute();
+
+		const open = await fetchOg(GET, "?videoId=open1");
+		const passwordImage = await fetchOg(GET, "?videoId=pass1");
+		const privateImage = await fetchOg(GET, "?videoId=private1");
+		const space = await fetchOg(GET, "?videoId=space1");
+		const restricted = await fetchOg(GET, "?videoId=domain1");
+		const openLink = await fetchOg(GET, "?videoId=domain2");
+
+		expect(space.bytes.equals(passwordImage.bytes)).toBe(true);
+		expect(restricted.bytes.equals(privateImage.bytes)).toBe(true);
+		expect(openLink.bytes.equals(open.bytes)).toBe(true);
+		expect(open.bytes.equals(privateImage.bytes)).toBe(false);
+		expect(open.bytes.equals(passwordImage.bytes)).toBe(false);
 	});
 });

@@ -1351,11 +1351,25 @@ impl crate::Device for super::Device {
             super::AccelerationStructure,
         >,
     ) -> Result<super::BindGroup, crate::DeviceError> {
-        let mut cpu_views = desc
-            .layout
-            .cpu_heap_views
+        // WARP keeps reading a staging descriptor after `CopyDescriptors`, so
+        // the heap a layout shares between its bind groups loses the views of
+        // every group but the last one staged. There each group stages into a
+        // heap it keeps for as long as it lives.
+        let own_staging = if self.shared.private_caps.avoid_cpu_descriptor_overwrites
+            && !desc.layout.copy_counts.is_empty()
+        {
+            Some(descriptor::CpuHeap::new(
+                &self.raw,
+                Direct3D12::D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+                desc.layout.copy_counts.len() as u32,
+            )?)
+        } else {
+            None
+        };
+        let staging = own_staging
             .as_ref()
-            .map(|cpu_heap| cpu_heap.inner.lock());
+            .or(desc.layout.cpu_heap_views.as_ref());
+        let mut cpu_views = staging.map(|cpu_heap| cpu_heap.inner.lock());
         if let Some(ref mut inner) = cpu_views {
             inner.stage.clear();
         }
@@ -1404,7 +1418,7 @@ impl crate::Device for super::Device {
 
                         let inner = cpu_views.as_mut().unwrap();
                         let cpu_index = inner.stage.len() as u32;
-                        let handle = desc.layout.cpu_heap_views.as_ref().unwrap().at(cpu_index);
+                        let handle = staging.unwrap().at(cpu_index);
                         match ty {
                             wgt::BufferBindingType::Uniform => {
                                 let size_mask =
@@ -1496,7 +1510,7 @@ impl crate::Device for super::Device {
                     for data in &desc.acceleration_structures[start..end] {
                         let inner = cpu_views.as_mut().unwrap();
                         let cpu_index = inner.stage.len() as u32;
-                        let handle = desc.layout.cpu_heap_views.as_ref().unwrap().at(cpu_index);
+                        let handle = staging.unwrap().at(cpu_index);
                         let raw_desc = Direct3D12::D3D12_SHADER_RESOURCE_VIEW_DESC {
                             Format: Dxgi::Common::DXGI_FORMAT_UNKNOWN,
                             Shader4ComponentMapping:
@@ -1573,7 +1587,7 @@ impl crate::Device for super::Device {
 
             let inner = cpu_views.as_mut().unwrap();
             let cpu_index = inner.stage.len() as u32;
-            let srv = desc.layout.cpu_heap_views.as_ref().unwrap().at(cpu_index);
+            let srv = staging.unwrap().at(cpu_index);
 
             unsafe {
                 self.raw
@@ -1587,20 +1601,16 @@ impl crate::Device for super::Device {
             None
         };
 
-        let handle_views = match cpu_views {
-            Some(inner) => {
-                let dual = unsafe {
-                    descriptor::upload(
-                        &self.raw,
-                        &inner,
-                        &self.shared.heap_views,
-                        &desc.layout.copy_counts,
-                    )
-                }?;
-                Some(dual)
-            }
-            None => None,
-        };
+        let handle_views = cpu_views
+            .map(|inner| unsafe {
+                descriptor::upload(
+                    &self.raw,
+                    &inner,
+                    &self.shared.heap_views,
+                    &desc.layout.copy_counts,
+                )
+            })
+            .transpose()?;
 
         self.counters.bind_groups.add(1);
 
@@ -1608,6 +1618,7 @@ impl crate::Device for super::Device {
             handle_views,
             sampler_index_buffer,
             dynamic_buffers,
+            _staging_views: own_staging,
         })
     }
 

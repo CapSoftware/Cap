@@ -12,7 +12,7 @@ export const RPM_DEPENDS = [
 	"pulseaudio-utils",
 	"libpipewire-0.3.so.0()(64bit)",
 	"libasound.so.2()(64bit)",
-	"(alsa-plugins-pulseaudio or alsa-plugins-pulse)",
+	"libpulse.so.0()(64bit)",
 	"libxkbcommon.so.0()(64bit)",
 	"libxkbcommon-x11.so.0()(64bit)",
 	"libX11.so.6()(64bit)",
@@ -49,6 +49,10 @@ export function createLinuxBundleConfig(libraryNames, debDependencies = []) {
 					depends: [...RPM_DEPENDS],
 					files: {
 						...files,
+						// Loaded only when the host has no ALSA pulse plugin of its own:
+						// openSUSE's pipewire-alsa conflicts with alsa-plugins-pulse.
+						"/usr/lib/cap/alsa-lib/libasound_module_pcm_pulse.so": `${root}/target/native-deps/cap-appimage-libs/libasound_module_pcm_pulse.so`,
+						"/usr/lib/cap/alsa-pulse.conf": `${root}/packaging/linux/alsa-pulse-rpm.conf`,
 						"/usr/lib/cap/package-format": `${root}/packaging/linux/rpm`,
 					},
 				},
@@ -59,6 +63,8 @@ export function createLinuxBundleConfig(libraryNames, debDependencies = []) {
 						"/usr/bin/pactl": "/usr/bin/pactl",
 						"/usr/lib/alsa-lib/libasound_module_pcm_pulse.so": `${root}/target/native-deps/cap-appimage-libs/libasound_module_pcm_pulse.so`,
 						"/usr/lib/cap/alsa-pulse.conf": `${root}/packaging/linux/alsa-pulse.conf`,
+						// Set alone as ALSA_CONFIG_PATH: openSUSE's alsa-lib ignores a list of files.
+						"/usr/lib/cap/alsa-pulse-appimage.conf": `${root}/packaging/linux/alsa-pulse-appimage.conf`,
 						"/usr/lib/cap/package-format": `${root}/packaging/linux/appimage`,
 					},
 				},

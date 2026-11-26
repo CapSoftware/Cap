@@ -37,6 +37,7 @@ const nonIndexablePaths = [
 	"/checkout/complete",
 	"/download/started",
 	"/redeem",
+	"/blackfriday/plan",
 	"/cli/authorize",
 	"/cli/complete",
 	"/mcp/authorize",

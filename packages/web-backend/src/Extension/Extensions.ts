@@ -1,3 +1,4 @@
+import { resolveOrCreateActiveOrganization } from "@cap/database/organization-pointer";
 import * as Db from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import type { Organisation, User } from "@cap/web-domain";
@@ -18,23 +19,6 @@ export class AuthKeyMintRateLimited extends Data.TaggedError(
 export class Extensions extends Effect.Service<Extensions>()("Extensions", {
 	effect: Effect.gen(function* () {
 		const db = yield* Database;
-
-		const selectOwnedOrganization = (where: Dz.SQL) =>
-			db.use((db) =>
-				db
-					.select({
-						id: Db.organizations.id,
-						name: Db.organizations.name,
-					})
-					.from(Db.organizations)
-					.innerJoin(Db.users, Dz.eq(Db.organizations.ownerId, Db.users.id))
-					.where(where)
-					// Deterministic fallback selection: this result can be persisted
-					// as the user's activeOrganizationId below, so an unordered
-					// LIMIT 1 would let the active org flap between requests.
-					.orderBy(Dz.asc(Db.organizations.id))
-					.limit(1),
-			);
 
 		return {
 			isUserPro: Effect.fn("Extensions.isUserPro")(function* (
@@ -120,63 +104,15 @@ export class Extensions extends Effect.Service<Extensions>()("Extensions", {
 				id: User.UserId;
 				activeOrganizationId: Organisation.OrganisationId;
 			}) {
-				let [organization] = yield* selectOwnedOrganization(
-					Dz.eq(Db.organizations.id, user.activeOrganizationId),
+				// The extension records into whatever this returns and
+				// createInstantRecording only accepts the stored active
+				// organization, so a stale pointer is repaired, not returned,
+				// and an account with no organization gets a personal one.
+				const organization = yield* db.use((db) =>
+					resolveOrCreateActiveOrganization(db, user),
 				);
 
-				// A dangling activeOrganizationId (deleted org, revoked
-				// membership) must not brick the extension; fall back to an
-				// organization the user owns, then to one they are a member
-				// of.
-				if (!organization) {
-					[organization] = yield* selectOwnedOrganization(
-						Dz.eq(Db.organizations.ownerId, user.id),
-					);
-				}
-
-				if (!organization) {
-					const [viaMembership] = yield* db.use((db) =>
-						db
-							.select({
-								id: Db.organizations.id,
-								name: Db.organizations.name,
-							})
-							.from(Db.organizationMembers)
-							.innerJoin(
-								Db.organizations,
-								Dz.eq(
-									Db.organizationMembers.organizationId,
-									Db.organizations.id,
-								),
-							)
-							.innerJoin(Db.users, Dz.eq(Db.organizations.ownerId, Db.users.id))
-							.where(Dz.eq(Db.organizationMembers.userId, user.id))
-							// Oldest membership first, with the org id as a stable
-							// tie-break — same determinism requirement as above.
-							.orderBy(
-								Dz.asc(Db.organizationMembers.createdAt),
-								Dz.asc(Db.organizations.id),
-							)
-							.limit(1),
-					);
-					organization = viaMembership;
-				}
-
-				// Repair the dangling pointer: createInstantRecording rejects any
-				// org that is not the user's activeOrganizationId, so returning a
-				// fallback org without persisting it would let bootstrap succeed
-				// while every recording create fails PolicyDenied.
-				const resolved = organization;
-				if (resolved && resolved.id !== user.activeOrganizationId) {
-					yield* db.use((db) =>
-						db
-							.update(Db.users)
-							.set({ activeOrganizationId: resolved.id })
-							.where(Dz.eq(Db.users.id, user.id)),
-					);
-				}
-
-				return Option.fromNullable(resolved);
+				return Option.fromNullable(organization);
 			}),
 		};
 	}),

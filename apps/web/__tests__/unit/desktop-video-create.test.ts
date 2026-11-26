@@ -46,6 +46,21 @@ vi.mock("@cap/database", () => ({
 	db: () => mockDb,
 }));
 vi.mock("@cap/database/video-sharing-default", () => defaultSharing);
+// The row lock and re-checks are covered against MySQL in
+// organization-pointer-database.test.ts; here only the inserts are observed.
+vi.mock("@cap/database/organization-pointer", async (importOriginal) => {
+	const original =
+		await importOriginal<typeof import("@cap/database/organization-pointer")>();
+	return {
+		...original,
+		ensurePersonalOrganization: vi.fn(
+			async (database: typeof mockDb, userId: string) =>
+				database.transaction((tx: never) =>
+					original.insertPersonalOrganization(tx, userId as never),
+				),
+		),
+	};
+});
 
 vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: vi.fn(),
@@ -1000,6 +1015,50 @@ describe("GET /create", () => {
 		expect(fixture.committed.videos.size).toBe(0);
 		expect(fixture.committed.uploads.size).toBe(0);
 		expect(maybeStartLiveTranscription).not.toHaveBeenCalled();
+	});
+
+	it("refuses a cross-site browser request before creating anything", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+
+		const response = await app.request(
+			"https://cap.test/create?videoId=0123456789abcde&createWithId=true",
+			{ headers: { "sec-fetch-site": "cross-site" } },
+		);
+
+		expect(response.status).toBe(403);
+		expect(mockDb.select).not.toHaveBeenCalled();
+		expect(mockDb.insert).not.toHaveBeenCalled();
+	});
+
+	it("still creates for a same-origin browser request", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Acme", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([{ count: 5 }]);
+
+		const response = await app.request(
+			"https://cap.test/create?videoId=0123456789abcde&createWithId=true",
+			{ headers: { "sec-fetch-site": "same-origin" } },
+		);
+
+		expect(response.status).toBe(200);
+		expect(insertedValues(schema.videos)).toMatchObject({
+			id: "0123456789abcde",
+		});
 	});
 
 	it("rejects an invalid client-selected video ID", async () => {

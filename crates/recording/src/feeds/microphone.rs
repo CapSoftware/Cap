@@ -112,6 +112,205 @@ fn audio_follows_confirmed_route(
             .is_some_and(|(captured_at, routed_at)| captured_at >= routed_at.instant())
 }
 
+/// Timestamps for a microphone whose callbacks arrive in bursts, as ALSA's
+/// pulse plugin delivers them from PipeWire's pulse server. Linux stamps
+/// audio with the time its callback runs, so a burst made the muxer see a
+/// gap, insert silence and then trim the late audio as overlap. Here each
+/// buffer is placed by the frames delivered so far from the earliest anchor
+/// its arrivals allow: steady delivery keeps the arrival times exactly and a
+/// late callback no longer moves its audio.
+///
+/// Arrivals falling behind the frames is not lost audio by itself: after the
+/// sound card wakes, PipeWire 1.0 delivers every frame but builds up about
+/// 200 ms of latency over the first seconds. So only an arrival that jumps
+/// past the arrivals just before it marks lost frames, and only drift that
+/// shows once the stream has settled moves the anchor, a little per window,
+/// as a device clock that runs slow or fast does. Lost frames can take the audio the
+/// server held with them, its latency then building up again: for a while
+/// after a loss the anchor follows the arrivals back to the lag they had.
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct SteadyDeliveryClock {
+    anchor: Option<Instant>,
+    rate: u32,
+    frames: u64,
+    /// When the stream (or its recovery from a loss) has settled.
+    settle_at: Option<Instant>,
+    /// Recent arrivals, each with the anchor it implies: the arrival minus
+    /// the frames delivered by then.
+    recent: std::collections::VecDeque<(Instant, Instant)>,
+    window_started: Option<Instant>,
+    window_earliest: Option<Instant>,
+    /// How far behind the anchor arrivals settled once the stream had.
+    settled_lag: Option<Duration>,
+    /// Before the stream settles, the lag a loss is measured back to.
+    last_lag: Option<Duration>,
+    /// After a loss: until when, and the lag arrivals had before it.
+    recovery: Option<(Instant, Duration)>,
+}
+
+#[cfg(target_os = "linux")]
+impl SteadyDeliveryClock {
+    const WINDOW: Duration = Duration::from_secs(2);
+    /// An arrival this much later than every arrival kept is a stall that
+    /// lost frames, marked where it happened. PipeWire delivers even its
+    /// largest quantum in bursts of about 200 ms.
+    const STALL: Duration = Duration::from_millis(250);
+    /// When the earliest of the last RECENT of arrivals lags the earliest of
+    /// the ones kept before them (HISTORY) by this much, frames were lost:
+    /// smaller losses, or ones that added up. A latency ramp adds far less in
+    /// that time (PipeWire 1.0's under 100 ms), and comparing earliest
+    /// arrivals rides out bursts.
+    const LOSS: Duration = Duration::from_millis(150);
+    const RECENT: Duration = Duration::from_millis(500);
+    const HISTORY: Duration = Duration::from_millis(2_500);
+    /// Long after the latency a stream starts with has settled.
+    const SETTLE: Duration = Duration::from_secs(30);
+    /// The most drift followed per window, 1000 ppm: well past any sound
+    /// card's clock, far below a latency ramp.
+    const MAX_DRIFT_STEP: Duration = Duration::from_millis(2);
+    /// How long after a loss the anchor follows the arrivals' lag back.
+    const RECOVERY: Duration = Duration::from_secs(15);
+
+    fn timestamp(&mut self, received: Instant, frame_count: usize, rate: u32) -> Timestamp {
+        if rate == 0 {
+            return Timestamp::Instant(received);
+        }
+        if rate != self.rate {
+            *self = Self {
+                rate,
+                ..Self::default()
+            };
+        }
+        let frames = self.frames + frame_count as u64;
+        self.frames = frames;
+        let delivered = Duration::from_secs_f64(frames as f64 / f64::from(rate));
+        let implied = received.checked_sub(delivered).unwrap_or(received);
+        let Some(mut anchor) = self.anchor else {
+            self.anchor = Some(implied);
+            self.settle_at = Some(received + Self::SETTLE);
+            self.window_started = Some(received);
+            self.recent.push_back((received, implied));
+            return Timestamp::Instant(received);
+        };
+        if implied < anchor {
+            // Arrivals are never early, so this one shows the anchor was late.
+            if let Some(settled) = self.settled_lag.as_mut() {
+                *settled += anchor.saturating_duration_since(implied);
+            }
+            anchor = implied;
+        }
+        // Arrivals from the last HISTORY; the latest one always stays, so
+        // the first arrival after a long stall is measured against it.
+        while self.recent.len() > 1
+            && self
+                .recent
+                .front()
+                .is_some_and(|(at, _)| received.saturating_duration_since(*at) > Self::HISTORY)
+        {
+            self.recent.pop_front();
+        }
+        let kept_floor = self.recent.iter().map(|(_, implied)| *implied).min();
+        self.recent.push_back((received, implied));
+        let recent = |at: &Instant| received.saturating_duration_since(*at) <= Self::RECENT;
+        let floor = |is_recent: bool| {
+            self.recent
+                .iter()
+                .filter(|(at, _)| recent(at) == is_recent)
+                .map(|(_, implied)| *implied)
+                .min()
+        };
+        let lost = match (kept_floor, floor(true), floor(false)) {
+            // A stall: this arrival alone is far later than all before it.
+            (Some(kept), _, _) if implied.saturating_duration_since(kept) > Self::STALL => {
+                Some(implied.saturating_duration_since(kept))
+            }
+            // Even the earliest recent arrival is this much later than the
+            // ones before them.
+            (_, Some(now), Some(before)) if now.saturating_duration_since(before) > Self::LOSS => {
+                Some(now.saturating_duration_since(before))
+            }
+            _ => None,
+        };
+        if let Some(lost) = lost {
+            // The frames between were lost, so the audio after them moves on
+            // by as much.
+            anchor += lost;
+            self.recent.clear();
+            self.recent.push_back((received, implied));
+            self.window_started = Some(received);
+            self.window_earliest = None;
+            let before = self.settled_lag.or(self.last_lag).unwrap_or_default();
+            self.recovery = Some((received + Self::RECOVERY, before));
+            self.settled_lag = None;
+            self.settle_at = Some(received + Self::RECOVERY);
+        }
+        // Losses too short to stand out one by one have added up: even the
+        // earliest recent arrival lags far more than once the stream settled.
+        if let Some(settled) = self.settled_lag
+            && let Some(floor) = self.recent.iter().map(|(_, implied)| *implied).min()
+            && floor.saturating_duration_since(anchor) > settled + Self::LOSS
+        {
+            anchor += floor
+                .saturating_duration_since(anchor)
+                .saturating_sub(settled);
+            self.recent.clear();
+            self.recent.push_back((received, implied));
+            self.window_earliest = None;
+            self.window_started = Some(received);
+        }
+        self.window_earliest = Some(
+            self.window_earliest
+                .map_or(implied, |earliest| earliest.min(implied)),
+        );
+        if self
+            .window_started
+            .is_some_and(|started| received.saturating_duration_since(started) >= Self::WINDOW)
+        {
+            let lag = self
+                .window_earliest
+                .take()
+                .map_or(Duration::ZERO, |earliest| {
+                    earliest.saturating_duration_since(anchor)
+                });
+            match (self.recovery, self.settled_lag) {
+                // Since the loss, arrivals lag the anchor by more (or less)
+                // than before it: the audio the server held went with the
+                // lost frames, or less was lost than the arrivals showed.
+                (Some((until, before)), _) if received < until => {
+                    if lag > before {
+                        anchor += lag.saturating_sub(before);
+                    } else {
+                        anchor = anchor
+                            .checked_sub(before.saturating_sub(lag))
+                            .unwrap_or(anchor);
+                    }
+                }
+                // The window's arrivals lag the anchor by more than once the
+                // stream settled (the device clock runs slow) or by less (it
+                // runs fast): follow, a little per window.
+                (_, Some(settled)) => {
+                    if lag > settled {
+                        anchor += lag.saturating_sub(settled).min(Self::MAX_DRIFT_STEP);
+                    } else {
+                        let step = settled.saturating_sub(lag).min(Self::MAX_DRIFT_STEP);
+                        anchor = anchor.checked_sub(step).unwrap_or(anchor);
+                    }
+                }
+                (_, None) if self.settle_at.is_some_and(|at| received >= at) => {
+                    self.settled_lag = Some(lag);
+                    self.recovery = None;
+                }
+                _ => {}
+            }
+            self.last_lag = Some(lag);
+            self.window_started = Some(received);
+        }
+        self.anchor = Some(anchor);
+        Timestamp::Instant(anchor + delivered)
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn cancellable_system_stream_ready(
     ready: StreamReadyFuture,
@@ -535,6 +734,33 @@ impl StreamHealth {
     }
 }
 
+/// A rebuild that failed because the microphone is gone: its error says
+/// there was nothing to open, or the microphone is no longer present (the
+/// pulse plugin reports a server with no source left as an I/O error).
+#[cfg(target_os = "linux")]
+fn rebuild_lost_device(error: &SetInputError, present: impl FnOnce() -> bool) -> bool {
+    rebuild_found_no_device(error) || !present()
+}
+
+/// A rebuild that failed because there is nothing to open: the device was
+/// unplugged, or the sound server has no source left to route it to.
+#[cfg(target_os = "linux")]
+fn rebuild_found_no_device(error: &SetInputError) -> bool {
+    match error {
+        SetInputError::DeviceNotFound => true,
+        SetInputError::BuildStream(message) => [
+            // cpal's BuildStreamError::DeviceNotAvailable
+            "no longer available",
+            // ALSA: the PCM, or the sound server's target for it, is gone
+            "No such file or directory",
+            "No such device",
+        ]
+        .iter()
+        .any(|gone| message.contains(gone)),
+        _ => false,
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Clone)]
 pub(crate) struct RecordingSourceHealth(Arc<std::sync::Mutex<RecordingSourceHealthState>>);
@@ -546,6 +772,10 @@ struct RecordingSourceHealthState {
     pending: Option<Arc<StreamHealth>>,
     recovery_origin: Option<u32>,
     terminal: Option<String>,
+    last_frame: Option<Instant>,
+    /// Since the last frame before a rebuild found no device to open.
+    missing_since: Option<Instant>,
+    missing_total: Duration,
 }
 
 #[cfg(target_os = "linux")]
@@ -558,6 +788,9 @@ impl RecordingSourceHealth {
                 pending: None,
                 recovery_origin: None,
                 terminal: None,
+                last_frame: None,
+                missing_since: None,
+                missing_total: Duration::ZERO,
             },
         )))
     }
@@ -577,21 +810,34 @@ impl RecordingSourceHealth {
             .store(true, Ordering::Release);
     }
 
+    /// `present` says whether the selected microphone is still there.
     fn observe_ready(
         &self,
         generation: u64,
         id: u32,
         ready: StreamReadyFuture,
+        present: impl FnOnce() -> bool + Send + 'static,
     ) -> StreamReadyFuture {
         let health = self.clone();
         ready
             .map(move |result| {
-                if let Err(error) = &result {
-                    health.fail_reconnect(
+                match &result {
+                    // The device is gone (unplugged, or the sound server has
+                    // no source left): as on Windows, the recording goes on
+                    // with silence and the next reconnect attempt tries again.
+                    // Stop still reports it if no replacement ever delivers.
+                    Err(error) if rebuild_lost_device(error, present) => {
+                        warn!(
+                            "Recording microphone is gone ({error}); recording silence until it returns"
+                        );
+                        health.lose_reconnect(generation, id);
+                    }
+                    Err(error) => health.fail_reconnect(
                         generation,
                         id,
                         format!("Requested audio stream rebuild failed: {error}"),
-                    );
+                    ),
+                    Ok(_) => {}
                 }
                 result
             })
@@ -659,6 +905,30 @@ impl RecordingSourceHealth {
         }
     }
 
+    /// A rebuild that found no device: not terminal, but unresolved at Stop
+    /// unless a later attempt replaces it.
+    fn lose_reconnect(&self, generation: u64, id: u32) {
+        let mut state = self.0.lock().unwrap();
+        if state.generation == generation
+            && let Some(pending) = state.pending.as_ref().filter(|pending| pending.id == id)
+        {
+            pending.failed.store(true, Ordering::Release);
+            let since = state.last_frame.unwrap_or_else(Instant::now);
+            state.missing_since.get_or_insert(since);
+        }
+    }
+
+    /// How long the microphone was missing in this recording, once it is back.
+    pub(crate) fn missing_report(&self) -> Option<String> {
+        let state = self.0.lock().unwrap();
+        (state.missing_total > Duration::ZERO).then(|| {
+            format!(
+                "Recording microphone was missing for {:.1} s",
+                state.missing_total.as_secs_f64()
+            )
+        })
+    }
+
     pub(crate) fn fail(&self, error: String) {
         self.0.lock().unwrap().terminal.get_or_insert(error);
     }
@@ -682,6 +952,18 @@ impl RecordingSourceHealth {
 
     pub(crate) fn accepted_frame(&self, id: u32) {
         let mut state = self.0.lock().unwrap();
+        let now = Instant::now();
+        if state.current.id == id
+            && let Some(since) = state.missing_since.take()
+        {
+            let missing = now.saturating_duration_since(since);
+            state.missing_total += missing;
+            warn!(
+                missing_ms = missing.as_millis() as u64,
+                "Recording microphone is back after being missing"
+            );
+        }
+        state.last_frame = Some(now);
         if state.current.id == id
             && state.terminal.is_none()
             && !state.current.failed.load(Ordering::Acquire)
@@ -693,6 +975,14 @@ impl RecordingSourceHealth {
 
     pub(crate) fn stop_error(&self) -> Option<String> {
         let state = self.0.lock().unwrap();
+        if state.terminal.is_none()
+            && let Some(since) = state.missing_since
+        {
+            return Some(format!(
+                "Requested microphone was missing for {:.0} s at Stop: it was unplugged and did not come back",
+                since.elapsed().as_secs_f64()
+            ));
+        }
         state.terminal.clone().or_else(|| {
             (state.current.failed.load(Ordering::Acquire)
                 || state
@@ -1167,6 +1457,51 @@ fn alsa_card_names() -> Vec<String> {
     names
 }
 
+/// The ALSA software PCMs cpal lists by name, ahead of the sound cards.
+#[cfg(target_os = "linux")]
+const ALSA_SOFTWARE_INPUTS: [&str; 5] = ["default", "pipewire", "pulse", "jack", "oss"];
+
+/// An ALSA PCM by name, without listing devices. cpal's list opens every PCM
+/// it finds, both ways, starting with "default": where that is the bare sound
+/// card, listing takes the card from the sound server for a moment.
+#[cfg(target_os = "linux")]
+fn alsa_device(pcm_id: &str) -> Device {
+    cpal::platform::AlsaDevice::from_pcm_id(pcm_id).into()
+}
+
+/// The sound server's input that records the microphone selected as `label`,
+/// when ALSA would open that selection on the bare sound card (see
+/// [`crate::sources::screen_capture::microphone_input_device`]). Its formats
+/// are the ones the recording gets, and probing the card instead fails while
+/// the server holds it.
+#[cfg(target_os = "linux")]
+fn sound_server_input(label: &str) -> Option<Device> {
+    crate::sources::screen_capture::microphone_input_device(label).map(|input| alsa_device(&input))
+}
+
+/// Input names from the last device list (at launch, and whenever a device
+/// menu lists them again), so that starting a recording lists nothing.
+#[cfg(target_os = "linux")]
+static LISTED_INPUT_NAMES: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+
+#[cfg(target_os = "linux")]
+fn remember_listed_inputs(names: Vec<String>) {
+    if let Ok(mut listed) = LISTED_INPUT_NAMES.lock() {
+        *listed = Some(names);
+    }
+}
+
+/// The input names the last device list found, or a fresh list when nothing
+/// has listed them in this process yet.
+#[cfg(target_os = "linux")]
+pub(crate) fn listed_input_names() -> Vec<String> {
+    let listed = LISTED_INPUT_NAMES
+        .lock()
+        .ok()
+        .and_then(|listed| listed.clone());
+    listed.unwrap_or_else(list_input_device_names)
+}
+
 #[cfg(not(target_os = "macos"))]
 fn list_input_device_names() -> Vec<String> {
     let host = cpal::default_host();
@@ -1190,7 +1525,29 @@ fn list_input_device_names() -> Vec<String> {
         }
     }
 
-    names.into_keys().collect()
+    let names = names.into_keys().collect::<Vec<_>>();
+    #[cfg(target_os = "linux")]
+    remember_listed_inputs(names.clone());
+    names
+}
+
+#[cfg(windows)]
+fn register_microphone_callback_thread() -> bool {
+    thread_local! {
+        static MMCSS_HANDLE: std::cell::OnceCell<
+            Option<cap_mediafoundation_utils::MmcssAudioHandle>,
+        > = const { std::cell::OnceCell::new() };
+    }
+    MMCSS_HANDLE.with(|cell| {
+        cell.get_or_init(|| {
+            let handle = cap_mediafoundation_utils::MmcssAudioHandle::register_audio();
+            if handle.is_none() {
+                debug!("Microphone callback thread was not registered with MMCSS");
+            }
+            handle
+        })
+        .is_some()
+    })
 }
 
 impl MicrophoneFeed {
@@ -1235,6 +1592,12 @@ impl MicrophoneFeed {
 
     pub fn default_device() -> Option<(String, Device, SupportedStreamConfig)> {
         let host = cpal::default_host();
+        #[cfg(target_os = "linux")]
+        if let Some((_, device, config)) =
+            sound_server_input("default").and_then(|device| get_usable_device(device, None))
+        {
+            return Some(("default".to_string(), device, config));
+        }
         host.default_input_device()
             .and_then(|device| get_usable_device(device, None))
     }
@@ -1253,11 +1616,29 @@ impl MicrophoneFeed {
     /// it, and ALSA hardware PCMs are exclusive: the card a feed is recording
     /// from drops out of that list. A card counts as present for as long as
     /// ALSA still has it, which needs no PCM to be opened.
+    ///
+    /// That list holds "default" (always), the cards and ALSA's other
+    /// software PCMs, so this opens at most the one PCM asked about: a
+    /// recording asks every second, and listing opens every device, which
+    /// takes a bare-card default from the sound server each time.
     pub fn is_connected(name: &str) -> bool {
         #[cfg(target_os = "linux")]
-        if alsa_card_names().iter().any(|card| card == name) {
-            return true;
+        {
+            if name == "default" {
+                // Its sound server has an input for it: once none is left
+                // (the only microphone unplugged) the recording warns.
+                return crate::sources::screen_capture::default_microphone_present();
+            }
+            if alsa_card_names().iter().any(|card| card == name) {
+                return true;
+            }
+            if !ALSA_SOFTWARE_INPUTS.contains(&name) {
+                return false;
+            }
+            let device = alsa_device(name);
+            device.supported_input_configs().is_ok() || device.supported_output_configs().is_ok()
         }
+        #[cfg(not(target_os = "linux"))]
         list_input_device_names()
             .iter()
             .any(|listed| listed == name)
@@ -1267,17 +1648,27 @@ impl MicrophoneFeed {
         let host = cpal::default_host();
         let mut device_map = IndexMap::new();
 
-        if let Some((name, device, config)) = host
-            .default_input_device()
-            .and_then(|device| get_usable_device(device, settings))
+        #[cfg(target_os = "linux")]
+        if let Some((_, device, config)) =
+            sound_server_input("default").and_then(|device| get_usable_device(device, settings))
+        {
+            device_map.insert("default".to_string(), (device, config));
+        }
+        if !device_map.contains_key("default")
+            && let Some((name, device, config)) = host
+                .default_input_device()
+                .and_then(|device| get_usable_device(device, settings))
         {
             device_map.insert(name, (device, config));
         }
 
         match host.input_devices() {
             Ok(devices) => {
-                for (name, device, config) in
-                    devices.filter_map(|device| get_usable_device(device, settings))
+                // The default is already listed: probing it again only reopens it.
+                let listed = device_map.keys().cloned().collect::<Vec<_>>();
+                for (name, device, config) in devices
+                    .filter(|device| !device.name().is_ok_and(|name| listed.contains(&name)))
+                    .filter_map(|device| get_usable_device(device, settings))
                 {
                     device_map.entry(name).or_insert((device, config));
                 }
@@ -1287,6 +1678,8 @@ impl MicrophoneFeed {
             }
         }
 
+        #[cfg(target_os = "linux")]
+        remember_listed_inputs(device_map.keys().cloned().collect());
         device_map
     }
 
@@ -1298,6 +1691,16 @@ impl MicrophoneFeed {
         let configure = |device| {
             get_usable_device(device, settings).map(|(_, device, config)| (device, config))
         };
+        #[cfg(target_os = "linux")]
+        if let Some(device) = sound_server_input(label).and_then(configure) {
+            return Some(device);
+        }
+        // A software PCM's name is its ALSA name: open it directly rather
+        // than listing (and so opening) every device to find it.
+        #[cfg(target_os = "linux")]
+        if label != "default" && ALSA_SOFTWARE_INPUTS.contains(&label) {
+            return configure(alsa_device(label));
+        }
         if let Some(device) = configure_named_device(
             host.default_input_device(),
             label,
@@ -1368,6 +1771,20 @@ impl MicrophoneFeed {
                 if setup_cancel.is_cancelled() || ready_tx.is_canceled() {
                     return;
                 }
+                #[cfg(target_os = "linux")]
+                let label = match (pulse_input_role
+                    == crate::sources::screen_capture::PulseInputRole::Microphone)
+                    .then(|| crate::sources::screen_capture::microphone_input_device(&label))
+                    .flatten()
+                {
+                    Some(device) => {
+                        info!(
+                            "🎤 ALSA '{label}' opens the sound card directly; recording it through the sound server's '{device}' input"
+                        );
+                        device
+                    }
+                    None => label,
+                };
                 let Some((device, config)) = Self::device_with_settings(&label, settings.as_ref())
                 else {
                     let _ = ready_tx.send(Err(SetInputError::DeviceNotFound));
@@ -1467,7 +1884,14 @@ impl MicrophoneFeed {
                         let system_stream_cancel = system_stream_cancel.clone();
                         let mut callback_count = 0u64;
                         let mut enqueue_failures = EnqueueFailureLog::default();
+                        #[cfg(target_os = "linux")]
+                        let mut delivery_clock = (route_required
+                            && pulse_input_role
+                                == crate::sources::screen_capture::PulseInputRole::Microphone)
+                            .then(SteadyDeliveryClock::default);
                         move |data, info| {
+                            #[cfg(windows)]
+                            register_microphone_callback_thread();
                             #[cfg(target_os = "linux")]
                             if system_stream_cancel.is_cancelled() {
                                 return;
@@ -1508,6 +1932,15 @@ impl MicrophoneFeed {
                             ) {
                                 return;
                             }
+                            #[cfg(target_os = "linux")]
+                            let timestamp = match delivery_clock.as_mut() {
+                                Some(clock) => clock.timestamp(
+                                    callback_received,
+                                    frame_count,
+                                    effective_sample_rate.sample_rate,
+                                ),
+                                None => timestamp,
+                            };
                             #[cfg(windows)]
                             let timestamp = capture_clock.timestamp(
                                 timestamp,
@@ -2059,6 +2492,8 @@ struct ReconnectSystemInput {
 struct SystemReconnectFailed {
     id: u32,
     generation: u64,
+    /// The rebuild found nothing to open (see [`rebuild_found_no_device`]).
+    device_gone: bool,
 }
 
 struct InputConnectFailed {
@@ -2335,9 +2770,17 @@ impl MicrophoneFeed {
                 } else {
                     ready_future
                 };
+                // Asked once per rebuild, so the recording's health and the
+                // failed-rebuild report below agree while devices change.
+                #[cfg(target_os = "linux")]
+                let present = {
+                    let label = label.clone();
+                    let answer = Arc::new(std::sync::OnceLock::new());
+                    move || *answer.get_or_init(|| Self::is_connected(&label))
+                };
                 #[cfg(target_os = "linux")]
                 let ready_future = if let Some(health) = &self.recording_health {
-                    health.observe_ready(generation, new_id, ready_future)
+                    health.observe_ready(generation, new_id, ready_future, present.clone())
                 } else {
                     ready_future
                 };
@@ -2376,6 +2819,8 @@ impl MicrophoneFeed {
                     let actor = actor_ref;
                     let done_tx = done_tx.clone();
                     let label = label.clone();
+                    #[cfg(target_os = "linux")]
+                    let present = present.clone();
                     async move {
                         match ready.await {
                             Ok((config, buffer_size_frames)) => {
@@ -2407,6 +2852,7 @@ impl MicrophoneFeed {
                                     .tell(SystemReconnectFailed {
                                         id: new_id,
                                         generation,
+                                        device_gone: rebuild_lost_device(&_error, present),
                                     })
                                     .await;
                             }
@@ -3147,11 +3593,15 @@ impl Message<SystemReconnectFailed> for MicrophoneFeed {
 
     async fn handle(&mut self, msg: SystemReconnectFailed, _: &mut Context<Self, Self::Reply>) {
         if let Some(recording) = &self.recording_health {
-            recording.fail_reconnect(
-                msg.generation,
-                msg.id,
-                "Requested audio stream rebuild failed".into(),
-            );
+            if msg.device_gone {
+                recording.lose_reconnect(msg.generation, msg.id);
+            } else {
+                recording.fail_reconnect(
+                    msg.generation,
+                    msg.id,
+                    "Requested audio stream rebuild failed".into(),
+                );
+            }
         }
         if self
             .system_reconnect
@@ -4732,14 +5182,151 @@ mod required_recording_health_tests {
                 Err(SetInputError::DeviceNotFound)
             }
             .boxed(),
+            || true,
         );
         assert!(health.terminal_error().is_none());
         tx.send(()).unwrap();
         assert!(ready.await.is_err());
-        assert!(health.terminal_error().unwrap().contains("DeviceNotFound"));
+        // Nothing to open is not terminal: the recording goes on, and Stop
+        // reports the microphone unless a later rebuild replaces it.
+        assert!(health.terminal_error().is_none());
+        assert!(health.stop_error().is_some());
         health.commit_reconnect(1, 1);
         health.accepted_frame(1);
         assert!(health.stop_error().is_some());
+    }
+
+    #[tokio::test]
+    async fn an_unplugged_microphone_is_retried_until_it_returns() {
+        let stream = Arc::new(StreamHealth::new(0));
+        let health = RecordingSourceHealth::new(1, stream.clone());
+        stream.failed.store(true, Ordering::Release);
+        for (id, error) in [
+            (1, SetInputError::DeviceNotFound),
+            (
+                2,
+                SetInputError::BuildStream(
+                    "A backend-specific error has occurred: ALSA function 'snd_pcm_hw_params' failed with error 'No such file or directory (2)'".into(),
+                ),
+            ),
+        ] {
+            health.begin_reconnect(1, Arc::new(StreamHealth::new(id)));
+            let ready = health.observe_ready(1, id, async move { Err(error) }.boxed(), || true);
+            assert!(ready.await.is_err());
+            assert!(health.terminal_error().is_none(), "attempt {id}");
+            assert!(health.stop_error().is_some(), "attempt {id}");
+        }
+        // The device is back: the next rebuild replaces the lost stream.
+        health.begin_reconnect(1, Arc::new(StreamHealth::new(3)));
+        health.commit_reconnect(1, 3);
+        health.accepted_frame(3);
+        assert!(health.terminal_error().is_none());
+        assert!(health.stop_error().is_none());
+    }
+
+    #[tokio::test]
+    async fn stop_says_how_long_the_microphone_was_missing() {
+        let stream = Arc::new(StreamHealth::new(0));
+        let health = RecordingSourceHealth::new(1, stream.clone());
+        health.accepted_frame(0);
+        stream.failed.store(true, Ordering::Release);
+        health.begin_reconnect(1, Arc::new(StreamHealth::new(1)));
+        let ready = health.observe_ready(
+            1,
+            1,
+            async { Err(SetInputError::DeviceNotFound) }.boxed(),
+            || true,
+        );
+        assert!(ready.await.is_err());
+        assert!(health.missing_report().is_none());
+        let error = health.stop_error().unwrap();
+        assert!(
+            error.contains("was missing for") && error.contains("did not come back"),
+            "{error}"
+        );
+        // Back: Stop is clean, and the time it was missing is reported.
+        health.begin_reconnect(1, Arc::new(StreamHealth::new(2)));
+        health.commit_reconnect(1, 2);
+        health.accepted_frame(2);
+        assert!(health.stop_error().is_none());
+        assert!(health.missing_report().unwrap().contains("was missing for"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_rebuild_with_the_microphone_gone_spares_the_recording() {
+        // The pulse plugin reports a server with no source left as an I/O
+        // error: whether the microphone is still there decides.
+        let eio = || {
+            SetInputError::BuildStream(
+                "A backend-specific error has occurred: ALSA function 'snd_pcm_hw_params' failed with error 'I/O error (5)'".into(),
+            )
+        };
+        for (present, terminal) in [(false, false), (true, true)] {
+            let stream = Arc::new(StreamHealth::new(0));
+            let health = RecordingSourceHealth::new(1, stream.clone());
+            stream.failed.store(true, Ordering::Release);
+            health.begin_reconnect(1, Arc::new(StreamHealth::new(1)));
+            let error = eio();
+            let ready =
+                health.observe_ready(1, 1, async move { Err(error) }.boxed(), move || present);
+            assert!(ready.await.is_err());
+            assert_eq!(
+                health.terminal_error().is_some(),
+                terminal,
+                "present {present}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_device_that_is_gone_spares_the_recording() {
+        for error in [
+            SetInputError::BuildStreamCrashed,
+            SetInputError::SetupCancelled,
+            SetInputError::SetupTimedOut,
+            SetInputError::PlayStream("Device or resource busy".into()),
+            SetInputError::BuildStream("Invalid argument".into()),
+            SetInputError::BuildStream(
+                "A backend-specific error has occurred: ALSA function 'snd_pcm_hw_params' failed with error 'Invalid argument (22)'".into(),
+            ),
+            SetInputError::BuildStream(
+                "The requested stream configuration is not supported by the device.".into(),
+            ),
+        ] {
+            assert!(!super::rebuild_found_no_device(&error), "{error}");
+        }
+        for error in [
+            SetInputError::DeviceNotFound,
+            SetInputError::BuildStream(
+                "A backend-specific error has occurred: ALSA function 'snd_pcm_hw_params' failed with error 'No such file or directory (2)'".into(),
+            ),
+            SetInputError::BuildStream(
+                "The requested device is no longer available. For example, it has been unplugged.".into(),
+            ),
+        ] {
+            assert!(super::rebuild_found_no_device(&error), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rebuild_failing_for_another_reason_still_fails_the_recording() {
+        let stream = Arc::new(StreamHealth::new(0));
+        let health = RecordingSourceHealth::new(1, stream.clone());
+        stream.failed.store(true, Ordering::Release);
+        health.begin_reconnect(1, Arc::new(StreamHealth::new(1)));
+        let ready = health.observe_ready(
+            1,
+            1,
+            async { Err(SetInputError::BuildStream("Invalid argument".into())) }.boxed(),
+            || true,
+        );
+        assert!(ready.await.is_err());
+        assert!(
+            health
+                .terminal_error()
+                .unwrap()
+                .contains("Invalid argument")
+        );
     }
 
     #[test]
@@ -5429,5 +6016,345 @@ mod recording_subscription_tests {
             expected: true,
         });
         assert!(!expected.failed.load(Ordering::Acquire));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn microphone_callback_thread_registers_with_mmcss() {
+        let registered = std::thread::spawn(|| {
+            [
+                register_microphone_callback_thread(),
+                register_microphone_callback_thread(),
+            ]
+        })
+        .join()
+        .unwrap();
+        assert_eq!(registered, [true, true]);
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod steady_delivery_clock_tests {
+    use super::SteadyDeliveryClock;
+    use cap_timestamp::Timestamp;
+    use std::time::{Duration, Instant};
+
+    const RATE: u32 = 44_100;
+    const FRAMES: usize = 1_102;
+
+    fn period() -> Duration {
+        Duration::from_secs_f64(FRAMES as f64 / f64::from(RATE))
+    }
+
+    fn apart(a: Instant, b: Instant) -> Duration {
+        a.saturating_duration_since(b)
+            .max(b.saturating_duration_since(a))
+    }
+
+    fn instant(timestamp: Timestamp) -> Instant {
+        match timestamp {
+            Timestamp::Instant(instant) => instant,
+            other => panic!("expected an Instant timestamp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn steady_delivery_keeps_the_arrival_times() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        for buffer in 1..=200u32 {
+            let received = start + period() * buffer;
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            assert!(apart(stamped, received) < Duration::from_micros(50));
+        }
+    }
+
+    #[test]
+    fn a_burst_of_late_callbacks_keeps_its_audio_in_place() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let mut stamps = Vec::new();
+        for buffer in 1..=60u32 {
+            let on_time = start + period() * buffer;
+            // Buffers 20 to 22 arrive together, 75 ms after the first was due.
+            let received = if (20..=22).contains(&buffer) {
+                start + period() * 20 + Duration::from_millis(75)
+            } else {
+                on_time
+            };
+            stamps.push(instant(clock.timestamp(received, FRAMES, RATE)));
+        }
+        for pair in stamps.windows(2) {
+            let step = pair[1].saturating_duration_since(pair[0]);
+            assert!(step.abs_diff(period()) < Duration::from_micros(50));
+        }
+    }
+
+    #[test]
+    fn a_stall_longer_than_the_recent_arrivals_still_marks_its_loss() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        // Nothing arrives for a second, and that second of audio is gone.
+        let loss = Duration::from_secs(1);
+        for buffer in 1..=400u32 {
+            let received =
+                start + period() * buffer + if buffer > 50 { loss } else { Duration::ZERO };
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            let off = apart(received, stamped);
+            assert!(off < Duration::from_millis(1), "buffer {buffer}: {off:?}");
+        }
+    }
+
+    #[test]
+    fn audio_the_server_held_is_counted_when_a_stall_drops_it() {
+        // As measured on PipeWire 1.0.5: latency settles at 155 ms, then a
+        // 1 s stall drops the 155 ms the server held as well, and latency
+        // builds up again over 10 s. Each buffer's capture time is known.
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let stall_at = Duration::from_secs(40);
+        let stall = Duration::from_secs(1);
+        let held = Duration::from_millis(155);
+        let mut worst_after = Duration::ZERO;
+        for buffer in 1..=3_200u32 {
+            let mut captured = period() * buffer;
+            let latency_ms = if captured < stall_at {
+                (20.0 * captured.as_secs_f64()).min(155.0)
+            } else {
+                // Frames from the stall and the held audio before it are gone.
+                captured += stall + held;
+                let since = (captured - stall_at - stall).as_secs_f64();
+                (15.5 * since).min(155.0)
+            };
+            let received = start + captured + Duration::from_secs_f64(latency_ms / 1000.0);
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            if captured > stall_at + stall + Duration::from_secs(20) {
+                // Stamps line up with the capture times again.
+                worst_after = worst_after.max(apart(stamped, start + captured));
+            }
+        }
+        assert!(worst_after < Duration::from_millis(15), "{worst_after:?}");
+    }
+
+    #[test]
+    fn repeated_short_losses_are_caught_up() {
+        // From 40 s on, 100 ms of audio is lost every second: no single loss
+        // stands out, but the stamps must keep their place against the
+        // capture times instead of running ever earlier.
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let mut lost = Duration::ZERO;
+        let mut before_losses = None;
+        let mut worst = Duration::ZERO;
+        for buffer in 1..=6_000u32 {
+            let captured = period() * buffer + lost;
+            let received = start + captured + Duration::from_millis(20);
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            let off = apart(stamped, start + captured);
+            if captured < Duration::from_secs(40) {
+                before_losses = Some(off);
+            } else {
+                worst = worst.max(off.abs_diff(before_losses.unwrap()));
+                if buffer % 40 == 0 {
+                    lost += Duration::from_millis(100);
+                }
+            }
+        }
+        // At most the loss threshold plus the loss that crossed it.
+        assert!(worst < Duration::from_millis(300), "{worst:?}");
+    }
+
+    #[test]
+    fn a_stall_that_lost_frames_is_marked_where_it_happened() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let loss = Duration::from_millis(300);
+        for buffer in 1..=400u32 {
+            let received =
+                start + period() * buffer + if buffer > 50 { loss } else { Duration::ZERO };
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            let off = apart(received, stamped);
+            assert!(off < Duration::from_millis(1), "buffer {buffer}: {off:?}");
+        }
+    }
+
+    #[test]
+    fn a_smaller_loss_is_marked_within_half_a_second() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let loss = Duration::from_millis(200);
+        for buffer in 1..=400u32 {
+            let received =
+                start + period() * buffer + if buffer > 50 { loss } else { Duration::ZERO };
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            let off = apart(received, stamped);
+            if !(51..=72).contains(&buffer) {
+                assert!(off < Duration::from_millis(1), "buffer {buffer}: {off:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_short_losses_as_the_stream_starts_are_caught_up() {
+        // 100 ms lost every second from the start: the losses must not be
+        // taken for latency when the stream settles.
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let mut lost = Duration::ZERO;
+        let mut worst = Duration::ZERO;
+        for buffer in 1..=3_200u32 {
+            let captured = period() * buffer + lost;
+            let received = start + captured + Duration::from_millis(20);
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            if buffer > 40 {
+                worst = worst.max(apart(stamped, start + captured));
+            }
+            if buffer % 40 == 0 && buffer <= 1_600 {
+                lost += Duration::from_millis(100);
+            }
+        }
+        assert!(worst < Duration::from_millis(300), "{worst:?}");
+    }
+
+    #[test]
+    fn a_big_quantum_delivering_in_bursts_is_not_lost_audio() {
+        // As measured with PipeWire's quantum forced to 8192: each burst
+        // brings about 170 ms of buffers at once, some up to 200 ms apart.
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let mut stamps = Vec::new();
+        for buffer in 1..=4_800u32 {
+            let due = period() * buffer;
+            let burst = (due.as_millis() / 171) as u32;
+            let late = if burst % 7 == 0 { 28 } else { 0 };
+            let received = start
+                + Duration::from_millis(u64::from((burst + 1) * 171 + late))
+                + Duration::from_millis(80);
+            stamps.push(instant(clock.timestamp(received, FRAMES, RATE)));
+        }
+        // No stamp jumps ahead by more than a drift step (silence is only
+        // inserted past 70 ms), the anchor settles at most a buffer earlier
+        // as bursts land off the buffer grid, and nothing creeps.
+        for (index, pair) in stamps.windows(2).enumerate().skip(40) {
+            let step = pair[1].saturating_duration_since(pair[0]);
+            assert!(
+                step < period() + SteadyDeliveryClock::MAX_DRIFT_STEP + Duration::from_micros(50)
+                    && step + Duration::from_millis(30) > period(),
+                "buffer {index}: {step:?}"
+            );
+        }
+        let offset = |index: usize| apart(stamps[index], start + period() * (index as u32 + 1));
+        assert!(offset(4_799).abs_diff(offset(1_600)) < Duration::from_millis(10));
+    }
+
+    #[test]
+    fn latency_that_grows_past_300_ms_and_stays_is_not_lost_audio() {
+        // A mic whose latency builds to 450 ms over its first 20 s, then
+        // holds: none of it is loss.
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let mut stamps = Vec::new();
+        for buffer in 1..=6_000u32 {
+            let due = period() * buffer;
+            let latency_ms = (22.5 * due.as_secs_f64()).min(450.0);
+            let received = start + due + Duration::from_secs_f64(latency_ms / 1000.0);
+            stamps.push(instant(clock.timestamp(received, FRAMES, RATE)));
+        }
+        for (index, pair) in stamps.windows(2).enumerate() {
+            let step = pair[1].saturating_duration_since(pair[0]);
+            assert!(
+                step.abs_diff(period()) < Duration::from_micros(50),
+                "buffer {index}: {step:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fast_device_clock_is_followed_once_the_stream_settles() {
+        // As measured on a PipeWire 1.0.5 guest: arrivals settle 155 ms
+        // behind, then the card's clock runs 90 ppm fast for half an hour.
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let mut settled_off = None;
+        let mut last_off = Duration::ZERO;
+        for buffer in 1..=72_000u32 {
+            let due = period().mul_f64(1.0 - 0.000_09) * buffer;
+            let latency = Duration::from_secs_f64((20.0 * due.as_secs_f64()).min(155.0) / 1000.0);
+            let received = start + due + latency;
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            last_off = apart(received, stamped);
+            if due >= Duration::from_secs(34) {
+                settled_off.get_or_insert(last_off);
+            }
+        }
+        let settled_off = settled_off.unwrap();
+        assert!(
+            last_off.abs_diff(settled_off) < Duration::from_millis(5),
+            "{last_off:?} vs {settled_off:?}"
+        );
+    }
+
+    #[test]
+    fn a_slow_device_clock_is_followed_once_the_stream_settles() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        // 0.1% slow: each buffer arrives a little later than its frames say.
+        let mut settled_off = None;
+        let mut last_off = Duration::ZERO;
+        for buffer in 1..=4_000u32 {
+            let received = start + period().mul_f64(1.001) * buffer;
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            last_off = apart(received, stamped);
+            if received.saturating_duration_since(start) >= Duration::from_secs(34) {
+                settled_off.get_or_insert(last_off);
+            }
+        }
+        // The drift no longer adds up once followed: 100 s in, the stamps
+        // trail the arrivals by what they did when the stream settled.
+        let settled_off = settled_off.unwrap();
+        assert!(
+            last_off.abs_diff(settled_off) < Duration::from_millis(5),
+            "{last_off:?} vs {settled_off:?}"
+        );
+    }
+
+    #[test]
+    fn latency_that_builds_as_the_card_wakes_is_not_lost_audio() {
+        // As measured on PipeWire 1.0.5: every frame arrives, but arrivals
+        // fall behind to 200 ms over 10 s, settle at 155 ms by 14 s and stay
+        // there; every sixth buffer comes 20 ms late on top.
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let mut stamps = Vec::new();
+        for buffer in 1..=4_000u32 {
+            let due = period() * buffer;
+            let secs = due.as_secs_f64();
+            let latency_ms = if secs < 10.0 {
+                20.0 * secs
+            } else if secs < 14.0 {
+                200.0 - 45.0 * (secs - 10.0) / 4.0
+            } else {
+                155.0
+            };
+            let burst = if buffer % 6 == 0 { 20.0 } else { 0.0 };
+            let received = start + due + Duration::from_secs_f64((latency_ms + burst) / 1000.0);
+            stamps.push(instant(clock.timestamp(received, FRAMES, RATE)));
+        }
+        for (index, pair) in stamps.windows(2).enumerate() {
+            let step = pair[1].saturating_duration_since(pair[0]);
+            assert!(
+                step.abs_diff(period()) < Duration::from_micros(50),
+                "buffer {index}: {step:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_rate_starts_a_new_timeline() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let _ = clock.timestamp(start, FRAMES, RATE);
+        let later = start + Duration::from_secs(5);
+        assert_eq!(instant(clock.timestamp(later, 960, 48_000)), later);
     }
 }

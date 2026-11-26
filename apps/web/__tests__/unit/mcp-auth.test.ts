@@ -8,6 +8,11 @@ const databaseState = vi.hoisted(() => ({
 	inserted: [] as Record<string, unknown>[],
 	updated: 0,
 	quotaCount: 0,
+	accountEmail: "owner@open.example",
+}));
+vi.mock("@cap/database/auth/domain-utils", () => ({
+	isBlockedAccountEmail: (email: string | null | undefined) =>
+		email === "owner@blocked.example",
 }));
 vi.mock("@cap/database", () => ({
 	db: () => ({
@@ -27,6 +32,7 @@ vi.mock("@cap/database", () => ({
 										{
 											registrations: databaseState.quotaCount,
 											authSessionVersion: 0,
+											email: databaseState.accountEmail,
 										},
 									],
 								}),
@@ -94,6 +100,7 @@ describe("MCP OAuth authorization", () => {
 		databaseState.inserted = [];
 		databaseState.updated = 0;
 		databaseState.quotaCount = 0;
+		databaseState.accountEmail = "owner@open.example";
 	});
 	it("accepts only secure or explicit loopback redirect URIs", () => {
 		expect(isMcpRedirectUri("https://chatgpt.com/connector/callback")).toBe(
@@ -182,6 +189,52 @@ describe("MCP OAuth authorization", () => {
 		params.set("resource", "https://cap.so/api/v1");
 		expect(await exchangeMcpCode(params)).toBeNull();
 		expect(databaseState.inserted).toHaveLength(1);
+	});
+
+	it("issues no tokens to a blocked account from a code or a refresh token", async () => {
+		databaseState.accountEmail = "owner@blocked.example";
+		databaseState.selected = {
+			id: "grant",
+			userId: "owner",
+			clientId: "cap_mcp_client_test",
+			redirectUri: "https://chatgpt.com/connector/callback",
+			resource,
+			codeChallenge: challenge,
+			consumedAt: null,
+			expiresAt: new Date(Date.now() + 60_000),
+		};
+		expect(
+			await exchangeMcpCode(
+				new URLSearchParams({
+					code: `cap_mcp_code_${"c".repeat(43)}`,
+					client_id: "cap_mcp_client_test",
+					redirect_uri: "https://chatgpt.com/connector/callback",
+					code_verifier: "v".repeat(43),
+					resource,
+				}),
+			),
+		).toBeNull();
+
+		databaseState.selected = {
+			id: "token",
+			userId: "owner",
+			clientId: "cap_mcp_client_test",
+			resource,
+			familyId: "family",
+			revokedAt: null,
+			refreshExpiresAt: new Date(Date.now() + 60_000),
+		};
+		expect(
+			await refreshMcpTokens(
+				new URLSearchParams({
+					refresh_token: `cap_mcp_refresh_${"r".repeat(43)}`,
+					client_id: "cap_mcp_client_test",
+					resource,
+				}),
+			),
+		).toBeNull();
+		expect(databaseState.updated).toBe(0);
+		expect(databaseState.inserted).toHaveLength(0);
 	});
 
 	it("revokes a refresh family when a used refresh token is replayed", async () => {
