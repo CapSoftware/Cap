@@ -31,6 +31,7 @@ const NON_INDEXABLE_PATHS = new Set([
 	"/checkout/complete",
 	"/download/started",
 	"/redeem",
+	"/blackfriday/plan",
 ]);
 const NON_INDEXABLE_PREFIXES = ["/admin", "/cli", "/mcp"];
 
