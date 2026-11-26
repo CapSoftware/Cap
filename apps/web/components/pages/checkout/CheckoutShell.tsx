@@ -43,6 +43,7 @@ export function CheckoutShell({
 	children,
 	back = PRICING_BACK,
 	capFriday = false,
+	summaryTone = "dark",
 }: {
 	title: string;
 	subtitle: string;
@@ -50,6 +51,7 @@ export function CheckoutShell({
 	children: ReactNode;
 	back?: BackLink;
 	capFriday?: boolean;
+	summaryTone?: "dark" | "light";
 }) {
 	const fade = "transition-[opacity,color] duration-700 ease-out";
 	return (
@@ -156,7 +158,9 @@ export function CheckoutShell({
 									<div
 										className={classNames(
 											"rounded-[18px] p-5 transition-colors duration-700 sm:p-8",
-											capFriday ? "bg-[#141113] text-[#F5F1EA]" : "bg-white",
+											capFriday && summaryTone === "dark"
+												? "bg-[#141113] text-[#F5F1EA]"
+												: "bg-white",
 										)}
 									>
 										{summary}

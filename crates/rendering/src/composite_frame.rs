@@ -9,59 +9,417 @@ pub struct CompositeVideoFramePipeline {
     no_enhancement: wgpu::TextureView,
 }
 
-static PIPELINE_CACHE_DATA: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+fn shader_cache_path(
+    data_dir: &std::path::Path,
+    adapter: &wgpu::AdapterInfo,
+) -> Option<std::path::PathBuf> {
+    let key = wgpu::util::pipeline_cache_key(adapter)?;
+    Some(data_dir.join("Cap").join(format!("{key}.bin")))
+}
 
-fn get_cache_path() -> Option<std::path::PathBuf> {
-    dirs::data_local_dir().map(|p| p.join("Cap").join("shader_cache.bin"))
+fn shader_cache_dir() -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    {
+        let override_dir = TEST_SHADER_CACHE_DIR.with(|dir| dir.borrow().clone());
+        if override_dir.is_some() {
+            return override_dir;
+        }
+    }
+    dirs::data_local_dir()
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SHADER_CACHE_DIR: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn cache_adapter(device: &wgpu::Device) -> Option<wgpu::AdapterInfo> {
+    #[cfg(target_os = "linux")]
+    {
+        unsafe {
+            device.as_hal::<wgpu_hal::api::Vulkan, _, _>(|hal_device| {
+                let hal_device = hal_device?;
+                let properties = hal_device
+                    .shared_instance()
+                    .raw_instance()
+                    .get_physical_device_properties(hal_device.raw_physical_device());
+                Some(wgpu::AdapterInfo {
+                    name: String::new(),
+                    vendor: properties.vendor_id,
+                    device: properties.device_id,
+                    device_type: wgpu::DeviceType::Other,
+                    driver: String::new(),
+                    driver_info: String::new(),
+                    backend: wgpu::Backend::Vulkan,
+                })
+            })
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = device;
+        None
+    }
+}
+
+fn cache_path_for(device: &wgpu::Device) -> Option<std::path::PathBuf> {
+    shader_cache_path(shader_cache_dir()?.as_path(), &cache_adapter(device)?)
 }
 
 fn load_pipeline_cache(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
     if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
         return None;
     }
-
-    if let Some(cached_data) = PIPELINE_CACHE_DATA.get() {
-        return Some(unsafe {
-            device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
-                label: Some("Cap Pipeline Cache"),
-                data: Some(cached_data),
-                fallback: true,
-            })
-        });
+    let path = cache_path_for(device);
+    let bytes = path.as_ref().and_then(|path| std::fs::read(path).ok());
+    match create_pipeline_cache(device, bytes.as_deref()) {
+        Ok(cache) => Some(cache),
+        Err(error) if bytes.is_some() => {
+            if let Some(path) = &path {
+                let _ = std::fs::remove_file(path);
+            }
+            tracing::warn!(%error, "shader cache rejected for this adapter; starting a new one");
+            create_pipeline_cache(device, None).ok()
+        }
+        Err(_) => None,
     }
-
-    let cache_path = get_cache_path()?;
-    if cache_path.exists()
-        && let Ok(data) = std::fs::read(&cache_path)
-    {
-        let _ = PIPELINE_CACHE_DATA.set(data.clone());
-        return Some(unsafe {
-            device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
-                label: Some("Cap Pipeline Cache"),
-                data: Some(&data),
-                fallback: true,
-            })
-        });
-    }
-
-    Some(unsafe {
-        device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
-            label: Some("Cap Pipeline Cache"),
-            data: None,
-            fallback: true,
-        })
-    })
 }
 
-fn save_pipeline_cache(cache: &wgpu::PipelineCache) {
-    if let Some(data) = cache.get_data() {
-        let _ = PIPELINE_CACHE_DATA.set(data.clone());
-        if let Some(cache_path) = get_cache_path() {
-            if let Some(parent) = cache_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(cache_path, &data);
+fn create_pipeline_cache(
+    device: &wgpu::Device,
+    data: Option<&[u8]>,
+) -> Result<wgpu::PipelineCache, String> {
+    device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let cache = unsafe {
+        device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+            label: Some("Cap Pipeline Cache"),
+            data,
+            fallback: true,
+        })
+    };
+    if let Some(error) = validation_error(device) {
+        return Err(error);
+    }
+    Ok(cache)
+}
+
+fn validation_error(device: &wgpu::Device) -> Option<String> {
+    let mut future = std::pin::pin!(device.pop_error_scope());
+    let waker = std::task::Waker::noop();
+    let mut context = std::task::Context::from_waker(waker);
+    match future.as_mut().poll(&mut context) {
+        std::task::Poll::Ready(error) => error.map(|error| error.to_string()),
+        std::task::Poll::Pending => Some(String::from("shader cache validation did not resolve")),
+    }
+}
+
+fn save_pipeline_cache(device: &wgpu::Device, cache: &wgpu::PipelineCache) {
+    let Some(path) = cache_path_for(device) else {
+        return;
+    };
+    let Some(data) = cache.get_data() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let temporary = path.with_extension("tmp");
+    if std::fs::write(&temporary, data).is_err() {
+        return;
+    }
+    if std::fs::rename(&temporary, path).is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+}
+
+#[cfg(test)]
+mod shader_cache_tests {
+    use super::*;
+
+    fn adapter(backend: wgpu::Backend, vendor: u32, device: u32) -> wgpu::AdapterInfo {
+        wgpu::AdapterInfo {
+            name: String::new(),
+            vendor,
+            device,
+            device_type: wgpu::DeviceType::Other,
+            driver: String::new(),
+            driver_info: String::new(),
+            backend,
         }
+    }
+
+    #[test]
+    fn shader_cache_file_follows_the_adapter() {
+        let dir = std::path::Path::new("cap-data");
+        let intel = adapter(wgpu::Backend::Vulkan, 0x8086, 0x5917);
+        let nvidia = adapter(wgpu::Backend::Vulkan, 0x10de, 0x1d10);
+        let intel_path = shader_cache_path(dir, &intel).expect("vulkan cache path");
+        let nvidia_path = shader_cache_path(dir, &nvidia).expect("vulkan cache path");
+        assert_ne!(intel_path, nvidia_path);
+        assert_eq!(
+            intel_path,
+            dir.join("Cap").join(format!(
+                "{}.bin",
+                wgpu::util::pipeline_cache_key(&intel).unwrap()
+            ))
+        );
+        assert_eq!(shader_cache_path(dir, &intel), Some(intel_path.clone()));
+        assert_ne!(
+            intel_path.file_name().and_then(|name| name.to_str()),
+            Some("shader_cache.bin")
+        );
+        assert!(shader_cache_path(dir, &adapter(wgpu::Backend::Metal, 0x8086, 0x5917)).is_none());
+        assert!(shader_cache_path(dir, &adapter(wgpu::Backend::Dx12, 0x8086, 0x5917)).is_none());
+    }
+
+    struct CacheDir(tempfile::TempDir);
+
+    impl CacheDir {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("temp dir");
+            TEST_SHADER_CACHE_DIR.with(|slot| *slot.borrow_mut() = Some(dir.path().to_path_buf()));
+            Self(dir)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            self.0.path()
+        }
+    }
+
+    impl Drop for CacheDir {
+        fn drop(&mut self) {
+            TEST_SHADER_CACHE_DIR.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    struct LogWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn foreign_header() -> Vec<u8> {
+        let mut bytes = vec![0u8; 64];
+        bytes[..8].copy_from_slice(b"WGPUPLCH");
+        bytes[8..12].copy_from_slice(&1u32.to_be_bytes());
+        bytes[12..16].copy_from_slice(&8u32.to_be_bytes());
+        bytes[16] = 1;
+        let adapter_key = [255, 255, 255, 0, 0, 0, 1, 0, 0, 0, 2, 255, 255, 255, 255];
+        bytes[17..32].copy_from_slice(&adapter_key);
+        bytes[56..64].copy_from_slice(&0x0FED_CBA9_8765_4321u64.to_be_bytes());
+        bytes
+    }
+
+    fn pipeline_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
+        let instance = crate::create_wgpu_instance_sync();
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .ok()?;
+        if !adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
+            eprintln!("adapter {:?} has no pipeline cache", adapter.get_info());
+            return None;
+        }
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("shader-cache-test"),
+            required_features: wgpu::Features::PIPELINE_CACHE,
+            ..Default::default()
+        }))
+        .expect("device");
+        Some((adapter, device, queue))
+    }
+
+    fn assert_saved_cache(path: &std::path::Path, rejected: &[u8]) {
+        let stored = std::fs::read(path).expect("shader cache file after recovery");
+        assert!(!stored.is_empty(), "shader cache file is empty");
+        assert_ne!(stored.as_slice(), rejected);
+    }
+
+    fn reload_saved_cache(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        path: &std::path::Path,
+        rejected: &[u8],
+        logs: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    ) {
+        assert_saved_cache(path, rejected);
+        let mark = logs.lock().unwrap().len();
+        let pipeline = CompositeVideoFramePipeline::new(device);
+        assert_eq!(draw_red(device, queue, &pipeline), vec![255, 0, 0, 255]);
+        let text = {
+            let bytes = logs.lock().unwrap();
+            String::from_utf8_lossy(&bytes[mark..]).into_owned()
+        };
+        assert!(!text.contains("uncaptured wgpu error"), "{text}");
+        assert!(
+            !text.contains("shader cache rejected"),
+            "saved cache was rejected on reload: {text}"
+        );
+        assert_saved_cache(path, rejected);
+    }
+
+    fn draw_red(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pipeline: &CompositeVideoFramePipeline,
+    ) -> Vec<u8> {
+        const SIZE: u32 = 8;
+        let frame = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let red = [255, 0, 0, 255].repeat((SIZE * SIZE) as usize);
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &frame,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &red,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(SIZE * 4),
+                rows_per_image: Some(SIZE),
+            },
+            frame.size(),
+        );
+        let side = SIZE as f32;
+        let uniforms = CompositeVideoFrameUniforms {
+            output_size: [side, side],
+            frame_size: [side, side],
+            crop_bounds: [0.0, 0.0, side, side],
+            target_bounds: [0.0, 0.0, side, side],
+            target_size: [side, side],
+            ..Default::default()
+        };
+        let view = frame.create_view(&Default::default());
+        let uniforms_buffer = uniforms.to_buffer(device);
+        let bind_group = pipeline.bind_group(device, &uniforms_buffer, &view);
+        let output = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let padded = (SIZE * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (padded * SIZE) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let out_view = output.create_view(&Default::default());
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &out_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&pipeline.render_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &output,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(SIZE),
+                },
+            },
+            output.size(),
+        );
+        queue.submit([encoder.finish()]);
+        device.poll(wgpu::PollType::Wait).expect("poll");
+        readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::Wait).expect("map");
+        let mapped = readback.slice(..).get_mapped_range();
+        let center = ((4 * padded) + 16) as usize;
+        mapped[center..center + 4].to_vec()
+    }
+
+    #[test]
+    fn foreign_or_corrupt_shader_cache_still_draws() {
+        let Some((adapter, device, queue)) = pipeline_device() else {
+            eprintln!("no pipeline-cache adapter; skipping");
+            return;
+        };
+        let cache_dir = CacheDir::new();
+        let path = cache_path_for(&device).expect("per-adapter cache path");
+        let expected = shader_cache_path(cache_dir.path(), &adapter.get_info())
+            .expect("path from adapter info");
+        assert_eq!(path, expected);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let logs = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let writer = logs.clone();
+        let _subscriber = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_writer(move || LogWriter(writer.clone()))
+                .finish(),
+        );
+        crate::log_uncaptured_errors(&device, "shader-cache-test");
+
+        let foreign = foreign_header();
+        std::fs::write(&path, &foreign).unwrap();
+        let pipeline = CompositeVideoFramePipeline::new(&device);
+        assert_eq!(draw_red(&device, &queue, &pipeline), vec![255, 0, 0, 255]);
+        reload_saved_cache(&device, &queue, &path, &foreign, &logs);
+
+        let corrupt = b"not-a-cache";
+        std::fs::write(&path, corrupt).unwrap();
+        let pipeline = CompositeVideoFramePipeline::new(&device);
+        assert_eq!(draw_red(&device, &queue, &pipeline), vec![255, 0, 0, 255]);
+        reload_saved_cache(&device, &queue, &path, corrupt, &logs);
+
+        let text = String::from_utf8(logs.lock().unwrap().clone()).unwrap_or_default();
+        assert!(!text.contains("uncaptured wgpu error"), "{text}");
     }
 }
 
@@ -348,7 +706,7 @@ impl CompositeVideoFramePipeline {
         });
 
         if let Some(cache) = &pipeline_cache {
-            save_pipeline_cache(cache);
+            save_pipeline_cache(device, cache);
         }
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {

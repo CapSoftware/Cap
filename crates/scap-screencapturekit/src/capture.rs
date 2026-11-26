@@ -1,5 +1,5 @@
 use cidre::{
-    arc, blocks, cm, cv, define_obj_type, dispatch, ns, objc,
+    arc, blocks, cf, cm, cv, define_obj_type, dispatch, ns, objc,
     sc::{self, StreamDelegate, StreamDelegateImpl, StreamOutput, StreamOutputImpl},
 };
 
@@ -57,15 +57,20 @@ impl sc::stream::OutputImpl for CapturerCallbacks {
         kind: sc::OutputType,
     ) {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if let Some(cb) = &mut self.inner_mut().did_output_sample_buf_cb {
+            let inner = self.inner_mut();
+            let screen_status_samples = inner.screen_status_samples;
+            if let Some(cb) = &mut inner.did_output_sample_buf_cb {
                 let sample_buf = sample_buf.retained();
                 let frame = match kind {
                     sc::OutputType::Screen => {
                         if sample_buf.image_buf().is_none() {
-                            return;
+                            if !screen_status_samples {
+                                return;
+                            }
+                            Frame::ScreenStatus(VideoFrame { sample_buf })
+                        } else {
+                            Frame::Screen(VideoFrame { sample_buf })
                         }
-
-                        Frame::Screen(VideoFrame { sample_buf })
                     }
                     sc::OutputType::Audio => Frame::Audio(AudioFrame { sample_buf }),
                     sc::OutputType::Mic => Frame::Mic(AudioFrame { sample_buf }),
@@ -109,6 +114,7 @@ type StreamDidStopwithErrCallback = Box<dyn FnMut(&sc::Stream, &ns::Error)>;
 pub struct CapturerCallbacksInner {
     did_output_sample_buf_cb: Option<DidOutputSampleBufCallback>,
     did_stop_with_err_cb: Option<StreamDidStopwithErrCallback>,
+    screen_status_samples: bool,
 }
 
 pub struct Capturer {
@@ -169,6 +175,48 @@ impl VideoFrame {
     pub fn image_buf(&self) -> Option<&cv::ImageBuf> {
         self.sample_buf.image_buf()
     }
+
+    pub fn info(&self) -> ScreenFrameInfo {
+        ScreenFrameInfo::read(&self.sample_buf)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScreenFrameInfo {
+    pub status: Option<sc::FrameStatus>,
+    pub display_time: Option<u64>,
+}
+
+impl ScreenFrameInfo {
+    pub fn read(sample_buf: &cm::SampleBuf) -> Self {
+        let Some(info) = sample_buf
+            .attaches(false)
+            .and_then(|attachments| attachments.iter().next())
+        else {
+            return Self::default();
+        };
+        let number = |key: &sc::FrameInfo| {
+            info.get(key.as_cf())
+                .and_then(cf::Plist::try_as_number)
+                .and_then(cf::Number::to_i64)
+        };
+        Self {
+            status: number(sc::FrameInfo::status()).and_then(frame_status),
+            display_time: number(sc::FrameInfo::display_time()).and_then(|t| u64::try_from(t).ok()),
+        }
+    }
+}
+
+fn frame_status(raw: i64) -> Option<sc::FrameStatus> {
+    Some(match raw {
+        0 => sc::FrameStatus::Complete,
+        1 => sc::FrameStatus::Idle,
+        2 => sc::FrameStatus::Blank,
+        3 => sc::FrameStatus::Suspended,
+        4 => sc::FrameStatus::Started,
+        5 => sc::FrameStatus::Stopped,
+        _ => return None,
+    })
 }
 
 pub struct AudioFrame {
@@ -187,6 +235,7 @@ impl AudioFrame {
 
 pub enum Frame {
     Screen(VideoFrame),
+    ScreenStatus(VideoFrame),
     Audio(AudioFrame),
     Mic(AudioFrame),
 }
@@ -194,7 +243,7 @@ pub enum Frame {
 impl Frame {
     pub fn sample_buf(&self) -> &cm::SampleBuf {
         match self {
-            Frame::Screen(frame) => frame.sample_buf(),
+            Frame::Screen(frame) | Frame::ScreenStatus(frame) => frame.sample_buf(),
             Frame::Audio(frame) => frame.sample_buf(),
             Frame::Mic(frame) => frame.sample_buf(),
         }
@@ -202,7 +251,7 @@ impl Frame {
 
     pub fn sample_buf_mut(&mut self) -> &mut cm::SampleBuf {
         match self {
-            Frame::Screen(frame) => frame.sample_buf_mut(),
+            Frame::Screen(frame) | Frame::ScreenStatus(frame) => frame.sample_buf_mut(),
             Frame::Audio(frame) => frame.sample_buf_mut(),
             Frame::Mic(frame) => frame.sample_buf_mut(),
         }
@@ -210,7 +259,7 @@ impl Frame {
 
     pub fn output_type(&self) -> sc::OutputType {
         match self {
-            Frame::Screen(_) => sc::OutputType::Screen,
+            Frame::Screen(_) | Frame::ScreenStatus(_) => sc::OutputType::Screen,
             Frame::Audio(_) => sc::OutputType::Audio,
             Frame::Mic(_) => sc::OutputType::Mic,
         }
@@ -226,6 +275,11 @@ pub struct CapturerBuilder {
 impl CapturerBuilder {
     pub fn with_output_sample_buf_cb(mut self, cb: impl FnMut(Frame) + 'static) -> Self {
         self.callbacks.did_output_sample_buf_cb = Some(Box::new(cb));
+        self
+    }
+
+    pub fn with_screen_status_samples(mut self) -> Self {
+        self.callbacks.screen_status_samples = true;
         self
     }
 
@@ -300,6 +354,7 @@ mod deallocation_tests {
                 let _ = &counter;
             })),
             did_stop_with_err_cb: None,
+            screen_status_samples: false,
         })
     }
 

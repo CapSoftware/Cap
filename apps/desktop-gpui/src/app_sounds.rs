@@ -61,7 +61,7 @@ impl AppSound {
     }
 
     fn play_to_end(self) -> anyhow::Result<()> {
-        let (_stream, handle) = OutputStream::try_default().context("opening audio output")?;
+        let (_stream, handle) = open_output().context("opening audio output")?;
         let source = Decoder::new(Cursor::new(self.bytes())).context("decoding app sound")?;
         let sink = Sink::try_new(&handle).context("creating app sound sink")?;
         sink.set_volume(self.volume());
@@ -111,5 +111,54 @@ mod tests {
         for sound in SOUNDS {
             sound.play_to_end().unwrap();
         }
+    }
+}
+
+/// The default output, or on Linux the sound server's when ALSA's default
+/// would open the sound card itself and take it from every other app.
+pub(crate) fn open_output() -> Result<(OutputStream, rodio::OutputStreamHandle), rodio::StreamError>
+{
+    #[cfg(target_os = "linux")]
+    if let Some(output) =
+        sound_server_output_device().and_then(|device| OutputStream::try_from_device(&device).ok())
+    {
+        return Ok(output);
+    }
+    OutputStream::try_default()
+}
+
+/// The sound server's output, found once. rodio's cpal has no lookup by
+/// name: its device list opens every PCM, a bare-card default among them,
+/// which took the card from the sound server when the start cue looked it
+/// up as a recording began. [`prepare_output`] finds it at launch instead.
+#[cfg(target_os = "linux")]
+static SOUND_SERVER_OUTPUT: std::sync::Mutex<Option<rodio::cpal::Device>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(target_os = "linux")]
+fn sound_server_output_device() -> Option<rodio::cpal::Device> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+
+    let name = cap_recording::sources::screen_capture::sound_server_output()?;
+    let mut found = SOUND_SERVER_OUTPUT.lock().ok()?;
+    if found.is_none() {
+        *found = rodio::cpal::default_host()
+            .output_devices()
+            .ok()?
+            .find(|device| device.name().is_ok_and(|device_name| device_name == name));
+    }
+    found.clone()
+}
+
+/// Finds the output Cap's sounds play through before anything plays.
+#[cfg(target_os = "linux")]
+pub(crate) fn prepare_output() {
+    if let Err(error) = std::thread::Builder::new()
+        .name("app-sound-output".into())
+        .spawn(|| {
+            let _ = sound_server_output_device();
+        })
+    {
+        tracing::warn!("could not look up the sound output early: {error}");
     }
 }

@@ -21,6 +21,7 @@ const context = vi.hoisted(() => ({
 		reset: () => void;
 	},
 	appDeleted: false,
+	blockedEmail: null as string | null,
 }));
 
 vi.mock("@cap/database", async () => {
@@ -35,6 +36,10 @@ vi.mock("@cap/database", async () => {
 	context.fake = fake;
 	return { db: () => fake.db };
 });
+vi.mock("@cap/database/auth/domain-utils", () => ({
+	isBlockedAccountEmail: (email: string | null | undefined) =>
+		!!email && email === context.blockedEmail,
+}));
 vi.mock("@cap/database/crypto", () => ({
 	encrypt: async (text: string) => `sealed:${text}`,
 	decrypt: async (text: string) => text.replace(/^sealed:/, ""),
@@ -118,6 +123,7 @@ const answers = (status: number) => ({
 beforeEach(() => {
 	fake().reset();
 	context.appDeleted = false;
+	context.blockedEmail = null;
 });
 
 describe("a customer endpoint over real HTTP", () => {
@@ -470,6 +476,18 @@ describe("one delivery attempt", () => {
 		context.appDeleted = true;
 		expect(await deliverDeveloperWebhookAttempt(job, guards)).toBe("dropped");
 		expect(guards.request).not.toHaveBeenCalled();
+	});
+
+	it("drops the delivery once the app owner's account is blocked", async () => {
+		// The fake reads the joined owner's email from the endpoint row.
+		seedEndpoint({ email: "dev@held.example" });
+		const guards = answers(200);
+		context.blockedEmail = "dev@other.example";
+		expect(await deliverDeveloperWebhookAttempt(job, guards)).toBe("delivered");
+
+		context.blockedEmail = "dev@held.example";
+		expect(await deliverDeveloperWebhookAttempt(job, guards)).toBe("dropped");
+		expect(guards.request).toHaveBeenCalledTimes(1);
 	});
 });
 

@@ -6,12 +6,16 @@
 //! calling process, the same arrangement `scap-targets`' window discovery test
 //! uses.
 
-use scap_direct3d::{Capturer, PixelFormat, Settings};
+use scap_direct3d::{Capturer, Frame, PixelFormat, Settings};
 use scap_targets::{Window, WindowId};
 use std::{
     io::{BufRead, BufReader, Write},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex, Once, mpsc},
+    sync::{
+        Arc, Mutex, Once,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 use windows::{
@@ -23,16 +27,17 @@ use windows::{
                 D3D11_BOX, D3D11_CREATE_DEVICE_FLAG, D3D11_SDK_VERSION, D3D11CreateDevice,
                 ID3D11Device,
             },
-            Gdi::{CreateSolidBrush, InvalidateRect},
+            Gdi::{CreateSolidBrush, DeleteObject, FillRect, HDC, InvalidateRect},
         },
         UI::{
             HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness},
             WindowsAndMessaging::{
                 CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DispatchMessageW,
-                HWND_TOPMOST, MSG, PM_REMOVE, PeekMessageW, RegisterClassW, SPI_GETWORKAREA,
-                SWP_NOACTIVATE, SWP_SHOWWINDOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowPos,
-                SystemParametersInfoW, TranslateMessage, WINDOW_EX_STYLE, WNDCLASSW,
-                WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
+                GetClientRect, HWND_TOPMOST, MSG, PM_REMOVE, PeekMessageW, RegisterClassW,
+                SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowPos, SystemParametersInfoW,
+                TranslateMessage, WINDOW_EX_STYLE, WM_ERASEBKGND, WNDCLASSW, WS_EX_TOOLWINDOW,
+                WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
             },
         },
     },
@@ -107,12 +112,37 @@ fn match_cli_dpi_awareness() {
     });
 }
 
+/// Set by the fixture's `cycle` command: every repaint then fills the window
+/// with the next colour, so no two consecutive frames look the same.
+static CYCLE_COLOURS: AtomicBool = AtomicBool::new(false);
+static REPAINTS: AtomicUsize = AtomicUsize::new(0);
+
 unsafe extern "system" fn window_proc(
     window: HWND,
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if message == WM_ERASEBKGND && CYCLE_COLOURS.load(Ordering::Relaxed) {
+        const COLOURS: [u32; 6] = [
+            0x00FF_0000,
+            0x0000_FF00,
+            0x0000_00FF,
+            0x00FF_FF00,
+            0x0000_FFFF,
+            0x00FF_00FF,
+        ];
+        let colour = COLOURS[REPAINTS.fetch_add(1, Ordering::Relaxed) % COLOURS.len()];
+        let mut client = RECT::default();
+        unsafe {
+            if GetClientRect(window, &mut client).is_ok() {
+                let brush = CreateSolidBrush(COLORREF(colour));
+                FillRect(HDC(wparam.0 as _), &client, brush);
+                let _ = DeleteObject(brush.into());
+            }
+        }
+        return LRESULT(1);
+    }
     unsafe { DefWindowProcW(window, message, wparam, lparam) }
 }
 
@@ -243,6 +273,7 @@ fn window_capture_fixture_process() {
                     .expect("size target");
                 }
             }
+            Ok(line) if line.trim() == "cycle" => CYCLE_COLOURS.store(true, Ordering::Relaxed),
             Ok(line) if line.trim() == "stop" => return,
             Ok(_) | Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => return,
@@ -405,14 +436,22 @@ fn capture_samples_on(
     samples.clone()
 }
 
+/// Every fixture puts its windows at the same place on the one desktop, so a
+/// second fixture would cover the first.
+static DESKTOP: Mutex<()> = Mutex::new(());
+
 struct Fixture {
     process: FixtureProcess,
     target: WindowId,
     layout: Layout,
+    _desktop: std::sync::MutexGuard<'static, ()>,
 }
 
 impl Fixture {
     fn start() -> Self {
+        let desktop = DESKTOP
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut process = FixtureProcess(
             Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "window_capture_fixture_process", "--nocapture"])
@@ -444,6 +483,7 @@ impl Fixture {
             process,
             target,
             layout: Layout::of_primary_work_area(),
+            _desktop: desktop,
         }
     }
 
@@ -770,5 +810,115 @@ fn frames_smaller_than_their_surface_still_read_back() {
             .iter()
             .all(|s| (s.width, s.height) == s.content && s.blue > 0),
         "a frame smaller than its surface must be its ContentSize and carry the window: {shrunk:?}"
+    );
+}
+
+fn frame_digest(frame: &Frame) -> windows::core::Result<u64> {
+    let buffer = frame.as_buffer()?;
+    let (row, stride) = (buffer.width() as usize * 4, buffer.stride() as usize);
+    let mut digest = 0xcbf2_9ce4_8422_2325u64;
+    for line in buffer.data().chunks(stride).take(buffer.height() as usize) {
+        for byte in &line[..row] {
+            digest = (digest ^ *byte as u64).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    Ok(digest)
+}
+
+/// Area recordings and display recordings cropped to a window copy every frame
+/// out of the display's surface. The encoder reads a frame after later ones
+/// have arrived whenever it falls behind, so a frame still waiting must keep
+/// what it showed when it arrived rather than take on the next frame's.
+#[test]
+fn cropped_frames_keep_their_contents_while_later_frames_arrive() {
+    match_cli_dpi_awareness();
+
+    let mut fixture = Fixture::start();
+    fixture.send("cycle");
+    let window = fixture.window();
+    let display = window.display().expect("window display");
+    let window_bounds = window
+        .raw_handle()
+        .physical_bounds()
+        .expect("window bounds");
+    let display_position = display
+        .raw_handle()
+        .physical_position()
+        .expect("display position");
+    let crop = D3D11_BOX {
+        left: (window_bounds.position().x() - display_position.x()).max(0.0) as u32,
+        top: (window_bounds.position().y() - display_position.y()).max(0.0) as u32,
+        right: (window_bounds.position().x() - display_position.x() + window_bounds.size().width())
+            .max(0.0) as u32,
+        bottom: (window_bounds.position().y() - display_position.y()
+            + window_bounds.size().height())
+        .max(0.0) as u32,
+        front: 0,
+        back: 1,
+    };
+
+    // (digest when the frame arrived, digest once the next frame had arrived,
+    // the next frame's digest)
+    let pairs: Arc<Mutex<Vec<(u64, u64, u64)>>> = Arc::new(Mutex::new(Vec::new()));
+    let held: Arc<Mutex<Option<(Frame, u64)>>> = Arc::new(Mutex::new(None));
+    let mut capturer = Capturer::new(
+        display
+            .raw_handle()
+            .try_as_capture_item()
+            .expect("display capture item"),
+        Settings {
+            is_border_required: Some(false),
+            is_cursor_capture_enabled: Some(false),
+            pixel_format: PixelFormat::R8G8B8A8Unorm,
+            fps: Some(30),
+            crop: Some(crop),
+            ..Default::default()
+        },
+        {
+            let pairs = pairs.clone();
+            let held = held.clone();
+            move |frame| {
+                let digest = frame_digest(&frame)?;
+                let mut held = held.lock().unwrap();
+                if let Some((previous, arrived)) = held.take() {
+                    let later = frame_digest(&previous)?;
+                    pairs.lock().unwrap().push((arrived, later, digest));
+                }
+                *held = Some((frame, digest));
+                Ok(())
+            }
+        },
+        || Ok(()),
+        device_from_env(),
+    )
+    .expect("create capturer");
+
+    capturer.start().expect("start capture");
+    std::thread::sleep(Duration::from_secs(2));
+    capturer.stop().expect("stop capture");
+    drop(held.lock().unwrap().take());
+    unsafe { capturer.d3d_device().GetDeviceRemovedReason() }
+        .expect("the capture device must not be removed during the capture");
+
+    let pairs = pairs.lock().unwrap();
+    let changed: Vec<_> = pairs
+        .iter()
+        .filter(|(arrived, _, next)| arrived != next)
+        .collect();
+    assert!(
+        changed.len() >= 5,
+        "the window must repaint with a new colour between frames, saw {} changes in {} frames",
+        changed.len(),
+        pairs.len()
+    );
+    let overwritten = changed
+        .iter()
+        .filter(|(arrived, later, _)| arrived != later)
+        .count();
+    assert_eq!(
+        overwritten,
+        0,
+        "{overwritten} of {} held frames read back different contents once the next frame arrived",
+        changed.len()
     );
 }
