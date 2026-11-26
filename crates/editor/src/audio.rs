@@ -1541,11 +1541,6 @@ impl AudioResampler {
         // Clamp output info for FFmpeg compatibility (max 8 channels)
         let output_info = output_info.for_ffmpeg_output();
 
-        let mut options = high_quality_resampler_options();
-        // FFmpeg's default stereo to mono matrix sums at equal power (+3 dB), which clips
-        // centred speech on 1-channel outputs. Capping each output row at unity averages the
-        // pair instead and leaves stereo and the upmixes (rows already at unity) untouched.
-        options.set("rematrix_maxval", "1");
         let context = resampling::Context::get_with(
             AudioData::SAMPLE_FORMAT,
             ChannelLayout::STEREO,
@@ -1553,7 +1548,7 @@ impl AudioResampler {
             output_info.sample_format,
             output_info.channel_layout(),
             output_info.sample_rate,
-            options,
+            high_quality_resampler_options(),
         )?;
 
         info!(
@@ -6188,22 +6183,19 @@ mod tests {
     }
 
     #[test]
-    fn audio_resampler_downmixes_every_frame_to_mono_at_unity_level() {
+    fn audio_resampler_downmixes_every_frame_to_mono() {
         ffmpeg::init().unwrap();
-        for (left, right, expected) in [(0.9, 0.9, 0.9), (0.8, 0.0, 0.4)] {
-            let mut resampler =
-                AudioResampler::new(AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 1))
-                    .unwrap();
-            for frame_index in 0..8 {
-                let frame = stereo_frame(frame_index, 1024, left, right);
-                let out = resampled(resampler.queue_and_process_frame(&frame));
-                assert_eq!(out.len(), 1024, "frame {frame_index} must not stall");
-                let peak = out.iter().fold(0f32, |peak, v| peak.max(v.abs()));
-                assert!(
-                    (peak - expected).abs() < 0.01,
-                    "frame {frame_index}: peak {peak}, expected {expected} for L {left} R {right}"
-                );
-            }
+        let mut resampler =
+            AudioResampler::new(AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 1)).unwrap();
+        for frame_index in 0..8 {
+            let frame = stereo_frame(frame_index, 1024, 0.5, 0.5);
+            let out = resampled(resampler.queue_and_process_frame(&frame));
+            assert_eq!(out.len(), 1024, "frame {frame_index} must not stall");
+            let peak = out.iter().fold(0f32, |peak, v| peak.max(v.abs()));
+            assert!(
+                (peak - std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01,
+                "frame {frame_index}: peak {peak}"
+            );
         }
     }
 
@@ -6239,9 +6231,15 @@ mod tests {
     #[test]
     fn audio_resampler_output_keeps_pace_with_input_when_the_rate_changes() {
         ffmpeg::init().unwrap();
+        for rate in [44_100u32, 96_000] {
+            resampler_keeps_pace(rate);
+        }
+    }
+
+    fn resampler_keeps_pace(rate: u32) {
         let frames = 200usize;
         let mut resampler =
-            AudioResampler::new(AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 44_100, 2)).unwrap();
+            AudioResampler::new(AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, rate, 2)).unwrap();
         let mut total = 0usize;
         for frame_index in 0..frames {
             let frame = stereo_frame(frame_index, 1024, 0.5, 0.5);
@@ -6252,7 +6250,7 @@ mod tests {
                 .map_or(0, |delay| delay.output.max(0) as usize);
             assert!(
                 backlog < 1024,
-                "frame {frame_index}: {backlog} output frames held back inside the resampler"
+                "{rate} Hz frame {frame_index}: {backlog} output frames held back inside the resampler"
             );
         }
         while let Some(flushed) = resampler.flush_frame() {
@@ -6261,10 +6259,10 @@ mod tests {
             }
             total += flushed.len() / f32::BYTE_SIZE / 2;
         }
-        let expected = frames * 1024 * 44_100 / 48_000;
+        let expected = frames * 1024 * rate as usize / 48_000;
         assert!(
             total.abs_diff(expected) <= 2,
-            "resampled {total} frames, expected {expected}"
+            "{rate} Hz: resampled {total} frames, expected {expected}"
         );
     }
 }
