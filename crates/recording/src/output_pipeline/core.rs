@@ -3907,6 +3907,17 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         resynced || matches!(remap.outcome, SourceClockOutcome::HardReset),
                     );
                     let duration = shift_from_origin(duration, is_first_frame, origin_lead);
+                    #[cfg(windows)]
+                    if placed_after_stop_cut(
+                        stop_cut.as_ref(),
+                        timestamps,
+                        total_pause_duration,
+                        first_frame_offset,
+                        duration,
+                        Duration::from_nanos(frame_duration_ns),
+                    ) {
+                        continue;
+                    }
                     timestamp_span.record(duration);
 
                     if frame_count.is_multiple_of(300) {
@@ -4068,6 +4079,17 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             resynced || matches!(remap.outcome, SourceClockOutcome::HardReset),
                         );
                         let duration = shift_from_origin(duration, is_first_frame, origin_lead);
+                        #[cfg(windows)]
+                        if placed_after_stop_cut(
+                            stop_cut.as_ref(),
+                            timestamps,
+                            shared_pause.total_pause_duration(),
+                            first_frame_offset,
+                            duration,
+                            Duration::from_nanos(frame_duration_ns),
+                        ) {
+                            continue;
+                        }
                         timestamp_span.record(duration);
 
                         let duplicate = frame.duplicate();
@@ -4218,6 +4240,30 @@ fn clip_to_capture_time(
         frame.inner.set_samples(kept as usize);
     }
     Some(frame)
+}
+
+/// Whether a video frame lands on the track more than one frame after the
+/// stop request of `cut`. A frame handed over late can be stamped from the
+/// wall clock instead of its capture time, so a frame captured before the
+/// request can still land after it: placed there it would carry the track past
+/// the stop. `duration` is the frame's position on the track, which starts at
+/// `first_frame_offset` on the recording's paused-time-free timeline.
+#[cfg(windows)]
+fn placed_after_stop_cut(
+    cut: Option<&StopCut>,
+    timestamps: Timestamps,
+    pause: Duration,
+    first_frame_offset: Option<Duration>,
+    duration: Duration,
+    frame: Duration,
+) -> bool {
+    cut.and_then(StopCut::instant).is_some_and(|at| {
+        let cut_on_track = at
+            .saturating_duration_since(timestamps.instant())
+            .saturating_sub(pause)
+            .saturating_sub(first_frame_offset.unwrap_or_default());
+        duration > cut_on_track + frame
+    })
 }
 
 /// Clips `frame` at the stop request of `cut`, plus one audio buffer.
@@ -9286,6 +9332,67 @@ mod tests {
 
             let timestamps = sent.lock().unwrap().clone();
             (timestamps, capture_duration)
+        }
+
+        /// A frame captured before the stop request but handed over so late
+        /// that it is stamped from the wall clock would land after the request
+        /// on the track: it is not written there either.
+        #[cfg(windows)]
+        #[tokio::test]
+        async fn late_stop_cut_drops_a_late_frame_stamped_after_the_stop_request() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let cut = StopCut::default();
+            let (sender, receiver) = flume::bounded(16);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = cut
+                .clone()
+                .scope(
+                    OutputPipeline::builder(temp_dir.path().join("late.mp4"))
+                        .with_video::<ChannelVideoSource<StaticFrame>>(
+                            ChannelVideoSourceConfig::new(
+                                VideoInfo::from_raw(
+                                    cap_media_info::RawVideoFormat::Bgra,
+                                    16,
+                                    16,
+                                    30,
+                                ),
+                                receiver,
+                            ),
+                        )
+                        .with_timestamps(Timestamps::now())
+                        .build::<ObservedMuxer>(sent.clone()),
+                )
+                .await
+                .unwrap();
+
+            let first = Instant::now();
+            sender
+                .send_async(StaticFrame {
+                    timestamp: Timestamp::Instant(first),
+                })
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(cut.mark());
+            let request = cut.instant().unwrap();
+            // Captured just before the request, handed over 1.5 s later.
+            tokio::time::sleep(Duration::from_millis(1_500)).await;
+            sender
+                .send_async(StaticFrame {
+                    timestamp: Timestamp::Instant(request - Duration::from_millis(5)),
+                })
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            pipeline.stop().await.unwrap();
+
+            let muxed = sent.lock().unwrap().clone();
+            let limit = request.duration_since(first) + Duration::from_nanos(33_333_334);
+            assert!(!muxed.is_empty());
+            assert!(
+                muxed.iter().all(|timestamp| *timestamp <= limit),
+                "nothing placed past the request plus one frame ({limit:?}): {muxed:?}"
+            );
         }
 
         /// A Stop that reaches the pipeline long after the user asked to stop
