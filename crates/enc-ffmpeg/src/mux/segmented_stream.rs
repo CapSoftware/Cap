@@ -135,6 +135,17 @@ pub(crate) fn notify_segment(sender: &SegmentSender, event: SegmentCompletedEven
 }
 
 fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
+    atomic_write_json_unless(path, data, || false)
+}
+
+/// Writes like [`atomic_write_json`], but drops the write instead of
+/// publishing it when `cancelled` turns true before the rename, so abandoned
+/// bookkeeping cannot replace a manifest after its muxer has finished.
+fn atomic_write_json_unless<T: Serialize>(
+    path: &Path,
+    data: &T,
+    cancelled: impl Fn() -> bool,
+) -> std::io::Result<()> {
     let temp_path = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(data)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -142,6 +153,14 @@ fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()>
     let mut file = std::fs::File::create(&temp_path)?;
     file.write_all(json.as_bytes())?;
     file.sync_all()?;
+
+    if cancelled() {
+        drop(file);
+        if let Err(error) = std::fs::remove_file(&temp_path) {
+            tracing::debug!(%error, path = %temp_path.display(), "Could not remove an unpublished manifest");
+        }
+        return Ok(());
+    }
 
     std::fs::rename(&temp_path, path)?;
 
@@ -1240,7 +1259,8 @@ impl SegmentLedger {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        if let Err(e) = atomic_write_json(&manifest_path, &manifest) {
+        if let Err(e) = atomic_write_json_unless(&manifest_path, &manifest, || self.is_cancelled())
+        {
             tracing::warn!(
                 "Failed to write in-progress manifest to {}: {e}",
                 manifest_path.display()
@@ -1925,6 +1945,22 @@ mod tests {
             current_index,
         };
         assert_same_output(&expected, &actual);
+    }
+
+    #[test]
+    fn cancelled_manifest_write_publishes_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("manifest.json");
+        std::fs::write(&path, b"previous").unwrap();
+
+        atomic_write_json_unless(&path, &serde_json::json!({ "next": true }), || true).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous");
+        assert!(!temp.path().join("manifest.json.tmp").exists());
+
+        atomic_write_json_unless(&path, &serde_json::json!({ "next": true }), || false).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["next"], true);
     }
 
     #[test]
