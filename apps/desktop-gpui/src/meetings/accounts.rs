@@ -8,7 +8,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use cap_calendar::{
@@ -432,8 +432,11 @@ fn refresh_token(dir: &Path, id: &str) -> Option<String> {
         .filter(|token| !token.is_empty())
 }
 
-fn access_tokens() -> &'static Mutex<HashMap<String, (String, Instant)>> {
-    static TOKENS: std::sync::OnceLock<Mutex<HashMap<String, (String, Instant)>>> =
+// Expiry is kept on the wall clock: `Instant` stops while macOS and Linux
+// are asleep, so after a night closed it would still trust a token the
+// provider expired hours ago.
+fn access_tokens() -> &'static Mutex<HashMap<String, (String, SystemTime)>> {
+    static TOKENS: std::sync::OnceLock<Mutex<HashMap<String, (String, SystemTime)>>> =
         std::sync::OnceLock::new();
     TOKENS.get_or_init(Default::default)
 }
@@ -518,13 +521,8 @@ async fn access_token(
     id: &str,
     client: &OAuthClient,
 ) -> Result<String, FetchError> {
-    if let Some((token, expires)) = access_tokens()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(id)
-        && *expires > Instant::now()
-    {
-        return Ok(token.clone());
+    if let Some(token) = cached_access_token(id) {
+        return Ok(token);
     }
     let refresh = refresh_token(dir, id).ok_or(FetchError::SignInAgain)?;
     let spec = oauth::refresh_request(client, &refresh);
@@ -552,6 +550,15 @@ async fn access_token(
     Ok(tokens.access_token)
 }
 
+fn cached_access_token(id: &str) -> Option<String> {
+    access_tokens()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(id)
+        .filter(|(_, expires)| *expires > SystemTime::now())
+        .map(|(token, _)| token.clone())
+}
+
 /// Saves what a refresh returned, unless the account was removed while it
 /// ran: then nothing is saved or cached and this returns false.
 fn keep_refreshed(dir: &Path, id: &str, refresh: &str, tokens: &oauth::Tokens) -> bool {
@@ -567,16 +574,14 @@ fn keep_refreshed(dir: &Path, id: &str, refresh: &str, tokens: &oauth::Tokens) -
         }
     }
     let lifetime = Duration::from_secs(tokens.expires_in.unwrap_or(600));
+    let now = SystemTime::now();
+    let expires = now
+        .checked_add(lifetime.saturating_sub(TOKEN_MARGIN))
+        .unwrap_or(now);
     access_tokens()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(
-            id.to_string(),
-            (
-                tokens.access_token.clone(),
-                Instant::now() + lifetime.saturating_sub(TOKEN_MARGIN),
-            ),
-        );
+        .insert(id.to_string(), (tokens.access_token.clone(), expires));
     true
 }
 
@@ -1130,6 +1135,38 @@ mod tests {
             "no token written back"
         );
         assert!(!cached(id), "no access token kept");
+    }
+
+    #[test]
+    fn a_cached_token_expires_by_the_wall_clock() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = "closed-overnight";
+        store_refresh_token(dir.path(), id, "refresh").unwrap();
+        assert!(keep_refreshed(
+            dir.path(),
+            id,
+            "refresh",
+            &refreshed("access", None)
+        ));
+        assert_eq!(cached_access_token(id).as_deref(), Some("access"));
+
+        let hour_ago = SystemTime::now() - Duration::from_secs(3600);
+        access_tokens()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.to_string(), ("access".to_string(), hour_ago));
+        assert_eq!(
+            cached_access_token(id),
+            None,
+            "a token past its expiry is refreshed, however long the computer was asleep"
+        );
+
+        let endless = oauth::Tokens {
+            expires_in: Some(u64::MAX),
+            ..refreshed("endless", None)
+        };
+        assert!(keep_refreshed(dir.path(), id, "refresh", &endless));
+        forget(dir.path(), id);
     }
 
     #[test]
