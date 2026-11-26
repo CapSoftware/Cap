@@ -510,19 +510,7 @@ impl AudioOutput {
     /// so sync harnesses can observe what a device would have played without
     /// needing audio hardware.
     pub fn new_headless(tap: HeadlessAudioTap) -> Self {
-        let (control_tx, control_rx) = std_mpsc::channel();
-
-        if let Err(e) = std::thread::Builder::new()
-            .name("cap-audio-headless".into())
-            .spawn(move || control_thread_headless(control_rx, tap))
-        {
-            error!("Failed to spawn headless audio output thread: {e}");
-        }
-
-        Self {
-            control_tx,
-            next_generation: AtomicU64::new(0),
-        }
+        Self::new_headless_with_channels(HEADLESS_CHANNELS, tap)
     }
 
     pub fn new_headless_with_channels(channels: u16, tap: HeadlessAudioTap) -> Self {
@@ -530,7 +518,7 @@ impl AudioOutput {
 
         if let Err(e) = std::thread::Builder::new()
             .name("cap-audio-headless".into())
-            .spawn(move || control_thread_headless_with_channels(control_rx, tap, channels))
+            .spawn(move || control_thread_headless(control_rx, tap, channels))
         {
             error!("Failed to spawn headless audio output thread: {e}");
         }
@@ -1295,12 +1283,7 @@ fn install_progressive_source<T: FromSampleBytes + cpal::FromSample<f32>>(
 
 /// Control loop for the headless sink: a pump thread pulls blocks on a
 /// real-time schedule (as a device would) and hands every block to `tap`.
-#[allow(dead_code)]
-fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, tap: HeadlessAudioTap) {
-    control_thread_headless_with_channels(control_rx, tap, HEADLESS_CHANNELS);
-}
-
-fn control_thread_headless_with_channels(
+fn control_thread_headless(
     control_rx: std_mpsc::Receiver<ControlMsg>,
     mut tap: HeadlessAudioTap,
     channels: u16,
@@ -1498,28 +1481,6 @@ impl AudioOutput {
             },
         )
     }
-
-    #[allow(dead_code)]
-    pub fn new_offline_with_channels(channels: u16) -> (Self, OfflineAudioSink) {
-        let (control_tx, control_rx) = std_mpsc::channel();
-        let (source_tx, source_rx) = std_mpsc::channel();
-        if let Err(e) = std::thread::Builder::new()
-            .name("cap-audio-offline".into())
-            .spawn(move || control_thread_offline_with_channels(control_rx, source_tx, channels))
-        {
-            error!("Failed to spawn offline audio output thread: {e}");
-        }
-        (
-            Self {
-                control_tx,
-                next_generation: AtomicU64::new(0),
-            },
-            OfflineAudioSink {
-                source_rx,
-                active: None,
-            },
-        )
-    }
 }
 
 #[cfg(feature = "test-hooks")]
@@ -1544,21 +1505,15 @@ impl OfflineAudioSink {
 }
 
 #[cfg(feature = "test-hooks")]
-#[allow(dead_code)]
 fn control_thread_offline(
     control_rx: std_mpsc::Receiver<ControlMsg>,
     source_tx: std_mpsc::Sender<SourceCommand<f32>>,
 ) {
-    control_thread_offline_with_channels(control_rx, source_tx, HEADLESS_CHANNELS);
-}
-
-#[cfg(feature = "test-hooks")]
-fn control_thread_offline_with_channels(
-    control_rx: std_mpsc::Receiver<ControlMsg>,
-    source_tx: std_mpsc::Sender<SourceCommand<f32>>,
-    channels: u16,
-) {
-    let output_info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, HEADLESS_SAMPLE_RATE, channels);
+    let output_info = AudioInfo::new_raw(
+        AudioData::SAMPLE_FORMAT,
+        HEADLESS_SAMPLE_RATE,
+        HEADLESS_CHANNELS,
+    );
     let cache = PlaybackAudioCache::default();
     while let Ok(msg) = control_rx.recv() {
         match msg {

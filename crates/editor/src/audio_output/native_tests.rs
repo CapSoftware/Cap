@@ -22,7 +22,8 @@ impl HeadlessControl {
             let _ = blocks_tx.send(samples.iter().any(|sample| sample.abs() > 0.0001));
         });
         let (control_tx, control_rx) = std_mpsc::channel();
-        let thread = std::thread::spawn(move || control_thread_headless(control_rx, tap));
+        let thread =
+            std::thread::spawn(move || control_thread_headless(control_rx, tap, HEADLESS_CHANNELS));
         let control = Self {
             output: Arc::new(AudioOutput {
                 control_tx,
@@ -615,6 +616,7 @@ async fn progressive_output_acknowledges_real_pcm_and_grows_the_same_gated_sourc
             Box::new(move |samples, _| {
                 let _ = blocks_tx.send(samples.to_vec());
             }),
+            HEADLESS_CHANNELS,
         );
     });
     let output = AudioOutput {
@@ -682,6 +684,7 @@ async fn progressive_output_without_a_prefix_never_acknowledges_and_cancels_clea
             Box::new(move |samples, _| {
                 let _ = blocks_tx.send(samples.iter().any(|sample| *sample != 0.0));
             }),
+            HEADLESS_CHANNELS,
         );
     });
     let output = AudioOutput {
