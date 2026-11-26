@@ -1,0 +1,14 @@
+{
+	"kind": "calendar#events",
+	"timeZone": "America/New_York",
+	"items": [
+		{
+			"id": "lastpage1",
+			"status": "confirmed",
+			"summary": "Late review",
+			"start": { "dateTime": "2026-03-20T15:00:00-04:00" },
+			"end": { "dateTime": "2026-03-20T15:30:00-04:00" },
+			"location": "https://acme.zoom.us/j/99887766554"
+		}
+	]
+}

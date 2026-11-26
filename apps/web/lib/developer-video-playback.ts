@@ -39,13 +39,12 @@ import {
 	developerVideoIsTakenDown,
 } from "./developer-video-takedown";
 import { getInfraAppStanding } from "./infra-standing";
+import { streamUrlValidity } from "./signed-url-validity";
 
 export const PLAYBACK_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
 const HLS_FILE_PATTERN = /^[A-Za-z0-9_-]+\.(m3u8|m4s)$/;
 const MEDIA_FILE_PATTERN = /^[A-Za-z0-9_-]+\.m4s$/;
 
-const SIGNED_URL_MIN_SECONDS = 12 * 60 * 60;
-const SIGNED_URL_WINDOW_SECONDS = 6 * 60 * 60;
 // How long an answer may be served from a shared cache. It bounds how long a
 // deleted video keeps answering new viewers, and how long a paused app waits
 // for playback after a top-up.
@@ -108,20 +107,11 @@ function paused(): Response {
 	);
 }
 
-// A browser caches media under its signed URL, and a URL signed from the
-// current time is new on every request, so a repeat view downloaded the video
-// again. Signing from the start of a fixed window gives every request in that
-// window the same URL, and the URL still works for SIGNED_URL_MIN_SECONDS
-// after the window ends.
 export function signedUrlValidity(now: number = Date.now()): {
 	signingDate: Date;
 	expiresIn: number;
 } {
-	const windowMs = SIGNED_URL_WINDOW_SECONDS * 1000;
-	return {
-		signingDate: new Date(Math.floor(now / windowMs) * windowMs),
-		expiresIn: SIGNED_URL_WINDOW_SECONDS + SIGNED_URL_MIN_SECONDS,
-	};
+	return streamUrlValidity(now);
 }
 
 async function redirectTo(key: string, request: Request): Promise<Response> {

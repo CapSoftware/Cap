@@ -25,7 +25,7 @@ mod stage;
 mod welcome_script;
 
 pub use stage::Paper;
-pub(crate) use stage::paper_button;
+pub(crate) use stage::{close_dot, pager, paper_button, paper_card, paper_heading, primary_pill};
 
 pub const ONBOARDING_WIDTH: f32 = 860.;
 pub const ONBOARDING_HEIGHT: f32 = 690.;
@@ -947,41 +947,17 @@ impl OnboardingWindow {
     }
 
     fn paper_card(&self) -> Div {
-        let paper = stage::Paper::new(&self.theme);
-        div()
-            .rounded(px(20.))
-            .border(px(1.5))
-            .border_color(paper.track)
-            .bg(paper.card)
+        stage::paper_card(&stage::Paper::new(&self.theme))
     }
 
     fn heading(&self, title: &'static str, subtitle: &'static str) -> Div {
-        let paper = stage::Paper::new(&self.theme);
-        div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .max_w(px(500.))
-            .text_center()
-            .child(
-                copy(title, 28., paper.ink)
-                    .font_weight(FontWeight::MEDIUM)
-                    .line_height(px(34.)),
-            )
-            .child(div().mt(px(4.)).child(crate::doodle::doodle(
-                &crate::onboarding_doodles::UNDERLINE,
-                paper.palette(),
-                self.step_at,
-                !self.animated,
-                132.,
-                12.,
-            )))
-            .child(
-                copy(subtitle, 15., paper.soft)
-                    .mt(px(10.))
-                    .font_weight(FontWeight::NORMAL)
-                    .line_height(px(22.)),
-            )
+        stage::paper_heading(
+            &stage::Paper::new(&self.theme),
+            title,
+            Some(subtitle.into()),
+            self.step_at,
+            !self.animated,
+        )
     }
 
     fn tick_welcome(&mut self, window: &mut Window, cx: &mut Context<Self>) {

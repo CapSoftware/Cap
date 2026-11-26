@@ -126,6 +126,12 @@ vi.mock("@/actions/organization/upload-space-icon", () => ({
 	uploadSpaceIcon: state.uploadSpaceIcon,
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("@/actions/organization/authorization", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("@/actions/organization/authorization")
+	>()),
+	getOrganizationAccess: async () => ({ role: "member" }),
+}));
 vi.mock("@/lib/rate-limit", () => ({
 	RATE_LIMIT_IDS: {
 		ORGANIZATION_CREATE: "rl_organization_create",

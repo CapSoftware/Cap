@@ -3,6 +3,7 @@ import { handle } from "hono/vercel";
 
 import { corsMiddleware } from "../../utils";
 
+import * as meetings from "./meetings";
 import * as root from "./root";
 import * as s3Config from "./s3Config";
 import * as session from "./session";
@@ -16,6 +17,7 @@ const app = new Hono()
 	.route("/session", session.app)
 	.route("/storage", storage.app)
 	.route("/video", video.app)
+	.route("/meetings", meetings.app)
 	.route("/", root.app);
 
 export const GET = handle(app);

@@ -53,9 +53,16 @@ pub enum HotkeyAction {
     ScreenshotArea,
     AddRecordingMarker,
     ToggleDrawing,
+    ToggleMeetingNotes,
+    OpenMeetingNotes,
+    NewNote,
 }
 
-const ACTION_KEYS: [(&str, HotkeyAction); 16] = [
+pub const MEETING_TOGGLE_HOTKEY: &str = "toggleMeetingNotes";
+pub const MEETING_OPEN_HOTKEY: &str = "openMeetingNotes";
+pub const NEW_NOTE_HOTKEY: &str = "newNote";
+
+const ACTION_KEYS: [(&str, HotkeyAction); 19] = [
     ("startRecording", HotkeyAction::StartRecording),
     ("startStudioRecording", HotkeyAction::StartStudioRecording),
     ("startInstantRecording", HotkeyAction::StartInstantRecording),
@@ -84,6 +91,9 @@ const ACTION_KEYS: [(&str, HotkeyAction); 16] = [
         HotkeyAction::AddRecordingMarker,
     ),
     (store::DRAW_HOTKEY, HotkeyAction::ToggleDrawing),
+    (MEETING_TOGGLE_HOTKEY, HotkeyAction::ToggleMeetingNotes),
+    (MEETING_OPEN_HOTKEY, HotkeyAction::OpenMeetingNotes),
+    (NEW_NOTE_HOTKEY, HotkeyAction::NewNote),
 ];
 
 impl HotkeyAction {
@@ -151,7 +161,10 @@ pub(crate) fn mode_plan(action: HotkeyAction, selected: Mode) -> ModePlan {
         | HotkeyAction::TogglePauseRecording
         | HotkeyAction::OpenRecordingPicker
         | HotkeyAction::AddRecordingMarker
-        | HotkeyAction::ToggleDrawing => ModePlan::Unrelated,
+        | HotkeyAction::ToggleDrawing
+        | HotkeyAction::ToggleMeetingNotes
+        | HotkeyAction::OpenMeetingNotes
+        | HotkeyAction::NewNote => ModePlan::Unrelated,
     }
 }
 
@@ -1128,6 +1141,17 @@ fn dispatch_without_mode(action: HotkeyAction, pressed_at: std::time::Instant, c
         | HotkeyAction::ScreenshotArea => {
             tracing::error!(?action, "mode shortcut reached the modeless dispatch");
         }
+        HotkeyAction::ToggleMeetingNotes => crate::meetings_ui::live::toggle(cx),
+        // Asked for from another app: the notes come forward, not only
+        // their window (macOS keeps the app that was in front otherwise).
+        HotkeyAction::OpenMeetingNotes => {
+            crate::meetings_ui::live::open_document(None, cx);
+            cx.activate(true);
+        }
+        HotkeyAction::NewNote => {
+            crate::meetings_ui::documents::new_note(cx);
+            cx.activate(true);
+        }
     }
 }
 
@@ -1138,6 +1162,11 @@ fn microphone_available(name: &str) -> bool {
         MicrophoneFeed::list_names()
             .iter()
             .any(|device| device == name)
+    } else if cfg!(target_os = "linux") {
+        // Listing opens every ALSA device as the recording starts, which takes
+        // a bare-card default from the sound server; it also misses a card
+        // the open microphone already holds.
+        MicrophoneFeed::is_connected(name)
     } else {
         MicrophoneFeed::list().contains_key(name)
     }
@@ -1528,7 +1557,10 @@ mod tests {
                     | HotkeyAction::TogglePauseRecording
                     | HotkeyAction::OpenRecordingPicker
                     | HotkeyAction::AddRecordingMarker
-                    | HotkeyAction::ToggleDrawing => ModePlan::Unrelated,
+                    | HotkeyAction::ToggleDrawing
+                    | HotkeyAction::ToggleMeetingNotes
+                    | HotkeyAction::OpenMeetingNotes
+                    | HotkeyAction::NewNote => ModePlan::Unrelated,
                 };
                 assert_eq!(
                     mode_plan(action, selected),
@@ -1596,6 +1628,14 @@ mod tests {
         assert_eq!(
             HotkeyAction::from_store_key("addRecordingMarker"),
             Some(HotkeyAction::AddRecordingMarker)
+        );
+        assert_eq!(
+            HotkeyAction::from_store_key("toggleMeetingNotes"),
+            Some(HotkeyAction::ToggleMeetingNotes)
+        );
+        assert_eq!(
+            HotkeyAction::from_store_key("openMeetingNotes"),
+            Some(HotkeyAction::OpenMeetingNotes)
         );
         for (key, action) in ACTION_KEYS {
             assert_eq!(action.store_key(), key);

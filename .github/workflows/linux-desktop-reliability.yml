@@ -622,7 +622,7 @@ jobs:
     # connects a capture stream through the real launchers, with the AppDir as
     # 0.6.1 shipped it and as scripts/finalize-linux-appimage.mjs lays it out.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -633,8 +633,11 @@ jobs:
           echo "$CAP_APPIMAGE_SHA256  $RUNNER_TEMP/Cap.AppImage" | sha256sum --check
 
       - name: Connect a capture stream in NixOS appimage-run
+        timeout-minutes: 30
+        env:
+          NIX_GITHUB_TOKEN: ${{ github.token }}
         run: |
-          sudo bash scripts/linux-desktop-harness/appimage-pipewire/run.sh \
+          sudo --preserve-env=NIX_GITHUB_TOKEN bash scripts/linux-desktop-harness/appimage-pipewire/run.sh \
             "$RUNNER_TEMP/Cap.AppImage" "$RUNNER_TEMP/out/appimage-nixos"
 
       - name: Check results

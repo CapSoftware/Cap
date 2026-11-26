@@ -11,12 +11,22 @@ import {
 } from "@cap/database/schema";
 import { type Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
+import { sharesInviterCompanyDomain } from "@/lib/public-email-domains";
 import {
 	calculateProSeats,
 	hasActiveDirectSubscription,
 } from "@/utils/organization";
 
 type ProvisionOrganizationRole = "admin" | "member";
+
+export class InviteeRequiresAcceptanceError extends Error {
+	constructor() {
+		super(
+			"This person needs to accept an invite before they can be added to the organization.",
+		);
+		this.name = "InviteeRequiresAcceptanceError";
+	}
+}
 
 function getProvisionedUserName(email: string) {
 	return (
@@ -32,15 +42,39 @@ export async function provisionOrganizationInvitee({
 	email,
 	invitedByUserId,
 	role,
+	operatorApproved = false,
 }: {
 	organizationId: Organisation.OrganisationId;
 	email: string;
 	invitedByUserId: User.UserId;
 	role: ProvisionOrganizationRole;
+	operatorApproved?: boolean;
 }) {
 	const normalizedEmail = email.trim().toLowerCase();
 
 	return db().transaction(async (tx) => {
+		if (!operatorApproved) {
+			const [inviter] = await tx
+				.select({ email: users.email })
+				.from(users)
+				.where(eq(users.id, invitedByUserId))
+				.limit(1);
+			if (!sharesInviterCompanyDomain(inviter?.email, normalizedEmail)) {
+				const [currentMember] = await tx
+					.select({ id: organizationMembers.id })
+					.from(organizationMembers)
+					.innerJoin(users, eq(users.id, organizationMembers.userId))
+					.where(
+						and(
+							eq(organizationMembers.organizationId, organizationId),
+							eq(users.email, normalizedEmail),
+						),
+					)
+					.limit(1);
+				if (!currentMember) throw new InviteeRequiresAcceptanceError();
+			}
+		}
+
 		const [existingUser] = await tx
 			.select()
 			.from(users)

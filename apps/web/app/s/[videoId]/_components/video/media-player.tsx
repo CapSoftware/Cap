@@ -40,6 +40,8 @@ import {
 	VolumeXIcon,
 	ZapIcon,
 } from "lucide-react";
+import { createMediaStore } from "media-chrome/media-store/media-store";
+import { stateMediator } from "media-chrome/media-store/state-mediator";
 import {
 	MediaActionTypes,
 	MediaContext,
@@ -60,6 +62,7 @@ import {
 	PLAYBACK_SPEEDS,
 } from "@/lib/playback-speed";
 import { seekLength } from "../early-length";
+import { displayedMediaTime } from "../media-source-refresh";
 import { Badge } from "./badge";
 import { Button as PlayerButton } from "./button";
 import {
@@ -149,6 +152,14 @@ const selectRenditionList = (s: S) =>
 const selectRenditionSelected = (s: S) => s.mediaRenditionSelected;
 
 const EMPTY_MEDIA_STATE = Object.freeze({}) as Partial<MediaState>;
+
+const playerStateMediator: typeof stateMediator = {
+	...stateMediator,
+	mediaCurrentTime: {
+		...stateMediator.mediaCurrentTime,
+		get: ({ media }) => (media ? displayedMediaTime(media) : 0),
+	},
+};
 
 function useMediaOwnerRef<T extends HTMLElement>(type: string) {
 	const store = React.useContext(MediaContext);
@@ -343,9 +354,17 @@ function MediaPlayerRoot(props: MediaPlayerRootProps) {
 		() => createStore(listenersRef, stateRef),
 		[listenersRef, stateRef],
 	);
+	const mediaStore = React.useMemo(
+		() =>
+			createMediaStore({
+				documentElement: globalThis.document,
+				stateMediator: playerStateMediator,
+			}),
+		[],
+	);
 
 	return (
-		<MediaProvider>
+		<MediaProvider mediaStore={mediaStore}>
 			<StoreContext.Provider value={store}>
 				<MediaPlayerRootImpl {...props} />
 			</StoreContext.Provider>

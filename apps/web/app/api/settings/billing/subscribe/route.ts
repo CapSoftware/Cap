@@ -7,7 +7,11 @@ import type { NextRequest } from "next/server";
 import { ensureStripeCustomerId } from "@/lib/checkout/customer";
 import { customCheckoutEnabled } from "@/lib/checkout/enabled";
 import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
-import { checkoutPath, planForPriceId } from "@/lib/checkout/plans";
+import {
+	checkoutPath,
+	planForPriceId,
+	promotionForPlan,
+} from "@/lib/checkout/plans";
 import {
 	createWithPromotion,
 	findPromotionCodeId,
@@ -106,7 +110,7 @@ export async function POST(request: NextRequest) {
 					user,
 					request.cookies.get(DUB_CLICK_ID_COOKIE)?.value,
 				),
-				findPromotionCodeId(promo),
+				findPromotionCodeId(promotionForPlan(plan, promo)),
 			]);
 		if (alreadySubscribed) {
 			return Response.json(

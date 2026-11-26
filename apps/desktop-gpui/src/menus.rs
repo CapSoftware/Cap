@@ -711,7 +711,80 @@ fn quit_phase(phase: Phase, ui_cleanup_pending: bool) -> Phase {
     }
 }
 
+/// Quitting from the menu, the tray or the main window's own Close while a
+/// meeting records asks first: the rest of the meeting would not be
+/// recorded. Cap itself, the system and updates quit without asking.
+fn source_confirms_meeting(source: QuitSource) -> bool {
+    match source {
+        QuitSource::AppMenu | QuitSource::Tray => true,
+        // Alt+F4 and the taskbar's Close arrive as WM_CLOSE. A shutdown or
+        // sign-off never does (it comes as WM_QUERYENDSESSION and
+        // WM_ENDSESSION), so this dialog cannot hold one up.
+        #[cfg(target_os = "windows")]
+        QuitSource::MainWindowClose => true,
+        _ => false,
+    }
+}
+
+fn confirms_meeting(source: QuitSource, cx: &App) -> bool {
+    source_confirms_meeting(source)
+        && crate::meetings::Meetings::try_global(cx).is_some_and(|m| m.read(cx).is_recording())
+}
+
+static ASKING_TO_QUIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Held while the quit question is open, so pressing Alt+F4 or choosing Quit
+/// again does not stack a second one.
+struct QuitQuestion;
+
+impl QuitQuestion {
+    fn open() -> Option<Self> {
+        ASKING_TO_QUIT
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_ok()
+            .then_some(Self)
+    }
+}
+
+impl Drop for QuitQuestion {
+    fn drop(&mut self) {
+        ASKING_TO_QUIT.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 pub fn quit(source: QuitSource, cx: &mut App) {
+    if confirms_meeting(source, cx) {
+        let Some(question) = QuitQuestion::open() else {
+            return;
+        };
+        tracing::info!(?source, "quit requested during a meeting; asking first");
+        cx.spawn(async move |cx| {
+            let quit = platform::confirm_dialog(
+                tr::dialog::quit::meeting_title(),
+                tr::dialog::quit::meeting_message(),
+                tr::dialog::quit::meeting_quit(),
+                tr::dialog::quit::meeting_keep(),
+                false,
+            );
+            drop(question);
+            if quit {
+                let _ = cx.update(|cx| quit_now(source, cx));
+            } else {
+                tracing::info!("quit canceled to keep recording the meeting");
+            }
+        })
+        .detach();
+        return;
+    }
+    quit_now(source, cx);
+}
+
+fn quit_now(source: QuitSource, cx: &mut App) {
     tracing::info!(?source, "quit requested");
     let session = RecordingSession::global(cx);
     if !cx.has_global::<QuitCoordinator>() {
@@ -971,16 +1044,20 @@ fn visible_window_classes(cx: &mut App) -> (bool, bool) {
         })
         .unwrap_or(false);
 
+    let meeting_panel = !crate::meetings_ui::MeetingWindows::panel_windows(cx).is_empty();
+    let meeting_dock = !crate::meetings_ui::MeetingWindows::dock_windows(cx).is_empty();
     let windows = cx.global::<AppWindows>();
     let panel = windows.camera.is_some()
         || windows.controls.is_some()
         || !windows.overlays.is_empty()
-        || teleprompter_visible;
+        || teleprompter_visible
+        || meeting_panel;
     let dock = main_visible
         || windows.settings.is_some()
         || windows.onboarding.is_some()
         || windows.mode_select.is_some()
-        || !windows.editors.is_empty();
+        || !windows.editors.is_empty()
+        || meeting_dock;
     (panel, dock)
 }
 
@@ -1021,6 +1098,36 @@ mod tests {
         for (actual, (_, expected)) in opened.iter().zip(cases) {
             assert_eq!(actual.as_deref(), Some(expected));
         }
+    }
+
+    #[test]
+    fn closing_the_main_window_asks_during_a_meeting_like_quit_does() {
+        assert!(source_confirms_meeting(QuitSource::AppMenu));
+        assert!(source_confirms_meeting(QuitSource::Tray));
+        #[cfg(target_os = "windows")]
+        assert!(source_confirms_meeting(QuitSource::MainWindowClose));
+        for source in [
+            QuitSource::UpdateInstaller,
+            QuitSource::UpdateRelaunchFailed,
+            QuitSource::Relaunch,
+        ] {
+            assert!(!source_confirms_meeting(source), "{source:?}");
+        }
+        #[cfg(target_os = "macos")]
+        for source in [
+            QuitSource::NativeTermination,
+            QuitSource::NativeQuitHandlerUnavailable,
+        ] {
+            assert!(!source_confirms_meeting(source), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_second_quit_while_the_question_is_open_asks_nothing_more() {
+        let first = QuitQuestion::open().expect("first question opens");
+        assert!(QuitQuestion::open().is_none());
+        drop(first);
+        assert!(QuitQuestion::open().is_some(), "answering frees it again");
     }
 
     #[test]

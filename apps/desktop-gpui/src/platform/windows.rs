@@ -56,6 +56,11 @@ struct DisplayGeometry {
 }
 
 fn native_handle(window: &Window) -> Option<isize> {
+    // Test builds only ever have gpui's test windows, which panic when asked
+    // for a platform handle instead of returning an error.
+    if cfg!(test) {
+        return None;
+    }
     let handle = HasWindowHandle::window_handle(window).ok()?;
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
         return None;
@@ -694,8 +699,6 @@ pub fn focus_capture_target_window(id: &scap_targets::WindowId) -> bool {
 pub fn install_url_scheme_handler() {
     url_scheme::install();
 }
-
-pub fn set_dock_icon(_png: &[u8]) {}
 
 pub fn save_file_panel(suggested: &str, extensions: &[&str]) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new().set_file_name(suggested);

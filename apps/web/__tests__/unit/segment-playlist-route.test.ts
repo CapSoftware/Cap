@@ -45,9 +45,9 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 						mocks.read();
 						return Option.some(JSON.stringify(mocks.manifest));
 					}),
-		getSignedObjectUrl: (key: string) =>
+		getSignedObjectUrl: (key: string, signingArgs?: unknown) =>
 			Effect.sync(() => {
-				mocks.sign(key);
+				mocks.sign(key, signingArgs);
 				return `https://media.example.com/${key}`;
 			}),
 		listObjects: ({ prefix }: { prefix: string }) =>
@@ -447,7 +447,33 @@ describe("Instant playlist readiness API", () => {
 			expect(response.status).toBe(302);
 			expect(mocks.sign).toHaveBeenCalledExactlyOnceWith(
 				mocks.source.outputKey,
+				{ expiresIn: 24 * 60 * 60 },
 			);
+		},
+	);
+
+	it.each(["segments-video", "segments-audio"])(
+		"signs every %s URL for at least 12 hours from a shared window",
+		async (type) => {
+			const response = await request(type, "");
+			expect(response.status).toBe(200);
+			const playlist = await response.text();
+			const uris = playlist
+				.split("\n")
+				.filter((line) => line.startsWith("https://"));
+			expect(mocks.sign).toHaveBeenCalledTimes(uris.length + 1);
+			const windowMs = 6 * 60 * 60 * 1000;
+			for (const [, signingArgs] of mocks.sign.mock.calls) {
+				const { signingDate, expiresIn } = signingArgs as {
+					signingDate: Date;
+					expiresIn: number;
+				};
+				expect(signingDate.getTime() % windowMs).toBe(0);
+				expect(expiresIn).toBe(18 * 60 * 60);
+				expect(
+					signingDate.getTime() + expiresIn * 1000 - Date.now(),
+				).toBeGreaterThanOrEqual(12 * 60 * 60 * 1000);
+			}
 		},
 	);
 });

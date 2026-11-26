@@ -1642,16 +1642,35 @@ fn handle_play(state: &mut Option<StreamState>, spec: Box<PlaySpec>, generation:
     }
 }
 
+/// Linux: names the ALSA output to play through when ALSA "default" is the
+/// bare sound card, which playing would take from the sound server and every
+/// other app. The app supplies the check it shares with recording.
+#[cfg(target_os = "linux")]
+static LINUX_OUTPUT: OnceLock<fn() -> Option<&'static str>> = OnceLock::new();
+
+#[cfg(target_os = "linux")]
+pub fn set_linux_output(output: fn() -> Option<&'static str>) {
+    let _ = LINUX_OUTPUT.set(output);
+}
+
+fn output_device(host: &cpal::Host) -> Option<cpal::Device> {
+    #[cfg(target_os = "linux")]
+    if let Some(name) = LINUX_OUTPUT.get().and_then(|output| output()) {
+        return Some(cpal::platform::AlsaDevice::from_pcm_id(name).into());
+    }
+    host.default_output_device()
+}
+
 /// Returns true when a healthy stream for the current default device exists
 /// (building one if needed).
 fn ensure_stream(state: &mut Option<StreamState>) -> bool {
     let host = cpal::default_host();
-    let Some(device) = host.default_output_device() else {
+    let Some(mut device) = output_device(&host) else {
         error!("No default output device found");
         *state = None;
         return false;
     };
-    let device_name = device.name().ok();
+    let mut device_name = device.name().ok();
 
     if let Some(s) = state.as_mut() {
         if !s.failed.load(Ordering::Acquire) && s.device_name == device_name {
@@ -1672,6 +1691,21 @@ fn ensure_stream(state: &mut Option<StreamState>) -> bool {
 
     let supported_config = match device.default_output_config() {
         Ok(config) => config,
+        Err(e) if device_name.as_deref() != Some("default") => {
+            error!(device = ?device_name, "Failed to get output config, using the default: {e}");
+            let Some(default) = host.default_output_device() else {
+                return false;
+            };
+            device = default;
+            device_name = device.name().ok();
+            match device.default_output_config() {
+                Ok(config) => config,
+                Err(e) => {
+                    error!("Failed to get default output config: {e}");
+                    return false;
+                }
+            }
+        }
         Err(e) => {
             error!("Failed to get default output config: {e}");
             return false;

@@ -540,10 +540,13 @@ impl Mp4ExportSettings {
             let encoder_is_hw = false;
 
             let mut detached_audio = None;
+            // Faststart: shared links play this file straight from the CDN,
+            // and a moov box at the end costs every viewer a seek to the end
+            // of the file before the first frame.
             let mut encoder = MP4File::init(
                 "output",
                 encoder_output_path.clone(),
-                self.optimize_filesize,
+                true,
                 |o| {
                     #[cfg(target_os = "macos")]
                     if want_hw_input {

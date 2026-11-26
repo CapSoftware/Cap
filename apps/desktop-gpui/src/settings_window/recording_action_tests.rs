@@ -13,7 +13,10 @@ impl Render for RecordingActions {
     }
 }
 
-fn settings_fixture(window: &mut Window, cx: &mut Context<SettingsWindow>) -> SettingsWindow {
+pub(crate) fn settings_fixture(
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> SettingsWindow {
     let input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
     let scroll = ScrollHandle::new();
     SettingsWindow {
@@ -30,6 +33,9 @@ fn settings_fixture(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Se
         plan_refresh_failed: false,
         instant_quality_notice: None,
         studio_quality_save_failed: false,
+        studio_resolution: None,
+        #[cfg(target_os = "linux")]
+        studio_resolution_task: None,
         pages: crate::settings_pages::PagesState::new(window, cx),
         project_name: String::new(),
         server_url: String::new(),
@@ -42,6 +48,8 @@ fn settings_fixture(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Se
         placeholders_task: None,
         slider_track: Rc::new(Cell::new(None)),
         slider_dragging: false,
+        bitrate_slider_track: Rc::new(Cell::new(None)),
+        bitrate_slider_dragging: false,
         windows: Vec::new(),
         focus: cx.focus_handle(),
         _sign_in_subscriptions: std::array::from_fn(|_| gpui::Subscription::new(|| {})),

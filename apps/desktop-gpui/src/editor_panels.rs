@@ -6560,7 +6560,8 @@ impl EditorWindow {
         };
         let mode = segment.mode;
         let split_mode = matches!(mode, SceneMode::SplitScreen | SceneMode::Floating);
-        let has_camera = self.summary().is_some_and(|summary| summary.has_camera);
+        let has_camera = self.summary().is_some_and(|summary| summary.has_camera)
+            || self.project.camera_picture.is_some();
         let description = SCENE_MODES
             .iter()
             .find(|(candidate, ..)| {
