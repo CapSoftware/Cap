@@ -272,7 +272,9 @@ pub struct FrameLossCarry {
 /// of the last frame are only appended at stop, so a lost tail loses them
 /// first: only packets beyond the real frames that encoded count as written
 /// repeats. Writer losses are only taken until the first repeat encodes, so
-/// they are all real frames.
+/// they are all real frames; later ones count at finish, except that a real
+/// frame failing to write after the repeats can leave `written` high by at
+/// most the repeats written.
 #[derive(Debug, Default)]
 pub struct ScreenFrameAccounting {
     attached: AtomicBool,
@@ -1005,6 +1007,29 @@ mod tests {
             "a written repeat does not hide a lost frame"
         );
         assert_eq!(run(Some(3), true), (1, 1));
+    }
+
+    #[test]
+    fn writer_losses_after_the_stop_repeats_count_at_finish() {
+        let accounting = ScreenFrameAccounting::default();
+        for i in 0..10u64 {
+            accounting.record_accepted(FrameLossCarry::default(), i == 0);
+            hand(&accounting, false);
+            let repeat = accounting.next_is_repeat();
+            accounting.record_encoded(repeat, true, Some(i));
+            accounting.record_writer_lost(0);
+        }
+        hand(&accounting, true);
+        let repeat = accounting.next_is_repeat();
+        accounting.record_encoded(repeat, true, Some(9));
+        accounting.record_writer_lost(2);
+        assert_eq!(accounting.totals().lost_in_encoder, 0);
+        accounting.record_finished(Some(9));
+        assert_eq!(
+            accounting.totals().lost_in_encoder,
+            1,
+            "the last real frame and the repeat failed to write"
+        );
     }
 
     #[test]
