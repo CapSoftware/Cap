@@ -5426,6 +5426,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[gpui::test]
     fn choosing_a_clipboard_mode_by_keyboard_leaves_the_menu_closed(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::sign_in::SignIn::init);
         let project = tempfile::tempdir().unwrap();
         let (editor, cx) = cx.add_window_view(|window, cx| {
             let mut editor = super::EditorWindow::new(project.path().to_path_buf(), window, cx);
