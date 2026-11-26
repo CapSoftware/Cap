@@ -13,8 +13,7 @@ use crate::{
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
 use cap_enc_ffmpeg::segmented_stream::{
-    DiskSpaceCallback, FinishError, QueueFrameError, SegmentedVideoEncoder,
-    SegmentedVideoEncoderConfig,
+    DiskSpaceCallback, QueueFrameError, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
 };
 use cap_media_info::{AudioInfo, Pixel, VideoInfo};
 use std::{
@@ -165,27 +164,6 @@ trait FinishableEncoderState {
     ) -> anyhow::Result<()>;
 }
 
-/// A finish that gave up on stalled segment bookkeeping keeps its
-/// `StorageStalled` type, so the pipeline knows the muxer may still write.
-fn finish_failure(finish_label: &str, error: FinishError) -> anyhow::Error {
-    if matches!(&error, FinishError::Io(io) if cap_enc_ffmpeg::StorageStalled::is_in(io)) {
-        anyhow::Error::new(error).context(finish_label.to_string())
-    } else {
-        anyhow!("{finish_label}: {error:#}")
-    }
-}
-
-fn combine_keeping_stall(primary: anyhow::Error, secondary: anyhow::Error) -> anyhow::Error {
-    if secondary
-        .chain()
-        .any(|cause| cap_enc_ffmpeg::StorageStalled::is_in(cause))
-    {
-        secondary.context(format!("{primary:#}"))
-    } else {
-        combine_finish_errors(primary, secondary)
-    }
-}
-
 fn finish_and_report_flush_failure(
     encoder: &mut SegmentedVideoEncoder,
     _timestamp: Duration,
@@ -194,7 +172,7 @@ fn finish_and_report_flush_failure(
 ) -> anyhow::Result<()> {
     let result = encoder
         .finish_within(ENCODER_FINISH_LIMIT)
-        .map_err(|error| finish_failure(finish_label, error));
+        .map_err(|error| anyhow!("{finish_label}: {error:#}"));
     if let Some(failure) = encoder.take_flush_failure() {
         warn!(
             encoder = %failure.encoder,
@@ -291,7 +269,7 @@ fn finish_segmented_encoder_impl(
     match (thread_error, finalize_error) {
         (None, None) => Ok(()),
         (Some(error), None) | (None, Some(error)) => Err(error),
-        (Some(primary), Some(secondary)) => Err(combine_keeping_stall(primary, secondary)),
+        (Some(primary), Some(secondary)) => Err(combine_finish_errors(primary, secondary)),
     }
 }
 
@@ -1222,44 +1200,7 @@ impl AudioMuxer for WindowsFragmentedM4SCameraMuxer {
 
 #[cfg(test)]
 mod tests {
-    use super::{combine_keeping_stall, finish_failure, reference_video_frame};
-    use cap_enc_ffmpeg::{StorageStalled, segmented_stream::FinishError};
-
-    fn keeps_stall(error: &anyhow::Error) -> bool {
-        error.chain().any(|cause| StorageStalled::is_in(cause))
-    }
-
-    #[test]
-    fn stalled_bookkeeping_finish_keeps_its_type_through_the_muxer_errors() {
-        let stalled = finish_failure(
-            "Failed to finish segmented encoder",
-            FinishError::Io(std::io::Error::from(StorageStalled)),
-        );
-        assert!(keeps_stall(&stalled));
-        assert!(format!("{stalled:#}").starts_with("Failed to finish segmented encoder: "));
-
-        let combined = combine_keeping_stall(anyhow::anyhow!("encoder thread failed"), stalled);
-        assert!(keeps_stall(&combined));
-        assert!(format!("{combined:#}").starts_with("encoder thread failed: "));
-    }
-
-    #[test]
-    fn other_finish_errors_keep_their_previous_text() {
-        let error = finish_failure(
-            "Failed to finish segmented encoder",
-            FinishError::FFmpeg(ffmpeg::Error::Bug),
-        );
-        assert!(!keeps_stall(&error));
-        assert_eq!(
-            format!("{error:#}"),
-            format!(
-                "Failed to finish segmented encoder: {:#}",
-                FinishError::FFmpeg(ffmpeg::Error::Bug)
-            )
-        );
-        let combined = combine_keeping_stall(anyhow::anyhow!("first"), anyhow::anyhow!("second"));
-        assert_eq!(format!("{combined:#}"), "first; second");
-    }
+    use super::reference_video_frame;
 
     #[test]
     fn instant_fragment_frames_reuse_reference_counted_pixels() {
