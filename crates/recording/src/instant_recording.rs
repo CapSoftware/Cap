@@ -829,6 +829,7 @@ async fn create_pipeline(
                 timed_fragments: false,
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: cap_enc_ffmpeg::h264::H264Preset::Ultrafast,
+                video_bitrate: None,
                 output_size: Some(output_resolution),
                 shared_pause_state: None,
                 segment_tx: segment_tx_for_video,
@@ -1732,6 +1733,23 @@ fn instant_capture_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instant_frame_rate_keeps_its_own_ceiling() {
+        let builder = |fps| {
+            ActorBuilder::new(PathBuf::from("unused.cap"), ScreenCaptureTarget::CameraOnly)
+                .with_max_fps(fps)
+                .max_fps
+        };
+        assert_eq!(
+            ActorBuilder::new(PathBuf::from("unused.cap"), ScreenCaptureTarget::CameraOnly).max_fps,
+            crate::defaults::DEFAULT_INSTANT_MODE_FPS
+        );
+        assert_eq!(builder(60), 60);
+        assert_eq!(builder(120), 120);
+        assert_eq!(builder(144), 120);
+        assert_eq!(builder(240), 120);
+    }
 
     #[cfg(any(target_os = "macos", windows))]
     #[test]

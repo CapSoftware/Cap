@@ -329,40 +329,6 @@ fn english_matches_the_literals_it_replaced() {
                 .into(),
         ),
         (
-            tr::settings::general::recording::max_fps::description(),
-            "Maximum framerate for screen capture.".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::description_high(),
-            "Maximum framerate for screen capture. Higher values may cause \
-                             drops or increased CPU usage on some systems."
-                .into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_120(),
-            "120 FPS".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_24(),
-            "24 FPS".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_25(),
-            "25 FPS".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_30(),
-            "30 FPS".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_60(),
-            "60 FPS (Recommended)".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::label(),
-            "Max capture framerate".into(),
-        ),
-        (
             tr::settings::general::storage::choose_folder(),
             "Choose Folder".into(),
         ),
@@ -606,6 +572,74 @@ fn appearance_labels_follow_language_changes_without_changing_saved_values() {
             assert_eq!(AppTheme::from_json(saved), Some(*theme));
         }
     }
+}
+
+#[test]
+fn recording_quality_page_names_the_modes_in_every_language() {
+    const CHILD: &str = "CAP_GPUI_TEST_QUALITY_MODE_NAMES";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "i18n::tests::recording_quality_page_names_the_modes_in_every_language",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove(LOCALE_ENV)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    use tr::settings::quality::{instant, studio};
+    for (locale, studio_title, instant_title, studio_in_a_sentence) in [
+        (Locale::En, "Studio Mode", "Instant Mode", "Studio Mode"),
+        (Locale::ZhCn, "Studio 模式", "Instant 模式", "Studio 模式"),
+        (Locale::Ja, "Studioモード", "Instantモード", "Studioモード"),
+        (Locale::Fr, "Mode Studio", "Mode Instant", "mode Studio"),
+        (Locale::Es, "Modo Studio", "Modo Instant", "modo Studio"),
+        (Locale::De, "Studio-Modus", "Instant-Modus", "Studio-Modus"),
+        (Locale::Hi, "Studio मोड", "Instant मोड", "Studio मोड"),
+    ] {
+        init(Some(locale.code()));
+        let code = locale.code();
+        assert_eq!(studio::title(), studio_title, "{code}");
+        assert_eq!(instant::title(), instant_title, "{code}");
+        assert_eq!(studio::title(), tr::main::mode::header::studio(), "{code}");
+        assert_eq!(
+            instant::title(),
+            tr::main::mode::header::instant(),
+            "{code}"
+        );
+        assert!(
+            instant::description().contains(studio_in_a_sentence),
+            "{code}"
+        );
+        for text in [
+            studio::description(),
+            studio::resolution_description(),
+            studio::resolution_description_several(),
+            studio::resolution_description_compatibility(),
+        ] {
+            assert!(text.contains("4K"), "{code}: {text}");
+        }
+        let camera_note = studio::resolution_description_compatibility();
+        assert!(camera_note.contains("1600 × 1000"), "{code}");
+        assert!(camera_note.contains(studio::compatibility()), "{code}");
+        assert!(!studio::resolution().is_empty(), "{code}");
+        let up_to = studio::resolution_up_to("5120 × 2880");
+        assert!(
+            up_to.contains("5120 × 2880") && up_to != "5120 × 2880",
+            "{code}"
+        );
+    }
+    init(Some(Locale::En.code()));
 }
 
 #[test]
