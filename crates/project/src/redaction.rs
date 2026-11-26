@@ -428,8 +428,14 @@ impl RedactionIndex {
     /// frame and a half before `t` to half a frame after it. The decoder shows
     /// the sample nearest the requested time, which can be the frame before
     /// it, and edits (speed, cuts) change which times are requested; covering
-    /// the window keeps the shown frame masked whichever one it is.
-    pub fn for_each_around(&self, segment: u32, t: f64, mut visit: impl FnMut(&str, RedactRect)) {
+    /// the window keeps the shown frame masked whichever one it is. `visit`
+    /// also learns whether the region is on screen at `t` itself.
+    pub fn for_each_around(
+        &self,
+        segment: u32,
+        t: f64,
+        mut visit: impl FnMut(&str, RedactRect, bool),
+    ) {
         let Some(index) = self.segments.iter().find(|s| s.segment == segment) else {
             return;
         };
@@ -455,7 +461,7 @@ impl RedactionIndex {
                 seen.push(*id);
                 let region = &index.regions[*id as usize];
                 if let Some(rect) = region.rect_between(from, to).and_then(RedactRect::clamped) {
-                    visit(&region.id, rect);
+                    visit(&region.id, rect, region.start <= t && t <= region.end);
                 }
             }
         }
@@ -542,10 +548,13 @@ mod tests {
         let index = RedactionIndex::new(&redactions, &config);
         assert!(index.rects_at(0, 2.03).is_empty());
         let mut around = Vec::new();
-        index.for_each_around(0, 2.03, |id, _| around.push(id.to_string()));
-        assert_eq!(around, vec!["a".to_string()]);
+        index.for_each_around(0, 2.03, |id, _, now| around.push((id.to_string(), now)));
+        assert_eq!(around, vec![("a".to_string(), false)]);
+        let mut during = Vec::new();
+        index.for_each_around(0, 1.5, |_, _, now| during.push(now));
+        assert_eq!(during, vec![true]);
         let mut later = Vec::new();
-        index.for_each_around(0, 2.1, |id, _| later.push(id.to_string()));
+        index.for_each_around(0, 2.1, |id, _, _| later.push(id.to_string()));
         assert!(later.is_empty());
     }
 
