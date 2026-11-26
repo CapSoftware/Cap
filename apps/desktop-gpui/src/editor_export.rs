@@ -2569,6 +2569,7 @@ impl EditorWindow {
                         menu,
                     )
                     .min_width(px(120.))
+                    .align_right()
                     .on_select(cx.listener(|this, index: &usize, window, cx| {
                         this.choose_clipboard_export(*index, window, cx);
                     }))

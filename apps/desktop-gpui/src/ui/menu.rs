@@ -161,6 +161,7 @@ pub struct Menu {
     trigger_bounds: Option<Bounds<Pixels>>,
     highlighted: Option<usize>,
     min_width: Pixels,
+    align_right: bool,
     max_height: Pixels,
     radius: Pixels,
     shadow: Vec<gpui::BoxShadow>,
@@ -194,6 +195,7 @@ impl Menu {
             trigger_bounds: state.trigger_bounds,
             highlighted: state.visible_highlight(),
             min_width: px(180.),
+            align_right: false,
             max_height: px(320.),
             radius: px(10.),
             shadow: vec![gpui::BoxShadow {
@@ -252,6 +254,11 @@ impl Menu {
         self
     }
 
+    pub fn align_right(mut self) -> Self {
+        self.align_right = true;
+        self
+    }
+
     pub fn trigger(
         element: gpui::Stateful<gpui::Div>,
         handler: impl Fn(&Bounds<Pixels>, &mut Window, &mut App) + 'static,
@@ -295,6 +302,7 @@ fn anchored_placement(
     item_count: usize,
     max_height: Pixels,
     viewport: Size<Pixels>,
+    align_right: bool,
 ) -> (Point<Pixels>, Anchor, Pixels) {
     let gap = px(4.);
     let margin = px(12.);
@@ -303,14 +311,30 @@ fn anchored_placement(
     let height = px(item_count as f32 * MENU_ROW_HEIGHT + MENU_CHROME_HEIGHT).min(max_height);
     if height <= below || below >= above {
         (
-            trigger.bottom_left() + point(px(0.), gap),
-            Anchor::TopLeft,
+            if align_right {
+                trigger.bottom_right()
+            } else {
+                trigger.bottom_left()
+            } + point(px(0.), gap),
+            if align_right {
+                Anchor::TopRight
+            } else {
+                Anchor::TopLeft
+            },
             max_height.min(below),
         )
     } else {
         (
-            trigger.origin - point(px(0.), gap),
-            Anchor::BottomLeft,
+            if align_right {
+                trigger.top_right()
+            } else {
+                trigger.origin
+            } - point(px(0.), gap),
+            if align_right {
+                Anchor::BottomRight
+            } else {
+                Anchor::BottomLeft
+            },
             max_height.min(above),
         )
     }
@@ -373,6 +397,7 @@ impl RenderOnce for Menu {
             trigger_bounds,
             highlighted,
             min_width,
+            align_right,
             max_height,
             radius,
             shadow,
@@ -395,7 +420,7 @@ impl RenderOnce for Menu {
         let min_width = trigger_bounds.map_or(min_width, |bounds| min_width.max(bounds.size.width));
         let (origin, anchor, max_height) = trigger_bounds
             .map_or((origin, Anchor::TopLeft, max_height), |bounds| {
-                anchored_placement(bounds, items.len(), max_height, viewport)
+                anchored_placement(bounds, items.len(), max_height, viewport, align_right)
             });
         let mut style = window.text_style();
         style.font_size = px(12.).into();
@@ -571,7 +596,7 @@ mod tests {
     fn a_select_menu_opens_below_the_button_when_it_fits() {
         let bounds = Bounds::new(point(px(100.), px(80.)), gpui::size(px(160.), px(36.)));
         let (origin, anchor, height) =
-            anchored_placement(bounds, 4, px(320.), gpui::size(px(800.), px(600.)));
+            anchored_placement(bounds, 4, px(320.), gpui::size(px(800.), px(600.)), false);
         assert_eq!(origin, point(px(100.), px(120.)));
         assert_eq!(anchor, Anchor::TopLeft);
         assert_eq!(height, px(320.));
@@ -581,17 +606,31 @@ mod tests {
     fn a_select_menu_flips_above_a_button_near_the_bottom() {
         let bounds = Bounds::new(point(px(100.), px(540.)), gpui::size(px(160.), px(36.)));
         let (origin, anchor, height) =
-            anchored_placement(bounds, 4, px(320.), gpui::size(px(800.), px(600.)));
+            anchored_placement(bounds, 4, px(320.), gpui::size(px(800.), px(600.)), false);
         assert_eq!(origin, point(px(100.), px(536.)));
         assert_eq!(anchor, Anchor::BottomLeft);
         assert_eq!(height, px(320.));
     }
 
     #[test]
+    fn a_right_aligned_menu_stays_aligned_when_it_opens_above_or_below() {
+        let viewport = gpui::size(px(800.), px(600.));
+        for (top, expected_y, expected_anchor) in [
+            (80., 120., Anchor::TopRight),
+            (540., 536., Anchor::BottomRight),
+        ] {
+            let bounds = Bounds::new(point(px(100.), px(top)), gpui::size(px(22.), px(36.)));
+            let (origin, anchor, _) = anchored_placement(bounds, 2, px(320.), viewport, true);
+            assert_eq!(origin, point(px(122.), px(expected_y)));
+            assert_eq!(anchor, expected_anchor);
+        }
+    }
+
+    #[test]
     fn a_long_select_menu_is_limited_to_the_larger_side_of_the_button() {
         let bounds = Bounds::new(point(px(100.), px(220.)), gpui::size(px(160.), px(36.)));
         let (origin, anchor, height) =
-            anchored_placement(bounds, 40, px(320.), gpui::size(px(800.), px(420.)));
+            anchored_placement(bounds, 40, px(320.), gpui::size(px(800.), px(420.)), false);
         assert_eq!(origin, point(px(100.), px(216.)));
         assert_eq!(anchor, Anchor::BottomLeft);
         assert_eq!(height, px(204.));
