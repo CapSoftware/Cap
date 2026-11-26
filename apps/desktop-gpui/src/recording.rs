@@ -1185,6 +1185,15 @@ impl ActiveRecording {
         }))
     }
 
+    /// Marks a Windows Studio stop request at the moment it is made, so nothing
+    /// captured after it is saved however late the stop reaches the capture.
+    #[cfg(windows)]
+    pub(crate) fn mark_stop_requested(&self) {
+        if let Handle::Studio(handle) = &self.handle {
+            handle.mark_stop_requested();
+        }
+    }
+
     #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn clean_studio_stop_handle(
         &self,

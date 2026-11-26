@@ -1295,6 +1295,8 @@ impl RecordingSession {
         let Some(active) = self.active.as_ref() else {
             return;
         };
+        #[cfg(windows)]
+        active.mark_stop_requested();
         let instant_share_url = active.instant_share_url().map(ToString::to_string);
         let instant_video_id = active.instant_video_id().map(ToString::to_string);
         let instant_rules_hold = instant_share_url
