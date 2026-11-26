@@ -144,11 +144,13 @@ fn report_encode_result(
     encoded
 }
 
+const ENCODER_FINISH_LIMIT: Duration = Duration::from_secs(5);
+
 fn finish_encoder_thread(
     handle: JoinHandle<anyhow::Result<()>>,
     label: &str,
 ) -> BlockingThreadFinish {
-    wait_for_blocking_thread_finish(handle, Duration::from_secs(5), label)
+    wait_for_blocking_thread_finish(handle, ENCODER_FINISH_LIMIT, label)
 }
 
 trait FinishableEncoderState {
@@ -164,12 +166,12 @@ trait FinishableEncoderState {
 
 fn finish_and_report_flush_failure(
     encoder: &mut SegmentedVideoEncoder,
-    timestamp: Duration,
+    _timestamp: Duration,
     finish_label: &str,
     health_tx: &SharedHealthSender,
 ) -> anyhow::Result<()> {
     let result = encoder
-        .finish_with_timestamp(timestamp)
+        .finish_within(ENCODER_FINISH_LIMIT)
         .map_err(|error| anyhow!("{finish_label}: {error:#}"));
     if let Some(failure) = encoder.take_flush_failure() {
         warn!(
