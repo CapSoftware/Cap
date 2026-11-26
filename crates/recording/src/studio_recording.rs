@@ -3429,9 +3429,9 @@ struct SegmentPipelineFactory {
     /// moves to another camera while that segment records.
     live_camera: Option<StudioCameraInput>,
     segment_observers: crate::segment_observer::SegmentObservers,
-    observations: Arc<
-        std::sync::Mutex<Vec<(u32, Box<dyn crate::segment_observer::SegmentObservation>)>>,
-    >,
+    observations: crate::segment_observer::Observations,
+    #[cfg(target_os = "linux")]
+    pending_screen_tap: Option<Arc<crate::segment_observer::ScreenTap>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -3472,16 +3472,27 @@ impl SegmentPipelineFactory {
             live_camera: None,
             segment_observers: Vec::new(),
             observations: Default::default(),
+            #[cfg(target_os = "linux")]
+            pending_screen_tap: None,
         }
     }
 
-    fn with_segment_observers(mut self, observers: crate::segment_observer::SegmentObservers) -> Self {
+    fn with_segment_observers(
+        mut self,
+        observers: crate::segment_observer::SegmentObservers,
+    ) -> Self {
         self.segment_observers = observers;
         self
     }
 
-    /// Starts every observer's observation of the segment `pipeline` records.
-    fn observe_segment(&self, pipeline: &Pipeline) {
+    /// Starts every observer's observation of the next segment, measured from
+    /// `start_time` and `start_gate` (the values its pipeline is built with).
+    fn observe_segment(
+        &self,
+        start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
+        screen_tap: Option<Arc<crate::segment_observer::ScreenTap>>,
+    ) {
         if self.segment_observers.is_empty() {
             return;
         }
@@ -3489,27 +3500,40 @@ impl SegmentPipelineFactory {
         let target = capture_target
             .cursor_crop()
             .zip(capture_target.display())
-            .map(|(crop_bounds, display)| crate::cursor::CursorCaptureTarget {
-                crop_bounds,
-                display,
-                #[cfg(target_os = "linux")]
-                window: capture_target.window(),
-                #[cfg(not(target_os = "linux"))]
-                window: crate::window_only_target(capture_target, self.base_inputs.window_only),
-            });
+            .map(
+                |(crop_bounds, display)| crate::cursor::CursorCaptureTarget {
+                    crop_bounds,
+                    display,
+                    #[cfg(target_os = "linux")]
+                    window: capture_target.window(),
+                    #[cfg(not(target_os = "linux"))]
+                    window: crate::window_only_target(capture_target, self.base_inputs.window_only),
+                },
+            );
         let mut observations = self.observations.lock().unwrap_or_else(|e| e.into_inner());
+        let mut screen_receivers = Vec::new();
         for observer in &self.segment_observers {
             let observation = observer.segment_started(crate::segment_observer::SegmentStart {
                 index: self.index,
                 dir: self.segments_dir.join(format!("segment-{}", self.index)),
-                clock: crate::segment_observer::SegmentClock::new(
-                    pipeline.start_time,
-                    pipeline.start_gate.clone(),
-                ),
+                clock: crate::segment_observer::SegmentClock::new(start_time, start_gate.clone()),
                 target: target.clone(),
             });
+            if let Some(receiver) = observation.screen_frames() {
+                screen_receivers.push(receiver);
+            }
             observations.push((self.index, observation));
         }
+        if let Some(tap) = screen_tap {
+            tap.attach(screen_receivers);
+        }
+    }
+
+    /// A tap for the next segment's screen frames, when an observer may want
+    /// them; without observers the screen pipeline is built without one.
+    fn next_screen_tap(&self) -> Option<Arc<crate::segment_observer::ScreenTap>> {
+        (!self.segment_observers.is_empty())
+            .then(|| Arc::new(crate::segment_observer::ScreenTap::default()))
     }
 
     /// Stops the observations of segment `index`.
@@ -3553,6 +3577,8 @@ impl SegmentPipelineFactory {
             return prepare(cursors, next_cursors_id).await;
         }
         let segment_start_time = Timestamps::now();
+        let screen_tap = self.next_screen_tap();
+        self.pending_screen_tap = screen_tap.clone();
         create_segment_pipeline(
             &self.segments_dir,
             &self.cursors_dir,
@@ -3568,6 +3594,9 @@ impl SegmentPipelineFactory {
             self.max_fps,
             self.quality,
             segment_start_time,
+            screen_tap
+                .as_ref()
+                .map(crate::segment_observer::ScreenTap::video_tap),
             #[cfg(windows)]
             self.encoder_preferences.clone(),
         )
@@ -3576,7 +3605,8 @@ impl SegmentPipelineFactory {
 
     #[cfg(target_os = "linux")]
     fn commit_next(&mut self, pipeline: &mut Pipeline) {
-        self.observe_segment(pipeline);
+        let screen_tap = self.pending_screen_tap.take();
+        self.observe_segment(pipeline.start_time, pipeline.start_gate.clone(), screen_tap);
         self.index += 1;
         pipeline.spawn_watcher(self.completion_tx.clone());
         pipeline.spawn_start_time_persister();
@@ -3589,6 +3619,13 @@ impl SegmentPipelineFactory {
         next_cursors_id: u32,
     ) -> anyhow::Result<Pipeline> {
         let camera_input = self.next_camera_input();
+        let screen_tap = self.next_screen_tap();
+        let start_time = Timestamps::now();
+        self.observe_segment(
+            start_time,
+            self.segment_base_inputs().start_gate,
+            screen_tap.clone(),
+        );
         let startup = async {
             #[cfg(test)]
             if let Some(prepare) = &self.prepare_override {
@@ -3608,23 +3645,31 @@ impl SegmentPipelineFactory {
                 self.use_oop_muxer,
                 self.max_fps,
                 self.quality,
-                Timestamps::now(),
+                start_time,
+                screen_tap
+                    .as_ref()
+                    .map(crate::segment_observer::ScreenTap::video_tap),
                 #[cfg(windows)]
                 self.encoder_preferences.clone(),
             )
             .await
         };
-        let mut pipeline = if crate::output_pipeline::PipelineBuildScope::current().is_some() {
-            startup.await?
+        let built = if crate::output_pipeline::PipelineBuildScope::current().is_some() {
+            startup.await
         } else {
             #[cfg(target_os = "macos")]
             let scope = crate::output_pipeline::PipelineBuildScope::new_macos_segment();
             #[cfg(not(target_os = "macos"))]
             let scope = crate::output_pipeline::PipelineBuildScope::new();
-            crate::output_pipeline::finish_pipeline_startup(&scope, startup).await?
+            crate::output_pipeline::finish_pipeline_startup(&scope, startup).await
         };
-
-        self.observe_segment(&pipeline);
+        let mut pipeline = match built {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                self.stop_observations(self.index);
+                return Err(error);
+            }
+        };
         self.index += 1;
 
         pipeline.spawn_watcher(self.completion_tx.clone());
@@ -3756,6 +3801,7 @@ async fn create_segment_pipeline(
     max_fps: u32,
     quality: crate::StudioQuality,
     start_time: Timestamps,
+    screen_tap: Option<crate::output_pipeline::VideoTap<crate::segment_observer::ScreenFrame>>,
     #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 ) -> anyhow::Result<Pipeline> {
     #[cfg(windows)]
@@ -3962,6 +4008,7 @@ async fn create_segment_pipeline(
             shared_pause_state.clone(),
             output_size,
             quality,
+            screen_tap,
             #[cfg(windows)]
             encoder_preferences.clone(),
         )

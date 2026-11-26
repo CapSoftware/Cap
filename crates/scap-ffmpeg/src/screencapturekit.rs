@@ -12,85 +12,92 @@ pub enum AsFFmpegError {
 
 impl super::AsFFmpeg for scap_screencapturekit::VideoFrame {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
-        let Some(image_buf_ref) = self.image_buf() else {
+        let Some(image_buf) = self.image_buf() else {
             return Err(AsFFmpegError::NoImageBuffer);
         };
-        let mut image_buf = image_buf_ref.retained();
-
-        let width = image_buf.width();
-        let height = image_buf.height();
-        let pixel_format = image_buf.pixel_format();
-        let plane0_stride = image_buf.plane_bytes_per_row(0);
-        let plane1_stride = image_buf.plane_bytes_per_row(1);
-
-        let bytes_lock =
-            ImageBufExt::base_addr_lock(image_buf.as_mut(), cv::pixel_buffer::LockFlags::READ_ONLY)
-                .map_err(AsFFmpegError::BaseAddrLock)?;
-
-        Ok(match pixel_format {
-            cv::PixelFormat::_420V => {
-                let mut ff_frame = ffmpeg::frame::Video::new(
-                    ffmpeg::format::Pixel::NV12,
-                    width as u32,
-                    height as u32,
-                );
-
-                let src_stride = plane0_stride;
-                let dest_stride = ff_frame.stride(0);
-
-                let src_bytes = bytes_lock.plane_data(0);
-                let dest_bytes = &mut ff_frame.data_mut(0);
-
-                for y in 0..height {
-                    let row_width = width;
-                    let src_row = &src_bytes[y * src_stride..y * src_stride + row_width];
-                    let dest_row = &mut dest_bytes[y * dest_stride..y * dest_stride + row_width];
-
-                    dest_row.copy_from_slice(src_row);
-                }
-
-                let src_stride = plane1_stride;
-                let dest_stride = ff_frame.stride(1);
-
-                let src_bytes = bytes_lock.plane_data(1);
-                let dest_bytes = &mut ff_frame.data_mut(1);
-
-                for y in 0..height / 2 {
-                    let row_width = width;
-                    let src_row = &src_bytes[y * src_stride..y * src_stride + row_width];
-                    let dest_row = &mut dest_bytes[y * dest_stride..y * dest_stride + row_width];
-
-                    dest_row.copy_from_slice(src_row);
-                }
-
-                ff_frame
-            }
-            cv::PixelFormat::_32_BGRA => {
-                let mut ff_frame = ffmpeg::frame::Video::new(
-                    ffmpeg::format::Pixel::BGRA,
-                    width as u32,
-                    height as u32,
-                );
-
-                let src_stride = plane0_stride;
-                let dest_stride = ff_frame.stride(0);
-
-                let src_bytes = bytes_lock.plane_data(0);
-                let dest_bytes = &mut ff_frame.data_mut(0);
-
-                for y in 0..height {
-                    let row_width = width * 4;
-                    let src_row = &src_bytes[y * src_stride..y * src_stride + row_width];
-                    let dest_row = &mut dest_bytes[y * dest_stride..y * dest_stride + row_width];
-
-                    dest_row.copy_from_slice(src_row);
-                }
-
-                ff_frame
-            }
-            format => return Err(AsFFmpegError::UnsupportedFormat(format)),
-        })
+        image_buf_as_ffmpeg(image_buf.retained())
     }
+}
+
+impl super::AsFFmpeg for cidre::cm::SampleBuf {
+    fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
+        let Some(image_buf) = self.image_buf() else {
+            return Err(AsFFmpegError::NoImageBuffer);
+        };
+        image_buf_as_ffmpeg(image_buf.retained())
+    }
+}
+
+fn image_buf_as_ffmpeg(
+    mut image_buf: cidre::arc::R<cv::ImageBuf>,
+) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
+    let width = image_buf.width();
+    let height = image_buf.height();
+    let pixel_format = image_buf.pixel_format();
+    let plane0_stride = image_buf.plane_bytes_per_row(0);
+    let plane1_stride = image_buf.plane_bytes_per_row(1);
+
+    let bytes_lock =
+        ImageBufExt::base_addr_lock(image_buf.as_mut(), cv::pixel_buffer::LockFlags::READ_ONLY)
+            .map_err(AsFFmpegError::BaseAddrLock)?;
+
+    Ok(match pixel_format {
+        cv::PixelFormat::_420V => {
+            let mut ff_frame =
+                ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width as u32, height as u32);
+
+            let src_stride = plane0_stride;
+            let dest_stride = ff_frame.stride(0);
+
+            let src_bytes = bytes_lock.plane_data(0);
+            let dest_bytes = &mut ff_frame.data_mut(0);
+
+            for y in 0..height {
+                let row_width = width;
+                let src_row = &src_bytes[y * src_stride..y * src_stride + row_width];
+                let dest_row = &mut dest_bytes[y * dest_stride..y * dest_stride + row_width];
+
+                dest_row.copy_from_slice(src_row);
+            }
+
+            let src_stride = plane1_stride;
+            let dest_stride = ff_frame.stride(1);
+
+            let src_bytes = bytes_lock.plane_data(1);
+            let dest_bytes = &mut ff_frame.data_mut(1);
+
+            for y in 0..height / 2 {
+                let row_width = width;
+                let src_row = &src_bytes[y * src_stride..y * src_stride + row_width];
+                let dest_row = &mut dest_bytes[y * dest_stride..y * dest_stride + row_width];
+
+                dest_row.copy_from_slice(src_row);
+            }
+
+            ff_frame
+        }
+        cv::PixelFormat::_32_BGRA => {
+            let mut ff_frame =
+                ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, width as u32, height as u32);
+
+            let src_stride = plane0_stride;
+            let dest_stride = ff_frame.stride(0);
+
+            let src_bytes = bytes_lock.plane_data(0);
+            let dest_bytes = &mut ff_frame.data_mut(0);
+
+            for y in 0..height {
+                let row_width = width * 4;
+                let src_row = &src_bytes[y * src_stride..y * src_stride + row_width];
+                let dest_row = &mut dest_bytes[y * dest_stride..y * dest_stride + row_width];
+
+                dest_row.copy_from_slice(src_row);
+            }
+
+            ff_frame
+        }
+        format => return Err(AsFFmpegError::UnsupportedFormat(format)),
+    })
 }
 
 pub trait ImageBufExt {
