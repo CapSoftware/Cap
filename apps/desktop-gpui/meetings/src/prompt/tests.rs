@@ -696,6 +696,43 @@ fn auto_record_never_hands_over_to_a_meeting_that_is_over() {
 }
 
 #[test]
+fn auto_record_never_hands_over_to_a_meeting_that_ends_during_the_countdown() {
+    // B (10 min .. 10 min + 3 s) is still on when A ends and the countdown
+    // starts, and over when it would fire.
+    for scheduled_enabled in [true, false] {
+        let mut s = Sim::with(PromptConfig {
+            scheduled_enabled,
+            auto_record: AutoRecord::Scheduled,
+            ..PromptConfig::default()
+        });
+        s.events(vec![
+            ev("a", "A", 0, 10 * MIN as i64, false),
+            ev("b", "B", 10 * MIN as i64, 3_000, false),
+        ]);
+        s.recording(RecordingState::Recording {
+            event_id: Some("a".into()),
+        });
+        s.take();
+        s.at(10 * MIN);
+        assert!(
+            s.take().iter().any(|(_, a)| a.contains("countdown 605000")),
+            "{scheduled_enabled}"
+        );
+        s.at(60 * MIN);
+        let log = s.take();
+        assert!(
+            log.iter().all(|(_, a)| !a.starts_with("record")),
+            "{scheduled_enabled} {log:?}"
+        );
+        assert!(
+            log.iter()
+                .any(|(t, a)| *t == 10 * MIN + 5_000 && a.ends_with("EventOver")),
+            "{scheduled_enabled} {log:?}"
+        );
+    }
+}
+
+#[test]
 fn auto_record_hands_over_to_a_meeting_still_running_when_the_recorded_one_ends() {
     // B (27..40 min) starts inside A (0..30 min): when A ends B takes over.
     let mut s = Sim::with(PromptConfig {

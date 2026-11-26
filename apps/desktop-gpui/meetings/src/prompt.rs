@@ -845,7 +845,17 @@ impl PromptPlanner {
             .iter()
             .position(|s| s.prompt.countdown.is_some_and(|c| c.ends_at <= now.mono))
         {
-            if self.recording.is_active() && !self.may_auto_start(now.wall) {
+            let slot = &self.slots[index];
+            let over = slot.prompt.kind == PromptKind::Scheduled
+                && slot
+                    .prompt
+                    .event
+                    .as_ref()
+                    .is_some_and(|e| e.end <= now.wall);
+            if over {
+                let id = slot.prompt.id;
+                self.remove(id, DismissReason::EventOver, &mut out);
+            } else if self.recording.is_active() && !self.may_auto_start(now.wall) {
                 let id = self.slots[index].prompt.id;
                 self.remove(id, DismissReason::RecordingStarted, &mut out);
             } else {
