@@ -925,33 +925,111 @@ index 0000000..f6f4e12
 +    }
 +}
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index c52fd34..a76fbd9 100644
+index c52fd34..d464afd 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
-@@ -342,6 +342,8 @@ pub(crate) struct WaylandClientState {
+@@ -342,6 +342,10 @@ pub(crate) struct WaylandClientState {
      vertical_modifier: f32,
      horizontal_modifier: f32,
      scroll_event_received: bool,
-+    continuous_scroll_active: bool,
++    vertical_scroll_active: bool,
++    horizontal_scroll_active: bool,
++    continuous_scroll_started: bool,
 +    scroll_axis_stopped: bool,
      enter_token: Option<()>,
      button_pressed: Option<MouseButton>,
      mouse_focused_window: Option<WaylandWindowStatePtr>,
-@@ -825,6 +827,8 @@ impl WaylandClient {
+@@ -825,6 +829,10 @@ impl WaylandClient {
              },
              capslock: Capslock { on: false },
              scroll_event_received: false,
-+            continuous_scroll_active: false,
++            vertical_scroll_active: false,
++            horizontal_scroll_active: false,
++            continuous_scroll_started: false,
 +            scroll_axis_stopped: false,
              axis_source: AxisSource::Wheel,
              mouse_location: None,
              continuous_scroll_delta: None,
-@@ -2286,18 +2290,66 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2037,10 +2045,20 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+             }
+             wl_pointer::Event::Leave { .. } => {
+                 if let Some(focused_window) = state.mouse_focused_window.clone() {
++                    let position = state.mouse_location.unwrap();
++                    let modifiers = state.modifiers;
++                    let cancel_scroll = state.continuous_scroll_started
++                        || state.vertical_scroll_active
++                        || state.horizontal_scroll_active;
++                    state.vertical_scroll_active = false;
++                    state.horizontal_scroll_active = false;
++                    state.continuous_scroll_started = false;
++                    state.scroll_axis_stopped = false;
++                    state.continuous_scroll_delta = None;
+                     let input = PlatformInput::MouseExited(MouseExitEvent {
+-                        position: state.mouse_location.unwrap(),
++                        position,
+                         pressed_button: state.button_pressed,
+-                        modifiers: state.modifiers,
++                        modifiers,
+                     });
+                     state.mouse_focused_window = None;
+                     state.mouse_location = None;
+@@ -2048,6 +2066,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+                     state.cursor_hidden_window = None;
+ 
+                     drop(state);
++                    if cancel_scroll {
++                        focused_window.handle_input(PlatformInput::ScrollWheel(ScrollWheelEvent {
++                            position,
++                            delta: ScrollDelta::Pixels(point(px(0.0), px(0.0))),
++                            modifiers,
++                            touch_phase: TouchPhase::Cancelled,
++                            ..Default::default()
++                        }));
++                    }
+                     focused_window.handle_input(input);
+                     focused_window.set_hovered(false);
+                 }
+@@ -2199,17 +2226,23 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+                 state.axis_source = axis_source;
+             }
+             wl_pointer::Event::Axis {
+-                axis: WEnum::Value(axis),
++                axis: WEnum::Value(raw_axis),
+                 value,
+                 ..
+             } => {
+                 if state.axis_source == AxisSource::Wheel {
+                     return;
+                 }
++                match raw_axis {
++                    wl_pointer::Axis::VerticalScroll => state.vertical_scroll_active = true,
++                    wl_pointer::Axis::HorizontalScroll => state.horizontal_scroll_active = true,
++                    _ => unreachable!(),
++                }
++                state.scroll_axis_stopped = false;
+                 let axis = if state.modifiers.shift {
+                     wl_pointer::Axis::HorizontalScroll
+                 } else {
+-                    axis
++                    raw_axis
+                 };
+                 let axis_modifier = match axis {
+                     wl_pointer::Axis::VerticalScroll => state.vertical_modifier,
+@@ -2286,18 +2319,74 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      _ => unreachable!(),
                  }
              }
-+            wl_pointer::Event::AxisStop { .. } => {
-+                if state.continuous_scroll_active {
++            wl_pointer::Event::AxisStop {
++                axis: WEnum::Value(raw_axis),
++                ..
++            } => {
++                let was_active = state.vertical_scroll_active || state.horizontal_scroll_active;
++                match raw_axis {
++                    wl_pointer::Axis::VerticalScroll => state.vertical_scroll_active = false,
++                    wl_pointer::Axis::HorizontalScroll => state.horizontal_scroll_active = false,
++                    _ => {}
++                }
++                if was_active && !state.vertical_scroll_active && !state.horizontal_scroll_active {
 +                    state.scroll_event_received = true;
 +                    state.scroll_axis_stopped = true;
 +                }
@@ -961,22 +1039,21 @@ index c52fd34..a76fbd9 100644
                      state.scroll_event_received = false;
                      let continuous = state.continuous_scroll_delta.take();
                      let discrete = state.discrete_scroll_delta.take();
-+                    let axis_stopped = state.scroll_axis_stopped;
++                    let all_stopped = state.scroll_axis_stopped
++                        && !state.vertical_scroll_active
++                        && !state.horizontal_scroll_active;
 +                    state.scroll_axis_stopped = false;
                      if let Some(continuous) = continuous {
 -                        if let Some(window) = state.mouse_focused_window.clone() {
-+                        let touch_phase = if state.continuous_scroll_active {
++                        let touch_phase = if state.continuous_scroll_started {
 +                            TouchPhase::Moved
 +                        } else {
-+                            state.continuous_scroll_active = true;
++                            state.continuous_scroll_started = true;
 +                            TouchPhase::Started
 +                        };
-+                        let stop_after = if axis_stopped {
-+                            state.continuous_scroll_active = false;
-+                            true
-+                        } else {
-+                            false
-+                        };
++                        if all_stopped {
++                            state.continuous_scroll_started = false;
++                        }
 +                        if let Some(window) = state.mouse_focused_window.clone()
 +                            && let Some(position) = state.mouse_location
 +                        {
@@ -991,7 +1068,7 @@ index c52fd34..a76fbd9 100644
 +                            });
 +                            drop(state);
 +                            window.handle_input(input);
-+                            if stop_after {
++                            if all_stopped {
 +                                window.handle_input(PlatformInput::ScrollWheel(ScrollWheelEvent {
 +                                    position,
 +                                    delta: ScrollDelta::Pixels(point(px(0.0), px(0.0))),
@@ -1001,8 +1078,8 @@ index c52fd34..a76fbd9 100644
 +                                }));
 +                            }
 +                        }
-+                    } else if axis_stopped {
-+                        state.continuous_scroll_active = false;
++                    } else if all_stopped {
++                        state.continuous_scroll_started = false;
 +                        if let Some(window) = state.mouse_focused_window.clone()
 +                            && let Some(position) = state.mouse_location
 +                        {
@@ -1016,7 +1093,7 @@ index c52fd34..a76fbd9 100644
                              });
                              drop(state);
                              window.handle_input(input);
-@@ -2310,6 +2362,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2310,6 +2399,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                              delta: ScrollDelta::Lines(discrete),
                              modifiers: state.modifiers,
                              touch_phase: TouchPhase::Moved,
