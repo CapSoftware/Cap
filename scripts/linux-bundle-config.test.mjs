@@ -50,6 +50,10 @@ test("AppImage includes the system-audio control tool without a webview media fr
 		appimage.files["/usr/lib/cap/alsa-pulse.conf"],
 		"../../packaging/linux/alsa-pulse.conf",
 	);
+	assert.equal(
+		appimage.files["/usr/lib/cap/alsa-pulse-appimage.conf"],
+		"../../packaging/linux/alsa-pulse-appimage.conf",
+	);
 	assert.equal(deb.files["/usr/lib/cap/alsa-pulse.conf"], undefined);
 	assert.equal(
 		Object.keys(deb.files).some((file) => file.includes("alsa")),

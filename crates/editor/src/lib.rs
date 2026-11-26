@@ -27,6 +27,8 @@ pub use audio::{
 pub use audio_levels::compute_audio_levels;
 #[cfg(feature = "test-hooks")]
 pub use audio_output::OfflineAudioSink;
+#[cfg(target_os = "linux")]
+pub use audio_output::set_linux_output;
 pub use audio_output::{
     AudioOutput, HEADLESS_BLOCK_FRAMES, HEADLESS_CHANNELS, HEADLESS_SAMPLE_RATE, HeadlessAudioTap,
     PlaySpec,
