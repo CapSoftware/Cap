@@ -61,6 +61,9 @@ mod overlay_layers;
 mod project_recordings;
 mod readiness;
 mod recorded_cursor_assets;
+pub mod redaction;
+#[cfg(test)]
+mod redaction_render_tests;
 mod scene;
 pub mod screen_enhance;
 #[cfg(test)]
@@ -1383,7 +1386,12 @@ pub async fn render_video_to_channel(
                 zoom_timeline,
                 precomputed_cursor,
             )
-            .with_quality(RenderQuality::Export);
+            .with_quality(RenderQuality::Export)
+            .with_redaction(
+                constants,
+                segment.recording_clip,
+                segment_frames.segment_time,
+            );
 
             let mut next_prefetch_meta: Option<(u32, f64, usize)> = None;
             let prefetch_future = if let Some(next_frame_number) = next_frame
@@ -1993,7 +2001,12 @@ pub async fn render_video_to_channel_nv12(
                 zoom_timeline,
                 precomputed_cursor,
             )
-            .with_quality(RenderQuality::Export);
+            .with_quality(RenderQuality::Export)
+            .with_redaction(
+                constants,
+                segment.recording_clip,
+                segment_frames.segment_time,
+            );
 
             let mut next_prefetch_meta: Option<(u32, f64, usize)> = None;
             let prefetch_future = if let Some(next_frame_number) = next_frame
@@ -2587,7 +2600,12 @@ async fn render_transition_rgba(
         &context.outgoing_zoom_timelines[outgoing_clip_index],
         &context.precomputed_cursor_timelines[outgoing_clip_index],
     )
-    .with_quality(RenderQuality::Export);
+    .with_quality(RenderQuality::Export)
+    .with_redaction(
+        context.constants,
+        outgoing.segment.recording_clip,
+        outgoing_frames.segment_time,
+    );
 
     frame_renderer
         .render_transition(
@@ -2647,7 +2665,12 @@ async fn render_transition_nv12_export(
         &context.outgoing_zoom_timelines[outgoing_clip_index],
         &context.precomputed_cursor_timelines[outgoing_clip_index],
     )
-    .with_quality(RenderQuality::Export);
+    .with_quality(RenderQuality::Export)
+    .with_redaction(
+        context.constants,
+        outgoing.segment.recording_clip,
+        outgoing_frames.segment_time,
+    );
 
     frame_renderer
         .render_transition_nv12(
@@ -2853,6 +2876,9 @@ pub struct RenderVideoConstants {
     /// Loudness envelope an audio-only recording's visualiser draws from. Set
     /// once it is computed; until then the visualiser rests flat.
     audio_levels: std::sync::RwLock<Option<Arc<AudioLevels>>>,
+    /// Auto redact detections, loaded from the project when first needed or
+    /// set by the editor while analysis runs.
+    pub redactions: redaction::RedactionStore,
 }
 
 /// Instance, adapter and device the way every renderer creates them. A
@@ -3134,6 +3160,7 @@ impl RenderVideoConstants {
             project_styles: ProjectStyleCache::default(),
             camera_picture: Default::default(),
             audio_levels: Default::default(),
+            redactions: Default::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         })
@@ -3167,6 +3194,7 @@ impl RenderVideoConstants {
             project_styles: ProjectStyleCache::default(),
             camera_picture: Default::default(),
             audio_levels: Default::default(),
+            redactions: Default::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         }
@@ -3231,6 +3259,7 @@ impl RenderVideoConstants {
             project_styles: ProjectStyleCache::default(),
             camera_picture: Default::default(),
             audio_levels: Default::default(),
+            redactions: Default::default(),
             is_software_adapter,
             adapter_name,
         })
@@ -3503,6 +3532,8 @@ pub struct ProjectUniforms {
     /// enhances.
     pub screen_enhance: ScreenEnhanceFrame,
     pub quality: RenderQuality,
+    /// Auto redact regions hidden on this frame's display, in source space.
+    pub redaction: Option<redaction::RedactionFrame>,
 }
 
 fn cursor_time_for_interpolation(time: f32, stop_time: Option<f32>) -> f32 {
@@ -4050,9 +4081,45 @@ pub(crate) struct DisplayLayout {
     pub content_size: XY<f64>,
 }
 
+/// Seconds from a recording clip's segment time to its display video's own
+/// timestamps: decoders read the display at `segment_time + offset`.
+pub fn display_video_offset(meta: &StudioRecordingMeta, recording_clip: usize) -> f64 {
+    let clips = match meta {
+        StudioRecordingMeta::SingleSegment { .. } => 1,
+        StudioRecordingMeta::MultipleSegments { inner, .. } => inner.segments.len(),
+    };
+    if recording_clip >= clips {
+        return 0.0;
+    }
+    segment_timing::segment_video_timing(meta, recording_clip).screen_offset
+}
+
 impl ProjectUniforms {
     pub fn with_quality(mut self, quality: RenderQuality) -> Self {
         self.quality = quality;
+        self
+    }
+
+    /// Adds the auto redact regions of recording `recording_clip` at
+    /// `segment_time` (seconds into its display video). Call after
+    /// [`Self::with_quality`]: only previews outline selected detections.
+    pub fn with_redaction(
+        mut self,
+        constants: &RenderVideoConstants,
+        recording_clip: u32,
+        segment_time: f32,
+    ) -> Self {
+        if self.project.auto_redact.enabled {
+            let video_time = f64::from(segment_time)
+                + display_video_offset(&constants.meta, recording_clip as usize);
+            self.redaction = constants.redactions.frame(
+                &self.project.auto_redact,
+                &constants.recording_meta.project_path,
+                recording_clip,
+                video_time,
+                !matches!(self.quality, RenderQuality::Export),
+            );
+        }
         self
     }
 
@@ -6069,6 +6136,7 @@ impl ProjectUniforms {
             screen_color_grade,
             screen_enhance,
             quality: RenderQuality::Playback,
+            redaction: None,
         }
     }
 }
@@ -7497,6 +7565,7 @@ mod style_image_tests {
             project_styles: ProjectStyleCache::default(),
             camera_picture: Default::default(),
             audio_levels: Default::default(),
+            redactions: Default::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: false,
         };
@@ -7898,6 +7967,7 @@ mod export_order_tests {
             project_styles: ProjectStyleCache::default(),
             camera_picture: Default::default(),
             audio_levels: Default::default(),
+            redactions: Default::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: is_software_adapter || software_path,
         })
@@ -8240,6 +8310,7 @@ mod nv12_flush_tests {
             project_styles: ProjectStyleCache::default(),
             camera_picture: Default::default(),
             audio_levels: Default::default(),
+            redactions: Default::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter,
         })
@@ -9708,6 +9779,7 @@ impl RendererLayers {
                 .prepare(&constants.device, &constants.queue, uniforms.notch);
             self.display
                 .set_enhancement(uniforms.display_enhancement(constants.is_software_adapter));
+            self.display.set_redaction(uniforms.redaction.clone());
             self.display.prepare(
                 &constants.device,
                 &constants.queue,
@@ -9879,6 +9951,7 @@ impl RendererLayers {
                 .prepare(&constants.device, &constants.queue, uniforms.notch);
             self.display
                 .set_enhancement(uniforms.display_enhancement(constants.is_software_adapter));
+            self.display.set_redaction(uniforms.redaction.clone());
             let display_ready = self.display.prepare_with_encoder(
                 &constants.device,
                 &constants.queue,
@@ -10116,6 +10189,7 @@ impl RendererLayers {
         if parts.content {
             if render_display {
                 self.display.copy_to_texture(encoder);
+                self.display.encode_redaction(device, queue, encoder);
                 self.display.encode_enhancement(device, queue, encoder);
             }
             self.camera.copy_to_texture(encoder);

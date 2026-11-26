@@ -1347,6 +1347,11 @@ impl Playback {
                         duration,
                         zoom_ref,
                         precomputed_cursor,
+                    )
+                    .with_redaction(
+                        &self.render_constants,
+                        segment_index,
+                        segment_frames.segment_time,
                     );
                     let uniforms_duration = uniforms_start.elapsed();
                     let submit_start = Instant::now();
@@ -1372,6 +1377,11 @@ impl Playback {
                             duration,
                             outgoing_zoom,
                             &cursor_timelines[outgoing_index as usize],
+                        )
+                        .with_redaction(
+                            &self.render_constants,
+                            outgoing_index,
+                            outgoing_frames.segment_time,
                         );
                         self.renderer.render_transition_frame_wait(
                             editor::RendererTransitionInput {
@@ -2071,6 +2081,11 @@ impl Playback {
                         duration,
                         zoom_ref,
                         precomputed_cursor,
+                    )
+                    .with_redaction(
+                        &self.render_constants,
+                        segment_index,
+                        segment_frames.segment_time,
                     );
                     let uniforms_duration = uniforms_start.elapsed();
                     let submit_start = Instant::now();
@@ -2093,6 +2108,11 @@ impl Playback {
                             duration,
                             &outgoing_zoom_timelines[outgoing_index as usize],
                             &cursor_timelines[outgoing_index as usize],
+                        )
+                        .with_redaction(
+                            &self.render_constants,
+                            outgoing_index,
+                            outgoing_frames.segment_time,
                         );
                         self.renderer.render_transition_frame(
                             editor::RendererTransitionInput {

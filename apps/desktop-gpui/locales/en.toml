@@ -3532,6 +3532,35 @@ split = "Split clips at markers"
 stack = { one = "{count} marker. Click to see it.", other = "{count} markers close together. Click to see them." }
 title = "Markers"
 
+[editor.redact]
+body = "Finds private details on screen, like emails and keys, and hides them. Runs on this computer, so nothing is uploaded."
+category_address = "Street addresses"
+category_card = "Card and bank numbers"
+category_email = "Email addresses"
+category_ip = "IP addresses"
+category_name = "Names"
+category_phone = "Phone numbers"
+category_secret = "Passwords, keys and tokens"
+category_url = "Links"
+chip = "Redact"
+export_failed = "Auto redact couldn't scan this recording. Turn it off or try again before exporting."
+export_screen_track = "The screen track can't be exported on its own while Auto redact is on."
+export_wait = "Auto redact is still scanning. Export when it finishes."
+failed = "Couldn't scan this recording"
+hidden = { one = "{count} item hidden", other = "{count} items hidden" }
+hide = "Hide"
+keep = "Keep visible"
+kept = "Visible"
+lane = "Redact"
+nothing = "Nothing to hide"
+panel_empty = "Nothing is hidden here."
+panel_title = "Hidden here"
+preparing = "Getting ready"
+scanning = { text = "Scanning {percent}%", context = "{percent} is a whole number from 0 to 100." }
+style_blur = "Blur"
+style_pixelate = "Pixelate"
+title = "Auto redact"
+
 [ui]
 coming_soon = "Coming Soon"
 

@@ -193,6 +193,7 @@ pub mod track_color {
     pub const SCENE: u32 = 0x5e6f12;
     pub const AUDIO: u32 = 0x1b7940;
     pub const THREE_D: u32 = 0xbe3b69;
+    pub const REDACT: u32 = 0x4f4f86;
     pub const MUTED: u32 = 0x5f606a;
 }
 
@@ -1048,6 +1049,9 @@ pub enum TrackKind {
     Zoom,
     ThreeD,
     Scene,
+    /// Where auto redact hides something; read-only, one row for every
+    /// detection.
+    Redact,
 }
 
 impl TrackKind {
@@ -1068,6 +1072,7 @@ impl TrackKind {
             Self::Zoom => tr::editor::timeline::track::zoom(),
             Self::ThreeD => "3D",
             Self::Scene => tr::editor::timeline::track::scene(),
+            Self::Redact => tr::editor::redact::lane(),
         }
     }
 
@@ -1085,6 +1090,7 @@ impl TrackKind {
             Self::Zoom => "icons/search.svg",
             Self::ThreeD => "icons/rotate-3d.svg",
             Self::Scene => "icons/video.svg",
+            Self::Redact => "icons/eye-off.svg",
         }
     }
 
@@ -1102,6 +1108,7 @@ impl TrackKind {
             Self::Zoom => track_color::ZOOM,
             Self::ThreeD => track_color::THREE_D,
             Self::Scene => track_color::SCENE,
+            Self::Redact => track_color::REDACT,
         })
         .into()
     }
@@ -1127,6 +1134,7 @@ impl TrackKind {
             Self::Audio => tr::editor::timeline::picker::audio(),
             Self::Scene => tr::editor::timeline::picker::scene(),
             Self::ThreeD => tr::editor::timeline::picker::three_d(),
+            Self::Redact => tr::editor::redact::body(),
         }
     }
 
@@ -1146,6 +1154,7 @@ impl TrackKind {
             Self::Zoom => tr::editor::timeline::remove::zoom(),
             Self::ThreeD => tr::editor::timeline::remove::three_d(),
             Self::Scene => tr::editor::timeline::remove::scene(),
+            Self::Redact => tr::editor::redact::lane(),
         }
     }
 
@@ -1196,6 +1205,7 @@ pub struct TrackLanes {
     pub keyboard: bool,
     pub scene: bool,
     pub three_d: bool,
+    pub redact: bool,
     pub text: u32,
     pub shape: u32,
     pub mask: u32,
@@ -1234,6 +1244,7 @@ impl TrackLanes {
                 .is_some_and(|keyboard| keyboard.settings.enabled),
             scene: scene_available(config, has_camera),
             three_d: timeline.is_some_and(|timeline| !timeline.camera3d_segments.is_empty()),
+            redact: config.auto_redact.enabled,
             text: timeline.map_or(0, |timeline| {
                 used_config_lane_count(timeline.text_segments.iter().map(|segment| segment.track))
             }),
@@ -1261,6 +1272,7 @@ impl TrackLanes {
             TrackKind::Shape => self.shape > 0,
             TrackKind::Mask => self.mask > 0,
             TrackKind::Audio => self.audio > 0,
+            TrackKind::Redact => self.redact,
             TrackKind::Clip | TrackKind::Zoom => true,
         }
     }
@@ -1341,6 +1353,10 @@ pub enum SegmentDetail {
     /// `TL/SceneTrack.tsx:80-102`.
     Scene {
         mode: SceneMode,
+    },
+    /// How many detections the span hides.
+    Redact {
+        count: u32,
     },
     /// A 3D shot, named by the look it is sitting on (`camera3d_shot_label`).
     ThreeD {
@@ -1455,6 +1471,9 @@ pub struct TimelineModel {
     pub audio: Vec<Segment>,
     pub caption: Vec<Segment>,
     pub keyboard: Vec<Segment>,
+    /// Spans where auto redact hides something, built from its detections
+    /// by [`TimelineModel::set_redact`].
+    pub redact: Vec<Segment>,
     /// `clipTimelineOffsets` (`ED/clip-transitions.ts:91-106`) -- where each
     /// clip's box starts in output time, transitions subtracted.
     pub clip_boundaries: Vec<f64>,
@@ -1524,6 +1543,7 @@ impl TimelineModel {
             TrackKind::Zoom => &self.zoom,
             TrackKind::ThreeD => &self.three_d,
             TrackKind::Scene => &self.scene,
+            TrackKind::Redact => &self.redact,
         }
     }
 
@@ -1785,6 +1805,7 @@ impl TimelineModel {
             audio,
             caption,
             keyboard,
+            redact: Vec::new(),
             clip_boundaries: offsets,
             total_duration,
             mic_volume_db: config.audio.mic_volume_db as f64,
@@ -1846,6 +1867,12 @@ fn build_rows(
         kind: TrackKind::Clip,
         lane: 0,
     }];
+    if lanes.redact && config.auto_redact.enabled {
+        rows.push(TrackRow {
+            kind: TrackKind::Redact,
+            lane: 0,
+        });
+    }
     if lanes.caption {
         rows.push(TrackRow {
             kind: TrackKind::Caption,
@@ -1917,6 +1944,106 @@ fn lane_count(segments: &[Segment]) -> u32 {
         .map(|segment| segment.lane + 1)
         .max()
         .unwrap_or(0)
+}
+
+/// Every detection's time on the timeline: each region's source interval is
+/// placed through every clip that shows that part of its recording, at the
+/// clip's speed and past any holds.
+///
+/// `video_offsets[clip]` is how far the clip's display video timestamps run
+/// ahead of its segment time (see `cap_rendering::display_video_offset`);
+/// detections are stamped in video time.
+pub fn redact_region_spans<'a>(
+    config: &ProjectConfiguration,
+    redactions: &'a cap_project::redaction::Redactions,
+    video_offsets: &[f64],
+) -> Vec<(f64, f64, &'a cap_project::redaction::RedactionRegion)> {
+    let Some(timeline) = config.timeline.as_ref() else {
+        return Vec::new();
+    };
+    let offsets = clip_timeline_offsets(timeline);
+    let holds = timeline.hold_windows();
+    let mut spans = Vec::new();
+    for (index, segment) in timeline.segments.iter().enumerate() {
+        let scale = if segment.timescale > 0.0 {
+            segment.timescale
+        } else {
+            1.0
+        };
+        for region in redactions
+            .regions
+            .iter()
+            .filter(|region| region.segment == segment.recording_clip)
+        {
+            let offset = video_offsets
+                .get(segment.recording_clip as usize)
+                .copied()
+                .unwrap_or(0.0);
+            let start = (region.start - offset).max(segment.start);
+            let end = (region.end - offset).min(segment.end);
+            if end <= start {
+                continue;
+            }
+            let output_start =
+                effective_to_output(&holds, offsets[index] + (start - segment.start) / scale);
+            let output_end =
+                effective_to_output(&holds, offsets[index] + (end - segment.start) / scale);
+            spans.push((output_start, output_end, region));
+        }
+    }
+    spans
+}
+
+impl TimelineModel {
+    /// Rebuilds the redact row: the timeline spans where any detection the
+    /// settings hide is on screen, joined across short gaps.
+    pub fn set_redact(
+        &mut self,
+        config: &ProjectConfiguration,
+        redactions: Option<&cap_project::redaction::Redactions>,
+        video_offsets: &[f64],
+    ) {
+        self.redact.clear();
+        let Some(redactions) = redactions else {
+            return;
+        };
+        if !config.auto_redact.enabled {
+            return;
+        }
+        let settings = &config.auto_redact;
+        // Kept (visible) detections stay on the lane so their span can still
+        // be selected to hide them again; the label counts what is hidden.
+        let mut spans = redact_region_spans(config, redactions, video_offsets)
+            .into_iter()
+            .filter(|(_, _, region)| settings.has_category(region.category))
+            .map(|(start, end, region)| (start, end, region.id.as_str()))
+            .collect::<Vec<_>>();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        const JOIN: f64 = 0.4;
+        let mut merged: Vec<(f64, f64, Vec<&str>)> = Vec::new();
+        for (start, end, id) in spans {
+            match merged.last_mut() {
+                Some(last) if start <= last.1 + JOIN => {
+                    last.1 = last.1.max(end);
+                    if !last.2.contains(&id) {
+                        last.2.push(id);
+                    }
+                }
+                _ => merged.push((start, end, vec![id])),
+            }
+        }
+        self.redact = merged
+            .into_iter()
+            .map(|(start, end, ids)| Segment {
+                start,
+                end,
+                lane: 0,
+                detail: SegmentDetail::Redact {
+                    count: ids.iter().filter(|id| !settings.is_excluded(id)).count() as u32,
+                },
+            })
+            .collect();
+    }
 }
 
 /// `clipTimelineOffsets` (`ED/clip-transitions.ts:91-106`): each transition
@@ -4501,6 +4628,18 @@ fn label_body(
             label_glyph(theme, color, scene_icon(*mode), 12.)
         }
 
+        // -- Redact: what the span hides --------------------------------
+        (SegmentDetail::Redact { count }, LabelTier::Full) => label_row()
+            .child(label_primary(theme, color).child(tr::editor::redact::lane()))
+            .child(label_secondary(theme, color).child(count.to_string()))
+            .into_any_element(),
+        (SegmentDetail::Redact { count }, LabelTier::Compact) => label_row()
+            .child(label_primary(theme, color).child(count.to_string()))
+            .into_any_element(),
+        (SegmentDetail::Redact { .. }, LabelTier::Glyph) => {
+            label_glyph(theme, color, "icons/eye-off.svg", 12.)
+        }
+
         // -- 3D: the look's own name, then how long it runs ---------------
         (SegmentDetail::ThreeD { look }, LabelTier::Full) => label_row()
             .child(label_primary(theme, color).child(*look))
@@ -4773,6 +4912,76 @@ pub fn wheel_zoom_delta(dom_delta_y: f64, zoom: f64) -> f64 {
 mod tests {
     use super::*;
 
+    fn redact_region(id: &str, start: f64, end: f64) -> cap_project::redaction::RedactionRegion {
+        cap_project::redaction::RedactionRegion {
+            id: id.into(),
+            segment: 0,
+            category: cap_project::RedactCategory::Email,
+            start,
+            end,
+            keys: vec![cap_project::redaction::RedactionKey {
+                t: start,
+                x: 0.1,
+                y: 0.1,
+                w: 0.2,
+                h: 0.03,
+            }],
+        }
+    }
+
+    /// A detection's video time lands on the timeline through every clip that
+    /// shows it, at the clip's speed, after the display's start offset.
+    #[test]
+    fn redact_spans_follow_cuts_speed_and_video_offset() {
+        let mut config = ProjectConfiguration::default();
+        config.auto_redact.enabled = true;
+        config.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                    { "recordingSegment": 0, "timescale": 2.0, "start": 10.0, "end": 14.0 }
+                ],
+                "zoomSegments": []
+            }))
+            .unwrap(),
+        );
+        let redactions = cap_project::redaction::Redactions {
+            version: cap_project::redaction::REDACTIONS_VERSION,
+            regions: vec![
+                redact_region("a", 1.5, 2.5),
+                redact_region("b", 11.5, 12.5),
+                redact_region("cut", 6.0, 8.0),
+            ],
+            ..Default::default()
+        };
+        let spans = redact_region_spans(&config, &redactions, &[0.5]);
+        let found = spans
+            .iter()
+            .map(|(s, e, r)| {
+                (
+                    r.id.as_str(),
+                    (s * 1000.0).round() / 1000.0,
+                    (e * 1000.0).round() / 1000.0,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(found, vec![("a", 1.0, 2.0), ("b", 4.5, 5.0)]);
+
+        let mut model = TimelineModel::build(&config, false, false);
+        model.set_redact(&config, Some(&redactions), &[0.5]);
+        assert_eq!(model.redact.len(), 2);
+        config.auto_redact.excluded.push("a".into());
+        model.set_redact(&config, Some(&redactions), &[0.5]);
+        assert_eq!(model.redact.len(), 2);
+        assert!(matches!(
+            model.redact[0].detail,
+            SegmentDetail::Redact { count: 0 }
+        ));
+        config.auto_redact.enabled = false;
+        model.set_redact(&config, Some(&redactions), &[0.5]);
+        assert!(model.redact.is_empty());
+    }
+
     #[test]
     fn every_track_label_and_value_reads_at_aa_contrast_in_both_themes() {
         use crate::theme::{EditorPalette, mix, relative_luminance};
@@ -4793,6 +5002,7 @@ mod tests {
             track_color::SCENE,
             track_color::AUDIO,
             track_color::THREE_D,
+            track_color::REDACT,
         ];
         for palette in [EditorPalette::light(), EditorPalette::dark()] {
             let colors = tracks

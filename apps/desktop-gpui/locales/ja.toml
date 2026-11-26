@@ -3530,6 +3530,35 @@ split = "マーカー位置でクリップを分割"
 stack = { other = "{count}件のマーカーが近接しています。クリックで表示します。" }
 title = "マーカー"
 
+[editor.redact]
+body = "メールアドレスやキーなど、画面上の個人情報を見つけて隠します。このコンピューター上で処理され、何もアップロードされません。"
+category_address = "住所"
+category_card = "カード番号と口座番号"
+category_email = "メールアドレス"
+category_ip = "IPアドレス"
+category_name = "名前"
+category_phone = "電話番号"
+category_secret = "パスワード、キー、トークン"
+category_url = "リンク"
+chip = "隠す"
+export_failed = "この録画をスキャンできませんでした。書き出す前に、機能をオフにするか、もう一度お試しください。"
+export_screen_track = "自動で隠す機能がオンの間は、画面トラックだけを書き出すことはできません。"
+export_wait = "自動で隠す機能がまだスキャン中です。完了してから書き出してください。"
+failed = "この録画をスキャンできませんでした"
+hidden = { other = "{count}件を非表示" }
+hide = "隠す項目"
+keep = "表示したままにする"
+kept = "表示中"
+lane = "非表示"
+nothing = "隠すものはありません"
+panel_empty = "ここで隠しているものはありません。"
+panel_title = "ここで隠しているもの"
+preparing = "準備中"
+scanning = "スキャン中 {percent}%"
+style_blur = "ぼかし"
+style_pixelate = "モザイク"
+title = "自動で隠す"
+
 [ui]
 coming_soon = "近日公開"
 

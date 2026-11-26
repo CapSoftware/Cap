@@ -1,0 +1,48 @@
+[package]
+name = "cap-redact"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "cap-redact"
+path = "src/main.rs"
+
+[features]
+# Reads CAP_REDACT_OFF to turn scan mechanisms off for measurement. Never
+# enabled by the app.
+ablation = []
+
+[dependencies]
+anyhow.workspace = true
+bytemuck = { version = "1.7", features = ["derive"] }
+cap-camera-effects = { path = "../camera-effects" }
+cap-project = { path = "../project" }
+cap-video-decode = { path = "../video-decode" }
+ffmpeg.workspace = true
+pollster = "0.4.0"
+regex = "1.11"
+serde = { workspace = true }
+serde_json = "1.0"
+sysinfo.workspace = true
+tracing.workspace = true
+tracing-subscriber = "0.3.19"
+wgpu.workspace = true
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-23"] }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))'.dependencies]
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "coreml", "api-23"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "directml", "api-23"] }
+
+[dev-dependencies]
+tempfile = "3"

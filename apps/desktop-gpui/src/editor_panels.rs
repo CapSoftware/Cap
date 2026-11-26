@@ -4400,6 +4400,7 @@ impl EditorWindow {
                         .into_any_element()
                 }
             }
+            TrackKind::Redact => self.render_redact_panel(selection, cx),
             // A clip selection never reaches here -- `sidebarSelection()`
             // filters it out.
             TrackKind::Clip => div().into_any_element(),

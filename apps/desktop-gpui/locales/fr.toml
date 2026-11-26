@@ -3530,6 +3530,35 @@ split = "Couper les clips aux repères"
 stack = { one = "{count} repère. Cliquez pour le voir.", other = "{count} repères rapprochés. Cliquez pour les voir." }
 title = "Repères"
 
+[editor.redact]
+body = "Repère les informations privées à l'écran, comme les e-mails et les clés, et les masque. Tout se fait sur cet ordinateur, rien n'est envoyé."
+category_address = "Adresses postales"
+category_card = "Numéros de carte et bancaires"
+category_email = "Adresses e-mail"
+category_ip = "Adresses IP"
+category_name = "Noms"
+category_phone = "Numéros de téléphone"
+category_secret = "Mots de passe, clés et jetons"
+category_url = "Liens"
+chip = "Masquer"
+export_failed = "Le masquage automatique n'a pas pu analyser cet enregistrement. Désactivez-le ou réessayez avant d'exporter."
+export_screen_track = "La piste d'écran ne peut pas être exportée seule quand le masquage automatique est activé."
+export_wait = "Le masquage automatique analyse encore. Exportez une fois terminé."
+failed = "Impossible d'analyser cet enregistrement"
+hidden = { one = "{count} élément masqué", many = "{count} d'éléments masqués", other = "{count} éléments masqués" }
+hide = "Masquer"
+keep = "Laisser visible"
+kept = "Visible"
+lane = "Masquage"
+nothing = "Rien à masquer"
+panel_empty = "Rien n'est masqué ici."
+panel_title = "Masqué ici"
+preparing = "Préparation"
+scanning = "Analyse {percent} %"
+style_blur = "Flou"
+style_pixelate = "Pixeliser"
+title = "Masquage automatique"
+
 [ui]
 coming_soon = "Bientôt disponible"
 

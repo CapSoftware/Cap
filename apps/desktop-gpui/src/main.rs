@@ -98,6 +98,7 @@ mod presets;
 mod project_save;
 mod recording;
 mod recordings_overlay;
+mod redact;
 mod screenshot;
 mod screenshot_annotations;
 mod screenshot_crop;

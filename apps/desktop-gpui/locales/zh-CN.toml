@@ -3530,6 +3530,35 @@ split = "在标记处拆分片段"
 stack = { other = "{count} 个标记距离很近。点击查看。" }
 title = "标记"
 
+[editor.redact]
+body = "找出屏幕上的私人信息（如邮箱和密钥）并将其隐藏。在这台电脑上运行，不会上传任何内容。"
+category_address = "街道地址"
+category_card = "卡号和银行账号"
+category_email = "邮箱地址"
+category_ip = "IP 地址"
+category_name = "姓名"
+category_phone = "电话号码"
+category_secret = "密码、密钥和令牌"
+category_url = "链接"
+chip = "打码"
+export_failed = "自动打码无法扫描此录制。请先关闭或重试，然后再导出。"
+export_screen_track = "开启自动打码时，无法单独导出屏幕轨道。"
+export_wait = "自动打码仍在扫描。请在完成后导出。"
+failed = "无法扫描此录制"
+hidden = { other = "已隐藏 {count} 项" }
+hide = "隐藏"
+keep = "保持可见"
+kept = "可见"
+lane = "打码"
+nothing = "没有需要隐藏的内容"
+panel_empty = "这里没有隐藏内容。"
+panel_title = "此处隐藏的内容"
+preparing = "正在准备"
+scanning = "正在扫描 {percent}%"
+style_blur = "模糊"
+style_pixelate = "像素化"
+title = "自动打码"
+
 [ui]
 coming_soon = "即将推出"
 

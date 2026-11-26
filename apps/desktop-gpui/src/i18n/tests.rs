@@ -27,6 +27,43 @@ fn english_matches_the_literals_it_replaced() {
         (tr::editor::audio_only::style_wave(), "Wave".into()),
         (tr::editor::audio_only::title(), "Audio only".into()),
         (tr::editor::audio_only::visuals(), "Visuals".into()),
+        (
+            tr::editor::redact::body(),
+            "Finds private details on screen, like emails and keys, and hides them. Runs on this computer, so nothing is uploaded.".into(),
+        ),
+        (tr::editor::redact::category_address(), "Street addresses".into()),
+        (tr::editor::redact::category_card(), "Card and bank numbers".into()),
+        (tr::editor::redact::category_email(), "Email addresses".into()),
+        (tr::editor::redact::category_ip(), "IP addresses".into()),
+        (tr::editor::redact::category_name(), "Names".into()),
+        (tr::editor::redact::category_phone(), "Phone numbers".into()),
+        (tr::editor::redact::category_secret(), "Passwords, keys and tokens".into()),
+        (tr::editor::redact::category_url(), "Links".into()),
+        (tr::editor::redact::chip(), "Redact".into()),
+        (tr::editor::redact::failed(), "Couldn't scan this recording".into()),
+        (
+            tr::editor::redact::export_failed(),
+            "Auto redact couldn't scan this recording. Turn it off or try again before exporting.".into(),
+        ),
+        (
+            tr::editor::redact::export_screen_track(),
+            "The screen track can't be exported on its own while Auto redact is on.".into(),
+        ),
+        (
+            tr::editor::redact::export_wait(),
+            "Auto redact is still scanning. Export when it finishes.".into(),
+        ),
+        (tr::editor::redact::hide(), "Hide".into()),
+        (tr::editor::redact::keep(), "Keep visible".into()),
+        (tr::editor::redact::kept(), "Visible".into()),
+        (tr::editor::redact::lane(), "Redact".into()),
+        (tr::editor::redact::nothing(), "Nothing to hide".into()),
+        (tr::editor::redact::panel_empty(), "Nothing is hidden here.".into()),
+        (tr::editor::redact::panel_title(), "Hidden here".into()),
+        (tr::editor::redact::preparing(), "Getting ready".into()),
+        (tr::editor::redact::style_blur(), "Blur".into()),
+        (tr::editor::redact::style_pixelate(), "Pixelate".into()),
+        (tr::editor::redact::title(), "Auto redact".into()),
         (tr::common::cancel(), "Cancel".into()),
         (tr::common::ok(), "OK".into()),
         (tr::common::reset(), "Reset".into()),
@@ -543,8 +580,9 @@ fn english_matches_the_literals_it_replaced() {
         })
         .count()
         // `tray.version`, `excluded_windows.missing_body`, `self_host.confirm_change`,
-        // `menu.update.badge_progress` and `menu.update.badge_version` take arguments.
-        - 5;
+        // `menu.update.badge_progress`, `menu.update.badge_version`,
+        // `editor.redact.hidden` and `editor.redact.scanning` take arguments.
+        - 7;
     assert_eq!(
         pairs.len(),
         plain_keys,

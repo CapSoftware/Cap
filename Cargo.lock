@@ -1686,6 +1686,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-redact"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "cap-camera-effects",
+ "cap-project",
+ "cap-video-decode",
+ "ffmpeg-next",
+ "ort",
+ "pollster",
+ "regex",
+ "serde",
+ "serde_json",
+ "sysinfo 0.32.1",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+ "wgpu",
+ "workspace-hack",
+]
+
+[[package]]
 name = "cap-render-farm"
 version = "0.1.0"
 dependencies = [

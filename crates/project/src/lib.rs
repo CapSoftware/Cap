@@ -12,6 +12,7 @@ pub mod input_sounds;
 pub mod keyboard;
 mod late_audio;
 mod meta;
+pub mod redaction;
 mod shapes;
 
 pub use animated_gradient::*;
@@ -30,6 +31,7 @@ pub use cursor::*;
 pub use keyboard::*;
 pub use late_audio::{late_audio_trim_limits, migrate_late_audio_alignment};
 pub use meta::*;
+pub use redaction::{AutoRedactConfiguration, RedactCategory, RedactStyle};
 pub use shapes::*;
 
 use serde::{Deserialize, Serialize};

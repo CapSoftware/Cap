@@ -71,6 +71,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "enlarge.svg",
     "flag.svg",
     "flag-filled.svg",
+    "eye.svg",
     "eye-off.svg",
     "film-cut.svg",
     "flip-horizontal-2.svg",
@@ -334,6 +335,7 @@ mod tests {
         include_str!("editor_window/scenes.rs"),
         include_str!("editor_window/markers.rs"),
         include_str!("editor_window/enhance.rs"),
+        include_str!("editor_window/redact.rs"),
         // The timeline's nine track glyphs and its scene-mode icons are named
         // in the strip's own module, not in the window that hosts it.
         include_str!("editor_timeline.rs"),

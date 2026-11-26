@@ -3508,6 +3508,11 @@ pub struct ProjectConfiguration {
     pub markers: Vec<TimelineMarker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_visuals: Option<Box<AudioVisualsConfiguration>>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::AutoRedactConfiguration::is_default"
+    )]
+    pub auto_redact: crate::AutoRedactConfiguration,
     /// A still picture, relative to the project, shown where the camera would
     /// be in a recording that has no camera track. It sits outside `camera`
     /// so presets and style segments, which copy `camera` whole, never carry
@@ -3578,6 +3583,7 @@ impl Default for ProjectConfiguration {
             screen_motion_version: 0,
             markers: Vec::new(),
             audio_visuals: None,
+            auto_redact: Default::default(),
             camera_picture: None,
         }
     }

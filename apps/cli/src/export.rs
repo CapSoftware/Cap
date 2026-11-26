@@ -595,6 +595,12 @@ impl Export {
             .await;
         }
 
+        if let Some(reason) =
+            cap_project::redaction::export_blocker(project_path, &meta.project_config().auto_redact)
+        {
+            return Err(reason.to_string());
+        }
+
         let force_ffmpeg_decoder = force_ffmpeg_decoder || settings.force_ffmpeg_decoder();
         let mut builder = ExporterBase::builder(project_path.to_path_buf())
             .with_force_ffmpeg_decoder(force_ffmpeg_decoder);
@@ -721,6 +727,13 @@ impl Export {
                 &meta.project_config(),
             ))
         })?;
+        if meta.project_config().auto_redact.enabled
+            && selection.contains(&cap_export::tracks::TrackKind::Screen)
+        {
+            return Err(
+                "The screen track can't be exported on its own while Auto redact is on".to_string(),
+            );
+        }
         let output = output.unwrap_or_else(|| project_path.join("output").join("tracks"));
 
         let total = Arc::new(AtomicU64::new(0));

@@ -4497,6 +4497,7 @@ impl EditorWindow {
             "keyboard" => TrackKind::Keyboard,
             "scene" => TrackKind::Scene,
             "3d" | "three_d" => TrackKind::ThreeD,
+            "redact" => TrackKind::Redact,
             other => {
                 tracing::warn!(track = other, "unknown track");
                 return;

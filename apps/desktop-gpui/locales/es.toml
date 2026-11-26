@@ -3530,6 +3530,35 @@ split = "Dividir clips en los marcadores"
 stack = { one = "{count} marcador. Haz clic para verlo.", other = "{count} marcadores muy juntos. Haz clic para verlos." }
 title = "Marcadores"
 
+[editor.redact]
+body = "Encuentra datos privados en pantalla, como correos y claves, y los oculta. Funciona en este equipo, así que no se sube nada."
+category_address = "Direcciones postales"
+category_card = "Números de tarjeta y de cuenta"
+category_email = "Correos electrónicos"
+category_ip = "Direcciones IP"
+category_name = "Nombres"
+category_phone = "Números de teléfono"
+category_secret = "Contraseñas, claves y tokens"
+category_url = "Enlaces"
+chip = "Ocultar"
+export_failed = "La ocultación automática no pudo analizar esta grabación. Desactívala o vuelve a intentarlo antes de exportar."
+export_screen_track = "La pista de pantalla no se puede exportar sola con la ocultación automática activada."
+export_wait = "La ocultación automática sigue analizando. Exporta cuando termine."
+failed = "No se pudo analizar esta grabación"
+hidden = { one = "{count} elemento oculto", many = "{count} de elementos ocultos", other = "{count} elementos ocultos" }
+hide = "Ocultar"
+keep = "Dejar visible"
+kept = "Visible"
+lane = "Ocultar"
+nothing = "Nada que ocultar"
+panel_empty = "Aquí no se oculta nada."
+panel_title = "Oculto aquí"
+preparing = "Preparando"
+scanning = "Analizando {percent} %"
+style_blur = "Desenfocar"
+style_pixelate = "Pixelar"
+title = "Ocultación automática"
+
 [ui]
 coming_soon = "Próximamente"
 

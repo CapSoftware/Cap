@@ -1573,6 +1573,7 @@ dependencies = [
  "cap-media-info",
  "cap-project",
  "cap-recording",
+ "cap-redact",
  "cap-rendering",
  "cap-timestamp",
  "cap-utils",
@@ -1975,6 +1976,28 @@ dependencies = [
  "windows 0.60.0",
  "workspace-hack",
  "x11rb",
+]
+
+[[package]]
+name = "cap-redact"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "cap-camera-effects",
+ "cap-project",
+ "cap-video-decode",
+ "ffmpeg-next",
+ "ort",
+ "pollster 0.4.0",
+ "regex",
+ "serde",
+ "serde_json",
+ "sysinfo 0.32.1",
+ "tracing",
+ "tracing-subscriber",
+ "wgpu 25.0.2",
+ "workspace-hack",
 ]
 
 [[package]]

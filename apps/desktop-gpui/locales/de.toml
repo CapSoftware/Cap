@@ -3530,6 +3530,35 @@ split = "Clips an Markern teilen"
 stack = { one = "{count} Marker. Zum Anzeigen klicken.", other = "{count} Marker dicht beieinander. Zum Anzeigen klicken." }
 title = "Marker"
 
+[editor.redact]
+body = "Findet private Angaben auf dem Bildschirm, etwa E-Mails und Schlüssel, und verbirgt sie. Läuft auf diesem Computer, es wird nichts hochgeladen."
+category_address = "Postanschriften"
+category_card = "Karten- und Kontonummern"
+category_email = "E-Mail-Adressen"
+category_ip = "IP-Adressen"
+category_name = "Namen"
+category_phone = "Telefonnummern"
+category_secret = "Passwörter, Schlüssel und Tokens"
+category_url = "Links"
+chip = "Schwärzen"
+export_failed = "Automatisch schwärzen konnte diese Aufnahme nicht prüfen. Schalte es aus oder versuche es erneut, bevor du exportierst."
+export_screen_track = "Die Bildschirmspur kann nicht einzeln exportiert werden, solange Automatisch schwärzen an ist."
+export_wait = "Automatisch schwärzen prüft noch. Exportiere, wenn es fertig ist."
+failed = "Diese Aufnahme konnte nicht geprüft werden"
+hidden = { one = "{count} Element verborgen", other = "{count} Elemente verborgen" }
+hide = "Verbergen"
+keep = "Sichtbar lassen"
+kept = "Sichtbar"
+lane = "Schwärzen"
+nothing = "Nichts zu verbergen"
+panel_empty = "Hier ist nichts verborgen."
+panel_title = "Hier verborgen"
+preparing = "Wird vorbereitet"
+scanning = "Prüfung {percent} %"
+style_blur = "Weichzeichnen"
+style_pixelate = "Verpixeln"
+title = "Automatisch schwärzen"
+
 [ui]
 coming_soon = "Demnächst verfügbar"
 

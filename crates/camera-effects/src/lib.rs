@@ -27,6 +27,13 @@ pub fn initialize_onnx_runtime() -> anyhow::Result<()> {
     segmentation::init_runtime()
 }
 
+/// Whether the loaded ONNX Runtime has DirectML. Other crates must ask this
+/// before registering DirectML, see `try_register_directml`.
+#[cfg(target_os = "windows")]
+pub fn directml_available() -> bool {
+    segmentation::directml_status().is_ok()
+}
+
 static BLUR_DISABLED: AtomicBool = AtomicBool::new(false);
 static BLUR_SESSION_OBSERVER: OnceLock<fn(bool)> = OnceLock::new();
 
