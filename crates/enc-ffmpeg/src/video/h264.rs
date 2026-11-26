@@ -430,6 +430,7 @@ impl H264EncoderBuilder {
             #[cfg(test)]
             injected_failure: None,
             hardware_session: None,
+            past_ceiling_hardware: false,
         })
     }
 
@@ -471,6 +472,7 @@ impl H264EncoderBuilder {
             #[cfg(test)]
             injected_failure: None,
             hardware_session: None,
+            past_ceiling_hardware: false,
         })
     }
 
@@ -632,6 +634,7 @@ impl H264EncoderBuilder {
             #[cfg(test)]
             injected_failure: None,
             hardware_session: None,
+            past_ceiling_hardware: session == VideoToolboxHwInputSession::NonRealtime,
         })
     }
 
@@ -1172,6 +1175,7 @@ pub struct H264Encoder {
     injected_failure: Option<InjectedCodecFailure>,
     /// Last, so the hardware encoder is released before it reports idle.
     hardware_session: Option<HardwareEncoderSession>,
+    past_ceiling_hardware: bool,
 }
 
 #[cfg(test)]
@@ -1265,13 +1269,47 @@ impl H264Encoder {
     /// the failed encoder still held are lost. libx264 starts on an IDR frame
     /// with its parameter sets in-band, as every encoder here writes them.
     pub fn replace_with_software(&mut self) -> Result<(), H264EncoderError> {
+        let opened = self.open_software_replacement()?;
+        self.install_software(opened);
+        Ok(())
+    }
+
+    /// Whether this is the VideoToolbox session that only
+    /// [`VideoEncoderChoice::Hardware`] opens past the estimated ceiling.
+    pub fn is_past_ceiling_hardware(&self) -> bool {
+        self.past_ceiling_hardware
+    }
+
+    /// Like [`Self::replace_with_software`], for a hardware encoder that
+    /// still works: libx264 is opened first, so a failed open leaves this
+    /// encoder running, then every frame the hardware encoder held is
+    /// written before the swap. Returns the error of a hardware encoder that
+    /// failed while handing over; its remaining frames are lost and the swap
+    /// still happens.
+    pub fn hand_over_to_software<S: PacketSink + ?Sized>(
+        &mut self,
+        output: &mut S,
+    ) -> Result<Option<ffmpeg::Error>, H264EncoderError> {
+        let opened = self.open_software_replacement()?;
+        let drained = self.base.drain_for_handover(output, &mut self.encoder);
+        self.install_software(opened);
+        Ok(drained.err())
+    }
+
+    fn open_software_replacement(&mut self) -> Result<OpenedVideoEncoder, H264EncoderError> {
         let builder = self
             .software_fallback
             .take()
             .ok_or(H264EncoderError::CodecNotFound)?;
-        let opened = builder.open_software(self.output_width, self.output_height)?;
+        builder
+            .open_software(self.output_width, self.output_height)
+            .inspect_err(|_| self.software_fallback = Some(builder))
+    }
+
+    fn install_software(&mut self, opened: OpenedVideoEncoder) {
         self.encoder = opened.encoder;
         self.hardware_session = None;
+        self.past_ceiling_hardware = false;
         self.converter = opened.converter;
         self.converted_frame_pool = opened.converted_frame_pool;
         self.output_format = opened.output_format;
@@ -1280,7 +1318,15 @@ impl H264Encoder {
         {
             self.injected_failure = None;
         }
-        Ok(())
+    }
+
+    pub fn frames_in_codec(&self) -> u64 {
+        self.base.frames_in_codec()
+    }
+
+    pub fn next_packet_pts(&self, timestamp: Duration, time_base: ffmpeg::Rational) -> i64 {
+        let pts = self.base.next_pts(timestamp, self.encoder.time_base());
+        ffmpeg::Rescale::rescale(&pts, self.encoder.time_base(), time_base)
     }
 
     #[cfg(test)]
@@ -1299,6 +1345,20 @@ impl H264Encoder {
         self.software_fallback = replacement_preset
             .zip(builder)
             .map(|(preset, builder)| Box::new((*builder).with_preset(preset)));
+    }
+
+    /// Makes this encoder pose as the hardware session past the ceiling, so
+    /// a software encoder can stand in for VideoToolbox in tests.
+    #[cfg(test)]
+    pub(crate) fn pretend_past_ceiling_hardware(&mut self, replacement_preset: Option<H264Preset>) {
+        self.inject_codec_failure_after(
+            usize::MAX,
+            ffmpeg::Error::Other {
+                errno: ffmpeg::error::EIO,
+            },
+            replacement_preset,
+        );
+        self.past_ceiling_hardware = true;
     }
 
     #[cfg(test)]
@@ -2819,6 +2879,35 @@ mod video_encoder_choice_tests {
             }
         }
         assert!(past_ceiling > 0);
+    }
+
+    #[test]
+    fn automatic_never_opens_the_session_that_can_switch_to_software() {
+        if force_software_encoder() {
+            return;
+        }
+        ffmpeg::init().unwrap();
+        for &(width, height) in SIZES {
+            for &fps in RATES {
+                for &preset in PRESETS {
+                    for is_export in [false, true] {
+                        let automatic = builder(
+                            width,
+                            height,
+                            fps,
+                            preset,
+                            is_export,
+                            VideoEncoderChoice::Automatic,
+                        );
+                        assert_ne!(
+                            plan(&automatic).map(|(session, _)| session),
+                            Some(VideoToolboxHwInputSession::NonRealtime),
+                            "{width}x{height}@{fps} {preset:?} export={is_export}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn session_settings(encoder: &H264Encoder) -> (i64, i64, i64) {

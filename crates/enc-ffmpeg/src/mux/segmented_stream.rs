@@ -65,6 +65,7 @@ struct SinkProbe<'a, S: ?Sized> {
     inner: &'a mut S,
     failed: bool,
     written: u64,
+    clock: Option<&'a mut SegmentClock>,
 }
 
 impl<'a, S: PacketSink + ?Sized> SinkProbe<'a, S> {
@@ -73,6 +74,14 @@ impl<'a, S: PacketSink + ?Sized> SinkProbe<'a, S> {
             inner,
             failed: false,
             written: 0,
+            clock: None,
+        }
+    }
+
+    fn with_clock(inner: &'a mut S, clock: Option<&'a mut SegmentClock>) -> Self {
+        Self {
+            clock,
+            ..Self::new(inner)
         }
     }
 }
@@ -83,6 +92,9 @@ impl<S: PacketSink + ?Sized> PacketSink for SinkProbe<'_, S> {
     }
 
     fn write_packet(&mut self, packet: ffmpeg::Packet) -> Result<(), ffmpeg::Error> {
+        if let Some(clock) = self.clock.as_deref_mut() {
+            clock.observe(&packet, self.inner.stream_time_base(packet.stream()));
+        }
         let result = self.inner.write_packet(packet);
         self.failed |= result.is_err();
         self.written += u64::from(result.is_ok());
@@ -96,6 +108,71 @@ impl<S: PacketSink + ?Sized> PacketSink for SinkProbe<'_, S> {
 pub struct EncoderFlushFailure {
     pub encoder: String,
     pub error: ffmpeg::Error,
+}
+
+/// Follows the DASH muxer's segment cuts from the packets it is given: a new
+/// segment starts on a keyframe once the current one holds the segment
+/// duration, counted from where the previous segment ended.
+#[derive(Debug)]
+struct SegmentClock {
+    segment_duration_us: i64,
+    start: i64,
+    end: Option<i64>,
+    packets: u64,
+}
+
+impl SegmentClock {
+    fn new(segment_duration: Duration) -> Self {
+        Self {
+            segment_duration_us: segment_duration.as_micros() as i64,
+            start: 0,
+            end: None,
+            packets: 0,
+        }
+    }
+
+    fn observe(&mut self, packet: &ffmpeg::Packet, time_base: ffmpeg::Rational) {
+        let Some(pts) = packet.pts() else {
+            return;
+        };
+        if packet.is_key() && self.cuts_at(pts, time_base) {
+            self.packets = 0;
+        }
+        if self.packets == 0 {
+            self.start = self.end.unwrap_or(pts);
+        }
+        let end = pts + packet.duration();
+        self.end = Some(self.end.map_or(end, |last| last.max(end)));
+        self.packets += 1;
+    }
+
+    fn cuts_at(&self, pts: i64, time_base: ffmpeg::Rational) -> bool {
+        self.packets > 0
+            && unsafe {
+                ffmpeg::ffi::av_compare_ts(
+                    pts - self.start,
+                    time_base.into(),
+                    self.segment_duration_us,
+                    ffmpeg::ffi::AVRational {
+                        num: 1,
+                        den: 1_000_000,
+                    },
+                )
+            } >= 0
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum SoftwareSwitch {
+    Switched {
+        from: String,
+        to: String,
+        hardware_tail_error: Option<ffmpeg::Error>,
+    },
+    Failed {
+        encoder: String,
+        error: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -197,6 +274,14 @@ pub struct SegmentedVideoEncoder {
     flush_failure: Option<EncoderFlushFailure>,
     packets_written: Arc<AtomicU64>,
     packets_lost: Arc<AtomicU64>,
+    segment_clock: Option<SegmentClock>,
+    software_switch: Option<SwitchWait>,
+    finished_switch: Option<SoftwareSwitch>,
+}
+
+#[derive(Debug, Default)]
+struct SwitchWait {
+    previous_pts: Option<i64>,
 }
 
 struct SegmentMux {
@@ -537,7 +622,13 @@ impl SegmentedVideoEncoder {
             flush_failure: None,
             packets_written: Arc::new(AtomicU64::new(0)),
             packets_lost: Arc::new(AtomicU64::new(0)),
+            segment_clock: None,
+            software_switch: None,
+            finished_switch: None,
         };
+        if instance.encoder.is_past_ceiling_hardware() {
+            instance.segment_clock = Some(SegmentClock::new(config.segment_duration));
+        }
 
         if write_behind {
             let budget = super::write_behind::video_budget_bytes(instance.encoder.bit_rate());
@@ -610,8 +701,11 @@ impl SegmentedVideoEncoder {
         // anchors pts at the first frame, so capture gaps (static content,
         // stream restarts, dropped frames) stay in the timeline instead of
         // compressing it and drifting video ahead of audio.
+        if self.software_switch.is_some() {
+            self.switch_at_segment_start(timestamp);
+        }
         let inline = !self.mux.is_write_behind();
-        let mut sink = SinkProbe::new(&mut self.mux);
+        let mut sink = SinkProbe::with_clock(&mut self.mux, self.segment_clock.as_mut());
         let result = self.encoder.queue_frame_to(frame, timestamp, &mut sink);
         let sink_failed = sink.failed;
         if inline {
@@ -686,6 +780,71 @@ impl SegmentedVideoEncoder {
 
     pub fn take_encoder_fallback(&mut self) -> Option<EncoderFallback> {
         self.pending_fallback.take()
+    }
+
+    pub fn can_switch_to_software(&self) -> bool {
+        self.runtime_fallback
+            && self.segment_clock.is_some()
+            && self.encoder.is_past_ceiling_hardware()
+            && self.encoder.can_replace_with_software()
+    }
+
+    /// Switches to the software encoder where the next segment starts. Does
+    /// nothing unless [`Self::can_switch_to_software`]; a recording switches
+    /// at most once and never back.
+    pub fn request_software_switch(&mut self) -> bool {
+        if self.software_switch.is_none() && self.can_switch_to_software() {
+            self.software_switch = Some(SwitchWait::default());
+        }
+        self.software_switch.is_some()
+    }
+
+    pub fn take_software_switch(&mut self) -> Option<SoftwareSwitch> {
+        self.finished_switch.take()
+    }
+
+    pub fn frames_in_codec(&self) -> u64 {
+        self.encoder.frames_in_codec()
+    }
+
+    /// Hands over on the first frame whose keyframe would start a segment
+    /// while the frame before it would not, so the frames the hardware
+    /// encoder still holds all stay in the current segment and the software
+    /// encoder's first keyframe opens the next one.
+    fn switch_at_segment_start(&mut self, timestamp: Duration) {
+        let (Some(wait), Some(clock)) = (&mut self.software_switch, &self.segment_clock) else {
+            return;
+        };
+        let time_base = self.mux.stream_time_base(0);
+        let pts = self.encoder.next_packet_pts(timestamp, time_base);
+        let previous = wait.previous_pts.replace(pts);
+        if !previous.is_some_and(|previous| {
+            clock.cuts_at(pts, time_base) && !clock.cuts_at(previous, time_base)
+        }) {
+            return;
+        }
+
+        let from = self.encoder.codec_name();
+        let inline = !self.mux.is_write_behind();
+        let mut sink = SinkProbe::with_clock(&mut self.mux, self.segment_clock.as_mut());
+        let result = self.encoder.hand_over_to_software(&mut sink);
+        if inline {
+            self.packets_written
+                .fetch_add(sink.written, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.software_switch = None;
+        self.segment_clock = None;
+        self.finished_switch = Some(match result {
+            Ok(hardware_tail_error) => SoftwareSwitch::Switched {
+                from,
+                to: self.encoder.codec_name(),
+                hardware_tail_error,
+            },
+            Err(error) => SoftwareSwitch::Failed {
+                encoder: from,
+                error: error.to_string(),
+            },
+        });
     }
 
     /// The hardware encoder that stopped working and could not be replaced,
@@ -793,6 +952,13 @@ impl SegmentedVideoEncoder {
     #[cfg(test)]
     fn force_runtime_fallback(&mut self, enabled: bool) {
         self.runtime_fallback = enabled;
+    }
+
+    #[cfg(test)]
+    fn pretend_past_ceiling_hardware(&mut self, replacement_preset: Option<H264Preset>) {
+        self.encoder
+            .pretend_past_ceiling_hardware(replacement_preset);
+        self.segment_clock = Some(SegmentClock::new(self.segment_duration));
     }
 
     pub fn finish_with_timestamp(&mut self, _timestamp: Duration) -> Result<(), FinishError> {
@@ -2098,6 +2264,7 @@ mod tests {
         frames: usize,
         last_pts_secs: f64,
         in_band_sps_profiles: Vec<u8>,
+        frame_pts_secs: Vec<f64>,
     }
 
     fn decode_every_packet(path: &Path) -> DecodedTrack {
@@ -2121,6 +2288,7 @@ mod tests {
             frames: 0,
             last_pts_secs: 0.0,
             in_band_sps_profiles: Vec::new(),
+            frame_pts_secs: Vec::new(),
         };
         let mut frame = ffmpeg::frame::Video::empty();
         let mut receive = |decoder: &mut ffmpeg::decoder::Video, decoded: &mut DecodedTrack| {
@@ -2128,6 +2296,7 @@ mod tests {
                 assert_eq!(unsafe { (*frame.as_ptr()).decode_error_flags }, 0);
                 decoded.frames += 1;
                 if let Some(pts) = frame.pts() {
+                    decoded.frame_pts_secs.push(pts as f64 * time_base);
                     decoded.last_pts_secs = decoded.last_pts_secs.max(pts as f64 * time_base);
                 }
             }
@@ -2158,6 +2327,167 @@ mod tests {
     const HARDWARE_FAILURE: ffmpeg::Error = ffmpeg::Error::Other {
         errno: ffmpeg::error::EIO,
     };
+
+    /// The index of the first frame in each media segment.
+    fn segment_starts(base_path: &Path) -> Vec<usize> {
+        let mut segment_paths: Vec<PathBuf> = std::fs::read_dir(base_path)
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext == "m4s"))
+            .collect();
+        segment_paths.sort();
+        let mut starts = Vec::new();
+        let mut frames = 0;
+        for segment in &segment_paths {
+            let mut track = std::fs::read(base_path.join(INIT_SEGMENT_NAME)).unwrap();
+            track.extend(std::fs::read(segment).unwrap());
+            let path = base_path.join("one_segment.mp4");
+            std::fs::write(&path, track).unwrap();
+            let mut input = format::input(&path).unwrap();
+            let index = input
+                .streams()
+                .best(ffmpeg::media::Type::Video)
+                .unwrap()
+                .index();
+            starts.push(frames);
+            frames += input
+                .packets()
+                .filter(|(stream, _)| stream.index() == index)
+                .count();
+        }
+        starts
+    }
+
+    fn assert_continuous(decoded: &DecodedTrack, frames: usize, step_secs: f64) {
+        assert_eq!(decoded.frames, frames);
+        let mut pts = decoded.frame_pts_secs.clone();
+        pts.sort_by(f64::total_cmp);
+        for (index, pair) in pts.windows(2).enumerate() {
+            assert!(
+                (pair[1] - pair[0] - step_secs).abs() < 0.001,
+                "frame {} at {:.4}s follows {:.4}s",
+                index + 1,
+                pair[1],
+                pair[0]
+            );
+        }
+    }
+
+    /// Queues `total_frames` `step` apart, asking for the switch before
+    /// frame `request_at`, and returns every switch with the frame it
+    /// happened on.
+    fn record_with_switch_request(
+        encoder: &mut SegmentedVideoEncoder,
+        total_frames: u64,
+        request_at: u64,
+        step: Duration,
+        mut queue: impl FnMut(&mut SegmentedVideoEncoder, Duration),
+    ) -> Vec<(usize, SoftwareSwitch)> {
+        let mut switches = Vec::new();
+        for i in 0..total_frames {
+            if i == request_at {
+                assert!(encoder.request_software_switch());
+            }
+            queue(encoder, step * i as u32);
+            if let Some(switch) = encoder.take_software_switch() {
+                switches.push((i as usize, switch));
+            }
+        }
+        assert!(!encoder.can_switch_to_software());
+        assert!(!encoder.request_software_switch(), "never switches again");
+        switches
+    }
+
+    #[test]
+    fn software_switch_happens_once_at_a_segment_start_and_keeps_every_frame() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let mut encoder = SegmentedVideoEncoder::init_libx264(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig {
+                preset: H264Preset::Medium,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!encoder.can_switch_to_software());
+        assert!(!encoder.request_software_switch());
+        encoder.force_runtime_fallback(true);
+        encoder.pretend_past_ceiling_hardware(Some(H264Preset::Ultrafast));
+        assert!(encoder.can_switch_to_software());
+
+        let total_frames = 300;
+        let switches = record_with_switch_request(
+            &mut encoder,
+            total_frames,
+            100,
+            Duration::from_micros(33_333),
+            |encoder, timestamp| {
+                encoder
+                    .queue_frame(create_test_frame(320, 240), timestamp)
+                    .unwrap();
+            },
+        );
+        encoder.finish().unwrap();
+
+        let [
+            (
+                at,
+                SoftwareSwitch::Switched {
+                    to,
+                    hardware_tail_error: None,
+                    ..
+                },
+            ),
+        ] = switches.as_slice()
+        else {
+            panic!("one clean switch expected, got {switches:?}");
+        };
+        assert_eq!(to, "libx264");
+        assert!(*at >= 100 && *at < 100 + 2 * 60, "switch at frame {at}");
+        let starts = segment_starts(&base_path);
+        assert!(
+            starts.contains(at),
+            "the switch at frame {at} opens a segment: {starts:?}"
+        );
+        assert_eq!(encoder.packets_written(), total_frames);
+        let decoded = decode_every_packet(&recorded_track(&base_path));
+        assert_continuous(&decoded, total_frames as usize, 0.033_333);
+        let baseline = 66;
+        assert!(decoded.in_band_sps_profiles.first() != Some(&baseline));
+        assert_eq!(decoded.in_band_sps_profiles.last(), Some(&baseline));
+    }
+
+    #[test]
+    fn segment_clock_follows_the_dash_muxer_cuts() {
+        ffmpeg::init().unwrap();
+        let time_base = ffmpeg::Rational(1, 90_000);
+        let mut clock = SegmentClock::new(Duration::from_secs(2));
+        let packet = |pts: i64, key: bool| {
+            let mut packet = ffmpeg::Packet::empty();
+            packet.set_pts(Some(pts));
+            packet.set_duration(3_000);
+            if key {
+                packet.set_flags(ffmpeg::packet::Flags::KEY);
+            }
+            packet
+        };
+        assert!(!clock.cuts_at(0, time_base));
+        clock.observe(&packet(0, true), time_base);
+        assert!(!clock.cuts_at(179_999, time_base));
+        assert!(clock.cuts_at(180_000, time_base));
+        clock.observe(&packet(183_000, false), time_base);
+        assert!(clock.cuts_at(186_000, time_base), "only keyframes cut");
+        clock.observe(&packet(190_000, true), time_base);
+        assert!(!clock.cuts_at(193_000, time_base));
+        assert!(!clock.cuts_at(186_000 + 179_999, time_base));
+        assert!(
+            clock.cuts_at(186_000 + 180_000, time_base),
+            "a segment starts where the previous one ended, not at its keyframe"
+        );
+    }
 
     #[test]
     fn hardware_encoder_failure_mid_recording_continues_on_the_software_encoder() {
@@ -2592,6 +2922,100 @@ mod tests {
             })
             .collect();
         Some((encoder, accepted))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn past_ceiling_hardware_switches_once_at_a_segment_start_without_losing_frames() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let (width, height) = (1920, 1080);
+        let open = |path: &Path, choice: VideoEncoderChoice, fps: i32| {
+            SegmentedVideoEncoder::init(
+                path.to_path_buf(),
+                VideoInfo {
+                    width,
+                    height,
+                    frame_rate: ffmpeg::Rational(fps, 1),
+                    ..test_video_info()
+                },
+                SegmentedVideoEncoderConfig {
+                    prefer_videotoolbox_hw_input: true,
+                    video_encoder: choice,
+                    segment_duration: Duration::from_secs(1),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        for (index, (choice, fps)) in [
+            (VideoEncoderChoice::Automatic, 60),
+            (VideoEncoderChoice::Hardware, 60),
+            (VideoEncoderChoice::Automatic, 180),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut encoder = open(&temp.path().join(index.to_string()), choice, fps);
+            assert!(!encoder.can_switch_to_software(), "{choice:?} {fps}");
+            assert!(!encoder.request_software_switch(), "{choice:?} {fps}");
+        }
+
+        let base_path = temp.path().join("past");
+        let mut encoder = open(&base_path, VideoEncoderChoice::Hardware, 180);
+        if !encoder.is_videotoolbox_hw_input() {
+            assert!(
+                std::env::var_os("CAP_REQUIRE_VIDEOTOOLBOX").is_none(),
+                "zero-copy VideoToolbox input is required but unavailable"
+            );
+            eprintln!("skipped: zero-copy VideoToolbox input unavailable");
+            return;
+        }
+        assert_eq!(encoder.encoder.codec_name(), "h264_videotoolbox");
+        assert!(encoder.can_switch_to_software());
+
+        let gray = create_test_frame(width, height);
+        let total_frames = 450;
+        let switches = record_with_switch_request(
+            &mut encoder,
+            total_frames,
+            60,
+            Duration::from_micros(5_556),
+            |encoder, timestamp| {
+                let frame = encoder.encoder.test_videotoolbox_frame(&gray);
+                let pixel_buffer = unsafe { (*frame.as_ptr()).data[3] }.cast();
+                unsafe { encoder.queue_hw_pixel_buffer(pixel_buffer, timestamp) }.unwrap();
+            },
+        );
+        encoder.finish().unwrap();
+
+        let [
+            (
+                at,
+                SoftwareSwitch::Switched {
+                    from,
+                    to,
+                    hardware_tail_error: None,
+                },
+            ),
+        ] = switches.as_slice()
+        else {
+            panic!("one clean switch expected, got {switches:?}");
+        };
+        assert_eq!(from, "h264_videotoolbox");
+        assert_eq!(to, "libx264");
+        assert!(*at >= 60 && *at < 60 + 2 * 180, "switch at frame {at}");
+        let starts = segment_starts(&base_path);
+        assert!(
+            starts.contains(at),
+            "the switch at frame {at} opens a segment: {starts:?}"
+        );
+        assert_eq!(encoder.packets_written(), total_frames);
+        assert_continuous(
+            &decode_every_packet(&recorded_track(&base_path)),
+            total_frames as usize,
+            0.005_556,
+        );
     }
 
     #[cfg(target_os = "macos")]

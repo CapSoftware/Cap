@@ -8,7 +8,10 @@ use crate::{
     output_pipeline::NativeCameraFrame,
     screen_capture::{
         self,
-        frame_accounting::{LossWindow, ScreenFrameAccounting, ScreenFrameTotals},
+        frame_accounting::{
+            EncoderBacklog, EncoderFallbackTrigger, LossWindow, ScreenFrameAccounting,
+            ScreenFrameTotals,
+        },
     },
 };
 use anyhow::{Context, anyhow};
@@ -16,6 +19,7 @@ use cap_enc_ffmpeg::StorageStalled;
 use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset, VideoEncoderChoice};
 use cap_enc_ffmpeg::segmented_stream::{
     DiskSpaceCallback, SegmentCompletedEvent, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
+    SoftwareSwitch,
 };
 use cap_media_info::{AudioInfo, VideoInfo};
 use std::{
@@ -193,6 +197,79 @@ fn warn_frame_loss(lost: ScreenFrameTotals, health_tx: &SharedHealthSender) {
     });
 }
 
+/// Only for a hardware recording past the estimated ceiling: the muxer side
+/// decides once that the encoder is losing frames, the encoder thread then
+/// switches to the software encoder where the next segment starts.
+struct EncoderFallbackWatch {
+    trigger: EncoderFallbackTrigger,
+    link: Arc<EncoderFallbackLink>,
+}
+
+#[derive(Default)]
+struct EncoderFallbackLink {
+    backlog: EncoderBacklog,
+    request: Mutex<Option<ScreenFrameTotals>>,
+}
+
+fn arm_encoder_fallback(
+    link: &EncoderFallbackLink,
+    encoder: &mut SegmentedVideoEncoder,
+    armed_by: &mut Option<ScreenFrameTotals>,
+) {
+    if armed_by.is_some() {
+        return;
+    }
+    let requested = link
+        .request
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
+    if let Some(window) = requested
+        && encoder.request_software_switch()
+    {
+        *armed_by = Some(window);
+    }
+}
+
+fn report_encoder_fallback(
+    link: &EncoderFallbackLink,
+    encoder: &mut SegmentedVideoEncoder,
+    armed_by: Option<&ScreenFrameTotals>,
+    health_tx: &SharedHealthSender,
+) {
+    link.backlog.set_in_codec(encoder.frames_in_codec());
+    match encoder.take_software_switch() {
+        Some(SoftwareSwitch::Switched {
+            from,
+            to,
+            hardware_tail_error,
+        }) => {
+            let window = armed_by.copied().unwrap_or_default();
+            warn!(
+                from = %from,
+                to = %to,
+                displayed = window.displayed,
+                lost_to_encoder = window.lost(),
+                lost_pct = format!("{:.1}%", window.lost_pct()),
+                hardware_tail_error = ?hardware_tail_error,
+                "Hardware video encoder is losing frames; switched to the software encoder for the rest of the recording"
+            );
+            health_tx.emit(PipelineHealthEvent::EncoderRebuilt {
+                backend: to,
+                attempt: 1,
+            });
+        }
+        Some(SoftwareSwitch::Failed { encoder, error }) => {
+            warn!(
+                encoder = %encoder,
+                %error,
+                "Hardware video encoder is losing frames; the software encoder could not be opened, staying on hardware"
+            );
+        }
+        None => {}
+    }
+}
+
 fn log_frame_totals(accounting: &ScreenFrameAccounting, path: &std::path::Path) {
     let totals = accounting.totals();
     info!(
@@ -305,6 +382,7 @@ pub struct MacOSFragmentedM4SMuxer {
     encoder_packets: Option<Arc<AtomicU64>>,
     loss_window: LossWindow,
     accounted_first_frame: bool,
+    encoder_fallback: Option<EncoderFallbackWatch>,
 }
 
 pub struct MacOSFragmentedM4SMuxerConfig {
@@ -391,6 +469,7 @@ impl Muxer for MacOSFragmentedM4SMuxer {
             encoder_packets: None,
             loss_window: LossWindow::default(),
             accounted_first_frame: false,
+            encoder_fallback: None,
         })
     }
 
@@ -485,6 +564,18 @@ impl MacOSFragmentedM4SMuxer {
             .map(|encoder| encoder.codec_name())
             .unwrap_or_default();
         self.encoder_packets = Some(encoder.packets_written_counter());
+        if encoder.can_switch_to_software()
+            && let Some(accounting) = &self.frame_accounting
+        {
+            self.encoder_fallback = Some(EncoderFallbackWatch {
+                trigger: EncoderFallbackTrigger::new(accounting.capture_buffers()),
+                link: Arc::new(EncoderFallbackLink::default()),
+            });
+        }
+        let fallback_link = self
+            .encoder_fallback
+            .as_ref()
+            .map(|watch| watch.link.clone());
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
         let video_config = self.video_config;
@@ -519,8 +610,12 @@ impl MacOSFragmentedM4SMuxer {
                 let mut disk_monitor = DiskSpaceMonitor::new();
                 let mut disk_exhausted = false;
                 let slow_threshold_ms = frame_timing_log_threshold_ms(&video_config);
+                let mut fallback_armed_by = None;
 
                 while let Ok(Some((sample_buf, timestamp))) = video_rx.recv() {
+                    if let Some(link) = &fallback_link {
+                        link.backlog.record_taken();
+                    }
                     let repeat = frame_accounting
                         .as_deref()
                         .is_some_and(ScreenFrameAccounting::next_is_repeat);
@@ -614,6 +709,13 @@ impl MacOSFragmentedM4SMuxer {
 
                         match encoder_clone.lock() {
                             Ok(mut encoder) => {
+                                if let Some(link) = &fallback_link {
+                                    arm_encoder_fallback(
+                                        link,
+                                        &mut encoder,
+                                        &mut fallback_armed_by,
+                                    );
+                                }
                                 let result = match sample_buf.image_buf() {
                                     Some(image_buf) => {
                                         let ptr = (std::ptr::from_ref(image_buf)
@@ -637,6 +739,14 @@ impl MacOSFragmentedM4SMuxer {
                                     &health_tx,
                                     "screen",
                                 )?;
+                                if let Some(link) = &fallback_link {
+                                    report_encoder_fallback(
+                                        link,
+                                        &mut encoder,
+                                        fallback_armed_by.as_ref(),
+                                        &health_tx,
+                                    );
+                                }
                             }
                             Err(_) => {
                                 error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
@@ -726,6 +836,13 @@ impl VideoMuxer for MacOSFragmentedM4SMuxer {
         let repeat = frame.capture.is_none();
         if let (Some(accounting), Some(carry)) = (accounting, frame.capture) {
             accounting.record_accepted(carry, !self.accounted_first_frame);
+            if let Some(watch) = &mut self.encoder_fallback
+                && self.accounted_first_frame
+            {
+                watch
+                    .trigger
+                    .capture_gap(carry.capture_skipped, watch.link.backlog.held());
+            }
             self.accounted_first_frame = true;
         }
 
@@ -741,6 +858,9 @@ impl VideoMuxer for MacOSFragmentedM4SMuxer {
                     self.frame_drops.record_frame();
                     if let Some(accounting) = accounting {
                         accounting.record_handed_to_encoder(repeat);
+                    }
+                    if let Some(watch) = &self.encoder_fallback {
+                        watch.link.backlog.record_handed();
                     }
                 }
                 Err(e) => match e {
@@ -759,6 +879,17 @@ impl VideoMuxer for MacOSFragmentedM4SMuxer {
 
         if let Some(accounting) = accounting {
             report_frame_loss(accounting, &mut self.loss_window, &self.health_tx);
+            if let Some(watch) = &mut self.encoder_fallback
+                && let Some(window) = watch
+                    .trigger
+                    .observe(std::time::Instant::now(), accounting.totals())
+            {
+                *watch
+                    .link
+                    .request
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(window);
+            }
         }
 
         Ok(())

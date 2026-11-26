@@ -98,6 +98,8 @@ pub struct EncoderBase {
     /// capture gap that lands on a fragment cut, playing post-gap content
     /// during the gap. The bool records whether the duration was synthesized.
     held_packet: Option<(Packet, bool)>,
+    frames_sent: u64,
+    packets_received: u64,
 }
 
 impl EncoderBase {
@@ -110,7 +112,21 @@ impl EncoderBase {
             stream_index,
             last_written_dts: None,
             held_packet: None,
+            frames_sent: 0,
+            packets_received: 0,
         }
+    }
+
+    pub fn frames_in_codec(&self) -> u64 {
+        self.frames_sent.saturating_sub(self.packets_received)
+    }
+
+    /// The pts [`Self::update_pts`] would give a frame captured at
+    /// `timestamp`, without changing any state.
+    pub fn next_pts(&self, timestamp: Duration, time_base: ffmpeg::Rational) -> i64 {
+        let rate = time_base.denominator() as f64 / time_base.numerator() as f64;
+        let pts = (timestamp.as_secs_f64() * rate).round() as i64;
+        normalize_input_pts(pts - self.first_pts.unwrap_or(pts), self.last_frame_pts)
     }
 
     pub fn set_packet_stats(&mut self, stats: Arc<EncodedPacketStats>) {
@@ -203,8 +219,25 @@ impl EncoderBase {
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
         encoder.send_frame(frame)?;
+        self.frames_sent += 1;
 
         self.process_packets(output, encoder)
+    }
+
+    /// Ends `encoder`'s stream and writes everything it still held, keeping
+    /// the last packet back so the next encoder's first packet stamps its
+    /// real duration and the timeline stays continuous across the change.
+    pub fn drain_for_handover<S: PacketSink + ?Sized>(
+        &mut self,
+        output: &mut S,
+        encoder: &mut encoder::encoder::Encoder,
+    ) -> Result<(), ffmpeg::Error> {
+        let result = encoder
+            .send_eof()
+            .and_then(|()| self.process_packets(output, encoder));
+        self.frames_sent = 0;
+        self.packets_received = 0;
+        result
     }
 
     fn process_packets<S: PacketSink + ?Sized>(
@@ -213,6 +246,7 @@ impl EncoderBase {
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
         while packet_available(encoder.receive_packet(&mut self.packet))? {
+            self.packets_received += 1;
             self.packet.set_stream(self.stream_index);
             self.packet.rescale_ts(
                 encoder.time_base(),

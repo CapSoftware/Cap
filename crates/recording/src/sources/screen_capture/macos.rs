@@ -481,7 +481,9 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         let (stall_health_tx, stall_health_rx) =
             tokio::sync::mpsc::channel::<output_pipeline::PipelineHealthEvent>(32);
-        let frame_accounting = Arc::new(ScreenFrameAccounting::default());
+        let frame_accounting = Arc::new(ScreenFrameAccounting::with_capture_buffers(
+            queue_depth as u64,
+        ));
 
         let rebuild_params = Arc::new(CapturerRebuildParams {
             display_id: self.config.display.clone(),

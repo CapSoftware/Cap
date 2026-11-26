@@ -291,9 +291,21 @@ pub struct ScreenFrameAccounting {
     packets_written: AtomicU64,
     writer_lost: AtomicU64,
     repeat_flags: Mutex<VecDeque<bool>>,
+    capture_buffers: u64,
 }
 
 impl ScreenFrameAccounting {
+    pub fn with_capture_buffers(capture_buffers: u64) -> Self {
+        Self {
+            capture_buffers,
+            ..Self::default()
+        }
+    }
+
+    pub fn capture_buffers(&self) -> u64 {
+        self.capture_buffers
+    }
+
     pub fn attach(&self) {
         self.attached.store(true, Ordering::Relaxed);
     }
@@ -469,6 +481,88 @@ impl LossWindow {
     fn sustained(window: ScreenFrameTotals) -> Option<ScreenFrameTotals> {
         (window.lost() >= LOSS_WARN_MIN_FRAMES && window.lost_pct() >= LOSS_WARN_PCT)
             .then_some(window)
+    }
+}
+
+/// Frames on the encoder side of the screen muxer: handed to the encoder
+/// thread and not yet back from the codec as packets. With zero-copy input
+/// each one keeps a capture surface.
+#[derive(Debug, Default)]
+pub struct EncoderBacklog {
+    handed: AtomicU64,
+    taken: AtomicU64,
+    in_codec: AtomicU64,
+}
+
+impl EncoderBacklog {
+    pub fn record_handed(&self) {
+        self.handed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_taken(&self) {
+        self.taken.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn set_in_codec(&self, frames: u64) {
+        self.in_codec.store(frames, Ordering::Relaxed);
+    }
+
+    pub fn held(&self) -> u64 {
+        self.handed
+            .load(Ordering::Relaxed)
+            .saturating_sub(self.taken.load(Ordering::Relaxed))
+            + self.in_codec.load(Ordering::Relaxed)
+    }
+}
+
+/// Decides, at most once per recording, that the encoder is why frames are
+/// lost: the same sustained-loss window as the warning, counting only frames
+/// lost before or inside the encoder plus capture gaps that ended while the
+/// encoder side held all but two of the capture surfaces. Gaps while the
+/// encoder holds fewer (a capped refresh rate, a busy capture) never count.
+#[derive(Debug)]
+pub struct EncoderFallbackTrigger {
+    window: LossWindow,
+    full_at: Option<u64>,
+    lost_to_encoder: u64,
+    fired: bool,
+}
+
+impl EncoderFallbackTrigger {
+    pub fn new(capture_buffers: u64) -> Self {
+        Self {
+            window: LossWindow::default(),
+            full_at: capture_buffers
+                .checked_sub(2)
+                .filter(|full_at| *full_at > 0),
+            lost_to_encoder: 0,
+            fired: false,
+        }
+    }
+
+    pub fn capture_gap(&mut self, capture_skipped: u64, held: u64) {
+        if self.full_at.is_some_and(|full_at| held >= full_at) {
+            self.lost_to_encoder += capture_skipped;
+        }
+    }
+
+    pub fn observe(
+        &mut self,
+        now: std::time::Instant,
+        totals: ScreenFrameTotals,
+    ) -> Option<ScreenFrameTotals> {
+        if self.fired {
+            return None;
+        }
+        let window = self.window.observe(
+            now,
+            ScreenFrameTotals {
+                lost_in_capture: self.lost_to_encoder,
+                ..totals
+            },
+        )?;
+        self.fired = true;
+        Some(window)
     }
 }
 
@@ -846,6 +940,131 @@ mod tests {
             totals,
             "drops after stop are not counted"
         );
+    }
+
+    /// Feeds a 120 fps stream for `secs`: frame `i` arrives after
+    /// `skip(i)` missed slots while the encoder side holds `held` frames, and
+    /// is lost before the encoder when `dropped(i)`. Returns the frame index
+    /// and window of every time the trigger fires.
+    fn run_trigger(
+        trigger: &mut EncoderFallbackTrigger,
+        secs: u64,
+        held: u64,
+        skip: impl Fn(u64) -> u64,
+        dropped: impl Fn(u64) -> bool,
+    ) -> Vec<(u64, ScreenFrameTotals)> {
+        let accounting = ScreenFrameAccounting::with_capture_buffers(8);
+        let start = Instant::now();
+        let mut slot = 0;
+        let mut packets = 0;
+        let mut fired = Vec::new();
+        let mut i = 0;
+        while slot < secs * 120 {
+            let skipped = if i == 0 { 0 } else { skip(i) };
+            slot += 1 + skipped;
+            accounting.record_accepted(
+                FrameLossCarry {
+                    capture_skipped: skipped,
+                },
+                i == 0,
+            );
+            if i > 0 {
+                trigger.capture_gap(skipped, held);
+            }
+            if dropped(i) {
+                accounting.before_handing_to_encoder(false);
+                accounting.record_muxer_dropped(false);
+            } else {
+                hand(&accounting, false);
+                let repeat = accounting.next_is_repeat();
+                packets += 1;
+                accounting.record_encoded(repeat, true, Some(packets));
+            }
+            let now = start + Duration::from_nanos(slot * VSYNC_120);
+            if let Some(window) = trigger.observe(now, accounting.totals()) {
+                fired.push((i, window));
+            }
+            i += 1;
+        }
+        fired
+    }
+
+    #[test]
+    fn sustained_loss_while_the_encoder_holds_the_capture_buffers_fires_exactly_once() {
+        let mut trigger = EncoderFallbackTrigger::new(8);
+        let fired = run_trigger(&mut trigger, 30, 7, |_| 1, |_| false);
+        let [(frame, window)] = fired.as_slice() else {
+            panic!("fires once, got {fired:?}");
+        };
+        assert!(
+            (290..=310).contains(frame),
+            "after about 5 s, frame {frame}"
+        );
+        assert!(window.lost_in_capture >= 290, "{window:?}");
+        assert!(window.lost_pct() > 45.0, "{window:?}");
+
+        let mut at_the_threshold = EncoderFallbackTrigger::new(8);
+        assert_eq!(
+            run_trigger(&mut at_the_threshold, 12, 6, |_| 1, |_| false).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn capture_loss_alone_never_fires() {
+        for held in [0, 2, 5] {
+            let mut trigger = EncoderFallbackTrigger::new(8);
+            assert!(
+                run_trigger(&mut trigger, 30, held, |_| 1, |_| false).is_empty(),
+                "half the frames lost in capture while the encoder holds {held}"
+            );
+        }
+        for buffers in [0, 2] {
+            let mut trigger = EncoderFallbackTrigger::new(buffers);
+            assert!(
+                run_trigger(&mut trigger, 30, u64::MAX, |_| 1, |_| false).is_empty(),
+                "unknown capture buffers ({buffers}) never count capture loss"
+            );
+        }
+    }
+
+    #[test]
+    fn loss_below_the_threshold_never_fires() {
+        let mut trigger = EncoderFallbackTrigger::new(8);
+        assert!(
+            run_trigger(&mut trigger, 30, 7, |i| u64::from(i % 25 == 0), |_| false).is_empty(),
+            "4% lost"
+        );
+        let mut trigger = EncoderFallbackTrigger::new(8);
+        assert!(
+            run_trigger(&mut trigger, 30, 7, |i| u64::from(i % 600 < 9), |_| false).is_empty(),
+            "9 frames lost in each 5 s window"
+        );
+    }
+
+    #[test]
+    fn frames_lost_before_the_encoder_fire_whatever_the_encoder_holds() {
+        let mut trigger = EncoderFallbackTrigger::new(8);
+        let fired = run_trigger(&mut trigger, 30, 0, |_| 0, |i| i % 10 == 0);
+        let [(_, window)] = fired.as_slice() else {
+            panic!("fires once, got {fired:?}");
+        };
+        assert_eq!(window.lost_in_capture, 0);
+        assert!(window.lost_before_encoder >= 59, "{window:?}");
+    }
+
+    #[test]
+    fn encoder_backlog_counts_queued_and_in_codec_frames() {
+        let backlog = EncoderBacklog::default();
+        for _ in 0..5 {
+            backlog.record_handed();
+        }
+        backlog.record_taken();
+        backlog.record_taken();
+        backlog.set_in_codec(4);
+        assert_eq!(backlog.held(), 7);
+        backlog.set_in_codec(0);
+        assert_eq!(backlog.held(), 3);
     }
 
     #[test]
