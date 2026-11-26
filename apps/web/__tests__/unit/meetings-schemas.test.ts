@@ -186,6 +186,45 @@ describe("meeting ask request schema", () => {
 	});
 });
 
+describe("meeting request limits count characters", () => {
+	// The desktop clips by Unicode characters; an emoji is one character but
+	// two UTF-16 units.
+	const emoji = "\u{1F680}";
+	const chars = (count: number) => `${text(count - 1)}${emoji}`;
+
+	it("accepts text at the limit that holds characters outside the BMP", () => {
+		expect(notes({ title: chars(300) }).ok).toBe(true);
+		expect(notes({ rawNotesMarkdown: chars(50_000) }).ok).toBe(true);
+		expect(notes({ participants: [{ name: chars(200) }] }).ok).toBe(true);
+		expect(notes({ vocabulary: [chars(100)] }).ok).toBe(true);
+		expect(
+			notes({
+				template: { name: chars(100), sections: [{ heading: chars(120) }] },
+			}).ok,
+		).toBe(true);
+		expect(
+			ask({ history: [{ role: "assistant", content: chars(8_000) }] }).ok,
+		).toBe(true);
+		expect(ask({ question: chars(4_000) }).ok).toBe(true);
+		expect(ask({ notesMarkdown: chars(100_000) }).ok).toBe(true);
+		expect(
+			parseTranscribeQuery({ keywordsHeader: encodeURIComponent(chars(50)) })
+				.ok,
+		).toBe(true);
+	});
+
+	it("still rejects one character over the limit", () => {
+		expect(notes({ title: chars(301) }).ok).toBe(false);
+		expect(ask({ history: [{ role: "user", content: chars(8_001) }] }).ok).toBe(
+			false,
+		);
+		expect(
+			parseTranscribeQuery({ keywordsHeader: encodeURIComponent(chars(51)) })
+				.ok,
+		).toBe(false);
+	});
+});
+
 describe("transcribe query", () => {
 	const header = (terms: string[]) => terms.map(encodeURIComponent).join(",");
 
