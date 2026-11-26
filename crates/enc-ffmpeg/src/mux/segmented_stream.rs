@@ -196,6 +196,7 @@ pub struct SegmentedVideoEncoder {
     unrecovered_codec_failure: Option<(String, ffmpeg::Error)>,
     flush_failure: Option<EncoderFlushFailure>,
     packets_written: Arc<AtomicU64>,
+    packets_lost: Arc<AtomicU64>,
 }
 
 struct SegmentMux {
@@ -532,6 +533,7 @@ impl SegmentedVideoEncoder {
             unrecovered_codec_failure: None,
             flush_failure: None,
             packets_written: Arc::new(AtomicU64::new(0)),
+            packets_lost: Arc::new(AtomicU64::new(0)),
         };
 
         if write_behind {
@@ -541,6 +543,9 @@ impl SegmentedVideoEncoder {
                     tracing::debug!(budget_bytes = budget, "Video write-behind enabled");
                     if let Some(written) = instance.mux.written_packets_counter() {
                         instance.packets_written = written;
+                    }
+                    if let Some(lost) = instance.mux.lost_packets_counter() {
+                        instance.packets_lost = lost;
                     }
                 }
                 Err(error) => {
@@ -760,6 +765,10 @@ impl SegmentedVideoEncoder {
 
     pub fn packets_written_counter(&self) -> Arc<AtomicU64> {
         self.packets_written.clone()
+    }
+
+    pub fn packets_lost(&self) -> u64 {
+        self.packets_lost.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -1348,6 +1357,7 @@ mod tests {
             decoded.frames as u64,
             "a counter taken before recording follows the writer"
         );
+        assert_eq!(encoder.packets_lost(), 0);
     }
 
     #[test]
