@@ -53,6 +53,17 @@ export const isMcpRedirectUri = (value: string) => {
 	}
 };
 
+export const MCP_AUTHORIZATION_PARAMS = [
+	"client_id",
+	"redirect_uri",
+	"response_type",
+	"state",
+	"code_challenge",
+	"code_challenge_method",
+	"scope",
+	"resource",
+] as const;
+
 export type McpAuthorizationRequest = {
 	clientId: string;
 	redirectUri: string;
@@ -161,12 +172,16 @@ const lockAccount = async (
 	userId: typeof users.$inferSelect.id,
 ) => {
 	const [account] = await tx
-		.select({ authSessionVersion: users.authSessionVersion })
+		.select({
+			authSessionVersion: users.authSessionVersion,
+			email: users.email,
+		})
 		.from(users)
 		.where(eq(users.id, userId))
 		.limit(1)
 		.for("update");
-	return account ?? null;
+	if (!account || isBlockedAccountEmail(account.email)) return null;
+	return account;
 };
 
 export const createMcpAuthorizationCode = async (

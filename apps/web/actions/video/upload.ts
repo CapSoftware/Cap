@@ -113,6 +113,7 @@ async function getVideoUploadPresignedUrl({
 	}
 }
 
+const VIDEO_ID_PATTERN = /^[0-9A-Za-z_-]{1,15}$/;
 const NEW_VIDEO_ID_PATTERN = /^[0-9abcdefghjkmnpqrstvwxyz]{15}$/;
 
 export async function createVideoAndGetUploadUrl({
@@ -144,6 +145,8 @@ export async function createVideoAndGetUploadUrl({
 	const user = await getCurrentUser();
 
 	if (!user) throw new Error("Unauthorized");
+	if (videoId && !VIDEO_ID_PATTERN.test(videoId))
+		throw new Error("Invalid video id");
 
 	try {
 		if (!userIsPro(user) && duration && duration > 300)

@@ -75,6 +75,7 @@ function runFolders(operation: FolderOperation) {
 			FoldersPolicy,
 			FoldersPolicy.make({
 				canCreateIn: () => Effect.void,
+				canCreateInOrganization: () => Effect.void,
 				canEdit: () => Effect.void,
 			}),
 		),
