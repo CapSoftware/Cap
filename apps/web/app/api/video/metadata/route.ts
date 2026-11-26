@@ -35,7 +35,11 @@ export async function PUT(request: NextRequest) {
 		return Response.json({ error: true }, { status: 400 });
 	}
 
-	const { agentUpload: _agentUpload, ...clientMetadata } = metadata;
+	const {
+		agentUpload: _agentUpload,
+		transcriptSpeakerNames: _transcriptSpeakerNames,
+		...clientMetadata
+	} = metadata;
 
 	await db().transaction(async (tx) => {
 		const [locked] = await tx
@@ -44,14 +48,16 @@ export async function PUT(request: NextRequest) {
 			.where(eq(videos.id, videoId))
 			.for("update");
 
-		const storedAgentUpload = locked?.metadata?.agentUpload;
-
 		await tx
 			.update(videos)
 			.set({
-				metadata: storedAgentUpload
-					? { ...clientMetadata, agentUpload: storedAgentUpload }
-					: clientMetadata,
+				metadata: {
+					...locked?.metadata,
+					...clientMetadata,
+					...(locked?.metadata?.customCreatedAt !== undefined
+						? { customCreatedAt: locked.metadata.customCreatedAt }
+						: {}),
+				},
 			})
 			.where(eq(videos.id, videoId));
 	});

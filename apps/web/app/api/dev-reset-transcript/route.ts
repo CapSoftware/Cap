@@ -4,7 +4,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
@@ -73,19 +73,11 @@ export async function POST(request: NextRequest) {
 		await db().delete(videoEdits).where(eq(videoEdits.videoId, videoId));
 	}
 
-	const metadata = {
-		...((video.metadata as Record<string, unknown> | null) ?? {}),
-	};
-	delete metadata.summary;
-	delete metadata.chapters;
-	delete metadata.aiGenerationStatus;
-	delete metadata.editTranscriptBackfill;
-
 	await db()
 		.update(videos)
 		.set({
 			transcriptionStatus: null,
-			metadata,
+			metadata: sql`JSON_REMOVE(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.summary', '$.chapters', '$.aiGenerationStatus', '$.editTranscriptBackfill')`,
 			...(restoredDuration === null ? {} : { duration: restoredDuration }),
 		})
 		.where(eq(videos.id, videoId));

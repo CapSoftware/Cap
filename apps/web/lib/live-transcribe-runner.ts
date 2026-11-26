@@ -307,6 +307,15 @@ export async function promoteLiveTranscript(
 			};
 		}
 
+		// Chunk-local speaker IDs cannot identify the same person across chunks.
+		if (serverEnv().ASSEMBLY_SPEAKER_LABELS === true) {
+			await queueFullPassFallback(videoId, userId);
+			return {
+				promoted: false,
+				reason: "speaker diarization requires a full transcription pass",
+			};
+		}
+
 		const [bucket] = await Storage.getAccessForVideo(
 			decodeStorageVideo(video),
 		).pipe(runWorkflowPromise);

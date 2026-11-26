@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 	userId: "owner",
 	language: "original",
 	edit: vi.fn(),
+	rename: vi.fn(),
 	invalidate: vi.fn(),
 }));
 
@@ -46,6 +47,9 @@ vi.mock("@/app/s/[videoId]/_components/CaptionContext", () => ({
 }));
 vi.mock("@/actions/videos/edit-transcript", () => ({
 	editTranscriptEntry: mocks.edit,
+}));
+vi.mock("@/actions/videos/rename-transcript-speaker", () => ({
+	renameTranscriptSpeaker: mocks.rename,
 }));
 vi.mock("lucide-react", async (importOriginal) => {
 	const icons = await importOriginal<typeof import("lucide-react")>();
@@ -110,6 +114,7 @@ const onRender: ProfilerOnRenderCallback = (_id, phase, actualDuration) => {
 };
 
 beforeEach(() => {
+	video.metadata = null;
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	mocks.content = transcript(1200);
 	mocks.userId = "owner";
@@ -181,6 +186,113 @@ async function type(text: string) {
 }
 
 describe("share transcript rendering", () => {
+	it.each(["original", "es"])(
+		"reads saved recording-local names in %s and includes them in downloaded captions",
+		async (language) => {
+			mocks.language = language;
+			video.metadata = { transcriptSpeakerNames: { A: "Alice & Bob" } };
+			mocks.content =
+				"WEBVTT\n\n1\n00:00:01.125 --> 00:00:03.000\n<v A>Hello &amp; welcome</v>\n";
+			const createObjectURL = vi
+				.fn<(blob: Blob) => string>()
+				.mockReturnValue("blob:transcript");
+			vi.stubGlobal("Blob", Blob);
+			vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
+			vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+				() => {},
+			);
+			await render();
+			expect(container.textContent).toContain("Alice & Bob");
+			const menu = container.querySelector<HTMLButtonElement>(
+				'button[aria-label="Download transcript"]',
+			);
+			if (!menu) throw new Error("Missing download menu");
+			await click(menu);
+			const captions = Array.from(container.querySelectorAll("button")).find(
+				(button) => button.textContent?.includes("Captions file"),
+			);
+			if (!captions) throw new Error("Missing caption export");
+			await click(captions);
+			const blob = createObjectURL.mock.calls[0]?.[0];
+			if (!blob) throw new Error("Missing downloaded captions");
+			expect(await blob.text()).toContain(
+				"<v Alice &amp; Bob>Hello &amp; welcome</v>",
+			);
+			expect(await blob.text()).toContain("00:00:01.125 --> 00:00:03.000");
+			expect(mocks.rename).not.toHaveBeenCalled();
+		},
+	);
+	it("renders speaker turns, seeks exact overlapping timestamps and saves recording-local names", async () => {
+		mocks.content =
+			"WEBVTT\n\n1\n00:00:01.125 --> 00:00:03.000\n<v A>Hello</v>\n\n2\n00:00:02.250 --> 00:00:04.000\n<v B>Overlapping</v>\n\n3\n00:00:05.000 --> 00:00:06.000\nUnknown\n";
+		mocks.rename.mockResolvedValue({
+			success: true,
+			message: "Saved",
+			names: { A: "Alice" },
+		});
+		await render();
+		expect(container.textContent).toContain("Speaker A");
+		expect(container.textContent).toContain("Unknown speaker");
+		const turn = Array.from(container.querySelectorAll("button")).find(
+			(button) => button.textContent?.includes("Overlapping"),
+		);
+		if (!turn) throw new Error("Missing turn");
+		await click(turn);
+		expect(onSeek).toHaveBeenLastCalledWith(2.25);
+		const input = container.querySelector("input");
+		if (!input) throw new Error("Missing name input");
+		await act(async () => {
+			Object.getOwnPropertyDescriptor(
+				HTMLInputElement.prototype,
+				"value",
+			)?.set?.call(input, "Alice");
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		const save = Array.from(container.querySelectorAll("button")).find(
+			(button) => button.textContent === "Save name",
+		);
+		if (!save) throw new Error("Missing save name");
+		await click(save);
+		expect(mocks.rename).toHaveBeenCalledWith(video.id, "A", "Alice");
+		expect(container.textContent).toContain("Alice");
+		expect(container.innerHTML).not.toContain("<v A>");
+		const clipboard = { writeText: vi.fn().mockResolvedValue(undefined) };
+		Object.defineProperty(navigator, "clipboard", {
+			configurable: true,
+			value: clipboard,
+		});
+		const copyMenu = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="Copy transcript"]',
+		);
+		if (!copyMenu) throw new Error("Missing copy menu");
+		await click(copyMenu);
+		const timestamped = Array.from(container.querySelectorAll("button")).find(
+			(button) => button.textContent?.includes("With timestamps"),
+		);
+		if (!timestamped) throw new Error("Missing timestamped copy");
+		await click(timestamped);
+		expect(clipboard.writeText).toHaveBeenCalledWith(
+			expect.stringContaining("Alice: Hello"),
+		);
+		mocks.rename.mockResolvedValue({
+			success: true,
+			message: "Saved",
+			names: {},
+		});
+		await act(async () => {
+			Object.getOwnPropertyDescriptor(
+				HTMLInputElement.prototype,
+				"value",
+			)?.set?.call(input, "");
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		await click(save);
+		expect(mocks.rename).toHaveBeenLastCalledWith(video.id, "A", "");
+		expect(container.textContent).not.toContain("Alice");
+		mocks.userId = "viewer";
+		await render();
+		expect(container.querySelector("input")).toBeNull();
+	});
 	it.each(["original", "ja"])(
 		"preserves cue timing and text in the %s caption download",
 		async (language) => {

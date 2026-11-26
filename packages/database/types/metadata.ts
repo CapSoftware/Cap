@@ -6,6 +6,7 @@
  * Video metadata structure
  */
 export interface VideoMetadata {
+	transcriptSpeakerNames?: Record<string, string>;
 	loomImportRun?: {
 		runId: string;
 		dispatch: "pending" | "accepted" | "rejected" | "uncertain";
