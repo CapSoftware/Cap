@@ -350,6 +350,54 @@ fn wrapped_strings_are_found_on_both_lines() {
 }
 
 #[test]
+fn a_wrapped_address_joins_only_as_one_block_of_text() {
+    let at = |text, x, y, w| LineContext {
+        text,
+        x,
+        y,
+        w,
+        h: 0.02,
+    };
+    let emails = |lines: &[LineContext<'_>], index: usize| {
+        classify_frame(lines)[index]
+            .iter()
+            .filter(|f| f.category == Email)
+            .count()
+    };
+    let block = [
+        at("Write to jane.doe@ex", 0.1, 0.10, 0.2),
+        at("ample.com today", 0.1, 0.125, 0.15),
+    ];
+    assert_eq!(emails(&block, 0), 1);
+    assert_eq!(emails(&block, 1), 1);
+    let wider = [
+        at("Write to jane.doe@ex", 0.1, 0.10, 0.2),
+        at("ample.com today and more", 0.1, 0.125, 0.4),
+    ];
+    assert_eq!(emails(&wider, 1), 0);
+    let mostly_above = [
+        at("Write to jane.doe@example.c", 0.1, 0.10, 0.2),
+        at("om and more of the text", 0.1, 0.125, 0.4),
+    ];
+    assert_eq!(emails(&mostly_above, 1), 1);
+    let elsewhere = [
+        at("Write to jane.doe@ex", 0.1, 0.10, 0.2),
+        at("ample.com", 0.12, 0.125, 0.1),
+    ];
+    assert_eq!(emails(&elsewhere, 1), 0);
+    let dropped_dot = [
+        at("Write to jane.doe@example", 0.1, 0.10, 0.2),
+        at("com today", 0.1, 0.125, 0.1),
+    ];
+    assert_eq!(emails(&dropped_dot, 1), 1);
+    let partial = [
+        at("Contact jane.doe@", 0.1, 0.10, 0.2),
+        at("42 items", 0.1, 0.125, 0.08),
+    ];
+    assert_eq!(emails(&partial, 1), 0);
+}
+
+#[test]
 fn unicode_offsets_are_chars() {
     let text = "Ünïcödé jane@example.com";
     let found = classify_line(text);

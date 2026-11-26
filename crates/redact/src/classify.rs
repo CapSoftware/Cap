@@ -741,6 +741,25 @@ fn join_wrapped_lines(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
                 if finding.start >= upper_len || finding.end <= upper_len + gap {
                     continue;
                 }
+                // An address is joined only when the lines read as one block
+                // of text (or one line holds nearly all of it) and a whole
+                // address, allowing one misread character, runs across the
+                // join.
+                if finding.category == RedactCategory::Email
+                    && !(same_left_edge(upper, lower)
+                        && (no_wider(upper, lower)
+                            || mostly_on_one_line(
+                                &joined,
+                                finding.start,
+                                finding.end,
+                                upper_len,
+                                gap,
+                            ))
+                        && (whole_email_across(&joined, upper_len, gap)
+                            || whole_email_across_one_slip(upper.text, lower.text)))
+                {
+                    continue;
+                }
                 let already = |found: &[Finding], start: usize, end: usize| {
                     found
                         .iter()
@@ -768,6 +787,71 @@ fn join_wrapped_lines(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
     for found in results.iter_mut() {
         *found = resolve_overlaps(std::mem::take(found));
     }
+}
+
+/// Whether `lower` starts at the left edge `upper` starts at, as the lines
+/// of one block of text do.
+fn same_left_edge(upper: &LineContext<'_>, lower: &LineContext<'_>) -> bool {
+    (lower.x - upper.x).abs() < upper.h * 0.5
+}
+
+/// Whether `lower` runs no further right than `upper`, as wrapped text does.
+fn no_wider(upper: &LineContext<'_>, lower: &LineContext<'_>) -> bool {
+    lower.x + lower.w <= upper.x + upper.w + upper.h
+}
+
+/// Whether one of the two lines holds the `@` and at least four fifths of the
+/// address `start..end` of `joined` (characters; `gap` joins the lines after
+/// the first `upper_len`).
+fn mostly_on_one_line(
+    joined: &str,
+    start: usize,
+    end: usize,
+    upper_len: usize,
+    gap: usize,
+) -> bool {
+    let chars = joined.chars().collect::<Vec<_>>();
+    let Some(at) = (start..end.min(chars.len())).find(|&i| chars[i] == '@') else {
+        return false;
+    };
+    let on_upper = upper_len.clamp(start, end) - start;
+    let on_lower = end - (upper_len + gap).clamp(start, end);
+    let total = (on_upper + on_lower).max(1) as f32;
+    let on_line = if at < upper_len { on_upper } else { on_lower };
+    on_line as f32 >= total * 0.8
+}
+
+/// Whether one character misread at the join (a character too many within
+/// three of it, or a missing `.`, `-`, `_` or `@` within two of it) hides a
+/// whole address running across it.
+fn whole_email_across_one_slip(upper: &str, lower: &str) -> bool {
+    let joined = format!("{upper}{lower}").chars().collect::<Vec<_>>();
+    let at = upper.chars().count();
+    let deleted = (at.saturating_sub(3)..(at + 3).min(joined.len())).any(|i| {
+        let mut text = joined.clone();
+        text.remove(i);
+        let split = if i < at { at - 1 } else { at };
+        whole_email_across(&text.iter().collect::<String>(), split, 0)
+    });
+    deleted
+        || (at.saturating_sub(2)..=(at + 2).min(joined.len())).any(|i| {
+            ['.', '-', '_', '@'].iter().any(|&ch| {
+                let mut text = joined.clone();
+                text.insert(i, ch);
+                let split = if i <= at { at + 1 } else { at };
+                whole_email_across(&text.iter().collect::<String>(), split, 0)
+            })
+        })
+}
+
+/// Whether a whole address (not just its start) in `joined` begins in the
+/// first `upper_len` characters and ends after the join.
+fn whole_email_across(joined: &str, upper_len: usize, gap: usize) -> bool {
+    let index = CharIndex::new(joined);
+    EMAIL.find_iter(joined).any(|found| {
+        let (start, end) = index.chars(found.start(), found.end());
+        start < upper_len && end > upper_len + gap
+    })
 }
 
 /// A labelled value is one token of at least this many characters.

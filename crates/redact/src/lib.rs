@@ -22,4 +22,4 @@ pub use model::OcrModel;
 /// The revision of what a scan finds: raised by every change to the scan or
 /// the classifier that changes the regions it writes, so a project scanned
 /// by an earlier build is scanned again instead of keeping its old masks.
-pub const SCAN_REVISION: u32 = 3;
+pub const SCAN_REVISION: u32 = 4;
