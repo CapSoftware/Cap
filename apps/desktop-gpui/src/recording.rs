@@ -2952,6 +2952,10 @@ async fn start_attempt_with_upload(
             if let Some(lock) = mic_lock.clone() {
                 builder = builder.with_mic_feed(lock);
             }
+            #[cfg(target_os = "macos")]
+            if let Some(observer) = crate::redact::live::start(&project_dir) {
+                builder = builder.with_segment_observer(observer);
+            }
             Handle::Studio(
                 builder
                     .build(
