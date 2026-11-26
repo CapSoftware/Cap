@@ -91,16 +91,12 @@ describe("DrawingOverlay CPU & memory optimization", () => {
 
 		const canvas = host.querySelector("canvas");
 		expect(canvas).not.toBeNull();
-
-		// Initially requested 1 frame to clear/draw initial state
 		expect(rafCallbacks.length).toBe(1);
 
-		// Execute initial frame
 		act(() => {
 			flushRaf();
 		});
 
-		// Once initial render completes and there are no active strokes, rAF stops!
 		expect(rafCallbacks.length).toBe(0);
 	});
 
@@ -113,7 +109,6 @@ describe("DrawingOverlay CPU & memory optimization", () => {
 
 		const canvas = host.querySelector("canvas")!;
 
-		// Start drawing with pointer down
 		act(() => {
 			canvas.dispatchEvent(
 				new PointerEvent("pointerdown", {
@@ -125,10 +120,8 @@ describe("DrawingOverlay CPU & memory optimization", () => {
 			);
 		});
 
-		// Now loop is active because user is drawing
 		expect(rafCallbacks.length).toBe(1);
 
-		// Add move points
 		act(() => {
 			canvas.dispatchEvent(
 				new PointerEvent("pointermove", {
@@ -140,14 +133,11 @@ describe("DrawingOverlay CPU & memory optimization", () => {
 			);
 		});
 
-		// Tick a frame while drawing
 		act(() => {
 			flushRaf(1000);
 		});
-		// Still drawing, should schedule next frame
 		expect(rafCallbacks.length).toBe(1);
 
-		// Pointer up finishes the stroke
 		act(() => {
 			canvas.dispatchEvent(
 				new PointerEvent("pointerup", {
@@ -159,13 +149,10 @@ describe("DrawingOverlay CPU & memory optimization", () => {
 			);
 		});
 
-		// With autoFade = true (default), stroke fades over FADE_DELAY_MS + FADE_DURATION_MS (3400ms)
-		// Advance time past the fade duration (e.g. 10000ms)
 		act(() => {
-			flushRaf(15000);
+			flushRaf(performance.now() + 10000);
 		});
 
-		// Once stroke opacity hits 0, it drops from buffer and rAF stops
 		expect(rafCallbacks.length).toBe(0);
 	});
 
@@ -196,7 +183,6 @@ describe("DrawingOverlay CPU & memory optimization", () => {
 			clearBtn.click();
 		});
 
-		// Loop stops immediately and does not continue ticking
 		expect(rafCallbacks.length).toBe(0);
 	});
 });
