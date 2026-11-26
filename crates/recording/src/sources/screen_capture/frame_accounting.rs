@@ -388,7 +388,12 @@ impl ScreenFrameAccounting {
         let lost_in_encoder = if self.finished.load(Ordering::Relaxed) {
             handed_to_encoder.saturating_sub(written)
         } else {
-            encoder_failed + self.writer_lost.load(Ordering::Relaxed)
+            let repeats = self.repeats_encoded.load(Ordering::Relaxed);
+            encoder_failed
+                + self
+                    .writer_lost
+                    .load(Ordering::Relaxed)
+                    .saturating_sub(repeats)
         };
         ScreenFrameTotals {
             displayed: delivered + callback_dropped + lost_in_capture,
@@ -961,6 +966,24 @@ mod tests {
         assert_eq!(totals.delivered, 4);
         assert_eq!(totals.lost_in_capture, 7);
         assert_eq!(totals.displayed, 11);
+    }
+
+    #[test]
+    fn a_stop_repeat_the_writer_loses_is_not_a_lost_real_frame() {
+        let accounting = ScreenFrameAccounting::default();
+        for i in 0..10u64 {
+            accounting.record_accepted(FrameLossCarry::default(), i == 0);
+            hand(&accounting, false);
+            let repeat = accounting.next_is_repeat();
+            accounting.record_encoded(repeat, true, Some(i + 1));
+        }
+        hand(&accounting, true);
+        let repeat = accounting.next_is_repeat();
+        accounting.record_encoded(repeat, true, Some(10));
+        accounting.record_writer_lost(1);
+        assert_eq!(accounting.totals().lost_in_encoder, 0);
+        accounting.record_writer_lost(3);
+        assert_eq!(accounting.totals().lost_in_encoder, 2);
     }
 
     #[test]
