@@ -2119,6 +2119,10 @@ impl AudioSource for SystemAudioSource {
         self.inner.audio_info()
     }
 
+    async fn finish_capture(&mut self) {
+        self.inner.finish_capture().await;
+    }
+
     async fn stop(&mut self) -> anyhow::Result<()> {
         drop(self.monitor_route.take());
         // Stop waits until held samples have been handed to the muxer.

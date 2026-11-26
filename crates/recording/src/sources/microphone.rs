@@ -1316,6 +1316,27 @@ impl AudioSource for Microphone {
         self.info
     }
 
+    fn finish_capture(&mut self) -> impl Future<Output = ()> + Send {
+        // Linux system audio holds samples until their route is proven: end
+        // capture here so that flush reaches the track before its last drain.
+        #[cfg(target_os = "linux")]
+        let capture_task = self
+            ._binding
+            .lock()
+            .unwrap()
+            .lock
+            .has_system_audio_hold()
+            .then(|| {
+                self.cancel.cancel();
+                self.capture_task.take()
+            })
+            .flatten();
+        async move {
+            #[cfg(target_os = "linux")]
+            await_capture_stop(capture_task).await;
+        }
+    }
+
     fn stop(&mut self) -> impl Future<Output = anyhow::Result<()>> + Send {
         #[cfg(target_os = "linux")]
         if let Some(health) = &self.required_health {
