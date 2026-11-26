@@ -62,15 +62,7 @@ impl FrameSource {
         anyhow::ensure!(width > 0 && height > 0, "video has no size");
         let time_base = f64::from(video.time_base());
         let start = decoder.start_time();
-        let duration = ffmpeg::format::input(path).ok().and_then(|input| {
-            let stream = input.streams().best(ffmpeg::media::Type::Video)?;
-            let base = f64::from(stream.time_base());
-            if stream.duration() > 0 && base > 0.0 {
-                return Some(stream.duration() as f64 * base);
-            }
-            (input.duration() > 0)
-                .then(|| input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE))
-        });
+        let duration = video_duration(path);
         let gray = GrayScale::new(width, height);
         let (track_width, track_height) = (gray.track_width, gray.track_height);
         Ok(Self {
@@ -394,6 +386,19 @@ fn yuv_to_rgb(y: u8, u: u8, v: u8) -> [u8; 3] {
         clamp(c - 100 * d - 208 * e),
         clamp(c + 516 * d),
     ]
+}
+
+/// The video stream's length as the file reports it (the stream's own
+/// duration, else the container's).
+pub fn video_duration(path: &Path) -> Option<f64> {
+    ffmpeg::init().ok();
+    let input = ffmpeg::format::input(path).ok()?;
+    let stream = input.streams().best(ffmpeg::media::Type::Video)?;
+    let base = f64::from(stream.time_base());
+    if stream.duration() > 0 && base > 0.0 {
+        return Some(stream.duration() as f64 * base);
+    }
+    (input.duration() > 0).then(|| input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE))
 }
 
 /// `size-mtime-hash` of the display video: file size (all fragments for a
