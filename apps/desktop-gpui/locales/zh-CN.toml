@@ -2623,7 +2623,6 @@ transparent_mov = "导出为透明 MOV。文件较大，最适合合成或剪辑
 copy_file = "导出并复制文件"
 copy_file_path = "导出并复制文件路径"
 cancel_sign_in = "取消登录"
-clipboard = "导出到剪贴板"
 create_link = "创建分享链接"
 file = "导出为文件"
 reupload = "重新上传到同一链接"

@@ -416,7 +416,6 @@ impl ClipboardExport {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(path));
             }
         }
-        crate::app_sounds::play_notification();
         Ok(())
     }
 }
@@ -425,6 +424,7 @@ pub struct ExportUi {
     pub destination: ExportDestination,
     clipboard_export: ClipboardExport,
     clipboard_menu: Option<ui::MenuState>,
+    _keyboard_nav: Option<gpui::Subscription>,
     pub format: ExportFormatKind,
     pub resolution: ExportResolution,
     pub fps: u32,
@@ -587,6 +587,7 @@ impl ExportUi {
             destination,
             clipboard_export: ClipboardExport::default(),
             clipboard_menu: None,
+            _keyboard_nav: None,
             format: ExportFormatKind::from_slug(&prefs.format),
             resolution: ExportResolution::from_slug(&prefs.resolution),
             fps: prefs.fps,
@@ -836,6 +837,14 @@ impl ExportUi {
         copy_link(link);
     }
 
+    fn install_keyboard_nav(&mut self, window: &Window, cx: &mut Context<EditorWindow>) {
+        self._keyboard_nav = Some(ui::keyboard_nav::install(window, cx, |this, _| {
+            this.export
+                .as_ref()
+                .is_none_or(|ui| ui.phase.is_busy() || ui.clipboard_menu.is_some())
+        }));
+    }
+
     fn clipboard_retry_path(&self) -> Option<&Path> {
         if self.phase == ExportPhase::Failed && self.destination == ExportDestination::Clipboard {
             self.output_path.as_deref()
@@ -1045,6 +1054,7 @@ impl EditorWindow {
             ui.set_destination(ExportDestination::File);
         }
         self.normalize_export_options(&mut ui);
+        ui.install_keyboard_nav(window, cx);
         self.export = Some(ui);
         self.subscribe_export_to_sign_in(window, cx);
         self.refresh_export_preview(window, cx);
@@ -1517,7 +1527,9 @@ impl EditorWindow {
                         let _ = this.update(cx, |this, cx| {
                             if let Some(ui) = this.export.as_mut() {
                                 ui.copy_completed_export(path, |path| {
-                                    clipboard_export.copy(path, cx)
+                                    clipboard_export
+                                        .copy(path, cx)
+                                        .inspect(|()| crate::app_sounds::play_notification())
                                 });
                             }
                             cx.notify();
@@ -2065,7 +2077,11 @@ impl EditorWindow {
         };
         ui.cancel = Arc::new(AtomicBool::new(false));
         let clipboard_export = ui.clipboard_export;
-        ui.copy_completed_export(path, |path| clipboard_export.copy(path, cx));
+        ui.copy_completed_export(path, |path| {
+            clipboard_export
+                .copy(path, cx)
+                .inspect(|()| crate::app_sounds::play_notification())
+        });
         cx.notify();
         self.finish_requested_export_close(window, cx);
     }
@@ -2526,24 +2542,26 @@ impl EditorWindow {
                     }),
             )
             .when_some(ui.clipboard_menu.as_ref(), |this, menu| {
-                this.on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                    let Some(menu) = this
-                        .export
-                        .as_mut()
-                        .and_then(|ui| ui.clipboard_menu.as_mut())
-                    else {
-                        return;
-                    };
-                    match menu.on_key(event.keystroke.key.as_str()) {
-                        ui::MenuKey::Commit(index) => {
-                            this.choose_clipboard_export(index, window, cx)
+                this.capture_key_down(cx.listener(
+                    |this, event: &gpui::KeyDownEvent, window, cx| {
+                        let Some(menu) = this
+                            .export
+                            .as_mut()
+                            .and_then(|ui| ui.clipboard_menu.as_mut())
+                        else {
+                            return;
+                        };
+                        match menu.on_key(event.keystroke.key.as_str()) {
+                            ui::MenuKey::Commit(index) => {
+                                this.choose_clipboard_export(index, window, cx)
+                            }
+                            ui::MenuKey::Dismiss => this.dismiss_clipboard_menu(cx),
+                            ui::MenuKey::Moved => cx.notify(),
+                            ui::MenuKey::Ignored => return,
                         }
-                        ui::MenuKey::Dismiss => this.dismiss_clipboard_menu(cx),
-                        ui::MenuKey::Moved => cx.notify(),
-                        ui::MenuKey::Ignored => return,
-                    }
-                    cx.stop_propagation();
-                }))
+                        cx.stop_propagation();
+                    },
+                ))
                 .child(
                     ui::Menu::editor(
                         &theme,
@@ -5382,6 +5400,71 @@ mod tests {
         let mut reopened = clipboard_export();
         assert!(!reopened.update_preview(&current, |ui| ui.preview_error = Some("Closed".into())));
         assert!(reopened.preview_error.is_none());
+    }
+
+    #[gpui::test]
+    fn clipboard_path_export_copies_the_absolute_output_as_text(cx: &mut gpui::TestAppContext) {
+        let mut ui = clipboard_export();
+        assert!(ui.clipboard_export == super::ClipboardExport::File);
+        ui.clipboard_export = super::ClipboardExport::Path;
+
+        let output = PathBuf::from("output").join("finished recording #1.mp4");
+        let expected = std::env::current_dir().unwrap().join(&output);
+        cx.update(|cx| {
+            let mode = ui.clipboard_export;
+            ui.copy_completed_export(output.clone(), |path| mode.copy(path, cx));
+        });
+
+        assert_eq!(ui.phase, ExportPhase::Done);
+        assert_eq!(ui.output_path.as_deref(), Some(output.as_path()));
+        let copied = cx
+            .read_from_clipboard()
+            .and_then(|clipboard| clipboard.text());
+        assert_eq!(copied.as_deref(), expected.to_str());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn choosing_a_clipboard_mode_by_keyboard_leaves_the_menu_closed(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let (editor, cx) = cx.add_window_view(|window, cx| {
+            let mut editor = super::EditorWindow::new(project.path().to_path_buf(), window, cx);
+            let mut export = clipboard_export();
+            export.install_keyboard_nav(window, cx);
+            editor.export = Some(export);
+            editor
+        });
+
+        let press = |cx: &mut gpui::VisualTestContext, key: &str| {
+            cx.simulate_keystrokes(key);
+            cx.update(|window, cx| {
+                window.dispatch_event(
+                    gpui::PlatformInput::KeyUp(gpui::KeyUpEvent {
+                        keystroke: gpui::Keystroke::parse(key).unwrap(),
+                    }),
+                    cx,
+                );
+            });
+        };
+        press(cx, "tab");
+        for _ in 0..2 {
+            cx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+            });
+            cx.run_until_parked();
+        }
+        press(cx, "enter");
+        assert!(editor.read_with(cx, |editor, _| {
+            editor.export.as_ref().unwrap().clipboard_menu.is_some()
+        }));
+
+        press(cx, "down");
+        press(cx, "enter");
+        editor.read_with(cx, |editor, _| {
+            let export = editor.export.as_ref().unwrap();
+            assert!(export.clipboard_export == super::ClipboardExport::Path);
+            assert!(export.clipboard_menu.is_none());
+        });
     }
 
     #[test]

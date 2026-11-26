@@ -210,7 +210,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::export::back(), "Back to editor"),
         (tr::editor::export::cta::cancel_sign_in(), "Cancel Sign In"),
-        (tr::editor::export::cta::clipboard(), "Export to Clipboard"),
+        (tr::editor::export::cta::copy_file(), "Export and copy file"),
+        (
+            tr::editor::export::cta::copy_file_path(),
+            "Export and copy file path",
+        ),
         (
             tr::editor::export::cta::create_link(),
             "Create shareable link",
@@ -220,6 +224,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::export::cta::sign_in(), "Sign in to share"),
         (tr::editor::export::destination::clipboard(), "Clipboard"),
         (tr::editor::export::destination::file(), "File"),
+        (tr::editor::export::destination::file_path(), "File path"),
+        (
+            tr::editor::export::destination::invalid_path(),
+            "The export path cannot be copied as text.",
+        ),
         (tr::editor::export::destination::link(), "Shareable Link"),
         (tr::editor::export::done::copy_link(), "Copy link"),
         (

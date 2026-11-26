@@ -2623,7 +2623,6 @@ transparent_mov = "Exporta como MOV transparente. Los archivos son grandes y sir
 copy_file = "Exportar y copiar archivo"
 copy_file_path = "Exportar y copiar ruta del archivo"
 cancel_sign_in = "Cancelar inicio de sesión"
-clipboard = "Exportar al portapapeles"
 create_link = "Crear enlace para compartir"
 file = "Exportar a archivo"
 reupload = "Volver a subir al mismo enlace"

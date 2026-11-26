@@ -2623,7 +2623,6 @@ transparent_mov = "透過MOVとして書き出します。ファイルサイズ�
 copy_file = "書き出してファイルをコピー"
 copy_file_path = "書き出してファイルパスをコピー"
 cancel_sign_in = "サインインをキャンセル"
-clipboard = "クリップボードに書き出す"
 create_link = "共有リンクを作成"
 file = "ファイルに書き出す"
 reupload = "同じリンクに再アップロード"

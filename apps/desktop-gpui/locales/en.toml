@@ -2625,7 +2625,6 @@ transparent_mov = "Exports as a transparent MOV. Files are large and best for co
 copy_file = "Export and copy file"
 copy_file_path = "Export and copy file path"
 cancel_sign_in = "Cancel Sign In"
-clipboard = "Export to Clipboard"
 create_link = "Create shareable link"
 file = "Export to File"
 reupload = "Reupload to same link"
