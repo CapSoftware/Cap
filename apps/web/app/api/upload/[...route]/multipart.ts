@@ -46,6 +46,7 @@ import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { zValidator } from "@/utils/zod-validator";
+import { hasDotSegment } from "../utils";
 import {
 	getMultipartFileKey,
 	getSubpath,
@@ -110,6 +111,9 @@ app.post(
 		const user = c.get("user");
 
 		const fileKey = getMultipartFileKey(user.id, body);
+		if (hasDotSegment(fileKey)) {
+			return c.json({ error: "Invalid file path" }, 400);
+		}
 		if (isNonMediaRawUploadKey(fileKey)) {
 			return c.json({ error: nonMediaUploadMessage }, 400);
 		}

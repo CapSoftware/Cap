@@ -147,6 +147,67 @@ describe("signed upload metadata", () => {
 		},
 	);
 
+	it.each([
+		"index.html",
+		"segments/page.htm",
+		"preview/image.svg",
+		"result",
+		"result.mp4.xml",
+	])("refuses the upload %s", async (subpath) => {
+		const response = await requestSignedUpload({ subpath });
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({
+			error: "This file type cannot be uploaded",
+		});
+	});
+
+	it.each([
+		"result.mp4",
+		"segments/recording.json",
+		"segments/video/segment_001.m4s",
+		"screenshot/screen-capture.jpg",
+		"screenshot/screen-capture.png",
+		"output/video_recording_000.ts",
+		"audio.aac",
+	])("signs the upload %s", async (subpath) => {
+		const response = await requestSignedUpload({ subpath });
+
+		expect(response.status).toBe(200);
+	});
+
+	it("refuses batches that include an unsupported file type", async () => {
+		const response = await app.request("https://cap.test/batch", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video-1",
+				subpaths: ["segments/video/init.mp4", "segments/index.html"],
+			}),
+		});
+
+		expect(response.status).toBe(400);
+	});
+
+	it("signs the batch uploads a recording uses", async () => {
+		const response = await app.request("https://cap.test/batch", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video-1",
+				subpaths: [
+					"segments/video/init.mp4",
+					"segments/audio/init.mp4",
+					"segments/manifest.json",
+					"segments/video/segment_001.m4s",
+					"segments/audio/segment_001.m4s",
+				],
+			}),
+		});
+
+		expect(response.status).toBe(200);
+	});
+
 	it("refuses batches that include a playlist source", async () => {
 		const response = await app.request("https://cap.test/batch", {
 			method: "POST",

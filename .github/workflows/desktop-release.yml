@@ -808,6 +808,7 @@ jobs:
           test -x "$APPROOT/usr/bin/pactl"
           test -s "$APPROOT/usr/lib/alsa-lib/libasound_module_pcm_pulse.so"
           test -s "$APPROOT/usr/lib/cap/alsa-pulse.conf"
+          grep -qx "<confdir:alsa.conf>" "$APPROOT/usr/lib/cap/alsa-pulse-appimage.conf"
           if [[ -n "$(find "$APPROOT" -name 'libwayland-client.so*' -print -quit)" ]]; then
             echo "::error::The Cap AppImage bundles a Wayland client that can conflict with host Mesa drivers"
             exit 1

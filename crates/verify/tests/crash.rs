@@ -190,6 +190,7 @@ mod source {
         screen_capture::VideoFrame {
             sample_buf: picture,
             timestamp: Timestamp::Instant(at),
+            capture: None,
         }
     }
 

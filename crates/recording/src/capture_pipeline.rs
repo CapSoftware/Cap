@@ -66,6 +66,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
+        video_bitrate: Option<u32>,
         #[cfg(windows)] encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline>
     where
@@ -97,12 +98,14 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
+        video_bitrate: Option<u32>,
     ) -> anyhow::Result<OutputPipeline> {
         let ultra = quality == StudioQuality::Ultra;
         let compatibility = quality == StudioQuality::Compatibility;
 
         tracing::debug!(
             ?quality,
+            ?video_bitrate,
             ultra,
             compatibility,
             fragmented,
@@ -166,12 +169,14 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                     .build::<OutOfProcessFragmentedM4SMuxer>(OutOfProcessFragmentedM4SMuxerConfig {
                         preset,
                         bpp,
+                        video_bitrate,
                         output_size,
                         shared_pause_state,
                         ..Default::default()
                     })
                     .await
             } else {
+                let frame_accounting = screen_capture.frame_accounting();
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
                     .with_timestamps(start_time)
@@ -180,8 +185,10 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                         timed_fragments: true,
                         preset,
                         bpp,
+                        video_bitrate,
                         output_size,
                         shared_pause_state,
+                        frame_accounting: Some(frame_accounting),
                         ..Default::default()
                     })
                     .await
@@ -201,6 +208,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                     instant_mode: false,
                     ultra_quality: ultra,
                     compatibility_quality: compatibility,
+                    video_bitrate,
                 })
                 .await
         }
@@ -242,6 +250,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
+        video_bitrate: Option<u32>,
         encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline> {
         let ultra = quality == StudioQuality::Ultra;
@@ -299,6 +308,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         segment_duration: std::time::Duration::from_secs(2),
                         preset,
                         bpp,
+                        video_bitrate,
                         output_size,
                         shared_pause_state,
                         disk_space_callback: None,
@@ -316,6 +326,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         segment_duration: std::time::Duration::from_secs(2),
                         preset,
                         bpp,
+                        video_bitrate,
                         output_size,
                         shared_pause_state,
                         disk_space_callback: None,
@@ -336,6 +347,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
                     d3d_device,
                     bitrate_multiplier,
+                    video_bitrate,
                     frame_rate: 30u32,
                     output_size: output_size.map(|(w, h)| windows::Graphics::SizeInt32 {
                         Width: w as i32,
@@ -366,6 +378,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: H264Preset::Ultrafast,
                 bpp: H264EncoderBuilder::INSTANT_MODE_BPP,
+                video_bitrate: None,
                 output_size: Some(output_size),
                 shared_pause_state: None,
                 disk_space_callback: None,
@@ -388,6 +401,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
+        video_bitrate: Option<u32>,
     ) -> anyhow::Result<OutputPipeline> {
         let fragments_dir = output_path
             .parent()
@@ -407,6 +421,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
                 } else {
                     H264Preset::Ultrafast
                 },
+                video_bitrate,
                 output_size,
                 shared_pause_state,
                 segment_tx: None,
@@ -430,6 +445,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
                 timed_fragments: false,
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: H264Preset::Ultrafast,
+                video_bitrate: None,
                 output_size: Some(output_size),
                 shared_pause_state: None,
                 segment_tx,
