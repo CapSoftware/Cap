@@ -17,6 +17,9 @@ vi.mock("@/lib/server", () => ({
 	runPromise: vi.fn(),
 }));
 
+vi.mock("@/lib/shareable-link-quota", () => ({
+	isVideoLockedByShareableLinkLimit: async () => false,
+}));
 vi.mock("@/utils/helpers", () => ({
 	CACHE_CONTROL_HEADERS: {},
 }));

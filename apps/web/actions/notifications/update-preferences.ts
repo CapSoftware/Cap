@@ -3,8 +3,9 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { userPreferencesObject } from "@/lib/user-preferences-sql";
 
 export const updatePreferences = async ({
 	notifications,
@@ -26,10 +27,7 @@ export const updatePreferences = async ({
 		await db()
 			.update(users)
 			.set({
-				preferences: {
-					...(currentUser.preferences ?? {}),
-					notifications,
-				},
+				preferences: sql`JSON_SET(${userPreferencesObject()}, '$.notifications', CAST(${JSON.stringify(notifications)} AS JSON))`,
 			})
 			.where(eq(users.id, currentUser.id));
 		revalidatePath("/dashboard");

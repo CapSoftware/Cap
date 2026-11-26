@@ -240,6 +240,7 @@ impl Muxer for FragmentedAudioMuxer {
             Ok(result) => Ok(result.map_err(Into::into)),
             Err(FragmentedAudioFinishError::AlreadyFinished) => Ok(Ok(())),
             Err(FragmentedAudioFinishError::WriteTrailerFailed(error)) => Ok(Err(anyhow!(error))),
+            Err(error @ FragmentedAudioFinishError::StorageStalled(_)) => Ok(Err(error.into())),
         }
     }
 }
@@ -472,6 +473,7 @@ pub struct SegmentedVideoMuxer {
     video_config: VideoInfo,
     segment_duration: Duration,
     preset: H264Preset,
+    bpp: f32,
     output_size: Option<(u32, u32)>,
     segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     state: Option<SegmentedEncoderState>,
@@ -485,6 +487,7 @@ pub struct SegmentedVideoMuxerConfig {
     pub timed_fragments: bool,
     pub segment_duration: Duration,
     pub preset: H264Preset,
+    pub video_bitrate: Option<u32>,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
@@ -496,6 +499,7 @@ impl Default for SegmentedVideoMuxerConfig {
             timed_fragments: false,
             segment_duration: Duration::from_secs(3),
             preset: H264Preset::Ultrafast,
+            video_bitrate: None,
             output_size: None,
             shared_pause_state: None,
             segment_tx: None,
@@ -533,6 +537,12 @@ impl Muxer for SegmentedVideoMuxer {
             video_config,
             segment_duration: config.segment_duration,
             preset: config.preset,
+            bpp: H264EncoderBuilder::bpp_for_video_bitrate(
+                H264EncoderBuilder::QUALITY_BPP,
+                config.video_bitrate,
+                &video_config,
+                config.output_size,
+            ),
             output_size: config.output_size,
             segment_tx: config.segment_tx,
             state: None,
@@ -686,7 +696,7 @@ impl SegmentedVideoMuxer {
         let encoder_config = SegmentedVideoEncoderConfig {
             segment_duration: self.segment_duration,
             preset: self.preset,
-            bpp: H264EncoderBuilder::QUALITY_BPP,
+            bpp: self.bpp,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: false,
         };

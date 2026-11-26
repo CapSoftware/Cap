@@ -6,7 +6,8 @@
 		".next/types/**/*.ts",
 		"**/*.ts",
 		"**/*.tsx",
-		"./package.json"
+		"./package.json",
+		"./auth/disposable-email-domains.json"
 	],
 	"compilerOptions": {
 		"composite": true,

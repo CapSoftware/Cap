@@ -28,6 +28,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
+import { formatClock } from "@/lib/player-time";
 
 const phaseMessages: Partial<Record<RecorderPhase, string>> = {
 	recording: "Recording",
@@ -41,13 +42,6 @@ const clamp = (value: number, min: number, max: number) => {
 	if (Number.isNaN(value)) return min;
 	if (max < min) return min;
 	return Math.min(Math.max(value, min), max);
-};
-
-const formatDuration = (durationMs: number) => {
-	const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
-	const minutes = Math.floor(totalSeconds / 60);
-	const seconds = totalSeconds % 60;
-	return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 };
 
 interface InProgressRecordingBarProps {
@@ -198,7 +192,7 @@ export const InProgressRecordingBar = ({
 	const canStop = (phase === "recording" || isPaused) && !isErrorState;
 	const showTimer = (phase === "recording" || isPaused) && !isErrorState;
 	const statusText = showTimer
-		? formatDuration(durationMs)
+		? formatClock(durationMs / 1000)
 		: (phaseMessages[phase] ?? "Processing");
 
 	const handleStop = () => {

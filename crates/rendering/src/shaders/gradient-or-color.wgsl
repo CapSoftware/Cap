@@ -4,7 +4,7 @@ struct Uniforms {
 	angle: f32,
 	noise_intensity: f32,
 	noise_scale: f32,
-	_padding: f32,
+	aspect_ratio: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -69,15 +69,13 @@ fn fs_main(@location(0) tex_coords: vec2<f32>) -> @location(0) vec4<f32> {
 }
 
 fn gradient(uv: vec2<f32>) -> vec4<f32> {
-		let angle_rad = radians(u.angle + 270.0);
-
-		let dir = vec2<f32>(cos(angle_rad), sin(angle_rad));
-
-		let proj = dot(uv - 0.5, dir) + 0.5;
-
-		let t = clamp(proj, 0.0, 1.0);
-
-		return mix(u.start, u.end, t);
+    let angle_rad = radians(u.angle + 270.0);
+    let dir = vec2<f32>(cos(angle_rad), sin(angle_rad));
+    let canvas = vec2<f32>(u.aspect_ratio, 1.0);
+    let span = dot(abs(dir), canvas);
+    let proj = dot((uv - 0.5) * canvas, dir) / span + 0.5;
+    let t = clamp(proj, 0.0, 1.0);
+    return mix(u.start, u.end, t);
 }
 
 struct VertexOutput {

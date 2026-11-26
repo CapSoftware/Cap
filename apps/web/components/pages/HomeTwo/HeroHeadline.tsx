@@ -8,7 +8,6 @@ import {
 	StudioIcon,
 } from "@/components/pages/HomePage/modeIcons";
 import { MacCursor, WindowsCursor } from "./cursors";
-import { HALLOWEEN } from "./halloween";
 import { H_HERO, INK, MODE_THEME, type ModeKey } from "./theme";
 
 type SlideKey = ModeKey | "all";
@@ -26,9 +25,8 @@ const SLIDES: Slide[] = [
 	{ key: "screenshot", tail: "screenshots, too." },
 ];
 
-const NUDGE_EMOJI = HALLOWEEN ? "\u{1F47B}" : "\u{1F440}";
-const NUDGE = `Click me ${NUDGE_EMOJI}`;
-const NUDGE_TOUCH = `Tap me ${NUDGE_EMOJI}`;
+const NUDGE = "Click me \u{1F440}";
+const NUDGE_TOUCH = "Tap me \u{1F440}";
 const TOUCH_QUERY = "(max-width: 767px)";
 const TYPE_MS = 26;
 

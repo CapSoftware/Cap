@@ -9,6 +9,7 @@ import {
 	sendMessengerUserMessage,
 } from "@/actions/messenger";
 import { MESSENGER_SUGGESTED_PROMPTS } from "@/lib/messenger/constants";
+import { useMessengerPoll } from "@/lib/messenger/use-messenger-poll";
 
 interface ChatMessage {
 	id: string;
@@ -128,8 +129,6 @@ function MessageBubble({
 	);
 }
 
-const FULLPAGE_POLL_MS = 3000;
-
 export function ChatWindow({
 	conversation: initialConversation,
 	initialMessages,
@@ -142,6 +141,7 @@ export function ChatWindow({
 	const [conversation, setConversation] =
 		useState<ChatConversation>(initialConversation);
 	const [isPending, startTransition] = useTransition();
+	const [sendError, setSendError] = useState<string | null>(null);
 	const prevMessageCountRef = useRef(initialMessages.length);
 	const userScrolledRef = useRef(false);
 	const isSendingRef = useRef(false);
@@ -179,34 +179,17 @@ export function ChatWindow({
 		userScrolledRef.current = distanceFromBottom > 80;
 	}, []);
 
-	useEffect(() => {
-		let active = true;
-		let pollVersion = 0;
-		let appliedPollVersion = 0;
-		const interval = setInterval(async () => {
-			if (isSendingRef.current) return;
-			const requestVersion = ++pollVersion;
-			const messageVersion = messageVersionRef.current;
-			const data = await fetchMessengerConversation(
-				initialConversation.id,
-			).catch(() => null);
-			if (
-				!active ||
-				!data ||
-				isSendingRef.current ||
-				requestVersion <= appliedPollVersion ||
-				messageVersion !== messageVersionRef.current
-			)
-				return;
-			appliedPollVersion = requestVersion;
+	const resetPollBackoff = useMessengerPoll({
+		conversation,
+		messages,
+		hiddenPollMs: null,
+		isSendingRef,
+		messageVersionRef,
+		onSnapshot: (data) => {
 			setMessages(data.messages);
 			setConversation(data.conversation);
-		}, FULLPAGE_POLL_MS);
-		return () => {
-			active = false;
-			clearInterval(interval);
-		};
-	}, [initialConversation.id]);
+		},
+	});
 
 	const sendMessage = (text: string) => {
 		if (!text || isPending) return;
@@ -222,18 +205,27 @@ export function ChatWindow({
 			content: text,
 		};
 		setMessages((prev) => [...prev, optimistic]);
+		setSendError(null);
 		isSendingRef.current = true;
 		messageVersionRef.current++;
 
 		startTransition(async () => {
-			await sendMessengerUserMessage({
+			const result = await sendMessengerUserMessage({
 				conversationId: conversation.id,
 				content: text,
 			});
+			if ("error" in result) {
+				setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+				setInput(text);
+				setSendError(result.error);
+				isSendingRef.current = false;
+				return;
+			}
 			const data = await fetchMessengerConversation(conversation.id);
 			setMessages(data.messages);
 			setConversation(data.conversation);
 			isSendingRef.current = false;
+			resetPollBackoff();
 		});
 	};
 
@@ -372,6 +364,11 @@ export function ChatWindow({
 			</div>
 
 			<div className="border-t border-gray-3 bg-gray-1 px-4 py-3">
+				{sendError && (
+					<p role="alert" className="px-1 pb-2 text-[12px] text-gray-10">
+						{sendError}
+					</p>
+				)}
 				<form onSubmit={handleSubmit} className="flex items-end gap-2.5">
 					<textarea
 						ref={inputRef}

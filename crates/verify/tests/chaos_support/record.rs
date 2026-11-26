@@ -477,6 +477,7 @@ mod mac {
                             instant_mode: false,
                             ultra_quality: false,
                             compatibility_quality: false,
+                            video_bitrate: None,
                         },
                     )
                     .await
@@ -509,6 +510,7 @@ mod mac {
             let frame = screen_capture::VideoFrame {
                 sample_buf,
                 timestamp: timestamp(f.clock, timestamps),
+                capture: None,
             };
             if sender.send_async(frame).await.is_err() {
                 break;

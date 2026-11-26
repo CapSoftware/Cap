@@ -9,7 +9,10 @@ vi.mock("@cap/database", async () => {
 	return { db: () => client };
 });
 
-import { canUserDownloadVideo } from "@/lib/video-download-permissions";
+import {
+	areViewerDownloadsEnabled,
+	canUserDownloadVideo,
+} from "@/lib/video-download-permissions";
 
 const OWNER = User.UserId.make("user-owner");
 const OTHER = User.UserId.make("user-other");
@@ -148,5 +151,29 @@ describe("canUserDownloadVideo", () => {
 	it("propagates database failures", async () => {
 		mocks.query.mockRejectedValue(new Error("Database unavailable"));
 		await expect(call()).rejects.toThrow();
+	});
+});
+
+describe("areViewerDownloadsEnabled", () => {
+	it.each([
+		[undefined, undefined, true],
+		[null, null, true],
+		[{}, {}, true],
+		[{ disableDownloads: false }, { disableDownloads: false }, true],
+		[{}, { disableDownloads: true }, false],
+		[{ disableDownloads: true }, {}, false],
+		[{ disableDownloads: false }, { disableDownloads: true }, false],
+		[{ disableDownloads: true }, { disableDownloads: false }, false],
+	])(
+		"video %j, organization %j => %s",
+		(videoSettings, organizationSettings, expected) => {
+			expect(
+				areViewerDownloadsEnabled({ videoSettings, organizationSettings }),
+			).toBe(expected);
+		},
+	);
+
+	it("does not change who canUserDownloadVideo allows", async () => {
+		expect(await call()).toBe(false);
 	});
 });

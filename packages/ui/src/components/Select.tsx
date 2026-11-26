@@ -147,10 +147,12 @@ function Select({
 						value={option.value}
 						icon={option.icon}
 					>
-						<div className="flex gap-2 items-center">
-							{option.image && option.image}
-							{option.label}
-						</div>
+						<span className="flex gap-2 items-center min-w-0">
+							{option.image && (
+								<span className="flex shrink-0">{option.image}</span>
+							)}
+							<span className="truncate">{option.label}</span>
+						</span>
 					</SelectItem>
 				))}
 			</SelectContent>

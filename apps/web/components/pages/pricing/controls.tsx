@@ -3,7 +3,7 @@
 import { classNames } from "@cap/utils/helpers";
 import NumberFlow from "@number-flow/react";
 import { Minus, Plus } from "lucide-react";
-import { MONO, type ModeTheme } from "@/components/pages/HomeTwo/theme";
+import type { ModeTheme } from "@/components/pages/HomeTwo/theme";
 
 type SegmentOption = {
 	value: string;
@@ -47,7 +47,7 @@ export const Segmented = ({
 					{option.label}
 					{option.badge ? (
 						<span
-							className={`${MONO} hidden whitespace-nowrap rounded-full px-1.5 py-[3px] text-[9.5px] uppercase leading-none tracking-[0.05em] min-[360px]:inline-block`}
+							className="hidden whitespace-nowrap rounded-full px-1.5 py-[3px] text-[11px] leading-none min-[360px]:inline-block"
 							style={
 								active
 									? { background: theme.glyph, color: "#FFFFFF" }

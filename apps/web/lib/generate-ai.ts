@@ -15,6 +15,36 @@ type GenerateAiResult = {
 const LEGACY_AI_SUMMARY_FALLBACK =
 	"The AI was unable to generate a proper summary for this content.";
 
+export function isAiGenerationRerun(metadata: VideoMetadata) {
+	const status = metadata.aiGenerationStatus;
+	if (!status || status === "PROCESSING" || status === "QUEUED") return false;
+	return !(
+		status === "COMPLETE" &&
+		metadata.summary &&
+		metadata.summary !== LEGACY_AI_SUMMARY_FALLBACK &&
+		metadata.chapters
+	);
+}
+
+export function chargesProcessingRerun(input: {
+	target: "all" | "transcript" | "ai";
+	retry: boolean | undefined;
+	transcriptionStatus: string | null;
+	metadata: VideoMetadata;
+}) {
+	if (
+		input.target !== "ai" &&
+		input.retry === true &&
+		input.transcriptionStatus === "ERROR"
+	)
+		return true;
+	if (input.target === "transcript") return false;
+	if (input.transcriptionStatus !== "COMPLETE") return false;
+	if (!isAiGenerationRerun(input.metadata)) return false;
+	const status = input.metadata.aiGenerationStatus;
+	return input.retry === true || (status !== "ERROR" && status !== "SKIPPED");
+}
+
 const getAffectedRows = (result: unknown) => {
 	if (Array.isArray(result)) {
 		return (

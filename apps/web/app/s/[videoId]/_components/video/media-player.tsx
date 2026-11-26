@@ -40,6 +40,8 @@ import {
 	VolumeXIcon,
 	ZapIcon,
 } from "lucide-react";
+import { createMediaStore } from "media-chrome/media-store/media-store";
+import { stateMediator } from "media-chrome/media-store/state-mediator";
 import {
 	MediaActionTypes,
 	MediaContext,
@@ -60,8 +62,13 @@ import {
 	PLAYBACK_SPEEDS,
 } from "@/lib/playback-speed";
 import { seekLength } from "../early-length";
+import { displayedMediaTime } from "../media-source-refresh";
 import { Badge } from "./badge";
 import { Button as PlayerButton } from "./button";
+import {
+	createHandledKeyTracker,
+	hasBrowserShortcutModifier,
+} from "./shortcut-modifiers";
 import {
 	Tooltip,
 	TooltipContent,
@@ -145,6 +152,14 @@ const selectRenditionList = (s: S) =>
 const selectRenditionSelected = (s: S) => s.mediaRenditionSelected;
 
 const EMPTY_MEDIA_STATE = Object.freeze({}) as Partial<MediaState>;
+
+const playerStateMediator: typeof stateMediator = {
+	...stateMediator,
+	mediaCurrentTime: {
+		...stateMediator.mediaCurrentTime,
+		get: ({ media }) => (media ? displayedMediaTime(media) : 0),
+	},
+};
 
 function useMediaOwnerRef<T extends HTMLElement>(type: string) {
 	const store = React.useContext(MediaContext);
@@ -339,9 +354,17 @@ function MediaPlayerRoot(props: MediaPlayerRootProps) {
 		() => createStore(listenersRef, stateRef),
 		[listenersRef, stateRef],
 	);
+	const mediaStore = React.useMemo(
+		() =>
+			createMediaStore({
+				documentElement: globalThis.document,
+				stateMediator: playerStateMediator,
+			}),
+		[],
+	);
 
 	return (
-		<MediaProvider>
+		<MediaProvider mediaStore={mediaStore}>
 			<StoreContext.Provider value={store}>
 				<MediaPlayerRootImpl {...props} />
 			</StoreContext.Provider>
@@ -398,6 +421,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 
 	const hideControlsTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 	const volumeIndicatorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+	const [handledKeys] = React.useState(createHandledKeyTracker);
 
 	const mediaPaused = useMediaSelector(selectPaused);
 	const isFullscreen = useMediaSelector(selectFullscreen);
@@ -518,10 +542,14 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 				document.activeElement?.closest('[data-slot="media-player"]') !== null;
 
 			if (!isMediaFocused && !isPlayerFocused) return;
+			if (hasBrowserShortcutModifier(event)) return;
 
 			if (autoHide) onControlsShow();
 
-			switch (event.key.toLowerCase()) {
+			const key = event.key.toLowerCase();
+			handledKeys.down(key);
+
+			switch (key) {
 				case " ":
 				case "k":
 					event.preventDefault();
@@ -757,6 +785,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 			isVideo,
 			onControlsShow,
 			autoHide,
+			handledKeys,
 		],
 	);
 
@@ -765,11 +794,12 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 			rootImplProps.onKeyUp?.(event);
 
 			const key = event.key.toLowerCase();
+			if (!handledKeys.up(key)) return;
 			if (key === "arrowup" || key === "arrowdown" || key === "m") {
 				onVolumeIndicatorTrigger();
 			}
 		},
-		[rootImplProps.onKeyUp, onVolumeIndicatorTrigger],
+		[rootImplProps.onKeyUp, onVolumeIndicatorTrigger, handledKeys],
 	);
 
 	React.useEffect(() => {
@@ -2308,7 +2338,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 								}}
 							/>
 						)}
-					<SliderPrimitive.Range className="absolute h-full bg-white will-change-[width]" />
+					<SliderPrimitive.Range className="player-brand-range absolute h-full bg-white will-change-[width]" />
 					{seekState.isHovering && effectiveDuration > 0 && (
 						<div
 							data-slot="media-player-seek-hover-range"
@@ -2321,7 +2351,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 					)}
 					{chapterSeparators}
 				</SliderPrimitive.Track>
-				<SliderPrimitive.Thumb className="relative z-10 block size-3 shrink-0 rounded-full bg-white shadow-sm  transition-[color,box-shadow] will-change-transform focus-visible:outline-hidden outline-0 disabled:pointer-events-none disabled:opacity-50" />
+				<SliderPrimitive.Thumb className="player-brand-thumb relative z-10 block size-3 shrink-0 rounded-full bg-white shadow-sm  transition-[color,box-shadow] will-change-transform focus-visible:outline-hidden outline-0 disabled:pointer-events-none disabled:opacity-50" />
 			</SliderPrimitive.Root>
 			{!withoutTooltip &&
 				!context.withoutTooltip &&

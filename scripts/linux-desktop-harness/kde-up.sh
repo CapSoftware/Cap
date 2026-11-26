@@ -21,6 +21,13 @@ UNIT
 systemctl --user daemon-reload
 systemctl --user start cap-harness-session.target
 
+# ANIMATION_FACTOR is System Settings' animation speed (1 is the default, more
+# is slower): a window still fading out when a screenshot is taken shows in it.
+if [[ -n ${ANIMATION_FACTOR:-} ]]; then
+  mkdir -p "$HOME/.config"
+  printf '[KDE]\nAnimationDurationFactor=%s\n' "$ANIMATION_FACTOR" >"$HOME/.config/kdeglobals"
+fi
+
 # KWin streams screens only when it composites with OpenGL, which its virtual
 # backend does only on a DRM render node (load vgem on a host without a GPU).
 ls /dev/dri/renderD* >/dev/null 2>&1 ||

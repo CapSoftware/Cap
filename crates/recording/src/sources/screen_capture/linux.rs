@@ -1,6 +1,6 @@
 use super::cadence::FrameCadenceGate;
 use super::linux_dmabuf_import;
-use super::linux_shm::{self, ShmSegment};
+use super::linux_shm::{self, SharedMapping, ShmSegment};
 use super::*;
 use crate::feeds::microphone::{self, MicrophoneFeed, MicrophoneFeedLock};
 use crate::ffmpeg::FFmpegVideoFrame;
@@ -43,6 +43,9 @@ mod x11_tests;
 
 #[cfg(test)]
 mod system_audio_channel_tests;
+
+#[cfg(test)]
+mod wayland_portal_tests;
 
 use frame_scaler::FrameScaler;
 
@@ -103,8 +106,49 @@ struct WaylandInputConfig {
 }
 
 struct WaylandPortalSession {
-    _proxy: Screencast<'static>,
-    _session: Session<'static, Screencast<'static>>,
+    session: Arc<Session<'static, Screencast<'static>>>,
+    _close_on_drop: tokio::sync::oneshot::Sender<()>,
+}
+
+impl WaylandPortalSession {
+    fn new(session: Session<'static, Screencast<'static>>) -> Self {
+        let session = Arc::new(session);
+        let (close_on_drop, dropped) = tokio::sync::oneshot::channel::<()>();
+        let close = {
+            let session = session.clone();
+            async move {
+                let _ = dropped.await;
+                let result = tokio::time::timeout(Duration::from_secs(3), session.close())
+                    .await
+                    .context("Wayland screen capture portal session close timed out")?;
+                if let Err(ashpd::Error::Portal(ashpd::PortalError::ZBus(
+                    ashpd::zbus::Error::MethodError(name, _, _),
+                ))) = &result
+                    && matches!(
+                        name.as_str(),
+                        "org.freedesktop.DBus.Error.UnknownObject"
+                            | "org.freedesktop.DBus.Error.UnknownMethod"
+                    )
+                {
+                    return Ok(());
+                }
+                result.context("close Wayland screen capture portal session")
+            }
+        };
+        if let Some(scope) = crate::output_pipeline::PipelineBuildScope::current() {
+            scope.spawn_cleanup(close);
+        } else {
+            drop(tokio::spawn(async move {
+                if let Err(error) = close.await {
+                    tracing::warn!(%error, "Could not close the Wayland screen capture portal session");
+                }
+            }));
+        }
+        Self {
+            session,
+            _close_on_drop: close_on_drop,
+        }
+    }
 }
 
 pub struct VideoSource {
@@ -199,12 +243,41 @@ pub fn x11_capture_rect(
     display_height: f64,
     crop: Option<(f64, f64, f64, f64)>,
 ) -> anyhow::Result<(i32, i32, u32, u32)> {
+    let (x, y, width, height) =
+        x11_capture_bounds(display_x, display_y, display_width, display_height, crop, 2)?;
+    Ok((x, y, ensure_even(width), ensure_even(height)))
+}
+
+pub fn x11_screenshot_rect(
+    display_x: f64,
+    display_y: f64,
+    display_width: f64,
+    display_height: f64,
+    crop: Option<(f64, f64, f64, f64)>,
+) -> anyhow::Result<(i32, i32, u32, u32)> {
+    x11_capture_bounds(display_x, display_y, display_width, display_height, crop, 1)
+}
+
+fn x11_capture_bounds(
+    display_x: f64,
+    display_y: f64,
+    display_width: f64,
+    display_height: f64,
+    crop: Option<(f64, f64, f64, f64)>,
+    minimum: i32,
+) -> anyhow::Result<(i32, i32, u32, u32)> {
     let display_left = floor_i32(display_x, "display x")?;
     let display_top = floor_i32(display_y, "display y")?;
-    let display_right = ceil_i32(display_x + display_width.max(2.0), "display right")?;
-    let display_bottom = ceil_i32(display_y + display_height.max(2.0), "display bottom")?;
+    let display_right = ceil_i32(
+        display_x + display_width.max(f64::from(minimum)),
+        "display right",
+    )?;
+    let display_bottom = ceil_i32(
+        display_y + display_height.max(f64::from(minimum)),
+        "display bottom",
+    )?;
 
-    if display_right - display_left < 2 || display_bottom - display_top < 2 {
+    if display_right - display_left < minimum || display_bottom - display_top < minimum {
         bail!("X11 display bounds are too small for capture");
     }
 
@@ -212,23 +285,24 @@ pub fn x11_capture_rect(
         Some((x, y, width, height)) => (
             floor_i32(display_x + x, "capture x")?,
             floor_i32(display_y + y, "capture y")?,
-            ceil_i32(display_x + x + width.max(2.0), "capture right")?,
-            ceil_i32(display_y + y + height.max(2.0), "capture bottom")?,
+            ceil_i32(
+                display_x + x + width.max(f64::from(minimum)),
+                "capture right",
+            )?,
+            ceil_i32(
+                display_y + y + height.max(f64::from(minimum)),
+                "capture bottom",
+            )?,
         ),
         None => (display_left, display_top, display_right, display_bottom),
     };
 
-    let left = raw_left.clamp(display_left, display_right - 2);
-    let top = raw_top.clamp(display_top, display_bottom - 2);
-    let right = raw_right.clamp(left + 2, display_right);
-    let bottom = raw_bottom.clamp(top + 2, display_bottom);
+    let left = raw_left.clamp(display_left, display_right - minimum);
+    let top = raw_top.clamp(display_top, display_bottom - minimum);
+    let right = raw_right.clamp(left + minimum, display_right);
+    let bottom = raw_bottom.clamp(top + minimum, display_bottom);
 
-    Ok((
-        left,
-        top,
-        ensure_even((right - left) as u32),
-        ensure_even((bottom - top) as u32),
-    ))
+    Ok((left, top, (right - left) as u32, (bottom - top) as u32))
 }
 
 fn floor_i32(value: f64, label: &str) -> anyhow::Result<i32> {
@@ -382,6 +456,7 @@ async fn open_wayland_portal(
         .create_session()
         .await
         .context("create XDG Desktop Portal ScreenCast session")?;
+    let portal_session = WaylandPortalSession::new(session);
     let cursor_mode = if show_cursor {
         CursorMode::Embedded
     } else {
@@ -390,7 +465,7 @@ async fn open_wayland_portal(
 
     proxy
         .select_sources(
-            &session,
+            &portal_session.session,
             cursor_mode,
             wayland_source_type(source),
             false,
@@ -401,7 +476,7 @@ async fn open_wayland_portal(
         .context("select Wayland screen capture source")?;
 
     let response = proxy
-        .start(&session, None)
+        .start(&portal_session.session, None)
         .await
         .context("start Wayland screen capture portal request")?
         .response()
@@ -412,17 +487,14 @@ async fn open_wayland_portal(
         .cloned()
         .ok_or_else(|| anyhow!("Wayland screen capture portal did not return a stream"))?;
     let fd = proxy
-        .open_pipe_wire_remote(&session)
+        .open_pipe_wire_remote(&portal_session.session)
         .await
         .context("open PipeWire remote for Wayland screen capture")?;
 
     Ok(WaylandPortalCapture {
         stream,
         fd,
-        portal_session: WaylandPortalSession {
-            _proxy: proxy,
-            _session: session,
-        },
+        portal_session,
     })
 }
 
@@ -1506,48 +1578,77 @@ mod alsa_input_backend {
         Some(unsafe { CStr::from_ptr(value) }.to_owned())
     }
 
+    /// Where an ALSA device's capture (or playback) chain ends.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum CaptureBackend {
+        /// The PulseAudio ALSA plugin (PulseAudio or PipeWire's pulse server).
+        Pulse,
+        /// A sound card opened directly, which a running sound server cannot share.
+        Hardware,
+        /// Any other plugin: PipeWire's own ALSA plugin, JACK, a file, a null device.
+        Other,
+    }
+
     fn nested_pcm(
         root: *mut c_void,
         node: *mut c_void,
         key: &CStr,
+        side: &CStr,
         depth: usize,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<CaptureBackend> {
         let node = child(node, key).context("ALSA input slave is missing")?;
         let named = string(node)
             .map(|name| definition(root, c"pcm_slave", &name))
             .transpose()?;
         let slave = named.as_ref().map_or(node, |config| config.raw);
         let pcm = child(slave, c"pcm").context("ALSA input slave PCM is missing")?;
-        node_uses_pulse(root, pcm, depth + 1)
+        node_capture_backend(root, pcm, side, depth + 1)
     }
 
-    fn node_uses_pulse(root: *mut c_void, node: *mut c_void, depth: usize) -> anyhow::Result<bool> {
+    /// `side` is the `asym` branch to follow: `capture` or `playback`.
+    fn node_capture_backend(
+        root: *mut c_void,
+        node: *mut c_void,
+        side: &CStr,
+        depth: usize,
+    ) -> anyhow::Result<CaptureBackend> {
         ensure!(
             depth < 32,
             "ALSA input configuration exceeds the alias depth limit"
         );
         if let Some(name) = string(node) {
             let resolved = definition(root, c"pcm", &name)?;
-            return node_uses_pulse(root, resolved.raw, depth + 1);
+            return node_capture_backend(root, resolved.raw, side, depth + 1);
         }
         let kind = child(node, c"type")
             .and_then(string)
             .context("ALSA input plugin type is missing")?;
         match kind.as_bytes() {
-            b"pulse" => Ok(true),
-            b"asym" => nested_pcm(root, node, c"capture", depth),
-            b"file" if child(node, c"infile").is_some() => Ok(false),
+            b"pulse" => Ok(CaptureBackend::Pulse),
+            b"hw" => Ok(CaptureBackend::Hardware),
+            b"asym" => nested_pcm(root, node, side, side, depth),
+            b"file" if child(node, c"infile").is_some() => Ok(CaptureBackend::Other),
             b"plug" | b"rate" | b"route" | b"linear" | b"lfloat" | b"copy" | b"softvol"
-            | b"dsnoop" | b"mmap_emul" | b"file" => nested_pcm(root, node, c"slave", depth),
-            _ if child(node, c"slave").is_some() => nested_pcm(root, node, c"slave", depth),
+            | b"dsnoop" | b"dmix" | b"mmap_emul" | b"file" => {
+                nested_pcm(root, node, c"slave", side, depth)
+            }
+            _ if child(node, c"slave").is_some() => nested_pcm(root, node, c"slave", side, depth),
             b"multi" => {
                 bail!("ALSA input has multiple backends; cannot identify a single Pulse route")
             }
-            _ => Ok(false),
+            _ => Ok(CaptureBackend::Other),
         }
     }
 
-    pub(super) fn uses_pulse(device_name: &str) -> anyhow::Result<bool> {
+    pub(super) fn capture_backend(device_name: &str) -> anyhow::Result<CaptureBackend> {
+        backend(device_name, c"capture")
+    }
+
+    pub(super) fn playback_backend(device_name: &str) -> anyhow::Result<CaptureBackend> {
+        backend(device_name, c"playback")
+    }
+
+    fn backend(device_name: &str, side: &CStr) -> anyhow::Result<CaptureBackend> {
         let name = CString::new(device_name).context("Invalid ALSA input name")?;
         let mut raw = std::ptr::null_mut();
         let status = unsafe { snd_config_update_ref(&mut raw) };
@@ -1556,7 +1657,11 @@ mod alsa_input_backend {
         }
         let root = Config { raw, shared: true };
         let input = definition(root.raw, c"pcm", &name)?;
-        node_uses_pulse(root.raw, input.raw, 0)
+        node_capture_backend(root.raw, input.raw, side, 0)
+    }
+
+    pub(super) fn uses_pulse(device_name: &str) -> anyhow::Result<bool> {
+        capture_backend(device_name).map(|backend| backend == CaptureBackend::Pulse)
     }
 
     #[cfg(test)]
@@ -1564,6 +1669,10 @@ mod alsa_input_backend {
         use super::*;
 
         fn configured_input_uses_pulse(text: &str) -> anyhow::Result<bool> {
+            configured_capture_backend(text).map(|backend| backend == CaptureBackend::Pulse)
+        }
+
+        fn configured_capture_backend(text: &str) -> anyhow::Result<CaptureBackend> {
             let text = CString::new(text)?;
             let mut raw = std::ptr::null_mut();
             let status =
@@ -1574,7 +1683,74 @@ mod alsa_input_backend {
             );
             let root = Config { raw, shared: false };
             let input = definition(root.raw, c"pcm", c"default")?;
-            node_uses_pulse(root.raw, input.raw, 0)
+            node_capture_backend(root.raw, input.raw, c"capture", 0)
+        }
+
+        fn configured_playback_backend(text: &str) -> anyhow::Result<CaptureBackend> {
+            let text = CString::new(text)?;
+            let mut raw = std::ptr::null_mut();
+            let status =
+                unsafe { snd_config_load_string(&mut raw, text.as_ptr(), text.as_bytes().len()) };
+            ensure!(
+                status >= 0 && !raw.is_null(),
+                "ALSA test configuration failed: {status}"
+            );
+            let root = Config { raw, shared: false };
+            let output = definition(root.raw, c"pcm", c"default")?;
+            node_capture_backend(root.raw, output.raw, c"playback", 0)
+        }
+
+        #[test]
+        fn playback_follows_the_playback_branch_and_dmix() {
+            for (config, expected) in [
+                (
+                    "pcm.default { type asym playback.pcm { type dmix ipc_key 1 slave.pcm { type hw card 0 } } capture.pcm { type pulse } }",
+                    CaptureBackend::Hardware,
+                ),
+                (
+                    "pcm.default { type asym playback.pcm { type pulse } capture.pcm { type hw card 0 } }",
+                    CaptureBackend::Pulse,
+                ),
+                (
+                    "pcm.default { type plug slave.pcm { type pipewire } }",
+                    CaptureBackend::Other,
+                ),
+            ] {
+                assert_eq!(
+                    configured_playback_backend(config).unwrap(),
+                    expected,
+                    "{config}"
+                );
+            }
+        }
+
+        #[test]
+        fn sound_cards_are_told_apart_from_sound_server_plugins() {
+            for (config, expected) in [
+                ("pcm.default { type hw card 0 }", CaptureBackend::Hardware),
+                (
+                    "pcm.default { type asym playback.pcm { type pulse } capture.pcm { type dsnoop ipc_key 1 slave.pcm { type hw card 0 } } }",
+                    CaptureBackend::Hardware,
+                ),
+                (
+                    "pcm.default { type plug slave.pcm card0 }\npcm.card0 { type hw card 0 }",
+                    CaptureBackend::Hardware,
+                ),
+                ("pcm.default { type pipewire }", CaptureBackend::Other),
+                (
+                    "pcm.default { type plug slave.pcm { type pipewire } }",
+                    CaptureBackend::Other,
+                ),
+                ("pcm.default { type jack }", CaptureBackend::Other),
+                ("pcm.default { type null }", CaptureBackend::Other),
+                ("pcm.default { type pulse }", CaptureBackend::Pulse),
+            ] {
+                assert_eq!(
+                    configured_capture_backend(config).unwrap(),
+                    expected,
+                    "{config}"
+                );
+            }
         }
 
         #[test]
@@ -1773,6 +1949,54 @@ fn uses_default_pulse_input(device_name: &str) -> bool {
     device_name.eq_ignore_ascii_case("default") || device_name.eq_ignore_ascii_case("pulse")
 }
 
+/// The ALSA input to open for the microphone the user selected, when it is
+/// not the selection itself.
+///
+/// Without a sound-server override of ALSA "default" (Arch without
+/// pipewire-alsa, for example) "default" opens the sound card directly. A
+/// running PipeWire or PulseAudio cannot then use that card's capture
+/// device, so Cap's own system-audio stream stalls and other apps lose the
+/// microphone. The server's default source records the same microphone
+/// without holding the card.
+pub(crate) fn microphone_input_device(label: &str) -> Option<String> {
+    use alsa_input_backend::capture_backend;
+
+    routes_default_microphone_through_server(
+        label,
+        || capture_backend("default").ok(),
+        || capture_backend("pulse").ok(),
+        pactl_default_source,
+    )
+    .then(|| "pulse".to_string())
+}
+
+/// The ALSA output Cap plays its own sounds through when ALSA "default"
+/// playback is the bare sound card and a sound server runs. Opening the card
+/// would take the speakers from the server, which silences other apps and the
+/// server's monitor that Cap records system audio from.
+pub fn sound_server_output() -> Option<&'static str> {
+    use alsa_input_backend::{CaptureBackend, playback_backend};
+
+    (playback_backend("default").ok()? == CaptureBackend::Hardware
+        && playback_backend("pulse").ok()? == CaptureBackend::Pulse
+        && pactl_default_sink().is_some())
+    .then_some("pulse")
+}
+
+fn routes_default_microphone_through_server(
+    label: &str,
+    default_backend: impl FnOnce() -> Option<alsa_input_backend::CaptureBackend>,
+    pulse_backend: impl FnOnce() -> Option<alsa_input_backend::CaptureBackend>,
+    default_source: impl FnOnce() -> Option<String>,
+) -> bool {
+    use alsa_input_backend::CaptureBackend;
+
+    label.eq_ignore_ascii_case("default")
+        && default_backend() == Some(CaptureBackend::Hardware)
+        && pulse_backend() == Some(CaptureBackend::Pulse)
+        && default_source().is_some_and(|source| !source.ends_with(".monitor"))
+}
+
 impl AudioSource for SystemAudioSource {
     type Config = SystemAudioSourceConfig;
 
@@ -1790,6 +2014,7 @@ impl AudioSource for SystemAudioSource {
             tx,
             ctx,
             X11Capture::audio_info().channels,
+            None,
         );
         async move {
             let inner = setup
@@ -1822,7 +2047,7 @@ impl AudioSource for SystemAudioSource {
     }
 }
 
-async fn create_system_audio_source_config() -> anyhow::Result<SystemAudioSourceConfig> {
+pub async fn create_system_audio_source_config() -> anyhow::Result<SystemAudioSourceConfig> {
     let (error_tx, _error_rx) = flume::bounded(16);
     let feed = MicrophoneFeed::spawn(MicrophoneFeed::new_system_audio(error_tx));
     let owned_feed = OwnedSystemAudioFeed {
@@ -2024,8 +2249,9 @@ fn source_output_needs_move(current_source: u32, target_source: Option<u32>) -> 
 }
 
 fn select_system_audio_monitor() -> anyhow::Result<SelectedSystemAudioInput> {
-    let devices = MicrophoneFeed::list();
-    let available = devices.keys().cloned().collect::<Vec<_>>();
+    // The last device list's names: listing again here opens every device,
+    // which takes a bare-card default from the sound server as recording starts.
+    let available = crate::feeds::microphone::listed_input_names();
 
     if let Some(name) = preferred_system_audio_device(&available, false) {
         return Ok(SelectedSystemAudioInput {
@@ -2342,6 +2568,22 @@ fn pactl_default_source() -> Option<String> {
     pactl_default_device("get-default-source")
 }
 
+/// Whether the sound server still has a microphone for "default" to record.
+/// Once its only input is gone it reports no source, PipeWire's null source
+/// or a monitor. Without a server answering, ALSA's default is all there is
+/// and counts as present.
+pub(crate) fn default_microphone_present() -> bool {
+    default_source_is_a_microphone(pactl_default_source().as_deref())
+}
+
+fn default_source_is_a_microphone(source: Option<&str>) -> bool {
+    source.is_none_or(|source| {
+        !(source.starts_with('@')
+            || source.starts_with("auto_null")
+            || source.ends_with(".monitor"))
+    })
+}
+
 fn pactl_default_device(command: &str) -> Option<String> {
     let output = Command::new("pactl").arg(command).output().ok()?;
 
@@ -2441,11 +2683,188 @@ pub struct X11Grabber {
     output: VideoInfo,
     scaler: Option<FrameScaler>,
     show_cursor: bool,
+    force_shm_row_copy: bool,
 }
 
 enum GrabBackend {
-    Shm(ShmSegment),
+    Shm(ShmPool),
     GetImage,
+}
+
+/// In-flight SHM frames keep their mapping. Past this many outstanding
+/// frames, capture copies into an owned ffmpeg buffer instead of attaching
+/// another segment.
+#[doc(hidden)]
+pub const X11_SHM_PUBLISH_SLOTS: usize = 4;
+
+/// Matches `AV_INPUT_BUFFER_PADDING_SIZE`. Consumers such as swscale may
+/// overread a plane by this many bytes.
+const SHM_PLANE_PADDING: usize = 64;
+
+struct ShmPool {
+    conn: Arc<RustConnection>,
+    slots: Vec<ShmSegment>,
+    scratch: Option<ShmSegment>,
+    logged_copy_fallback: bool,
+}
+
+impl ShmPool {
+    fn new(conn: Arc<RustConnection>, segment: ShmSegment) -> Self {
+        Self {
+            conn,
+            slots: vec![segment],
+            scratch: None,
+            logged_copy_fallback: false,
+        }
+    }
+
+    fn segment_size(image_bytes: usize) -> anyhow::Result<usize> {
+        image_bytes
+            .checked_add(SHM_PLANE_PADDING)
+            .context("X11 shared-memory size overflowed")
+    }
+
+    fn read_frame(
+        &mut self,
+        drawable: u32,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        image_bytes: usize,
+        format: ffmpeg::format::Pixel,
+        force_copy: bool,
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        let required = Self::segment_size(image_bytes)?;
+        self.slots.retain(|slot| slot.len() == required);
+
+        if let Some(index) = self.slots.iter_mut().position(|slot| slot.is_exclusive()) {
+            return self
+                .publish_or_copy_slot(index, drawable, x, y, width, height, format, force_copy);
+        }
+
+        if !force_copy && self.slots.len() < X11_SHM_PUBLISH_SLOTS {
+            self.slots.push(
+                ShmSegment::new(&self.conn, required)
+                    .context("allocate X11 shared-memory frame")?,
+            );
+            let index = self.slots.len() - 1;
+            return self
+                .publish_or_copy_slot(index, drawable, x, y, width, height, format, force_copy);
+        }
+
+        self.copy_from_scratch(drawable, x, y, width, height, required, format, force_copy)
+    }
+
+    fn publish_or_copy_slot(
+        &mut self,
+        index: usize,
+        drawable: u32,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        format: ffmpeg::format::Pixel,
+        force_copy: bool,
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        let segment = &mut self.slots[index];
+        let written = segment
+            .get_image(drawable, x, y, width, height)
+            .context("read X11 shared-memory image")?
+            .len();
+        segment.zero_tail(written);
+        let width_px = usize::from(width);
+        let height_px = usize::from(height);
+        if !force_copy
+            && let Some(linesize) = shm_plane_linesize(written, width_px, height_px, segment.len())
+            && let Ok(frame) =
+                publish_shm_frame(segment.share_mapping(), linesize, width, height, format)
+        {
+            return Ok(frame);
+        }
+
+        let mut frame = ffmpeg::frame::Video::new(format, u32::from(width), u32::from(height));
+        copy_image_rows(
+            &self.slots[index].bytes()[..written],
+            width_px,
+            height_px,
+            &mut frame,
+        )?;
+        Ok(frame)
+    }
+
+    fn copy_from_scratch(
+        &mut self,
+        drawable: u32,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        required: usize,
+        format: ffmpeg::format::Pixel,
+        force_copy: bool,
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        if !force_copy && !self.logged_copy_fallback {
+            self.logged_copy_fallback = true;
+            tracing::debug!(
+                slots = self.slots.len(),
+                "X11 SHM frames are still referenced; copying this frame out of shared memory"
+            );
+        }
+        if self
+            .scratch
+            .as_ref()
+            .is_none_or(|segment| segment.len() != required)
+        {
+            self.scratch = Some(
+                ShmSegment::new(&self.conn, required)
+                    .context("allocate X11 shared-memory scratch")?,
+            );
+        }
+        let scratch = self
+            .scratch
+            .as_mut()
+            .context("X11 shared-memory scratch missing")?;
+        let written = scratch
+            .get_image(drawable, x, y, width, height)
+            .context("read X11 shared-memory image")?
+            .len();
+        scratch.zero_tail(written);
+        let mut frame = ffmpeg::frame::Video::new(format, u32::from(width), u32::from(height));
+        copy_image_rows(
+            &scratch.bytes()[..written],
+            usize::from(width),
+            usize::from(height),
+            &mut frame,
+        )?;
+        Ok(frame)
+    }
+
+    fn publish_idle(
+        &mut self,
+        width: u16,
+        height: u16,
+        image_bytes: usize,
+        format: ffmpeg::format::Pixel,
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        let required = Self::segment_size(image_bytes)?;
+        let Some(index) = self
+            .slots
+            .iter_mut()
+            .position(|slot| slot.len() == required && slot.is_exclusive())
+        else {
+            bail!("no idle X11 shared-memory segment to publish");
+        };
+        let segment = &self.slots[index];
+        let linesize = shm_plane_linesize(
+            image_bytes,
+            usize::from(width),
+            usize::from(height),
+            segment.len(),
+        )
+        .context("X11 shared-memory layout is not publishable")?;
+        publish_shm_frame(segment.share_mapping(), linesize, width, height, format)
+    }
 }
 
 struct X11WindowCapture {
@@ -2583,6 +3002,7 @@ impl X11Grabber {
             output,
             scaler: None,
             show_cursor,
+            force_shm_row_copy: false,
         };
         grabber.refresh_window_pixmap()?;
         grabber.backend = grabber.initial_backend(allow_shm);
@@ -2604,7 +3024,7 @@ impl X11Grabber {
         match self.create_shm_segment() {
             Ok(segment) => {
                 tracing::info!(bytes = segment.len(), "X11 capture using MIT-SHM");
-                GrabBackend::Shm(segment)
+                GrabBackend::Shm(ShmPool::new(Arc::clone(&self.conn), segment))
             }
             Err(error) => {
                 tracing::info!(error = %format!("{error:#}"), "X11 MIT-SHM unavailable, using GetImage");
@@ -2621,7 +3041,7 @@ impl X11Grabber {
             );
         }
         linux_shm::query_shm_support(&self.conn)?;
-        ShmSegment::new(&self.conn, self.shm_image_size()?)
+        ShmSegment::new(&self.conn, ShmPool::segment_size(self.shm_image_size()?)?)
     }
 
     fn shm_image_size(&self) -> anyhow::Result<usize> {
@@ -2644,6 +3064,29 @@ impl X11Grabber {
 
     pub fn uses_shm(&self) -> bool {
         matches!(self.backend, GrabBackend::Shm(_))
+    }
+
+    #[doc(hidden)]
+    pub fn force_shm_row_copy(&mut self, force: bool) {
+        self.force_shm_row_copy = force;
+    }
+
+    #[doc(hidden)]
+    pub fn set_output_size(&mut self, width: u32, height: u32) {
+        self.output.width = width;
+        self.output.height = height;
+    }
+
+    #[doc(hidden)]
+    pub fn publish_idle_shm_frame(&mut self) -> anyhow::Result<ffmpeg::frame::Video> {
+        let image_bytes = self.shm_image_size()?;
+        let width = self.width;
+        let height = self.height;
+        let format = self.source_pixel;
+        let GrabBackend::Shm(pool) = &mut self.backend else {
+            bail!("X11 MIT-SHM backend is not active");
+        };
+        pool.publish_idle(width, height, image_bytes, format)
     }
 
     fn refresh_window_pixmap(&mut self) -> anyhow::Result<()> {
@@ -2727,25 +3170,27 @@ impl X11Grabber {
             }
             None => (self.root, self.x, self.y),
         };
-        let mut source = ffmpeg::frame::Video::new(
-            self.source_pixel,
-            u32::from(self.width),
-            u32::from(self.height),
-        );
-        if self.uses_shm() {
-            if let Err(shm_error) = self.read_shm_image(drawable, x, y, &mut source) {
-                // Only abandon MIT-SHM once GetImage succeeds on the same frame;
-                // if both fail the cause is the drawable/region, not SHM.
-                self.read_get_image(drawable, x, y, &mut source)?;
-                tracing::warn!(
-                    error = %format!("{shm_error:#}"),
-                    "X11 MIT-SHM capture failed, switching to GetImage"
-                );
-                self.backend = GrabBackend::GetImage;
+        let source = if self.uses_shm() {
+            match self.read_shm_frame(drawable, x, y) {
+                Ok(frame) => frame,
+                Err(shm_error) => {
+                    // Only abandon MIT-SHM once GetImage succeeds on the same frame;
+                    // if both fail the cause is the drawable/region, not SHM.
+                    let mut source = self.allocate_source_frame();
+                    self.read_get_image(drawable, x, y, &mut source)?;
+                    tracing::warn!(
+                        error = %format!("{shm_error:#}"),
+                        "X11 MIT-SHM capture failed, switching to GetImage"
+                    );
+                    self.backend = GrabBackend::GetImage;
+                    source
+                }
             }
         } else {
+            let mut source = self.allocate_source_frame();
             self.read_get_image(drawable, x, y, &mut source)?;
-        }
+            source
+        };
 
         let mut frame = prepare_pipewire_frame(source, &mut self.scaler, self.output)?;
 
@@ -2758,23 +3203,38 @@ impl X11Grabber {
         Ok(frame)
     }
 
-    fn read_shm_image(
+    fn allocate_source_frame(&self) -> ffmpeg::frame::Video {
+        ffmpeg::frame::Video::new(
+            self.source_pixel,
+            u32::from(self.width),
+            u32::from(self.height),
+        )
+    }
+
+    fn read_shm_frame(
         &mut self,
         drawable: u32,
         x: i16,
         y: i16,
-        dst: &mut ffmpeg::frame::Video,
-    ) -> anyhow::Result<()> {
-        let required = self.shm_image_size()?;
-        let GrabBackend::Shm(segment) = &mut self.backend else {
+    ) -> anyhow::Result<ffmpeg::frame::Video> {
+        let image_bytes = self.shm_image_size()?;
+        let width = self.width;
+        let height = self.height;
+        let format = self.source_pixel;
+        let force_copy = self.force_shm_row_copy;
+        let GrabBackend::Shm(pool) = &mut self.backend else {
             bail!("X11 MIT-SHM backend is not active");
         };
-        if segment.len() != required {
-            *segment = ShmSegment::new(&self.conn, required)
-                .context("resize X11 shared-memory segment")?;
-        }
-        let data = segment.get_image(drawable, x, y, self.width, self.height)?;
-        copy_image_rows(data, usize::from(self.width), usize::from(self.height), dst)
+        pool.read_frame(
+            drawable,
+            x,
+            y,
+            width,
+            height,
+            image_bytes,
+            format,
+            force_copy,
+        )
     }
 
     fn read_get_image(
@@ -2876,6 +3336,101 @@ impl X11Grabber {
     }
 }
 
+/// Linesize for a packed 32-bit SHM image, when the mapping has room for the
+/// plane plus SIMD overread padding. `None` means the caller must copy.
+fn shm_plane_linesize(
+    written: usize,
+    width: usize,
+    height: usize,
+    mapping_len: usize,
+) -> Option<i32> {
+    if height == 0 {
+        return None;
+    }
+    let row_bytes = width.checked_mul(4)?;
+    let stride = written / height;
+    if stride < row_bytes {
+        return None;
+    }
+    let plane = stride.checked_mul(height)?;
+    if plane > written || plane > mapping_len {
+        return None;
+    }
+    if mapping_len - plane < SHM_PLANE_PADDING {
+        return None;
+    }
+    i32::try_from(stride).ok()
+}
+
+fn publish_shm_frame(
+    mapping: SharedMapping,
+    linesize: i32,
+    width: u16,
+    height: u16,
+    format: ffmpeg::format::Pixel,
+) -> anyhow::Result<ffmpeg::frame::Video> {
+    let mut frame = ffmpeg::frame::Video::empty();
+    frame.set_format(format);
+    frame.set_width(u32::from(width));
+    frame.set_height(u32::from(height));
+
+    let data = mapping.as_ptr();
+    let size = mapping.len();
+    if data.is_null() || size == 0 {
+        bail!("X11 shared-memory mapping is empty");
+    }
+    let plane = usize::try_from(linesize)
+        .ok()
+        .and_then(|stride| stride.checked_mul(usize::from(height)))
+        .filter(|plane| *plane <= size)
+        .context("X11 shared-memory plane does not fit the mapping")?;
+    if plane == 0 {
+        bail!("X11 shared-memory plane is empty");
+    }
+
+    let opaque = mapping.into_raw();
+    // SAFETY: `data`/`size` describe the live SysV mapping owned by `opaque`.
+    // The callback drops that owner when the last AVBufferRef is released, which
+    // is after every consumer of this frame has finished. The buffer is writable
+    // so cursor compositing can update pixels before the frame is shared further.
+    let buffer = unsafe {
+        ffmpeg::ffi::av_buffer_create(data, size, Some(release_shared_mapping), opaque, 0)
+    };
+    if buffer.is_null() {
+        // SAFETY: `av_buffer_create` failed and did not take `opaque`.
+        drop(unsafe { SharedMapping::from_raw(opaque) });
+        bail!("failed to publish X11 shared-memory frame");
+    }
+    // SAFETY: `frame` came from `av_frame_alloc`. Plane 0 points into `buffer`,
+    // whose free callback keeps the mapping mapped for the frame's lifetime.
+    unsafe {
+        let raw = frame.as_mut_ptr();
+        (*raw).data[0] = data;
+        (*raw).linesize[0] = linesize;
+        (*raw).buf[0] = buffer;
+        (*raw).extended_data = std::ptr::addr_of_mut!((*raw).data).cast();
+    }
+    Ok(frame)
+}
+
+unsafe extern "C" fn release_shared_mapping(opaque: *mut libc::c_void, _data: *mut u8) {
+    if !opaque.is_null() {
+        // SAFETY: `opaque` is the `SharedMapping::into_raw` pointer stored on the
+        // AVBuffer and released exactly once.
+        drop(unsafe { SharedMapping::from_raw(opaque) });
+    }
+}
+
+#[doc(hidden)]
+pub fn copy_x11_image_rows(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    dst: &mut ffmpeg::frame::Video,
+) -> anyhow::Result<()> {
+    copy_image_rows(data, width, height, dst)
+}
+
 fn copy_image_rows(
     data: &[u8],
     width: usize,
@@ -2958,9 +3513,9 @@ mod system_audio_tests {
         OwnedSystemAudioFeed, PactlSourceOutput, PulseInputRole, newly_created_source_output,
         pactl_monitor_preference, pactl_source_index, preferred_system_audio_device,
         previous_source_destination, process_source_output_ids, pulse_input_route_destination,
-        retry_system_audio_connection, source_output_needs_move, source_output_route_matches,
-        started_input_source_output, uses_default_pulse_input, wait_for_audio_after_route,
-        wait_for_started_source_output,
+        retry_system_audio_connection, routes_default_microphone_through_server,
+        source_output_needs_move, source_output_route_matches, started_input_source_output,
+        uses_default_pulse_input, wait_for_audio_after_route, wait_for_started_source_output,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -3351,6 +3906,80 @@ mod system_audio_tests {
     }
 
     #[test]
+    fn the_default_microphone_is_missing_once_the_server_has_no_input() {
+        use super::default_source_is_a_microphone;
+
+        assert!(default_source_is_a_microphone(Some(
+            "alsa_input.pci-0000_00_1f.3.analog-stereo"
+        )));
+        assert!(default_source_is_a_microphone(Some(
+            "bluez_input.00_11_22.0"
+        )));
+        assert!(default_source_is_a_microphone(None));
+        for gone in [
+            "@DEFAULT_SOURCE@",
+            "auto_null.monitor",
+            "auto_null",
+            "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor",
+        ] {
+            assert!(!default_source_is_a_microphone(Some(gone)), "{gone}");
+        }
+    }
+
+    #[test]
+    fn only_a_default_microphone_on_the_bare_sound_card_moves_to_the_sound_server() {
+        use super::alsa_input_backend::CaptureBackend::{Hardware, Other, Pulse};
+
+        let source = || Some("alsa_input.pci-0000_00_1f.3.analog-stereo".to_string());
+        assert!(routes_default_microphone_through_server(
+            "default",
+            || Some(Hardware),
+            || Some(Pulse),
+            source
+        ));
+        assert!(routes_default_microphone_through_server(
+            "Default",
+            || Some(Hardware),
+            || Some(Pulse),
+            source
+        ));
+        for (default, pulse) in [
+            (Some(Pulse), Some(Pulse)),
+            (Some(Other), Some(Pulse)),
+            (None, Some(Pulse)),
+            (Some(Hardware), None),
+            (Some(Hardware), Some(Other)),
+        ] {
+            assert!(!routes_default_microphone_through_server(
+                "default",
+                || default,
+                || pulse,
+                source
+            ));
+        }
+        assert!(!routes_default_microphone_through_server(
+            "default",
+            || Some(Hardware),
+            || Some(Pulse),
+            || None
+        ));
+        assert!(!routes_default_microphone_through_server(
+            "default",
+            || Some(Hardware),
+            || Some(Pulse),
+            || Some("alsa_output.pci-0000_00_1f.3.analog-stereo.monitor".to_string())
+        ));
+        for label in ["pulse", "pipewire", "HDA Intel PCH", "USB Microphone"] {
+            assert!(!routes_default_microphone_through_server(
+                label,
+                || panic!("a named input never reads the ALSA configuration"),
+                || panic!("a named input never reads the ALSA configuration"),
+                || panic!("a named input never asks the sound server"),
+            ));
+        }
+    }
+
+    #[test]
     fn only_generic_pulse_devices_follow_the_default_input() {
         assert!(uses_default_pulse_input("default"));
         assert!(uses_default_pulse_input("PULSE"));
@@ -3666,5 +4295,60 @@ mod pipewire_frame_tests {
         assert_eq!(prepared.format(), ffmpeg::format::Pixel::BGRZ);
         assert_eq!((prepared.width(), prepared.height()), (8, 6));
         assert!(scaler.is_some());
+    }
+}
+
+#[cfg(test)]
+mod shm_publish_tests {
+    use super::{SHM_PLANE_PADDING, shm_plane_linesize};
+
+    #[test]
+    fn packed_32bpp_frames_publish_with_their_native_stride() {
+        let stride = 1920 * 4;
+        let height = 1080;
+        let written = stride * height;
+        assert_eq!(
+            shm_plane_linesize(written, 1920, height, written + SHM_PLANE_PADDING),
+            Some(stride as i32)
+        );
+        let four_k = 3840 * 4;
+        let four_k_rows = 2160;
+        let four_k_bytes = four_k * four_k_rows;
+        assert_eq!(
+            shm_plane_linesize(
+                four_k_bytes,
+                3840,
+                four_k_rows,
+                four_k_bytes + SHM_PLANE_PADDING
+            ),
+            Some(four_k as i32)
+        );
+    }
+
+    #[test]
+    fn padded_and_short_rows_follow_the_mapping() {
+        let written = 8usize;
+        assert_eq!(
+            shm_plane_linesize(written, 1, 1, written + SHM_PLANE_PADDING),
+            Some(8)
+        );
+        let stride = 333 * 4;
+        let height = 211;
+        let plane = stride * height;
+        assert_eq!(
+            shm_plane_linesize(plane, 333, height, plane + SHM_PLANE_PADDING),
+            Some(stride as i32)
+        );
+        assert_eq!(shm_plane_linesize(plane, 333, height, plane + 63), None);
+        assert_eq!(shm_plane_linesize(plane - 1, 333, height, plane + 64), None);
+        assert_eq!(shm_plane_linesize(0, 16, 0, 64), None);
+    }
+
+    #[test]
+    fn padding_matches_ffmpeg_input_overread() {
+        assert_eq!(
+            SHM_PLANE_PADDING,
+            ffmpeg::ffi::AV_INPUT_BUFFER_PADDING_SIZE as usize
+        );
     }
 }

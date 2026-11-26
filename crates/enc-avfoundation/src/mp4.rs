@@ -131,6 +131,7 @@ impl MP4Encoder {
             output_height,
             BitrateProfile::Balanced,
             false,
+            None,
         )
     }
 
@@ -147,6 +148,7 @@ impl MP4Encoder {
             output_height,
             BitrateProfile::Ultra,
             false,
+            None,
         )
     }
 
@@ -163,6 +165,7 @@ impl MP4Encoder {
             output_height,
             BitrateProfile::Compatibility,
             false,
+            None,
         )
     }
 
@@ -179,6 +182,26 @@ impl MP4Encoder {
             output_height,
             BitrateProfile::Balanced,
             true,
+            None,
+        )
+    }
+
+    pub fn init_with_video_bitrate(
+        output: PathBuf,
+        video_config: VideoInfo,
+        audio_config: Option<AudioInfo>,
+        output_height: Option<u32>,
+        bitrate_profile: BitrateProfile,
+        video_bitrate: u32,
+    ) -> Result<Self, InitError> {
+        Self::init_with_options(
+            output,
+            video_config,
+            audio_config,
+            output_height,
+            bitrate_profile,
+            false,
+            Some(video_bitrate),
         )
     }
 
@@ -189,6 +212,7 @@ impl MP4Encoder {
         output_height: Option<u32>,
         bitrate_profile: BitrateProfile,
         instant_mode: bool,
+        video_bitrate: Option<u32>,
     ) -> Result<Self, InitError> {
         let ultra_quality = matches!(bitrate_profile, BitrateProfile::Ultra);
         info!(
@@ -278,21 +302,14 @@ impl MP4Encoder {
                 ns::Number::with_u32(output_height).as_id_ref(),
             );
 
-            let bitrate = if instant_mode {
-                get_instant_mode_bitrate(output_width as f32, output_height as f32, fps)
-            } else {
-                match bitrate_profile {
-                    BitrateProfile::Ultra => {
-                        get_ultra_bitrate(output_width as f32, output_height as f32, fps)
-                    }
-                    BitrateProfile::Balanced => {
-                        get_average_bitrate(output_width as f32, output_height as f32, fps)
-                    }
-                    BitrateProfile::Compatibility => {
-                        get_compatibility_bitrate(output_width as f32, output_height as f32, fps)
-                    }
-                }
-            };
+            let bitrate = target_bitrate(
+                video_bitrate,
+                instant_mode,
+                bitrate_profile,
+                output_width as f32,
+                output_height as f32,
+                fps,
+            );
 
             debug!(
                 instant_mode,
@@ -983,8 +1000,13 @@ impl MP4Encoder {
         &mut self,
         timestamp: Option<Duration>,
     ) -> Result<arc::R<av::AssetWriter>, FinishError> {
-        if !self.session_started || self.is_finishing {
+        if self.is_finishing {
             return Err(FinishError::NotWriting);
+        }
+        // No frame ever reached the writer, so it never started and there is
+        // nothing to finalize: an empty output, not a broken one.
+        if !self.session_started {
+            return Err(FinishError::NoFrames);
         }
 
         let mut finish_timestamp = timestamp;
@@ -1099,6 +1121,27 @@ pub enum BitrateProfile {
     #[default]
     Balanced,
     Ultra,
+}
+
+fn target_bitrate(
+    video_bitrate: Option<u32>,
+    instant_mode: bool,
+    bitrate_profile: BitrateProfile,
+    width: f32,
+    height: f32,
+    fps: f32,
+) -> f32 {
+    if let Some(video_bitrate) = video_bitrate {
+        video_bitrate as f32
+    } else if instant_mode {
+        get_instant_mode_bitrate(width, height, fps)
+    } else {
+        match bitrate_profile {
+            BitrateProfile::Ultra => get_ultra_bitrate(width, height, fps),
+            BitrateProfile::Balanced => get_average_bitrate(width, height, fps),
+            BitrateProfile::Compatibility => get_compatibility_bitrate(width, height, fps),
+        }
+    }
 }
 
 fn get_average_bitrate(width: f32, height: f32, fps: f32) -> f32 {
@@ -1335,6 +1378,39 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn explicit_video_bitrate_replaces_only_the_studio_target() {
+        for (width, height) in [(1920.0, 1080.0), (3024.0, 1964.0), (3840.0, 2160.0)] {
+            for fps in [30.0, 60.0, 120.0, 240.0] {
+                for (profile, expected) in [
+                    (
+                        BitrateProfile::Balanced,
+                        get_average_bitrate(width, height, fps),
+                    ),
+                    (BitrateProfile::Ultra, get_ultra_bitrate(width, height, fps)),
+                    (
+                        BitrateProfile::Compatibility,
+                        get_compatibility_bitrate(width, height, fps),
+                    ),
+                ] {
+                    assert_eq!(
+                        target_bitrate(None, false, profile, width, height, fps).to_bits(),
+                        expected.to_bits()
+                    );
+                    assert_eq!(
+                        target_bitrate(Some(45_000_000), false, profile, width, height, fps),
+                        45_000_000.0
+                    );
+                }
+                assert_eq!(
+                    target_bitrate(None, true, BitrateProfile::Balanced, width, height, fps)
+                        .to_bits(),
+                    get_instant_mode_bitrate(width, height, fps).to_bits()
+                );
+            }
+        }
     }
 
     #[test]
@@ -4412,6 +4488,55 @@ mod tests {
                 assert!(packets >= 28, "{case}: {packets} of 30 frames written");
             }
         }
+    }
+
+    /// A resumed Studio segment whose screen capture delivered no frame
+    /// before Pause. The writer never started, so finish reports an empty
+    /// output (`NoFrames`) rather than `NotWriting`, the error that failed
+    /// the whole recording. Paused or not, with or without an audio input.
+    #[test]
+    fn finish_without_any_frame_reports_no_frames() {
+        for (paused, audio) in [(false, false), (true, false), (false, true), (true, true)] {
+            let output = test_output_path("finish_without_any_frame");
+            let audio_config = audio.then(wireless_audio_config);
+            let mut encoder =
+                MP4Encoder::init(output.clone(), valid_video_config(), audio_config, None).unwrap();
+            if paused {
+                encoder.pause();
+            }
+            let result = encoder.finish(Some(Duration::from_secs(1)));
+            drop(encoder);
+            let _ = std::fs::remove_file(&output);
+            assert!(
+                matches!(result, Err(FinishError::NoFrames)),
+                "paused {paused}, audio {audio}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn finish_after_a_single_frame_writes_a_playable_file() {
+        let output = test_output_path("finish_after_a_single_frame");
+        let config = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::NV12, 1280, 720, 30);
+        let mut encoder = MP4Encoder::init(output.clone(), config, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1280, 720);
+        let frame = create_test_video_frame(&pool, 0, 33_333);
+        assert!(queue_video_frame_with_retry(&mut encoder, frame, Duration::ZERO).unwrap());
+        encoder.finish(Some(Duration::from_micros(33_333))).unwrap();
+        drop(encoder);
+
+        let mut input = ffmpeg::format::input(&output).unwrap();
+        let index = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .unwrap()
+            .index();
+        let packets = input
+            .packets()
+            .filter(|(stream, _)| stream.index() == index)
+            .count();
+        let _ = std::fs::remove_file(&output);
+        assert_eq!(packets, 1);
     }
 }
 

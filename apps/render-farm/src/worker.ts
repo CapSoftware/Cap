@@ -25,6 +25,7 @@ import {
 	encodedSeconds,
 	probeArgs,
 	remuxArgs,
+	sourceSizeError,
 	transcodeArgs,
 } from "./transcode";
 
@@ -740,7 +741,10 @@ async function runTranscode(task: TranscodeTask, slot: number) {
 			entry.lastProgressAt = Date.now();
 		}
 		probed += probeDecoder.decode();
-		const remux = (await probe.exited) === 0 && canRemux(probed);
+		const probeExit = await probe.exited;
+		const tooLarge = sourceSizeError(probed);
+		if (tooLarge) throw new Error(tooLarge);
+		const remux = probeExit === 0 && canRemux(probed);
 		run.controller.signal.throwIfAborted();
 		entry.lastProgressAt = Date.now();
 		console.log(`${task.taskId}: ${remux ? "remuxing" : "transcoding"}`);

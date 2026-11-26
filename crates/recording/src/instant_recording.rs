@@ -6,9 +6,9 @@ mod linux_camera;
 #[cfg(target_os = "linux")]
 pub use linux_camera::{
     LINUX_CAMERA_MAX_MASK_AGE, LinuxCameraBlur, LinuxCameraEffect, LinuxCameraMaskReceipt,
-    LinuxCameraPixels, LinuxCameraPresentation, LinuxCameraPresentationError,
-    LinuxCameraProcessing, LinuxCameraPublisher, LinuxCameraRect, LinuxCameraShape,
-    LinuxProcessedCameraFrame, LinuxProcessedCameraSource,
+    LinuxCameraPicture, LinuxCameraPixels, LinuxCameraPresentation, LinuxCameraPresentationError,
+    LinuxCameraProcessing, LinuxCameraPublisher, LinuxCameraRect, LinuxCameraSampleFormat,
+    LinuxCameraShape, LinuxProcessedCameraFrame, LinuxProcessedCameraSource,
 };
 
 use crate::{
@@ -38,6 +38,28 @@ use tracing::*;
 
 mod completion;
 pub use completion::CleanInstantRecording;
+
+/// Stop failed because the recording had already failed, after every capture
+/// task exited and its sources stopped. Nothing is capturing any more,
+/// and the files on disk stay as they are.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct CaptureStoppedAfterFailure(#[from] anyhow::Error);
+
+pub fn capture_stopped_after_failure(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<CaptureStoppedAfterFailure>())
+}
+
+/// Keeps the actor's own error, with its causes, rather than a copy of its
+/// message.
+fn handler_error<M>(error: kameo::error::SendError<M, anyhow::Error>) -> anyhow::Error {
+    match error {
+        kameo::error::SendError::HandlerError(error) => error,
+        error => anyhow::anyhow!("{error}"),
+    }
+}
 
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -303,16 +325,24 @@ pub struct ActorHandle {
             >,
         >,
     >,
+    microphone_switch: Option<crate::sources::MicrophoneSwitch>,
 }
 
 impl ActorHandle {
+    /// Moves the recording's microphone onto another open feed without
+    /// interrupting the audio track. `None` when the recording has no
+    /// microphone or its pipeline cannot swap one.
+    pub fn microphone_switch(&self) -> Option<crate::sources::MicrophoneSwitch> {
+        self.microphone_switch.clone()
+    }
+
     #[cfg(target_os = "linux")]
     pub fn lifecycle(&self) -> InstantLifecycle {
         self.lifecycle.clone()
     }
 
     pub async fn stop(&self) -> anyhow::Result<CompletedRecording> {
-        Ok(self.actor_ref.ask(Stop).await?)
+        self.actor_ref.ask(Stop).await.map_err(handler_error)
     }
 
     pub fn done_fut(&self) -> output_pipeline::DoneFut {
@@ -332,7 +362,7 @@ impl ActorHandle {
     }
 
     pub async fn cancel(&self) -> anyhow::Result<()> {
-        Ok(self.actor_ref.ask(Cancel).await?)
+        self.actor_ref.ask(Cancel).await.map_err(handler_error)
     }
 
     pub fn is_paused(&self) -> impl Future<Output = anyhow::Result<bool>> + Send + 'static + use<> {
@@ -370,9 +400,18 @@ impl Drop for ActorHandle {
             });
         }
         #[cfg(not(target_os = "linux"))]
-        tokio::spawn(async move {
-            let _ = actor_ref.tell(Stop).await;
-        });
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(async move {
+                    let _ = actor_ref.tell(Stop).await;
+                });
+            }
+            // The app drops a handle it kept after a failed stop on its UI
+            // thread, which has no Tokio runtime; `tokio::spawn` would panic.
+            Err(_) => {
+                let _ = actor_ref.tell(Stop).try_send();
+            }
+        }
     }
 }
 
@@ -387,6 +426,8 @@ pub struct Actor {
     total_pause_duration: std::time::Duration,
     pause_started_at: Option<f64>,
     terminal_stop_error: Option<String>,
+    #[cfg(not(target_os = "linux"))]
+    terminal_capture_stopped: bool,
     #[cfg(target_os = "linux")]
     lifetime: InstantLifetimeOwner,
 }
@@ -441,7 +482,12 @@ impl Actor {
     #[cfg(not(target_os = "linux"))]
     async fn stop(&mut self) -> anyhow::Result<()> {
         if let Some(error) = &self.terminal_stop_error {
-            return Err(anyhow::anyhow!(error.clone()));
+            let error = anyhow::anyhow!(error.clone());
+            return Err(if self.terminal_capture_stopped {
+                anyhow::Error::new(CaptureStoppedAfterFailure::from(error))
+            } else {
+                error
+            });
         }
         let pipeline = replace_with::replace_with_or_abort_and_return(&mut self.state, |state| {
             (
@@ -456,17 +502,25 @@ impl Actor {
 
         let result = async {
             if let Some(pipeline) = pipeline {
-                if let Some(audio) = pipeline.audio {
-                    let (audio_res, video_res) = tokio::join!(audio.stop(), pipeline.video.stop());
-                    video_res?;
-                    audio_res?;
-                } else {
-                    pipeline.video.stop().await?;
+                let (audio, video) = tokio::join!(
+                    futures::future::OptionFuture::from(
+                        pipeline.audio.map(OutputPipeline::stop_with_outcome)
+                    ),
+                    pipeline.video.stop_with_outcome()
+                );
+                let video = video?;
+                let audio = audio.transpose()?;
+                if let Some(error) = video
+                    .media_error
+                    .or_else(|| audio.and_then(|audio| audio.media_error))
+                {
+                    return Err(anyhow::Error::new(CaptureStoppedAfterFailure::from(error)));
                 }
             }
             Ok(())
         }
         .await;
+        self.terminal_capture_stopped = result.as_ref().is_err_and(capture_stopped_after_failure);
         preserve_terminal_stop_error(&mut self.terminal_stop_error, result)
     }
 }
@@ -704,7 +758,10 @@ struct ScreenPipelineInput {
 async fn create_pipeline(
     content_dir: PathBuf,
     screen: ScreenPipelineInput,
-    mic_feed: Option<Arc<MicrophoneFeedLock>>,
+    mic_feed: Option<(
+        Arc<MicrophoneFeedLock>,
+        Option<flume::Receiver<crate::sources::MicrophoneSwitchRequest>>,
+    )>,
     system_audio_source: Option<crate::sources::screen_capture::SystemAudioSourceConfig>,
     max_output_size: Option<u32>,
     start_time: Timestamps,
@@ -772,6 +829,7 @@ async fn create_pipeline(
                 timed_fragments: false,
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: cap_enc_ffmpeg::h264::H264Preset::Ultrafast,
+                video_bitrate: None,
                 output_size: Some(output_resolution),
                 shared_pause_state: None,
                 segment_tx: segment_tx_for_video,
@@ -811,8 +869,19 @@ async fn create_pipeline(
                 .with_audio_source::<crate::sources::screen_capture::SystemAudioSource>(sys_audio);
         }
 
-        if let Some(mic) = mic_feed {
-            builder = builder.with_audio_source::<crate::sources::Microphone>(mic);
+        match mic_feed {
+            Some((lock, Some(switch_requests))) => {
+                builder = builder.with_audio_source::<crate::sources::SwitchableMicrophone>(
+                    crate::sources::SwitchableMicrophoneConfig {
+                        lock,
+                        switch_requests,
+                    },
+                );
+            }
+            Some((mic, None)) => {
+                builder = builder.with_audio_source::<crate::sources::Microphone>(mic);
+            }
+            None => {}
         }
 
         let segment_tx_for_audio = segment_channel.as_ref().map(|(tx, _)| tx.clone());
@@ -870,6 +939,8 @@ pub struct ActorBuilder {
     #[cfg(target_os = "linux")]
     processed_camera: Option<LinuxProcessedCameraSource>,
     #[cfg(target_os = "linux")]
+    camera_picture: Option<LinuxCameraPicture>,
+    #[cfg(target_os = "linux")]
     camera_reference_size: Option<(u32, u32)>,
     max_output_size: Option<u32>,
     max_fps: u32,
@@ -895,6 +966,8 @@ impl ActorBuilder {
             camera_presentation: None,
             #[cfg(target_os = "linux")]
             processed_camera: None,
+            #[cfg(target_os = "linux")]
+            camera_picture: None,
             #[cfg(target_os = "linux")]
             camera_reference_size: None,
             max_output_size: None,
@@ -978,6 +1051,22 @@ impl ActorBuilder {
         self
     }
 
+    /// Draws a still picture where the camera would be, for a recording with
+    /// a picture in place of a camera.
+    #[cfg(target_os = "linux")]
+    pub fn with_linux_camera_picture(
+        mut self,
+        picture: LinuxCameraPicture,
+        presentation: LinuxCameraPresentation,
+        reference_size: (u32, u32),
+    ) -> Self {
+        self.composite_camera = true;
+        self.camera_presentation = Some(presentation);
+        self.camera_picture = Some(picture);
+        self.camera_reference_size = Some(reference_size);
+        self
+    }
+
     pub fn with_max_fps(mut self, max_fps: u32) -> Self {
         self.max_fps = max_fps.clamp(1, 120);
         self
@@ -1014,6 +1103,7 @@ impl ActorBuilder {
                 composite_camera: self.composite_camera,
                 camera_presentation: self.camera_presentation,
                 processed_camera: self.processed_camera,
+                camera_picture: self.camera_picture,
                 camera_reference_size: self.camera_reference_size,
             },
             #[cfg(target_os = "linux")]
@@ -1048,6 +1138,7 @@ struct LinuxCameraConfig {
     composite_camera: bool,
     camera_presentation: Option<LinuxCameraPresentation>,
     processed_camera: Option<LinuxProcessedCameraSource>,
+    camera_picture: Option<LinuxCameraPicture>,
     camera_reference_size: Option<(u32, u32)>,
 }
 
@@ -1197,6 +1288,11 @@ async fn build_instant_recording_actor(
     }
     diagnostic.stage("initializing_capture");
 
+    anyhow::ensure!(
+        !inputs.capture_target.is_audio_only(),
+        "Audio only recordings are made in Studio Mode"
+    );
+
     #[cfg(target_os = "linux")]
     anyhow::ensure!(
         !matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly)
@@ -1208,10 +1304,15 @@ async fn build_instant_recording_actor(
         composite_camera,
         camera_presentation,
         processed_camera,
+        camera_picture,
         camera_reference_size,
     } = camera;
     #[cfg(target_os = "linux")]
-    if camera_presentation.is_some() && inputs.camera_feed.is_none() {
+    if camera_picture.is_some() && (inputs.camera_feed.is_some() || processed_camera.is_some()) {
+        anyhow::bail!("A camera picture cannot be recorded together with a camera");
+    }
+    #[cfg(target_os = "linux")]
+    if camera_presentation.is_some() && inputs.camera_feed.is_none() && camera_picture.is_none() {
         return Err(LinuxCameraPresentationError::MissingCamera.into());
     }
     #[cfg(target_os = "linux")]
@@ -1231,6 +1332,15 @@ async fn build_instant_recording_actor(
     #[cfg(windows)]
     cap_mediafoundation_utils::thread_init();
 
+    let (microphone_switch, mut mic_switch_requests) = if inputs.mic_feed.is_some()
+        && !matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly)
+    {
+        let (switch, requests) = crate::sources::MicrophoneSwitch::channel();
+        (Some(switch), Some(requests))
+    } else {
+        (None, None)
+    };
+
     let (mut pipeline, video_info) = match inputs.capture_target {
         ScreenCaptureTarget::CameraOnly => {
             #[cfg(target_os = "linux")]
@@ -1247,7 +1357,9 @@ async fn build_instant_recording_actor(
                 let output_path = content_dir.join("output.mp4");
 
                 let mut builder = OutputPipeline::builder(output_path.clone())
-                    .with_video::<crate::sources::Camera>(camera_feed.clone())
+                    .with_video::<crate::sources::Camera>(crate::sources::CameraTrackInput::new(
+                        camera_feed.clone(),
+                    ))
                     .with_timestamps(timestamps);
 
                 if let Some(mic_feed) = inputs.mic_feed.clone() {
@@ -1286,7 +1398,9 @@ async fn build_instant_recording_actor(
                 let output_path = content_dir.join("output.mp4");
 
                 let mut builder = OutputPipeline::builder(output_path.clone())
-                    .with_video::<crate::sources::NativeCamera>(camera_feed.clone())
+                    .with_video::<crate::sources::NativeCamera>(
+                        crate::sources::CameraTrackInput::new(camera_feed.clone()),
+                    )
                     .with_timestamps(timestamps)
                     .with_start_gate(inputs.start_gate.clone());
 
@@ -1391,21 +1505,31 @@ async fn build_instant_recording_actor(
             #[cfg(target_os = "linux")]
             let screen_info = screen_capture.video_info();
             #[cfg(target_os = "linux")]
-            let (prepared_camera, timestamps) = if let Some(camera_feed) =
-                inputs.camera_feed.clone().filter(|_| composite_camera)
-            {
-                let (camera, timestamps) = linux_camera::PreparedCamera::prepare(
-                    camera_feed,
-                    camera_presentation,
-                    processed_camera,
-                    camera_reference_size,
-                    screen_info,
-                )
-                .await?;
-                (Some(camera), timestamps)
-            } else {
-                (None, Timestamps::now())
-            };
+            let (prepared_camera, timestamps) =
+                if let Some(picture) = camera_picture.filter(|_| composite_camera) {
+                    let (camera, timestamps) = linux_camera::PreparedCamera::prepare_picture(
+                        picture,
+                        camera_presentation,
+                        camera_reference_size,
+                        screen_info,
+                    )
+                    .await?;
+                    (Some(camera), timestamps)
+                } else if let Some(camera_feed) =
+                    inputs.camera_feed.clone().filter(|_| composite_camera)
+                {
+                    let (camera, timestamps) = linux_camera::PreparedCamera::prepare(
+                        camera_feed,
+                        camera_presentation,
+                        processed_camera,
+                        camera_reference_size,
+                        screen_info,
+                    )
+                    .await?;
+                    (Some(camera), timestamps)
+                } else {
+                    (None, Timestamps::now())
+                };
 
             let pipeline = create_pipeline(
                 content_dir.clone(),
@@ -1415,7 +1539,10 @@ async fn build_instant_recording_actor(
                     #[cfg(target_os = "linux")]
                     prepared_camera,
                 },
-                inputs.mic_feed.clone(),
+                inputs
+                    .mic_feed
+                    .clone()
+                    .map(|lock| (lock, mic_switch_requests.take())),
                 system_audio_source,
                 max_output_size,
                 timestamps,
@@ -1458,6 +1585,8 @@ async fn build_instant_recording_actor(
         total_pause_duration: std::time::Duration::ZERO,
         pause_started_at: None,
         terminal_stop_error: None,
+        #[cfg(not(target_os = "linux"))]
+        terminal_capture_stopped: false,
         #[cfg(target_os = "linux")]
         lifetime: InstantLifetimeOwner {
             lifecycle: lifecycle.clone(),
@@ -1473,6 +1602,7 @@ async fn build_instant_recording_actor(
         done_fut: done_fut.clone(),
         health_rx,
         segment_rx: segment_rx.map(|rx| std::sync::Mutex::new(Some(rx))),
+        microphone_switch,
     };
 
     #[cfg(not(target_os = "linux"))]
@@ -1604,6 +1734,23 @@ fn instant_capture_window(
 mod tests {
     use super::*;
 
+    #[test]
+    fn instant_frame_rate_keeps_its_own_ceiling() {
+        let builder = |fps| {
+            ActorBuilder::new(PathBuf::from("unused.cap"), ScreenCaptureTarget::CameraOnly)
+                .with_max_fps(fps)
+                .max_fps
+        };
+        assert_eq!(
+            ActorBuilder::new(PathBuf::from("unused.cap"), ScreenCaptureTarget::CameraOnly).max_fps,
+            crate::defaults::DEFAULT_INSTANT_MODE_FPS
+        );
+        assert_eq!(builder(60), 60);
+        assert_eq!(builder(120), 120);
+        assert_eq!(builder(144), 120);
+        assert_eq!(builder(240), 120);
+    }
+
     #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn instant_captures_the_window_only_when_asked_and_without_a_camera() {
@@ -1655,6 +1802,8 @@ mod tests {
             total_pause_duration: std::time::Duration::ZERO,
             pause_started_at: None,
             terminal_stop_error: Some("Required camera disconnected".to_string()),
+            #[cfg(not(target_os = "linux"))]
+            terminal_capture_stopped: false,
             #[cfg(target_os = "linux")]
             lifetime: InstantLifetimeOwner::new(),
         };
@@ -2001,6 +2150,7 @@ mod quiescence_tests {
                 done_fut: lifecycle.done_fut(),
                 health_rx: None,
                 segment_rx: None,
+                microphone_switch: None,
                 lifecycle,
             },
             audio_cancel,
@@ -2219,6 +2369,7 @@ mod quiescence_tests {
             done_fut: lifecycle.done_fut(),
             health_rx: None,
             segment_rx: None,
+            microphone_switch: None,
             lifecycle,
         };
         if start_video {
@@ -2915,6 +3066,7 @@ mod non_linux_stop_tests {
             total_pause_duration: std::time::Duration::ZERO,
             pause_started_at: None,
             terminal_stop_error: error,
+            terminal_capture_stopped: false,
         }
     }
 
@@ -3017,6 +3169,7 @@ mod non_linux_stop_tests {
             total_pause_duration: Duration::ZERO,
             pause_started_at: None,
             terminal_stop_error: None,
+            terminal_capture_stopped: false,
         });
         let stop_actor = actor.clone();
         let stop = tokio::spawn(async move {
@@ -3087,6 +3240,72 @@ mod non_linux_stop_tests {
     #[tokio::test]
     async fn cancel_waits_for_video_after_audio_finalization_fails() {
         audio_failure_waits_for_video_and_remains_visible(true).await;
+    }
+
+    /// The encoder fails to finish while Stop runs (AVFoundation's
+    /// `NotWriting`, a failed muxer). Every capture task had exited, so Stop
+    /// and every retry say capture stopped, and the failure stays visible.
+    #[tokio::test]
+    async fn stop_after_the_encoder_fails_confirms_capture_stopped() {
+        let directory = tempfile::tempdir().unwrap();
+        let timestamps = Timestamps::now();
+        let video_info = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 4, 4, 30);
+        let (video_sender, video_receiver) = flume::bounded(4);
+        let video = OutputPipeline::builder(directory.path().join("display"))
+            .with_video::<ChannelVideoSource<Frame>>(ChannelVideoSourceConfig::new(
+                video_info,
+                video_receiver,
+            ))
+            .with_timestamps(timestamps)
+            .build::<TestMuxer>(Finalizer {
+                entered: Arc::new(tokio::sync::Notify::new()),
+                finished: Arc::new(AtomicBool::new(false)),
+                release: None,
+                error: Some("encoder failed to finish"),
+            })
+            .await
+            .unwrap();
+        video_sender
+            .send(Frame(Timestamp::Instant(timestamps.instant())))
+            .unwrap();
+        let actor = Actor::spawn(Actor {
+            diagnostic: None,
+            recording_dir: directory.path().to_path_buf(),
+            output_dir: directory.path().join("display"),
+            capture_target: ScreenCaptureTarget::CameraOnly,
+            video_info,
+            state: ActorState::Recording {
+                pipeline: Pipeline {
+                    video,
+                    audio: None,
+                    video_info,
+                    segments_dir: directory.path().join("display"),
+                    segment_rx: None,
+                },
+                segment_start_time: current_time_f64(),
+            },
+            total_pause_duration: Duration::ZERO,
+            pause_started_at: None,
+            terminal_stop_error: None,
+            terminal_capture_stopped: false,
+        });
+
+        let error = tokio::time::timeout(Duration::from_secs(5), actor.ask(Stop))
+            .await
+            .unwrap()
+            .map_err(handler_error)
+            .unwrap_err();
+        assert!(
+            capture_stopped_after_failure(&error),
+            "every capture task had exited, but Stop stayed unconfirmed: {error:#}"
+        );
+        assert!(format!("{error:#}").contains("encoder failed to finish"));
+        let retry = actor.ask(Cancel).await.map_err(handler_error).unwrap_err();
+        assert!(capture_stopped_after_failure(&retry));
+        assert!(retry.to_string().contains("encoder failed to finish"));
+        drop(video_sender);
+        actor.kill();
+        actor.wait_for_stop().await;
     }
 
     #[tokio::test]

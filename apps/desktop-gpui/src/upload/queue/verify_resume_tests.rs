@@ -415,3 +415,382 @@ fn failed_thumbnail_fails_the_attempt_and_the_retry_verifies() {
         assert_eq!(mock.confirmations().len(), 1);
     });
 }
+
+#[test]
+fn live_authentication_failure_survives_stop_and_retries_the_same_video() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_live_authentication_failure");
+    virtual_time(async {
+        let mock = MockCap::start(vec![
+            rule(Route::Api("/api/upload/signed"), Fault::Status(401)).times(2),
+        ])
+        .await;
+        scratch.sign_in(&mock.url);
+        let (project, video, audio) = saved_instant_project(&scratch.0, &mock.url);
+        let mut state = read_state(&project).unwrap().unwrap();
+        state.phase = UploadPhase::Recording;
+        write_state(&project, &state).unwrap();
+        let meta = RecordingMeta::load_for_project(&project).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let upload = start_instant_upload(
+            pending_video(&meta).unwrap(),
+            project.clone(),
+            Some(receiver),
+            Arc::new(Mutex::new(())),
+            Some(CompletionAuthorization::new()),
+        )
+        .unwrap();
+        sender.send(video[0].clone()).unwrap();
+        while !upload.segment_upload.as_ref().unwrap().is_finished() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            read_state(&project).unwrap().unwrap().phase,
+            UploadPhase::NeedsAuthentication
+        );
+        drop(sender);
+
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        manager.admit(project.clone(), upload, false).await.unwrap();
+        settle(&manager).await;
+        let mut state = read_state(&project).unwrap().unwrap();
+        assert_eq!(state.phase, UploadPhase::NeedsAuthentication, "{state:?}");
+        assert!(
+            state
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("Authentication expired"),
+            "{state:?}"
+        );
+        assert!(state.next_retry_at.is_none());
+        assert!(state.can_retry());
+        assert!(mock.confirmations().is_empty());
+        assert_eq!(
+            std::fs::read(project.join("content/output.mp4")).unwrap(),
+            SAMPLE_MP4
+        );
+
+        state.phase = UploadPhase::Pending;
+        state.attempt_count = 0;
+        write_state(&project, &state).unwrap();
+        launch(&manager, &project).await;
+        settle(&manager).await;
+        assert_verified(&mock, &project, &video, &audio);
+        assert_eq!(mock.count("GET", "/api/desktop/video/create"), 0);
+        assert_eq!(mock.deletes(), 0);
+    });
+}
+
+/// What `Manager::run` does for one recording over `window` of virtual time:
+/// a reconcile pass on every wake and at least every `RECONCILE_INTERVAL`,
+/// resuming the recording whenever its saved state is due. The real loop
+/// scans the recordings folders, which a test must not touch.
+async fn run_queue(manager: &Arc<Manager<LiveBackend>>, project: &Path, window: Duration) {
+    let started = tokio::time::Instant::now();
+    while started.elapsed() < window {
+        manager.reap().await;
+        if manager.jobs.lock().await.is_empty()
+            && upload_candidate(&RecordingMeta::load_for_project(project).unwrap())
+            && read_state(project).unwrap().unwrap().pending(now(), false)
+        {
+            launch(manager, project).await;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(RECONCILE_INTERVAL) => {}
+            _ = manager.wake.notified() => {}
+        }
+    }
+    settle(manager).await;
+}
+
+/// Uploads the recording and quits while cloud verification is outstanding,
+/// leaving it in Processing with its verification saved.
+async fn upload_then_quit_before_verification(mock: &MockCap, project: &Path) {
+    let first = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+    launch(&first, project).await;
+    while mock.count("POST", "recording-complete") == 0 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    first.shutdown().await;
+    let state = read_state(project).unwrap().unwrap();
+    assert_eq!(state.phase, UploadPhase::Processing, "{state:?}");
+    assert!(state.verification.is_some());
+    mock.drain().await;
+    mock.new_session();
+    crate::auth::reset_shared_api_client();
+}
+
+fn assert_deleted_on_web(mock: &MockCap, project: &Path, window: Duration) {
+    let calls = mock.count("POST", "recording-complete");
+    eprintln!(
+        "recording-complete calls in {window:?}: {calls}\n{}",
+        mock.timeline()
+    );
+    assert_eq!(calls, 1, "{}", mock.timeline());
+    let state = read_state(project).unwrap().unwrap();
+    assert_eq!(state.phase, UploadPhase::Failed, "{state:?}");
+    assert_eq!(
+        state.last_error.as_deref(),
+        Some(RECORDING_DELETED_ON_WEB),
+        "{state:?}"
+    );
+    assert!(state.next_retry_at.is_none() && !state.is_pending());
+    assert_eq!(
+        std::fs::read(project.join("content/output.mp4")).unwrap(),
+        SAMPLE_MP4
+    );
+    assert!(mock.confirmations().is_empty());
+    assert_eq!(mock.deletes(), 0);
+}
+
+/// The owner deletes the cap on the web while the uploaded recording waits
+/// for cloud verification. The server then answers every completion call
+/// with 404 "Video not found", so the queue stops asking after the first and
+/// keeps the local recording.
+#[test]
+fn cap_deleted_on_the_web_during_verification_stops_confirming() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_deleted_on_web_during_verification");
+    virtual_time(async {
+        let mock = MockCap::start(vec![rule(Route::Api("recording-complete"), Fault::Hang)]).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        upload_then_quit_before_verification(&mock, &project).await;
+
+        mock.delete_on_web(VIDEO_ID);
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        let window = Duration::from_secs(30 * 60);
+        run_queue(&manager, &project, window).await;
+        assert_deleted_on_web(&mock, &project, window);
+    });
+}
+
+/// The same when the cap is deleted on the web after its upload URLs were
+/// issued and the media uploaded: the first completion call learns it and the
+/// queue stops there.
+#[test]
+fn cap_deleted_on_the_web_after_upload_stops_confirming() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_deleted_on_web_after_upload");
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        mock.delete_on_web_before_completion(VIDEO_ID);
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        let window = Duration::from_secs(30 * 60);
+        run_queue(&manager, &project, window).await;
+        assert!(mock.count("POST", "/api/upload/signed") > 0);
+        assert_deleted_on_web(&mock, &project, window);
+    });
+}
+
+/// The owner deletes the cap on the web while its upload waits for cloud
+/// verification, and the delete is still in progress: the server answers the
+/// completion call with 409 code "video-deleting". The queue stops there, as
+/// for a finished delete, instead of uploading the recording again.
+#[test]
+fn cap_being_deleted_on_the_web_is_not_uploaded_again() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_deleting_on_web_during_verification");
+    virtual_time(async {
+        let mock = MockCap::start(vec![rule(Route::Api("recording-complete"), Fault::Hang)]).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        upload_then_quit_before_verification(&mock, &project).await;
+        let initiated = mock.count("POST", "multipart/initiate");
+
+        mock.start_deleting_on_web(VIDEO_ID);
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        let window = Duration::from_secs(30 * 60);
+        run_queue(&manager, &project, window).await;
+        assert_eq!(mock.count("POST", "multipart/initiate"), initiated);
+        assert_deleted_on_web(&mock, &project, window);
+    });
+}
+
+/// A cap deleted on the web before its upload starts gets 404 from the upload
+/// URL routes, so the queue never reaches cloud verification and retries the
+/// transfer with the usual bounded backoff.
+#[test]
+fn cap_deleted_on_the_web_before_upload_never_confirms() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_deleted_on_web_before_upload");
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        mock.delete_on_web(VIDEO_ID);
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        run_queue(&manager, &project, Duration::from_secs(60 * 60)).await;
+        let state = read_state(&project).unwrap().unwrap();
+        eprintln!("{state:?}\n{}", mock.timeline());
+        assert_eq!(mock.count("POST", "recording-complete"), 0);
+        assert_eq!(state.phase, UploadPhase::Failed, "{state:?}");
+        assert_eq!(state.attempt_count(), MAX_AUTOMATIC_ATTEMPTS, "{state:?}");
+        assert_eq!(
+            std::fs::read(project.join("content/output.mp4")).unwrap(),
+            SAMPLE_MP4
+        );
+        assert_eq!(mock.deletes(), 0);
+    });
+}
+
+/// A server error on cloud verification is still retried with backoff and
+/// verifies once the server recovers.
+#[test]
+fn verification_server_errors_retry_with_backoff_then_verify() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_verification_500");
+    virtual_time(async {
+        let mock = MockCap::start(vec![
+            rule(Route::Api("recording-complete"), Fault::Status(500)).times(2),
+        ])
+        .await;
+        scratch.sign_in(&mock.url);
+        let (project, video, audio) = saved_instant_project(&scratch.0, &mock.url);
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        run_queue(&manager, &project, Duration::from_secs(10 * 60)).await;
+        assert_verified(&mock, &project, &video, &audio);
+        let calls = mock.responses("POST", "recording-complete");
+        assert_eq!(
+            calls.iter().map(|(status, _)| *status).collect::<Vec<_>>(),
+            [500, 500, 200],
+            "{}",
+            mock.timeline()
+        );
+        assert!(
+            calls[1].1.saturating_sub(calls[0].1) >= Duration::from_secs(60),
+            "{}",
+            mock.timeline()
+        );
+        assert!(
+            calls[2].1.saturating_sub(calls[1].1) >= Duration::from_secs(120),
+            "{}",
+            mock.timeline()
+        );
+    });
+}
+
+/// Verification the server keeps pending is rechecked every 5 s for the
+/// first minute and every 30 s until ten minutes, as before, then backs off
+/// instead of polling every 30 s for as long as the app runs.
+#[test]
+fn verification_pending_for_hours_backs_off() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_verification_pending_hours");
+    virtual_time(async {
+        let mock = MockCap::start(vec![
+            rule(Route::Api("recording-complete"), Fault::Status(202)).times(u32::MAX),
+        ])
+        .await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        let window = Duration::from_secs(2 * 60 * 60);
+        run_queue(&manager, &project, window).await;
+        let calls = mock.responses("POST", "recording-complete");
+        eprintln!(
+            "pending recording-complete calls in {window:?}: {}",
+            calls.len()
+        );
+        let first = calls[0].1;
+        let first_ten_minutes = calls
+            .iter()
+            .filter(|(_, at)| at.saturating_sub(first) < Duration::from_secs(10 * 60))
+            .count();
+        assert!(
+            (30..=32).contains(&first_ten_minutes),
+            "{first_ten_minutes}\n{}",
+            mock.timeline()
+        );
+        assert!(calls.len() <= 45, "{}\n{}", calls.len(), mock.timeline());
+        let state = read_state(&project).unwrap().unwrap();
+        assert_eq!(state.phase, UploadPhase::Processing, "{state:?}");
+        assert_eq!(
+            std::fs::read(project.join("content/output.mp4")).unwrap(),
+            SAMPLE_MP4
+        );
+    });
+}
+
+/// Verification that stays pending past the fast rechecks still completes
+/// when the server finishes.
+#[test]
+fn verification_pending_past_the_fast_rechecks_still_verifies() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_verification_pending_then_verified");
+    virtual_time(async {
+        let mock = MockCap::start(vec![
+            rule(Route::Api("recording-complete"), Fault::Status(202)).times(35),
+        ])
+        .await;
+        scratch.sign_in(&mock.url);
+        let (project, video, audio) = saved_instant_project(&scratch.0, &mock.url);
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        run_queue(&manager, &project, Duration::from_secs(60 * 60)).await;
+        assert_verified(&mock, &project, &video, &audio);
+        assert_eq!(mock.count("POST", "recording-complete"), 36);
+    });
+}
+
+/// A camera-only Instant recording saves its share link when it stops and
+/// uploads one MP4 through the queue. That upload is the recording itself,
+/// not a replacement of a published video, so it verifies once and is never
+/// sent again.
+#[test]
+fn camera_only_instant_upload_verifies_without_replacing_its_own_link() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_camera_only_instant_upload");
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        let mut meta = RecordingMeta::load_for_project(&project).unwrap();
+        let Some(UploadMeta::SegmentUpload {
+            pre_created_video, ..
+        }) = meta.upload.take()
+        else {
+            panic!("fixture is not a saved Instant upload");
+        };
+        meta.upload = Some(UploadMeta::MultipartUpload {
+            video_id: VIDEO_ID.into(),
+            file_path: project.join("content/output.mp4"),
+            pre_created_video,
+            recording_dir: project.clone(),
+        });
+        meta.save_for_project().unwrap();
+        let mut state = read_state(&project).unwrap().unwrap();
+        state.kind = UploadKind::Mp4;
+        write_state(&project, &state).unwrap();
+
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        run_queue(&manager, &project, Duration::from_secs(20 * 60)).await;
+
+        let state = read_state(&project).unwrap().unwrap();
+        assert_eq!(
+            state.phase,
+            UploadPhase::Verified,
+            "{state:?}\n{}",
+            mock.timeline()
+        );
+        assert!(mock.replaced().is_empty(), "{}", mock.timeline());
+        assert_eq!(
+            mock.count("POST", "multipart/initiate"),
+            1,
+            "{}",
+            mock.timeline()
+        );
+        assert_eq!(mock.count("POST", "recording-complete"), 1);
+        assert_eq!(
+            mock.object(&format!("{VIDEO_ID}/result.mp4")).as_deref(),
+            Some(SAMPLE_MP4)
+        );
+        assert!(matches!(
+            RecordingMeta::load_for_project(&project).unwrap().upload,
+            Some(UploadMeta::Complete)
+        ));
+        mock.assert_clean();
+    });
+}

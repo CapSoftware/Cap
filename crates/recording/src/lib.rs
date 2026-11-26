@@ -8,6 +8,7 @@ pub mod feeds;
 pub mod fragmentation;
 pub mod instant_recording;
 pub mod log_redaction;
+pub mod markers;
 pub mod memory_profiling;
 mod output_pipeline;
 pub mod output_validation;
@@ -33,7 +34,9 @@ pub use defaults::{
     CAMERA_ACTIVE_STUDIO_MAX_FPS, DEFAULT_CAPTURE_KEYBOARD_EVENTS,
     DEFAULT_CRASH_RECOVERY_RECORDING, DEFAULT_CUSTOM_CURSOR_CAPTURE, DEFAULT_INSTANT_MODE_FPS,
     DEFAULT_INSTANT_MODE_MAX_RESOLUTION, DEFAULT_OUT_OF_PROCESS_MUXER, DEFAULT_STUDIO_MAX_FPS,
-    FREE_INSTANT_MODE_MAX_RESOLUTION, PRO_INSTANT_MODE_MAX_RESOLUTION, RecordingDefaults,
+    FREE_INSTANT_MODE_MAX_RESOLUTION, MAX_STUDIO_FPS, MAX_STUDIO_VIDEO_BITRATE,
+    MIN_STUDIO_VIDEO_BITRATE, PRO_INSTANT_MODE_MAX_RESOLUTION, RecordingDefaults,
+    balanced_studio_video_bitrate, balanced_studio_video_bitrate_for_display,
     default_studio_recording_quality,
 };
 pub use feeds::{camera::CameraFeed, microphone::MicrophoneFeed};

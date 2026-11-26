@@ -1,5 +1,6 @@
+import { createHmac } from "node:crypto";
 import { NextRequest } from "next/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dub } from "../../../../packages/utils/src/lib/dub";
 import { GET as getMarketingOg } from "../../app/api/og/route";
 import { signOgParams, verifyOgSignature } from "../../lib/og/signature";
@@ -28,6 +29,14 @@ const renderMarketing = async (query: string) => {
 };
 
 describe("/api/og", () => {
+	beforeEach(() => {
+		vi.stubEnv("NEXTAUTH_SECRET", "og-images-test-secret");
+	});
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
 	it("renders the default 1200x630 PNG with immutable caching", async () => {
 		const res = await getMarketingOg(
 			new NextRequest("http://localhost:3000/api/og"),
@@ -81,6 +90,52 @@ describe("/api/og", () => {
 			verifyOgSignature({ ...params, tag: "X" }, signOgParams(params)),
 		).toBe(false);
 		expect(verifyOgSignature(params, null)).toBe(false);
+	});
+});
+
+describe("/api/og signing secret", () => {
+	const emptyKeySignature = (title: string, description: string) =>
+		createHmac("sha256", "")
+			.update([title, "", description].join("\n"))
+			.digest("hex")
+			.slice(0, 32);
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it.each([
+		["empty", ""],
+		["unset", undefined],
+	])(
+		"serves the default image when NEXTAUTH_SECRET is %s",
+		async (_label, value) => {
+			vi.stubEnv("NEXTAUTH_SECRET", value);
+			const params = {
+				title: "Custom headline",
+				description: "Custom description",
+			};
+			const signature = emptyKeySignature(params.title, params.description);
+
+			expect(signOgParams(params)).toBe("");
+			expect(verifyOgSignature(params, signature)).toBe(false);
+			expect(verifyOgSignature(params, signOgParams(params))).toBe(false);
+
+			const defaultPng = await renderMarketing("");
+			const custom = await renderMarketing(
+				`?title=${encodeURIComponent(params.title)}&description=${encodeURIComponent(
+					params.description,
+				)}&s=${signature}`,
+			);
+			expect(custom.equals(defaultPng)).toBe(true);
+		},
+	);
+
+	it("signs with the configured NEXTAUTH_SECRET", () => {
+		vi.stubEnv("NEXTAUTH_SECRET", "og-signing-secret");
+		const params = { title: "A", description: "C" };
+		expect(verifyOgSignature(params, signOgParams(params))).toBe(true);
+		expect(verifyOgSignature(params, emptyKeySignature("A", "C"))).toBe(false);
 	});
 });
 

@@ -1,0 +1,17 @@
+[
+	[
+		{ "text": "Wait.", "start": 0.32, "end": 0.8 },
+		{ "text": "Uh", "start": 1.12, "end": 1.6800001 },
+		{ "text": "I", "start": 1.76, "end": 2.0 },
+		{ "text": "I", "start": 2.16, "end": 2.4 },
+		{ "text": "need", "start": 2.4, "end": 2.64 },
+		{ "text": "to", "start": 2.8, "end": 3.04 },
+		{ "text": "uh", "start": 3.12, "end": 3.36 },
+		{ "text": "turn", "start": 3.36, "end": 3.84 },
+		{ "text": "on", "start": 3.92, "end": 4.16 },
+		{ "text": "the", "start": 4.4, "end": 4.64 },
+		{ "text": "um", "start": 4.88, "end": 5.12 },
+		{ "text": "the", "start": 5.52, "end": 5.7599998 },
+		{ "text": "webcam.", "start": 5.92, "end": 6.7999997 }
+	]
+]

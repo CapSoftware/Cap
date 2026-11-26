@@ -311,15 +311,9 @@ impl CameraProcessingFactory {
 
 #[cfg(target_os = "linux")]
 impl RecordingCameraWorker {
-    fn publish(
-        &self,
-        image: &Arc<gpui::RenderImage>,
-        dims: (usize, usize),
-        timestamp: cap_timestamp::Timestamp,
-        mask: Option<cap_recording::instant_recording::LinuxCameraMaskReceipt>,
-    ) {
+    fn accept(&self, timestamp: cap_timestamp::Timestamp) -> bool {
         if self.publisher.is_cancelled() {
-            return;
+            return false;
         }
         match validate_recording_camera_frame(
             timestamp,
@@ -327,12 +321,30 @@ impl RecordingCameraWorker {
             self.epoch,
             self.current_epoch.load(Ordering::Acquire),
         ) {
-            Ok(true) => {}
-            Ok(false) => return,
+            Ok(true) => true,
+            Ok(false) => false,
             Err(error) => {
                 self.publisher.fail(error);
-                return;
+                false
             }
+        }
+    }
+
+    fn publish_sample(&self, frame: cap_recording::instant_recording::LinuxProcessedCameraFrame) {
+        if self.accept(frame.timestamp) {
+            self.publisher.publish(frame);
+        }
+    }
+
+    fn publish(
+        &self,
+        image: &Arc<gpui::RenderImage>,
+        dims: (usize, usize),
+        timestamp: cap_timestamp::Timestamp,
+        mask: Option<cap_recording::instant_recording::LinuxCameraMaskReceipt>,
+    ) {
+        if !self.accept(timestamp) {
+            return;
         }
         if image.as_bytes(0).is_none() {
             self.publisher
@@ -341,9 +353,10 @@ impl RecordingCameraWorker {
         }
         self.publisher.publish(
             cap_recording::instant_recording::LinuxProcessedCameraFrame {
-                bgra: cap_recording::instant_recording::LinuxCameraPixels::new(RenderImagePixels(
-                    image.clone(),
-                )),
+                pixels: cap_recording::instant_recording::LinuxCameraPixels::new(
+                    RenderImagePixels(image.clone()),
+                ),
+                format: cap_recording::instant_recording::LinuxCameraSampleFormat::Bgra,
                 dimensions: (dims.0 as u32, dims.1 as u32),
                 stride: dims.0 * 4,
                 timestamp,
@@ -353,6 +366,24 @@ impl RecordingCameraWorker {
             },
         );
     }
+}
+
+#[cfg(target_os = "linux")]
+fn yuyv_overlay_frame(
+    frame: &cap_recording::FFmpegVideoFrame,
+    blur: u8,
+    generation: u64,
+    processing: cap_recording::instant_recording::LinuxCameraProcessing,
+) -> Option<cap_recording::instant_recording::LinuxProcessedCameraFrame> {
+    if blur != 0 {
+        return None;
+    }
+    cap_recording::instant_recording::LinuxProcessedCameraFrame::from_yuyv422(
+        &frame.inner,
+        frame.timestamp,
+        generation,
+        processing,
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -562,12 +593,29 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
                 .publisher
                 .fail("Requested camera blur is unavailable".to_string());
         }
+        #[cfg(target_os = "linux")]
+        let published_yuyv = recording.as_ref().is_some_and(|recording| {
+            let Some(sample) = yuyv_overlay_frame(
+                &frame,
+                requested_blur,
+                recording.generation,
+                recording.processing,
+            ) else {
+                return false;
+            };
+            recording.publish_sample(sample);
+            true
+        });
+        #[cfg(target_os = "linux")]
+        if published_yuyv && !active.load(Ordering::Acquire) {
+            continue;
+        }
         let max_dims = blur_mode.map(|_| crate::camera_blur_portable::MAX_DIMS);
         let Some((mut image, dims)) =
             camera_preview_image(&frame.inner, &mut scaler, requested_mirror, max_dims)
         else {
             #[cfg(target_os = "linux")]
-            if let Some(recording) = &recording {
+            if !published_yuyv && let Some(recording) = &recording {
                 recording
                     .publisher
                     .fail("Camera frame conversion failed".to_string());
@@ -657,7 +705,10 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
             }
         }
         #[cfg(target_os = "linux")]
-        if effects_ready && let Some(recording) = &recording {
+        if !published_yuyv
+            && effects_ready
+            && let Some(recording) = &recording
+        {
             recording.publish(&image, dims, frame.timestamp, applied_mask);
         }
         if active.load(Ordering::Acquire) {
@@ -698,6 +749,12 @@ pub struct Feeds {
     microphone_ready: Option<InputReady>,
     /// Selected camera; `Some` while the preview window should exist.
     pub camera: Option<SelectedCamera>,
+    /// A still picture standing in for the camera. Never set together with
+    /// `camera`: choosing either one clears the other.
+    pub camera_picture: Option<Arc<crate::camera_picture::CameraPicture>>,
+    pub remembered_camera_picture: Option<std::path::PathBuf>,
+    pub picking_camera_picture: bool,
+    pub previous_camera: Option<SelectedCamera>,
     /// Selected microphone name.
     pub microphone: Option<String>,
     mic_level: Entity<MicLevel>,
@@ -786,6 +843,13 @@ impl Feeds {
             camera_ready: None,
             microphone_ready: None,
             camera: None,
+            camera_picture: None,
+            remembered_camera_picture: crate::store::load()
+                .camera_picture
+                .map(|choice| choice.path)
+                .filter(|path| path.is_file()),
+            picking_camera_picture: false,
+            previous_camera: None,
             microphone: None,
             mic_level,
             mic_level_shown: Arc::new(std::sync::atomic::AtomicU64::new((-96.0f64).to_bits())),
@@ -926,6 +990,12 @@ impl Feeds {
         self.camera_epoch += 1;
         self.camera_input_epoch
             .store(self.camera_epoch, Ordering::Release);
+        if selection.is_some() {
+            self.previous_camera = None;
+            if self.camera_picture.take().is_some() {
+                persist_camera_picture(None, cx);
+            }
+        }
         self.camera = selection.clone();
         self.camera_ready = None;
         self.camera_settings = settings;
@@ -942,10 +1012,68 @@ impl Feeds {
             Some(_) => self.remove_camera_input(cx),
             None => {
                 self.remove_camera_input(cx);
-                cx.defer(app_windows::close_camera_window);
+                if self.camera_picture.is_none() {
+                    cx.defer(app_windows::close_camera_window);
+                }
             }
         }
         self.camera_epoch
+    }
+
+    pub fn set_camera_picture(
+        &mut self,
+        picture: Option<Arc<crate::camera_picture::CameraPicture>>,
+        cx: &mut Context<Self>,
+    ) {
+        let same = match (&self.camera_picture, &picture) {
+            (Some(current), Some(next)) => current.path == next.path,
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            return;
+        }
+        if picture.is_some()
+            && let Some(camera) = self.camera.clone()
+        {
+            self.camera_picture = picture.clone();
+            self.set_camera_with_settings(None, None, cx);
+            self.previous_camera = Some(camera);
+        }
+        if let Some(picture) = &picture {
+            self.remembered_camera_picture = Some(picture.path.clone());
+            let kept = picture.path.clone();
+            cx.background_executor()
+                .spawn(async move { crate::camera_picture::retire_older(&kept) })
+                .detach();
+        }
+        let had_picture = self.camera_picture.is_some();
+        self.camera_picture = picture.clone();
+        persist_camera_picture(picture.as_ref().map(|picture| picture.path.clone()), cx);
+        cx.notify();
+        match picture {
+            Some(_) => {
+                if !self.camera_preview_parked {
+                    cx.defer(app_windows::open_camera_window);
+                }
+            }
+            None if had_picture && self.camera.is_none() => {
+                cx.defer(app_windows::close_camera_window);
+            }
+            None => {}
+        }
+    }
+
+    pub fn forget_camera_picture(&mut self, cx: &mut Context<Self>) {
+        if self.remembered_camera_picture.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    pub fn use_previous_camera(&mut self, cx: &mut Context<Self>) {
+        if let Some(camera) = self.previous_camera.clone() {
+            self.set_camera(Some(camera), cx);
+        }
     }
 
     pub(crate) fn camera_preview_epoch(&self) -> Option<u64> {
@@ -1020,6 +1148,8 @@ impl Feeds {
                 .store(self.camera_epoch, Ordering::Release);
             self.start_camera_preview(selection, cx);
             tracing::info!("camera preview resumed");
+        } else if self.camera_picture.is_some() {
+            cx.defer(app_windows::open_camera_window);
         }
     }
 
@@ -1273,6 +1403,62 @@ impl Feeds {
             .detach();
         }
         self.set_mic_level(-96.0, cx);
+        cx.notify();
+    }
+
+    /// Opens the selected camera again on the same feed, for a camera that was
+    /// unplugged and is back. A feed a recording holds takes the same device
+    /// back without a new lock. The camera epoch stays: it is the same
+    /// selection, and a Linux Instant recording's camera worker checks the
+    /// epoch on every frame, so a new one would end its video. The input
+    /// watch never runs two reopens at once.
+    pub fn restart_camera(&mut self, cx: &mut Context<Self>) {
+        let Some(selection) = self.camera.clone() else {
+            return;
+        };
+        if self.camera_preview_parked {
+            return;
+        }
+        self.camera_ready = None;
+        self.start_camera_preview(selection, cx);
+        cx.notify();
+    }
+
+    /// An Instant recording moved onto `label`, opened on a feed of its own.
+    /// Selects it (the main window persists that) and lets the app feed close
+    /// the microphone the recording left, so the level meter only hears the
+    /// new one. The app feed reopens the selection after the recording.
+    pub fn adopt_recording_microphone(&mut self, label: String, cx: &mut Context<Self>) {
+        self.mic_epoch += 1;
+        self.mic_input_epoch
+            .store(self.mic_epoch, Ordering::Release);
+        self.microphone_settings = crate::store::RecordingDeviceSettings::for_microphone(&label);
+        self.microphone = Some(label);
+        self.mic_input_pending = false;
+        self.mic_input_released = true;
+        self.microphone_error = None;
+        self.applied_settings.microphone = None;
+        self.microphone_ready = None;
+        if let Some(actor) = self.mic_actor.clone() {
+            let gate = self.mic_input_gate.clone();
+            let current_epoch = self.mic_input_epoch.clone();
+            let epoch = self.mic_epoch;
+            gpui_tokio::Tokio::spawn(cx, async move {
+                if let Err(error) = camera_input_operation(&gate, &current_epoch, epoch, async {
+                    actor
+                        .ask(microphone::RemoveInput)
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+                .await
+                {
+                    tracing::warn!(
+                        "releasing the microphone a recording switched away from: {error}"
+                    );
+                }
+            })
+            .detach();
+        }
         cx.notify();
     }
 
@@ -2208,6 +2394,62 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn blur_off_yuyv_recording_keeps_the_packed_plane() {
+        use cap_recording::instant_recording::{
+            LinuxCameraBlur, LinuxCameraProcessing, LinuxCameraSampleFormat,
+        };
+        use cap_timestamp::Timestamp;
+
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUYV422, 4, 2);
+        let stride = frame.stride(0);
+        let row = 8;
+        frame.data_mut(0).fill(0xAB);
+        for y in 0..2 {
+            frame.data_mut(0)[y * stride..y * stride + row]
+                .copy_from_slice(&[10, 20, 30, 40, 50, 60, 70, 80]);
+        }
+        let timestamp = Timestamp::Instant(std::time::Instant::now());
+        let processing = LinuxCameraProcessing {
+            mirrored: true,
+            blur: LinuxCameraBlur::Off,
+        };
+        let packed = cap_recording::FFmpegVideoFrame {
+            inner: frame,
+            timestamp,
+        };
+        let sample = yuyv_overlay_frame(&packed, 0, 4, processing).expect("yuyv sample");
+        assert_eq!(sample.format, LinuxCameraSampleFormat::Yuyv422);
+        assert_eq!(sample.dimensions, (4, 2));
+        assert_eq!(sample.stride, row);
+        assert_eq!(sample.generation, 4);
+        assert_eq!(sample.processing, processing);
+        assert!(sample.mask.is_none());
+        assert_eq!(
+            &*sample.pixels,
+            &[
+                10, 20, 30, 40, 50, 60, 70, 80, 10, 20, 30, 40, 50, 60, 70, 80
+            ]
+        );
+
+        let mut blurred = packed;
+        assert!(yuyv_overlay_frame(&blurred, 1, 4, processing).is_none());
+        blurred.inner = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 4, 2);
+        assert!(yuyv_overlay_frame(&blurred, 0, 4, processing).is_none());
+        let heavy = LinuxCameraProcessing {
+            blur: LinuxCameraBlur::Heavy,
+            ..processing
+        };
+        let mut yuyv = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUYV422, 4, 2);
+        yuyv.data_mut(0).fill(1);
+        let source = cap_recording::FFmpegVideoFrame {
+            inner: yuyv,
+            timestamp,
+        };
+        assert!(yuyv_overlay_frame(&source, 0, 4, heavy).is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn recording_camera_pixels_share_the_preview_image() {
         let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 2, 1);
         frame.data_mut(0)[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
@@ -2324,4 +2566,26 @@ mod capture_consent_tests {
         send.send(()).unwrap();
         assert_eq!(configure.await.unwrap(), Some(()));
     }
+}
+
+/// Remembers the picture in the app state so the next launch picks it again;
+/// clearing keeps the file listed so the menu can offer it back.
+fn persist_camera_picture(path: Option<std::path::PathBuf>, cx: &mut Context<Feeds>) {
+    cx.background_executor()
+        .spawn(async move {
+            crate::store::update(|state| {
+                state.camera_picture = match (path, state.camera_picture.take()) {
+                    (Some(path), _) => Some(crate::store::CameraPictureChoice {
+                        path,
+                        selected: true,
+                    }),
+                    (None, Some(previous)) => Some(crate::store::CameraPictureChoice {
+                        selected: false,
+                        ..previous
+                    }),
+                    (None, None) => None,
+                };
+            });
+        })
+        .detach();
 }

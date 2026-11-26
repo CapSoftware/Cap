@@ -1,8 +1,8 @@
-import { faCheck } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import clsx from "clsx";
 import { motion } from "motion/react";
 import { Fragment } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { StepStatus } from "./types";
 
 interface StepperProps {

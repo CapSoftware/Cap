@@ -9,6 +9,7 @@ import { db } from "../index.ts";
 import { enqueueLoopsSync } from "../loops/queue.ts";
 import {
 	accounts,
+	directoryUsers,
 	organizationInvites,
 	organizationMembers,
 	organizationSso,
@@ -243,6 +244,27 @@ export async function provisionSsoMembership(
 			eq(organizationInvites.status, "pending"),
 		);
 		if (!member) {
+			const directoryLinks = await tx
+				.select({ active: directoryUsers.active })
+				.from(directoryUsers)
+				.where(
+					and(
+						eq(directoryUsers.organizationId, identity.organizationId),
+						eq(directoryUsers.userId, userId),
+					),
+				);
+			if (directoryLinks.length > 0) {
+				const [invite] = await tx
+					.select({ id: organizationInvites.id })
+					.from(organizationInvites)
+					.where(pendingInvites)
+					.limit(1);
+				if (!invite) {
+					throw new Error(
+						"You no longer have access to this organization. Ask an admin to invite you again.",
+					);
+				}
+			}
 			const [adminInvite] = await tx
 				.select({ id: organizationInvites.id })
 				.from(organizationInvites)

@@ -364,6 +364,12 @@ impl LogoutArgs {
 
     async fn run_inner(self, format: OutputFormat) -> Result<(), String> {
         let credentials = credentials::resolve_agent()?;
+        if credentials.source == AgentCredentialSource::LegacyEnv {
+            return Err(
+                "CAP_API_KEY is set to a legacy key, which `cap auth logout` cannot revoke. Unset CAP_API_KEY first; while it is set, any stored Cap CLI login is not used."
+                    .to_string(),
+            );
+        }
         if !is_agent_credential_source(credentials.source) {
             return Err(
                 "No Cap CLI agent credential is stored. A legacy CAP_API_KEY and Cap Desktop login are not changed by `cap auth logout`."

@@ -9,6 +9,12 @@ const state = vi.hoisted(() => ({
 	s3Configs: [] as Array<Record<string, unknown>>,
 	send: vi.fn(async () => ({})),
 	insert: vi.fn(),
+	isPro: true,
+	row: {} as Record<string, unknown>,
+}));
+
+vi.mock("node:dns/promises", () => ({
+	lookup: async () => [{ address: "93.184.216.34", family: 4 }],
 }));
 
 vi.mock("@cap/env", () => ({
@@ -51,7 +57,8 @@ type FakeDatabase = {
 };
 
 const database: FakeDatabase = {
-	select: () => query([{ id: "org_synthetic", name: "Org", ownerId: "usr" }]),
+	select: () =>
+		query([{ id: "org_synthetic", name: "Org", ownerId: "usr", ...state.row }]),
 	update: () => query(undefined),
 	insert: (...args: unknown[]) => {
 		state.insert(...args);
@@ -74,9 +81,10 @@ vi.mock("@cap/database/schema", () => ({
 	s3Buckets: {},
 	storageIntegrations: {},
 	storageObjects: {},
+	users: {},
 	videos: {},
 }));
-vi.mock("@cap/utils", () => ({ userIsPro: () => true }));
+vi.mock("@cap/utils", () => ({ userIsPro: () => state.isPro }));
 vi.mock("@cap/web-backend", () => ({}));
 vi.mock("@cap/web-domain", () => ({
 	S3Bucket: { S3BucketId: { make: (id: string) => id } },
@@ -92,6 +100,12 @@ import {
 	saveOrganizationS3Config,
 	testOrganizationS3Config,
 } from "@/actions/organization/storage";
+import {
+	CUSTOM_STORAGE_SAVE_LIMIT,
+	customStorageHttpsRequiredMessage,
+	customStorageRateLimitMessage,
+	customStorageUnavailableMessage,
+} from "@/lib/custom-storage-policy";
 import { blockedS3EndpointMessage } from "@/lib/s3-endpoint-policy";
 
 const input = (endpoint: string) => ({
@@ -111,6 +125,8 @@ describe("organization storage S3 endpoint policy", () => {
 		state.s3Configs.length = 0;
 		state.send.mockClear();
 		state.insert.mockClear();
+		state.isPro = true;
+		state.row = {};
 	});
 
 	it.each([
@@ -139,7 +155,7 @@ describe("organization storage S3 endpoint policy", () => {
 
 	it("saves public and default endpoints on Cap Cloud", async () => {
 		await expect(
-			saveOrganizationS3Config(input("https://8.8.8.8")),
+			saveOrganizationS3Config(input("https://s3.example.com")),
 		).resolves.toEqual({ success: true });
 		await expect(saveOrganizationS3Config(input(""))).resolves.toEqual({
 			success: true,
@@ -180,5 +196,66 @@ describe("organization storage S3 endpoint policy", () => {
 		expect(state.s3Configs).toHaveLength(1);
 		expect(state.s3Configs[0]?.endpoint).toBe("http://192.168.1.10:9000");
 		expect(state.s3Configs[0]?.requestHandler).toBeUndefined();
+	});
+
+	it.each([
+		"https://8.8.8.8",
+		"https://[2001:4860:4860::8888]",
+		"https://bucket.trycloudflare.com",
+		"https://ngrok-free.app",
+		"https://x.a.pinggy.io",
+	])("refuses to save restricted host %s on Cap Cloud", async (endpoint) => {
+		await expect(saveOrganizationS3Config(input(endpoint))).rejects.toThrow(
+			blockedS3EndpointMessage,
+		);
+		expect(state.insert).not.toHaveBeenCalled();
+	});
+
+	it("still tests IP literal endpoints so existing setups can be checked", async () => {
+		await expect(
+			testOrganizationS3Config(input("https://8.8.8.8")),
+		).resolves.toEqual({ success: true });
+	});
+
+	it("requires https endpoints when saving on Cap Cloud", async () => {
+		await expect(
+			saveOrganizationS3Config(input("http://s3.example.com")),
+		).rejects.toThrow(customStorageHttpsRequiredMessage);
+		expect(state.insert).not.toHaveBeenCalled();
+	});
+
+	it("keeps the upgrade error for non-Pro managers", async () => {
+		state.isPro = false;
+		await expect(
+			saveOrganizationS3Config(input("https://s3.example.com")),
+		).rejects.toThrow(
+			"Cap Pro is required to manage organization integrations",
+		);
+		expect(state.insert).not.toHaveBeenCalled();
+	});
+
+	it("limits how often storage can be reconfigured", async () => {
+		state.row = { value: CUSTOM_STORAGE_SAVE_LIMIT };
+		await expect(
+			saveOrganizationS3Config(input("https://s3.example.com")),
+		).rejects.toThrow(customStorageRateLimitMessage);
+		expect(state.insert).not.toHaveBeenCalled();
+
+		state.row = { value: CUSTOM_STORAGE_SAVE_LIMIT - 1 };
+		await expect(
+			saveOrganizationS3Config(input("https://s3.example.com")),
+		).resolves.toEqual({ success: true });
+	});
+
+	it("refuses new storage while media processing is suspended", async () => {
+		state.row = {
+			preferences: {
+				mediaInputPolicy: { strikes: [], suspendedAt: "2026-01-01T00:00:00Z" },
+			},
+		};
+		await expect(
+			saveOrganizationS3Config(input("https://s3.example.com")),
+		).rejects.toThrow(customStorageUnavailableMessage);
+		expect(state.insert).not.toHaveBeenCalled();
 	});
 });

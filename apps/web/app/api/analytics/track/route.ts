@@ -7,20 +7,22 @@ import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import UAParser from "ua-parser-js";
+import { z } from "zod";
 
 import { getAnonymousName } from "@/lib/anonymous-names";
 import {
 	createAnonymousViewNotification,
 	sendFirstViewEmail,
 } from "@/lib/Notification";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 
-interface TrackPayload {
-	videoId: string;
-	sessionId?: string;
-	userAgent?: string;
-	occurredAt?: string;
-}
+const trackPayloadSchema = z.object({
+	videoId: z.string().min(1).max(64),
+	sessionId: z.string().max(128).optional(),
+	userAgent: z.string().max(4096).optional(),
+	occurredAt: z.string().max(64).optional(),
+});
 
 const VIEW_TRACKING_DELAY_MS = 2 * 60 * 1000;
 const MAX_CLIENT_CLOCK_SKEW_MS = 5 * 60 * 1000;
@@ -49,21 +51,28 @@ const decodeUrlEncodedHeaderValue = (value?: string | null) => {
 };
 
 export async function POST(request: NextRequest) {
-	let body: TrackPayload;
+	if (
+		await isRateLimited(RATE_LIMIT_IDS.ANALYTICS_TRACK, {
+			headers: request.headers,
+		})
+	) {
+		return Response.json({ error: "Too many requests" }, { status: 429 });
+	}
+
+	let rawBody: unknown;
 	try {
-		body = (await request.json()) as TrackPayload;
+		rawBody = await request.json();
 	} catch (_error) {
 		return Response.json({ error: "Invalid JSON payload" }, { status: 400 });
 	}
 
-	if (!body?.videoId) {
-		return Response.json({ error: "videoId is required" }, { status: 400 });
+	const parsedBody = trackPayloadSchema.safeParse(rawBody);
+	if (!parsedBody.success) {
+		return Response.json({ error: "Invalid payload" }, { status: 400 });
 	}
+	const body = parsedBody.data;
 
-	const parsedSessionId =
-		typeof body.sessionId === "string"
-			? body.sessionId.trim().slice(0, 128) || null
-			: null;
+	const parsedSessionId = body.sessionId?.trim() || null;
 	const sessionId =
 		parsedSessionId && parsedSessionId !== "anonymous" ? parsedSessionId : null;
 	const userAgent =

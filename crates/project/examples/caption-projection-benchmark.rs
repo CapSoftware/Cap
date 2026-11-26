@@ -29,6 +29,7 @@ fn fixture(seconds: usize, clips: usize, spacing: usize) -> ProjectConfiguration
                         }
                     })
                     .collect(),
+                recording_clip: None,
             }
         })
         .collect();

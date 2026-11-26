@@ -12,6 +12,7 @@ import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { FatalError, sleep } from "workflow";
 import { retireDesktopRecordingJobForOutputReplacement } from "@/lib/desktop-recording-jobs";
+import { getMediaProcessingRejection } from "@/lib/media-processing-policy";
 import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
@@ -250,12 +251,19 @@ async function validateReprocessRequest(videoId: string): Promise<void> {
 	}
 
 	const [video] = await db()
-		.select({ id: videos.id })
+		.select({ id: videos.id, ownerId: videos.ownerId })
 		.from(videos)
 		.where(eq(videos.id, Video.VideoId.make(videoId)));
 
 	if (!video) {
 		throw new FatalError("Video does not exist");
+	}
+
+	const rejection = await getMediaProcessingRejection({
+		ownerId: video.ownerId,
+	});
+	if (rejection) {
+		throw new FatalError(rejection);
 	}
 }
 

@@ -295,7 +295,15 @@ describe("placing owned Caps in team folders", () => {
 
 	it("limits the selectable folders to personal and accessible team locations", async () => {
 		results = [
-			[{ id: spaceId, name: "Team space" }],
+			[{ name: "Acme" }],
+			[
+				{
+					id: spaceId,
+					name: "Team space",
+					createdById: "someone",
+					memberRole: "member",
+				},
+			],
 			[
 				{ id: "mine", name: "Personal", parentId: null, spaceId: null },
 				{ id: folderId, name: "Team folder", parentId: null, spaceId: "org" },
@@ -307,14 +315,88 @@ describe("placing owned Caps in team folders", () => {
 			destinations.map((group) => [
 				group.name,
 				group.folders.map((folder) => folder.id),
+				group.canCreateFolder,
 			]),
 		).toEqual([
-			["My Caps", ["mine"]],
-			["All team members", [folderId]],
-			["Team space", ["space-folder"]],
+			["My Caps", ["mine"], true],
+			["Acme", [folderId], false],
+			["Team space", ["space-folder"], false],
 		]);
-		expect(filters[0]?.params).toEqual(["org", "owner", "owner"]);
-		expect(filters[1]?.params).toEqual(["org", "owner", "org", spaceId]);
+		expect(destinations[1]?.folders[0]).toEqual({
+			id: folderId,
+			name: "Team folder",
+			parentId: null,
+			color: undefined,
+		});
+		expect(filters[0]?.params).toEqual(["org"]);
+		expect(filters[1]?.params).toEqual(["org", "owner", "owner"]);
+		expect(filters[2]?.params).toEqual(["org", "owner", "org", spaceId]);
+	});
+
+	it("offers folder creation only where the backend would allow it", async () => {
+		results = [
+			[{ name: "Acme" }],
+			[
+				{
+					id: spaceId,
+					name: "Own space",
+					createdById: "owner",
+					memberRole: null,
+				},
+			],
+			[],
+		];
+		const asMember = await getOwnedVideoMoveDestinations();
+		expect(asMember.map((group) => group.canCreateFolder)).toEqual([
+			true,
+			false,
+			true,
+		]);
+
+		mocks.organization.mockResolvedValue({ role: "admin" });
+		results = [
+			[{ name: "  " }],
+			[
+				{
+					id: spaceId,
+					name: "Team space",
+					createdById: "someone",
+					memberRole: null,
+				},
+			],
+			[],
+		];
+		const asAdmin = await getOwnedVideoMoveDestinations();
+		expect(asAdmin.map((group) => group.canCreateFolder)).toEqual([
+			true,
+			true,
+			true,
+		]);
+		expect(asAdmin[1]?.name).toBe("Everyone in the organization");
+	});
+
+	it("never offers folder creation in an organization that is not active", async () => {
+		mocks.organization.mockResolvedValue({ role: "owner" });
+		results = [
+			[{ name: "Other" }],
+			[
+				{
+					id: spaceId,
+					name: "Team space",
+					createdById: "owner",
+					memberRole: "admin",
+				},
+			],
+			[],
+		];
+		const destinations = await getOwnedVideoMoveDestinations(
+			Organisation.OrganisationId.make("other-org"),
+		);
+		expect(destinations.map((group) => group.canCreateFolder)).toEqual([
+			false,
+			false,
+			false,
+		]);
 	});
 
 	it("scopes every check and write to a requested organization the owner belongs to", async () => {
@@ -359,11 +441,12 @@ describe("placing owned Caps in team folders", () => {
 
 	it("lists destinations in a requested organization", async () => {
 		const organizationId = Organisation.OrganisationId.make("cap-org");
-		results = [[], []];
+		results = [[], [], []];
 		await getOwnedVideoMoveDestinations(organizationId);
 		expect(mocks.organization).toHaveBeenCalledWith("owner", organizationId);
-		expect(filters[0]?.params).toEqual([organizationId, "owner", "owner"]);
-		expect(filters[1]?.params).toEqual([
+		expect(filters[0]?.params).toEqual([organizationId]);
+		expect(filters[1]?.params).toEqual([organizationId, "owner", "owner"]);
+		expect(filters[2]?.params).toEqual([
 			organizationId,
 			"owner",
 			organizationId,

@@ -1320,15 +1320,19 @@ agentE2e("Cap agent local Docker E2E", () => {
 			await api("POST", `/api/v1/developer/apps/${createdAppId}/keys/rotate`),
 		);
 		expect(rotated.secretKey).toMatch(/^csk_/);
-		expectSuccess(
-			await api("PATCH", `/api/v1/developer/apps/${createdAppId}/auto-top-up`, {
+		const autoTopUpWithoutCard = await api(
+			"PATCH",
+			`/api/v1/developer/apps/${createdAppId}/auto-top-up`,
+			{
 				body: {
 					enabled: true,
 					thresholdMicroCredits: 100_000,
 					amountCents: 1_000,
 				},
-			}),
+			},
 		);
+		expect(autoTopUpWithoutCard.status).toBeGreaterThanOrEqual(400);
+		expect(asObject(autoTopUpWithoutCard.json).code).toBeTypeOf("string");
 		const creditCheckout = await api(
 			"POST",
 			`/api/v1/developer/apps/${createdAppId}/credits/checkout`,

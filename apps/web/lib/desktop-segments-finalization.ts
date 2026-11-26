@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
 import type { User, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { start } from "workflow/api";
@@ -28,6 +29,8 @@ async function queueEarlySegmentsTranscription({
 	videoId: Video.VideoId;
 	userId: User.UserId;
 }): Promise<void> {
+	if (!serverEnv().ASSEMBLY_API_KEY) return;
+
 	// An active live transcription is seconds away from promoting itself to
 	// canonical (or queueing this exact fallback itself); starting a full
 	// pass now would pay for the same audio twice.

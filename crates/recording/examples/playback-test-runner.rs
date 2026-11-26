@@ -657,7 +657,7 @@ fn get_video_duration(path: &Path) -> f64 {
                     .collect()
             })
             .unwrap_or_default();
-        fragments.sort();
+        cap_enc_ffmpeg::fragment_order::sort_fragment_paths(&mut fragments);
 
         if fragments.is_empty() {
             return 0.0;

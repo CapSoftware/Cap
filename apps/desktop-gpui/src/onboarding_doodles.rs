@@ -44,6 +44,32 @@ pub static CURSOR: Doodle = Doodle {
     ],
 };
 
+pub static KEYBOARD: Doodle = Doodle {
+    view: (120., 104.),
+    strokes: &[
+        Stroke::ink("M 20 40 L 100 40 Q 108 40 108 48 L 108 84 Q 108 92 100 92 L 20 92 Q 12 92 12 84 L 12 48 Q 12 40 20 40 Z")
+            .draw(60, 800),
+        Stroke::ink("M 25 53 L 30 53 M 39 53 L 44 53 M 53 53 L 58 53 M 76 53 L 81 53 M 90 53 L 95 53 M 25 66 L 30 66 M 39 66 L 44 66 M 76 66 L 81 66 M 90 66 L 95 66 M 38 79 L 82 79")
+            .with_ink(Ink::Soft)
+            .width(5.)
+            .draw(700, 500),
+        Stroke::ink("M 63 48 L 72 48 Q 74 48 74 50 L 74 69 Q 74 71 72 71 L 63 71 Q 61 71 61 69 L 61 50 Q 61 48 63 48 Z")
+            .with_ink(Ink::Accent)
+            .width(2.5)
+            .pop(1100, 400)
+            .pulsing(),
+        Stroke::ink("M 48 8 L 72 8 Q 78 8 78 14 L 78 24 Q 78 30 72 30 L 48 30 Q 42 30 42 24 L 42 14 Q 42 8 48 8 Z")
+            .with_ink(Ink::Accent)
+            .width(2.5)
+            .fade(1250, 350)
+            .bobbing(),
+        Stroke::ink("M 55 13 L 55 25 M 65 13 L 57.5 19 L 65 25")
+            .width(2.5)
+            .fade(1350, 300)
+            .bobbing(),
+    ],
+};
+
 pub static MICROPHONE: Doodle = Doodle {
     view: (120., 104.),
     strokes: &[

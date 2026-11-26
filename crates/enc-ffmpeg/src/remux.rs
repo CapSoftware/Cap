@@ -179,6 +179,38 @@ fn write_concat_list(fragments: &[PathBuf], concat_list: &Path) -> Result<(), Re
     Ok(())
 }
 
+/// FFmpeg resolves the concat list's relative entries against the list's path
+/// as a URL, and in a Windows verbatim path (`\\?\C:\...`) the `?` starts a
+/// query, so every entry resolves to a file that does not exist. The list is
+/// opened by its ordinary form instead; FFmpeg adds its own long-path prefix
+/// when it opens files.
+fn concat_list_url_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut components = path.components();
+        if let Some(Component::Prefix(prefix)) = components.next() {
+            let root = match prefix.kind() {
+                Prefix::VerbatimDisk(drive) => Some(format!("{}:\\", drive as char)),
+                Prefix::VerbatimUNC(server, share) => Some(format!(
+                    "\\\\{}\\{}\\",
+                    server.to_string_lossy(),
+                    share.to_string_lossy()
+                )),
+                _ => None,
+            };
+            if let Some(root) = root {
+                let mut plain = PathBuf::from(root);
+                plain.extend(
+                    components.filter(|component| !matches!(component, Component::RootDir)),
+                );
+                return plain;
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
 fn open_input_with_format(
     path: &Path,
     format_name: &str,
@@ -192,6 +224,7 @@ fn open_input_with_format(
             return Err(RemuxError::ConcatDemuxerNotFound);
         }
 
+        let path = concat_list_url_path(path);
         let path_text = path.to_str().ok_or_else(|| {
             RemuxError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -231,6 +264,7 @@ struct StreamRemuxer {
     stream_mapping: Vec<Option<usize>>,
     last_dts: Vec<i64>,
     dts_offset: Vec<i64>,
+    video_frame_rate: Vec<Option<ffmpeg::Rational>>,
 }
 
 impl StreamRemuxer {
@@ -239,6 +273,7 @@ impl StreamRemuxer {
         octx: &mut avformat::context::Output,
     ) -> Result<Self, RemuxError> {
         let mut stream_mapping = Vec::new();
+        let mut video_frame_rate = Vec::new();
         let mut output_stream_index = 0usize;
 
         for input_stream in ictx.streams() {
@@ -248,6 +283,11 @@ impl StreamRemuxer {
             if medium == ffmpeg::media::Type::Video || medium == ffmpeg::media::Type::Audio {
                 stream_mapping.push(Some(output_stream_index));
                 output_stream_index += 1;
+                video_frame_rate.push(
+                    (medium == ffmpeg::media::Type::Video)
+                        .then(|| input_stream.avg_frame_rate())
+                        .filter(|rate| rate.numerator() > 0 && rate.denominator() > 0),
+                );
 
                 let mut output_stream = octx.add_stream(None)?;
                 output_stream.set_parameters(codec_params);
@@ -265,6 +305,7 @@ impl StreamRemuxer {
             stream_mapping,
             last_dts: vec![i64::MIN; output_stream_index],
             dts_offset: vec![0; output_stream_index],
+            video_frame_rate,
         })
     }
 
@@ -279,6 +320,20 @@ impl StreamRemuxer {
             let output_time_base = octx.stream(output_index).unwrap().time_base();
 
             packet.rescale_ts(input_time_base, output_time_base);
+
+            // Fragmented recordings carry no sample durations. The muxer
+            // derives every duration from the next sample, except the last
+            // one; a lone frame would end up with a zero-length track whose
+            // only sample readers discard. Give a first video packet without
+            // a duration one frame.
+            if self.last_dts[output_index] == i64::MIN
+                && packet.duration() <= 0
+                && let Some(rate) = self.video_frame_rate[output_index]
+            {
+                packet.set_duration(
+                    ffmpeg::Rescale::rescale(&1i64, rate.invert(), output_time_base).max(1),
+                );
+            }
 
             let current_dts = packet.dts().unwrap_or(0);
 
@@ -1453,6 +1508,12 @@ mod tests {
     };
 
     fn encode_test_segments(directory: &Path) -> (PathBuf, Vec<PathBuf>) {
+        let (init, segments) = encode_test_frames(directory, 320);
+        assert!(segments.len() >= 2);
+        (init, segments)
+    }
+
+    fn encode_test_frames(directory: &Path, frames: u64) -> (PathBuf, Vec<PathBuf>) {
         use crate::segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig};
 
         ffmpeg::init().unwrap();
@@ -1468,7 +1529,7 @@ mod tests {
             SegmentedVideoEncoderConfig::default(),
         )
         .unwrap();
-        for index in 0..320 {
+        for index in 0..frames {
             let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
             frame.data_mut(0).fill(32 + (index % 192) as u8);
             frame.data_mut(1).fill(128);
@@ -1482,7 +1543,6 @@ mod tests {
             .iter()
             .map(|segment| segment.path.clone())
             .collect();
-        assert!(segments.len() >= 2);
         (encoder.init_segment_path(), segments)
     }
 
@@ -1572,6 +1632,109 @@ mod tests {
                     .contains(".validated-combined-")
             );
         }
+    }
+
+    #[test]
+    fn concat_lists_open_without_the_windows_verbatim_prefix() {
+        #[cfg(windows)]
+        {
+            use std::path::{Path, PathBuf};
+            for (verbatim, plain) in [
+                (
+                    r"\\?\C:\Users\a b\Café 録画\display.concat.txt",
+                    r"C:\Users\a b\Café 録画\display.concat.txt",
+                ),
+                (
+                    r"\\?\UNC\server\share\x\list.txt",
+                    r"\\server\share\x\list.txt",
+                ),
+                (r"C:\plain\list.txt", r"C:\plain\list.txt"),
+            ] {
+                assert_eq!(
+                    super::concat_list_url_path(Path::new(verbatim)),
+                    PathBuf::from(plain)
+                );
+            }
+        }
+        let plain = std::path::Path::new("/recordings/Cap Café/display.concat.txt");
+        #[cfg(not(windows))]
+        assert_eq!(super::concat_list_url_path(plain), plain);
+        let _ = plain;
+    }
+
+    /// A Studio segment paused right after it resumed can hold one frame.
+    /// Its fragment has no sample durations, so the progressive file used to
+    /// get a zero-length track whose only frame readers discard, and
+    /// finalizing failed the whole recording.
+    #[test]
+    fn remux_of_a_single_durationless_frame_stays_playable() {
+        let directory = tempfile::tempdir().unwrap();
+        let (init, segments) = encode_test_frames(&directory.path().join("source"), 1);
+        let single = directory.path().join("single.mp4");
+        concatenate_m4s_segments_with_init(&init, &segments, &single).unwrap();
+        // The macOS Studio fragments carry no sample durations.
+        let output = directory.path().join("output.mp4");
+        {
+            let mut ictx = ffmpeg::format::input(&single).unwrap();
+            let mut octx = ffmpeg::format::output(&output).unwrap();
+            let mut remuxer = super::StreamRemuxer::new(&ictx, &mut octx).unwrap();
+            for (stream, mut packet) in ictx.packets() {
+                packet.set_duration(0);
+                remuxer
+                    .write_packet(packet, stream.time_base(), &mut octx)
+                    .unwrap();
+            }
+            octx.write_trailer().unwrap();
+        }
+        assert_eq!(decoded_video_frame_count(&output), 1);
+        assert!(super::probe_video_can_decode(&output).unwrap());
+        super::probe_video_seek_points(&output, 8).unwrap();
+        let (time_base, packets) = video_packet_contents(&output);
+        assert_eq!(packets.len(), 1);
+        assert_eq!(
+            packets[0].duration,
+            i64::from(time_base.denominator()) / (30 * i64::from(time_base.numerator()))
+        );
+    }
+
+    /// The fallback only lengthens a lone frame: with more frames, a long
+    /// gap after the first (a static screen right after Resume) keeps every
+    /// timestamp where it was.
+    #[test]
+    fn remux_of_durationless_frames_keeps_their_timestamps() {
+        let directory = tempfile::tempdir().unwrap();
+        let (init, segments) = encode_test_frames(&directory.path().join("source"), 3);
+        let source = directory.path().join("source.mp4");
+        concatenate_m4s_segments_with_init(&init, &segments, &source).unwrap();
+        let (source_time_base, source_packets) = video_packet_contents(&source);
+        let frame = i64::from(source_time_base.denominator())
+            / (30 * i64::from(source_time_base.numerator()));
+        let stamps = [0, 24 * frame, 25 * frame];
+        assert!(source_packets.iter().all(|packet| packet.pts == packet.dts));
+
+        let output = directory.path().join("output.mp4");
+        {
+            let mut ictx = ffmpeg::format::input(&source).unwrap();
+            let mut octx = ffmpeg::format::output(&output).unwrap();
+            let mut remuxer = super::StreamRemuxer::new(&ictx, &mut octx).unwrap();
+            for (index, (stream, mut packet)) in ictx.packets().enumerate() {
+                packet.set_pts(Some(stamps[index]));
+                packet.set_dts(Some(stamps[index]));
+                packet.set_duration(0);
+                remuxer
+                    .write_packet(packet, stream.time_base(), &mut octx)
+                    .unwrap();
+            }
+            octx.write_trailer().unwrap();
+        }
+        let (time_base, packets) = video_packet_contents(&output);
+        assert_eq!(time_base, source_time_base);
+        assert_eq!(
+            packets.iter().map(|packet| packet.pts).collect::<Vec<_>>(),
+            stamps.map(Some)
+        );
+        assert_eq!(packets[0].duration, 24 * frame);
+        assert_eq!(decoded_video_frame_count(&output), 3);
     }
 
     #[test]

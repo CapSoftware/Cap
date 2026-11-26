@@ -1,5 +1,5 @@
+use super::CameraTrackInput;
 use crate::{
-    feeds::camera::{self, CameraFeedLock},
     ffmpeg::FFmpegVideoFrame,
     output_pipeline::{SetupCtx, StallSendOutcome, VideoSource, send_with_stall_budget_futures},
 };
@@ -10,15 +10,13 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
-use std::time::Duration;
 use tokio::sync::oneshot;
-
-const CAMERA_SENDER_ATTACH_TIMEOUT: Duration = Duration::from_millis(1500);
 
 struct CameraFrameScaler {
     context: ffmpeg::software::scaling::Context,
     source_width: u32,
     source_height: u32,
+    source_format: ffmpeg::format::Pixel,
 }
 
 unsafe impl Send for CameraFrameScaler {}
@@ -46,11 +44,12 @@ impl CameraFrameScaler {
             context,
             source_width: src_width,
             source_height: src_height,
+            source_format: src_format,
         })
     }
 
-    fn matches_source(&self, width: u32, height: u32) -> bool {
-        self.source_width == width && self.source_height == height
+    fn matches_source(&self, width: u32, height: u32, format: ffmpeg::format::Pixel) -> bool {
+        self.source_width == width && self.source_height == height && self.source_format == format
     }
 
     fn scale(&mut self, input: &ffmpeg::frame::Video) -> anyhow::Result<ffmpeg::frame::Video> {
@@ -62,42 +61,37 @@ impl CameraFrameScaler {
 }
 
 pub struct Camera {
-    #[allow(dead_code)]
-    feed_lock: Arc<CameraFeedLock>,
+    _input: CameraTrackInput<FFmpegVideoFrame>,
     stop_tx: Option<oneshot::Sender<()>>,
     stopped: Arc<AtomicBool>,
     original_video_info: VideoInfo,
-    _full_res: camera::MjpegFullResHold,
 }
 
 impl VideoSource for Camera {
-    type Config = Arc<CameraFeedLock>;
+    type Config = CameraTrackInput<FFmpegVideoFrame>;
     type Frame = FFmpegVideoFrame;
 
     async fn setup(
-        feed_lock: Self::Config,
+        input: Self::Config,
         video_tx: mpsc::Sender<Self::Frame>,
         ctx: &mut SetupCtx,
     ) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
-        let (tx, rx) = flume::bounded(256);
         let stall_health_tx = ctx.health_tx().clone();
-        let full_res = feed_lock.hold_full_resolution();
-
-        let original_video_info = *feed_lock.video_info();
+        let original_video_info = *input
+            .lock()
+            .ok_or_else(|| anyhow!("The camera track has no camera"))?
+            .video_info();
         let original_width = original_video_info.width;
         let original_height = original_video_info.height;
         let original_format = original_video_info.pixel_format;
 
-        tokio::time::timeout(
-            CAMERA_SENDER_ATTACH_TIMEOUT,
-            feed_lock.ask(camera::AddSender(tx)),
-        )
-        .await
-        .map_err(|_| anyhow!("Timed out adding camera sender"))?
-        .map_err(|e| anyhow!("Failed to add camera sender: {e}"))?;
+        let mut rx = input
+            .connect(None, true)
+            .await
+            .map_err(|e| anyhow!("Failed to add camera sender: {e:#}"))?;
 
         let (stop_tx, stop_rx) = oneshot::channel();
         let stopped = Arc::new(AtomicBool::new(false));
@@ -131,7 +125,7 @@ impl VideoSource for Camera {
                         tracing::debug!("Camera source: received stop signal");
                         break;
                     }
-                    result = rx.recv_async() => {
+                    result = rx.recv() => {
                         match result {
                             Ok(mut frame) => {
                                 frame_count += 1;
@@ -139,13 +133,17 @@ impl VideoSource for Camera {
                                 let frame_width = frame.inner.width();
                                 let frame_height = frame.inner.height();
 
-                                if frame_width != original_width || frame_height != original_height {
-                                    let needs_new_scaler = scaler
-                                        .as_ref()
-                                        .is_none_or(|s| !s.matches_source(frame_width, frame_height));
+                                let frame_format = frame.inner.format();
+
+                                if frame_width != original_width
+                                    || frame_height != original_height
+                                    || frame_format != original_format
+                                {
+                                    let needs_new_scaler = scaler.as_ref().is_none_or(|s| {
+                                        !s.matches_source(frame_width, frame_height, frame_format)
+                                    });
 
                                     if needs_new_scaler {
-                                        let frame_format = frame.inner.format();
                                         match CameraFrameScaler::new(
                                             frame_width,
                                             frame_height,
@@ -270,11 +268,10 @@ impl VideoSource for Camera {
         });
 
         Ok(Self {
-            feed_lock,
+            _input: input,
             stop_tx: Some(stop_tx),
             stopped,
             original_video_info,
-            _full_res: full_res,
         })
     }
 

@@ -11,6 +11,9 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("server-only", () => ({}));
+vi.mock("node:dns/promises", () => ({
+	lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+}));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/rate-limit", () => ({
 	isRateLimited: vi.fn(async () => false),
@@ -65,7 +68,7 @@ vi.mock("@/lib/agent-write", async (importOriginal) => {
 	};
 });
 
-const principalRow = {
+const principalRow: Record<string, unknown> = {
 	tokenId: "agk_synthetic",
 	scopes: ["caps:read", "integrations:read", "integrations:write"],
 	expiresAt: new Date(Date.now() + 60 * 60 * 1000),
@@ -125,6 +128,7 @@ describe("agent API S3 endpoint policy", () => {
 		state.nodeEnv = "production";
 		state.s3Configs.length = 0;
 		state.send.mockClear();
+		delete principalRow.value;
 	});
 
 	const s3Request = (method: "POST" | "PUT", endpoint: string) =>
@@ -197,6 +201,38 @@ describe("agent API S3 endpoint policy", () => {
 			endpoint: "http://localhost:9000",
 		});
 		expect(state.s3Configs[0]?.requestHandler).toBeUndefined();
+		expect(state.send).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		["https://8.8.8.8", "Invalid endpoint"],
+		["https://bucket.ngrok.io", "Invalid endpoint"],
+		["http://s3.example.com", "Custom storage endpoints must use https://"],
+	])("rejects saving %s on Cap Cloud", async (endpoint, message) => {
+		const response = await PUT(s3Request("PUT", endpoint));
+		const body = await response.json();
+
+		expect(response.status).toBe(400);
+		expect(body).toMatchObject({ code: "INVALID_REQUEST" });
+		expect(String(body.message)).toContain(message);
+		expect(state.send).not.toHaveBeenCalled();
+	});
+
+	it("rate limits repeated storage saves", async () => {
+		principalRow.value = 5;
+		const response = await PUT(s3Request("PUT", "https://s3.example.com"));
+		const body = await response.json();
+
+		expect(response.status).toBe(429);
+		expect(body).toMatchObject({ code: "RATE_LIMITED" });
+		expect(state.send).not.toHaveBeenCalled();
+	});
+
+	it("lets https endpoints below the limit reach the connection check", async () => {
+		principalRow.value = 4;
+		await PUT(s3Request("PUT", "https://s3.example.com"));
+
+		expect(state.s3Configs).toHaveLength(1);
 		expect(state.send).toHaveBeenCalledTimes(1);
 	});
 });

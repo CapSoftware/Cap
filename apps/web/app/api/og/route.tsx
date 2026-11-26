@@ -29,32 +29,21 @@ const clean = (value: string | null, maxLength: number) =>
 		.trim()
 		.slice(0, maxLength) || undefined;
 
-export async function GET(req: NextRequest) {
-	const params = req.nextUrl.searchParams;
+const OG_HEADERS = {
+	// The image is a pure function of the URL, so it can be cached
+	// forever, since changed copy produces a different URL.
+	"Cache-Control": "public, max-age=31536000, s-maxage=31536000, immutable",
+	"X-Robots-Tag": "noindex",
+};
 
-	// Only text our own server-side metadata helpers signed gets rendered;
-	// anything else (or no params at all) serves the default brand image.
-	const rawTitle = params.get("title");
-	const isSigned =
-		rawTitle !== null &&
-		verifyOgSignature(
-			{
-				title: rawTitle,
-				tag: params.get("tag") ?? undefined,
-				description: params.get("description") ?? undefined,
-			},
-			params.get("s"),
-		);
+type OgCopy = {
+	title: string;
+	tag?: string;
+	body?: string;
+};
 
-	const title = (isSigned && clean(rawTitle, 110)) || DEFAULT_TITLE;
-	const tag = isSigned ? clean(params.get("tag"), 28) : undefined;
-	const description = isSigned
-		? clean(params.get("description"), title.length > 72 ? 0 : 150)
-		: undefined;
-	const isDefault = !isSigned;
-
+const renderOgImage = async ({ title, tag, body }: OgCopy) => {
 	const [fonts, assets] = await Promise.all([loadOgFonts(), loadOgAssets()]);
-	const body = description ?? (isDefault ? DEFAULT_DESCRIPTION : undefined);
 	const art =
 		tag === "Pricing" ? (
 			<div
@@ -113,13 +102,53 @@ export async function GET(req: NextRequest) {
 			width: OG_WIDTH,
 			height: OG_HEIGHT,
 			fonts,
-			headers: {
-				// The image is a pure function of the URL, so it can be cached
-				// forever — changed copy produces a different URL.
-				"Cache-Control":
-					"public, max-age=31536000, s-maxage=31536000, immutable",
-				"X-Robots-Tag": "noindex",
-			},
+			headers: OG_HEADERS,
 		},
 	);
+};
+
+let defaultImage: Promise<ArrayBuffer> | undefined;
+
+const defaultOgImage = () => {
+	defaultImage ??= renderOgImage({
+		title: DEFAULT_TITLE,
+		body: DEFAULT_DESCRIPTION,
+	})
+		.then((res) => res.arrayBuffer())
+		.catch((error: unknown) => {
+			defaultImage = undefined;
+			throw error;
+		});
+	return defaultImage;
+};
+
+export async function GET(req: NextRequest) {
+	const params = req.nextUrl.searchParams;
+
+	// Only text our own server-side metadata helpers signed gets rendered;
+	// anything else (or no params at all) serves the default brand image.
+	const rawTitle = params.get("title");
+	const isSigned =
+		rawTitle !== null &&
+		verifyOgSignature(
+			{
+				title: rawTitle,
+				tag: params.get("tag") ?? undefined,
+				description: params.get("description") ?? undefined,
+			},
+			params.get("s"),
+		);
+
+	if (!isSigned) {
+		return new Response(await defaultOgImage(), {
+			headers: { "content-type": "image/png", ...OG_HEADERS },
+		});
+	}
+
+	const title = clean(rawTitle, 110) || DEFAULT_TITLE;
+	return renderOgImage({
+		title,
+		tag: clean(params.get("tag"), 28),
+		body: clean(params.get("description"), title.length > 72 ? 0 : 150),
+	});
 }

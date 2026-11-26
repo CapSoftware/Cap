@@ -1,3 +1,4 @@
+pub use super::fragment_metadata::{FragmentMetadata, read_fragment_metadata};
 pub use super::fragment_prefix::{FragmentPrefix, read_fragment_prefix};
 use std::{
     fs::File,

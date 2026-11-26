@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Meet - abc-defg-hij</title>
+<style>
+  body { font: 15px system-ui, sans-serif; background: #202124; color: #e8eaed; margin: 0; }
+  #tiles { display: flex; flex-wrap: wrap; gap: 12px; padding: 24px; }
+  .tile { width: 260px; height: 150px; border-radius: 10px; background: #3c4043; display: flex;
+          align-items: flex-end; padding: 10px; box-sizing: border-box; border: 3px solid transparent; }
+  .tile.speaking { border-color: #8ab4f8; }
+  #state { padding: 0 24px; opacity: .7; }
+</style>
+</head>
+<body>
+<!-- Test fixture: a stand-in call page. It holds the microphone like a call
+     does, plays the remote side of a scripted meeting, and labels the tile of
+     whoever is talking with "<name> is speaking" from the meeting's truth
+     timing, the way call pages label tiles for assistive technology. -->
+<div id="tiles" role="list" aria-label="Participants"></div>
+<div id="state">loading</div>
+<audio id="remote" src="sys.wav" preload="auto"></audio>
+<script>
+const NAMES = ["Ana Ruiz", "Ben Okafor", "Kwame Mensah", "Priya Shah"];
+const SELF = "Dana Lee";
+const tiles = document.getElementById("tiles");
+const state = document.getElementById("state");
+const audio = document.getElementById("remote");
+let truth = null, remoteIds = [], micStream = null;
+
+function tile(name, self) {
+  const el = document.createElement("div");
+  el.className = "tile";
+  el.setAttribute("role", "listitem");
+  el.setAttribute("aria-label", self ? `${name} (You)` : name);
+  el.textContent = self ? `${name} (You)` : name;
+  tiles.appendChild(el);
+  return el;
+}
+
+async function start() {
+  truth = await (await fetch("truth.json")).json();
+  remoteIds = [...new Set(truth.utterances.filter(u => u.track === "system").map(u => u.spk))];
+  const els = {};
+  els.__self = tile(SELF, true);
+  remoteIds.forEach((id, i) => { els[id] = tile(NAMES[i % NAMES.length], false); });
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    state.textContent = "in call, microphone on";
+  } catch (e) {
+    state.textContent = "in call, microphone unavailable: " + e.name;
+  }
+  fetch("/mic?state=" + encodeURIComponent(micStream ? "on" : state.textContent), { method: "POST" }).catch(() => {});
+  // Wait for the harness to say when the meeting starts (or start now).
+  const at = Number(new URLSearchParams(location.search).get("at") || 0);
+  const wait = Math.max(0, at - Date.now());
+  setTimeout(async () => {
+    try { await audio.play(); } catch (e) { state.textContent += " | audio blocked: " + e.name; }
+    fetch("/started?epoch=" + Date.now(), { method: "POST" }).catch(() => {});
+  }, wait);
+  setInterval(() => {
+    const t = audio.currentTime * 1000;
+    const now = truth.utterances.find(u => u.track === "system" && u.start_ms <= t && t < u.end_ms);
+    remoteIds.forEach((id, i) => {
+      const name = NAMES[i % NAMES.length];
+      const speaking = now && now.spk === id;
+      els[id].setAttribute("aria-label", speaking ? `${name} is speaking` : name);
+      els[id].classList.toggle("speaking", !!speaking);
+    });
+    if (audio.ended) state.textContent = "call audio finished";
+  }, 100);
+}
+start();
+</script>
+</body>
+</html>

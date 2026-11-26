@@ -5,6 +5,7 @@ import { createContext, type PropsWithChildren, useContext } from "react";
 type PublicEnvContext = {
 	webUrl: string;
 	googleAuthAvailable: boolean;
+	googleOneTapClientId: string | null;
 	workosAuthAvailable: boolean;
 	oidcAuthAvailable: boolean;
 	oidcName: string;

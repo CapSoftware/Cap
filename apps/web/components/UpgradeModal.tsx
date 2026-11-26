@@ -29,6 +29,7 @@ import { memo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useStripeContext } from "@/app/Layout/StripeContext";
 import { PRICING } from "@/data/pricing";
+import { CHECKOUT_RATE_LIMITED_MESSAGE } from "@/lib/checkout/messages";
 import { Fit, Layout, useRive } from "@/lib/rive";
 
 export interface UpgradeModalProps {
@@ -190,6 +191,11 @@ const UpgradeModalImpl = ({
 			if (data.subscription === true) {
 				toast.success("You are already on the Cap Pro plan");
 				onOpenChange(false);
+			}
+
+			if (response.status === 429) {
+				toast.error(CHECKOUT_RATE_LIMITED_MESSAGE);
+				return;
 			}
 
 			await onCheckout?.();

@@ -19,6 +19,12 @@ const schemaMocks = vi.hoisted(() => ({
 	videoUploads: { videoId: "videoId", phase: "phase" },
 }));
 
+const suspension = vi.hoisted(() => ({ suspended: false }));
+
+vi.mock("@/lib/media-processing-policy", () => ({
+	isMediaProcessingSuspended: vi.fn(async () => suspension.suspended),
+}));
+
 vi.mock("workflow/api", () => ({
 	start: mockStart,
 }));
@@ -83,6 +89,25 @@ describe("transcribeVideo", () => {
 		mockQueryResult = [];
 		mockUploadQueryResult = [];
 		mockUpdateResult = [{ affectedRows: 1 }];
+	});
+
+	describe("suspended accounts", () => {
+		it("does not start transcription for a suspended owner", async () => {
+			suspension.suspended = true;
+			try {
+				const result = await transcribeVideo(
+					"video-123" as Video.VideoId,
+					"user-123",
+				);
+				expect(result).toEqual({
+					success: false,
+					message: "Transcription is unavailable for this account",
+				});
+				expect(transcribeVideoWorkflow).not.toHaveBeenCalled();
+			} finally {
+				suspension.suspended = false;
+			}
+		});
 	});
 
 	describe("input validation", () => {

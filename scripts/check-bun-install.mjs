@@ -53,27 +53,14 @@ for (const [directory, workspace] of Object.entries(lock.workspaces)) {
 	}
 }
 const webRequire = createRequire(path.join(root, "apps/web/package.json"));
-const mobileRequire = createRequire(
-	path.join(root, "apps/mobile/package.json"),
-);
-const nativeRequire = createRequire(
-	mobileRequire.resolve("react-native/package.json"),
+const rendererRequire = createRequire(
+	webRequire.resolve("react-dom/package.json"),
 );
 assert.equal(
-	nativeRequire.resolve("react"),
-	mobileRequire.resolve("react"),
-	"React Native must resolve the mobile React instance",
+	rendererRequire.resolve("react"),
+	webRequire.resolve("react"),
+	"React DOM must resolve its application's React instance",
 );
-for (const require of [webRequire, mobileRequire]) {
-	const rendererRequire = createRequire(
-		require.resolve("react-dom/package.json"),
-	);
-	assert.equal(
-		rendererRequire.resolve("react"),
-		require.resolve("react"),
-		"React DOM must resolve its application's React instance",
-	);
-}
 const ffmpeg = webRequire("ffmpeg-static");
 assert.equal(
 	typeof ffmpeg,
@@ -94,5 +81,5 @@ const image = await nextRequire("sharp")({
 	.toBuffer();
 assert.ok(image.length > 0, "sharp must load its native binding");
 console.log(
-	`Bun ${version.stdout.trim()}: ${checked} workspace dependencies match the lockfile; React Native, FFmpeg and sharp passed.`,
+	`Bun ${version.stdout.trim()}: ${checked} workspace dependencies match the lockfile; React DOM, FFmpeg and sharp passed.`,
 );

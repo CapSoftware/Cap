@@ -1387,7 +1387,7 @@ dependencies = [
  "cap-enc-ffmpeg",
  "cap-rnnoise",
  "cidre",
- "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=a8c4b41d719b)",
  "ffmpeg-next",
  "serde",
  "serde_json",
@@ -1395,6 +1395,36 @@ dependencies = [
  "tracing",
  "windows 0.60.0",
  "workspace-hack",
+]
+
+[[package]]
+name = "cap-automation"
+version = "0.1.0"
+dependencies = [
+ "cap-project",
+ "serde",
+ "serde_json",
+ "specta",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "cap-calendar"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz",
+ "rrule",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
+ "url",
 ]
 
 [[package]]
@@ -1536,7 +1566,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop-gpui"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "ashpd 0.11.1",
@@ -1544,10 +1574,13 @@ dependencies = [
  "block2 0.6.2",
  "bytes",
  "cap-audio",
+ "cap-automation",
+ "cap-calendar",
  "cap-camera",
  "cap-camera-effects",
  "cap-cli-install",
  "cap-cursor-info",
+ "cap-diarize",
  "cap-editor",
  "cap-enc-ffmpeg",
  "cap-export",
@@ -1555,6 +1588,10 @@ dependencies = [
  "cap-gpui-kernels",
  "cap-i18n-build",
  "cap-media-info",
+ "cap-meeting-platform",
+ "cap-meetings",
+ "cap-notes",
+ "cap-notes-ui",
  "cap-project",
  "cap-recording",
  "cap-rendering",
@@ -1568,36 +1605,43 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-video",
  "cosmic-text 0.14.2",
- "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=a8c4b41d719b)",
  "dirs 6.0.0",
  "dunce",
  "ffmpeg-next",
  "flume 0.11.1",
  "futures-util",
+ "getrandom 0.2.17",
  "global-hotkey",
  "gpui",
  "gpui_platform",
  "gpui_tokio",
- "hound",
+ "iana-time-zone",
  "image 0.25.10",
  "jpeg-decoder",
  "jxl-oxide",
  "kameo",
  "libc",
  "lyon_tessellation",
+ "memmap2",
  "minisign-verify",
+ "notify-rust",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "objc2-user-notifications",
+ "ort",
  "parakeet-rs",
  "raw-window-handle",
  "reqwest 0.12.28",
  "resvg 0.45.1",
  "rfd",
  "rodio",
+ "same-file",
  "sanitize-filename",
+ "scap-cpal",
  "scap-targets",
  "semver",
  "serde",
@@ -1612,6 +1656,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "trash",
  "tray-icon",
  "unicode-segmentation",
  "wayland-client",
@@ -1619,6 +1664,19 @@ dependencies = [
  "whisper-rs",
  "windows-sys 0.59.0",
  "x11rb",
+]
+
+[[package]]
+name = "cap-diarize"
+version = "0.1.0"
+dependencies = [
+ "cap-meetings",
+ "ort",
+ "realfft",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -1632,7 +1690,7 @@ dependencies = [
  "cap-project",
  "cap-rendering",
  "cap-utils",
- "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=a8c4b41d719b)",
  "ffmpeg-next",
  "flume 0.11.1",
  "futures",
@@ -1670,6 +1728,7 @@ dependencies = [
 name = "cap-enc-ffmpeg"
 version = "0.1.0"
 dependencies = [
+ "cap-enc-mediafoundation",
  "cap-frame-converter",
  "cap-media-info",
  "ffmpeg-next",
@@ -1729,6 +1788,7 @@ dependencies = [
  "gifski",
  "image 0.25.10",
  "imgref",
+ "libc",
  "mp4",
  "rgb",
  "serde",
@@ -1818,7 +1878,7 @@ dependencies = [
 name = "cap-media-info"
 version = "0.1.0"
 dependencies = [
- "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=a8c4b41d719b)",
  "ffmpeg-next",
  "thiserror 1.0.69",
  "workspace-hack",
@@ -1849,12 +1909,61 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-meeting-platform"
+version = "0.1.0"
+dependencies = [
+ "block2 0.6.2",
+ "cidre",
+ "flume 0.11.1",
+ "libc",
+ "objc2 0.6.5",
+ "objc2-event-kit",
+ "objc2-foundation 0.3.2",
+ "thiserror 2.0.20",
+ "tracing",
+ "windows 0.61.3",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "cap-meetings"
+version = "0.1.0"
+dependencies = [
+ "cap-diarize",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "cap-muxer-protocol"
 version = "0.1.0"
 dependencies = [
  "byteorder",
  "crc32fast",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "cap-notes"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "cap-notes-ui"
+version = "0.1.0"
+dependencies = [
+ "cap-notes",
+ "gpui",
+ "gpui_platform",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -1910,7 +2019,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "coreaudio-rs",
- "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=a8c4b41d719b)",
  "device_query",
  "either",
  "ffmpeg-next",
@@ -2016,7 +2125,7 @@ name = "cap-timestamp"
 version = "0.1.0"
 dependencies = [
  "cidre",
- "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=a8c4b41d719b)",
  "windows 0.60.0",
  "workspace-hack",
 ]
@@ -2252,6 +2361,16 @@ dependencies = [
  "serde",
  "wasm-bindgen",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "chrono-tz"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
+dependencies = [
+ "chrono",
+ "phf 0.12.1",
 ]
 
 [[package]]
@@ -2901,7 +3020,7 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.15.3"
-source = "git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3#6013cb5f8bd34ddfbf7b215b9540fd211ce829fc"
+source = "git+https://github.com/CapSoftware/cpal?rev=a8c4b41d719b#a8c4b41d719bf82c2a93d72f38de7f03cbb12f06"
 dependencies = [
  "alsa",
  "core-foundation-sys",
@@ -4970,9 +5089,9 @@ checksum = "17e2ac29387b1aa07a1e448f7bb4f35b500787971e965b02842b900afa5c8f6f"
 
 [[package]]
 name = "h2"
-version = "0.4.15"
+version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cb093c84e8bd9b188d4c4a8cb6579fc016968d14c99882163cd3ff402a4f155"
+checksum = "7d29020232d6aa3fb1daca64c1127cf662cf97f254ae16c18c05b8ab635fc118"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -7483,6 +7602,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef25abbcd74fb2609453eb695bd2f860d389e457f67dc17cafc8b8cbc89d0c33"
 
 [[package]]
+name = "objc2-event-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51bc9ad7325642172110196bacd6af64027ec5549ded7fc6589ea03e0f792bf8"
+dependencies = [
+ "bitflags 2.13.1",
+ "block2 0.6.2",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-graphics",
+ "objc2-core-location",
+ "objc2-foundation 0.3.2",
+ "objc2-map-kit",
+]
+
+[[package]]
 name = "objc2-exception-helper"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7546,6 +7681,16 @@ dependencies = [
  "bitflags 2.13.1",
  "objc2 0.6.5",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-map-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "579edede1c244621cd8229b70ea6e20e6ec3bab5a74afdfd494b446b681e1e64"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -8118,6 +8263,15 @@ dependencies = [
 
 [[package]]
 name = "phf"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
+dependencies = [
+ "phf_shared 0.12.1",
+]
+
+[[package]]
+name = "phf"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1562dc717473dbaa4c1f85a36410e03c047b2e7df7f45ee938fbef64ae7fadf"
@@ -8237,6 +8391,15 @@ name = "phf_shared"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
+dependencies = [
+ "siphasher 1.0.3",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
 dependencies = [
  "siphasher 1.0.3",
 ]
@@ -8730,9 +8893,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.16"
+version = "0.11.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f4bfc015262b9df63c8845072ce59068853ff5872180c2ce2f13038b970e560"
+checksum = "a9746dbde176634f4f2f1faf2404e30a31b2bc1e9cafb5329c95d8177a18c9fc"
 dependencies = [
  "bytes",
  "getrandom 0.4.3",
@@ -9473,6 +9636,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rrule"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "720acfb4980b9d8a6a430f6d7a11933e701ebbeba5eee39cc9d8c5f932aaff74"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "log",
+ "regex",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9541,9 +9717,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "once_cell",
  "ring",
@@ -9565,9 +9741,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.14"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0527518605e68109d875e248ea259b6758801cf165e4b2c2733ae3b51f12535a"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -9655,7 +9831,7 @@ dependencies = [
 name = "scap-cpal"
 version = "0.1.0"
 dependencies = [
- "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=a8c4b41d719b)",
  "thiserror 1.0.69",
  "tracing",
  "workspace-hack",
@@ -9677,7 +9853,7 @@ name = "scap-ffmpeg"
 version = "0.1.0"
 dependencies = [
  "cidre",
- "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=a8c4b41d719b)",
  "ffmpeg-next",
  "scap-direct3d",
  "scap-screencapturekit",
@@ -11359,9 +11535,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
 dependencies = [
  "bytes",
  "libc",
@@ -11698,6 +11874,24 @@ checksum = "1ad61aed86bc3faea4300c7aee358b4c6d0c8d6ccc36524c96e4c92ccf26e77e"
 dependencies = [
  "num-integer",
  "strength_reduce",
+]
+
+[[package]]
+name = "trash"
+version = "5.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be89b3fe156965d29ac4f8522f3a640c655affdd9f21cb4f36857f0c92c00317"
+dependencies = [
+ "chrono",
+ "libc",
+ "log",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
+ "once_cell",
+ "percent-encoding",
+ "scopeguard",
+ "urlencoding",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -12495,18 +12689,18 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "e49d0e65abc00c142e8f9428da991da9f1a250c39be97459901eb12b9b49f62a"
 dependencies = [
  "rustls-pki-types",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
 dependencies = [
  "rustls-pki-types",
 ]

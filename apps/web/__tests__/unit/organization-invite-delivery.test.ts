@@ -3,16 +3,26 @@ import type { SQL } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sendOrganizationInvites } from "@/actions/organization/send-invites";
+import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
+import { RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 const mocks = vi.hoisted(() => ({
 	sendEmail: vi.fn(),
 	insert: vi.fn(),
 	delete: vi.fn(),
+	isRateLimited: vi.fn(),
+	existingInviteEmails: [] as string[],
+	existingMemberEmails: [] as string[],
 	sequence: 0,
 }));
 
+vi.mock("@/lib/rate-limit", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/rate-limit")>()),
+	isRateLimited: mocks.isRateLimited,
+}));
+
 vi.mock("@cap/database/auth/session", () => ({
-	getCurrentUser: async () => ({ id: "user-1" }),
+	getCurrentUser: async () => ({ id: "user-1", email: "admin@acme.dev" }),
 }));
 vi.mock("@cap/database/emails/config", () => ({ sendEmail: mocks.sendEmail }));
 vi.mock("@cap/database/emails/organization-invite", () => ({
@@ -36,8 +46,12 @@ vi.mock("@cap/database", () => {
 	const tx = {
 		select: () => ({
 			from: () => ({
-				where: async () => [],
-				innerJoin: () => ({ where: async () => [] }),
+				where: async () =>
+					mocks.existingInviteEmails.map((invitedEmail) => ({ invitedEmail })),
+				innerJoin: () => ({
+					where: async () =>
+						mocks.existingMemberEmails.map((email) => ({ email })),
+				}),
 			}),
 		}),
 		insert: () => ({ values: mocks.insert }),
@@ -54,10 +68,31 @@ vi.mock("@cap/database", () => {
 	};
 });
 
+const provisioned = ({ memberCreated }: { memberCreated: boolean }) =>
+	({
+		userId: "user-2",
+		memberId: "member-2",
+		inviteId: memberCreated ? "invite-0" : null,
+		hasProSeat: false,
+		userCreated: memberCreated,
+		memberCreated,
+		inviteCreated: memberCreated,
+	}) as Awaited<ReturnType<typeof provisionOrganizationInvitee>>;
+
 describe("organization invite delivery", () => {
 	beforeEach(() => {
 		mocks.sequence = 0;
 		mocks.sendEmail.mockReset();
+		mocks.insert.mockReset();
+		mocks.delete.mockReset();
+		mocks.isRateLimited.mockReset();
+		mocks.isRateLimited.mockResolvedValue(false);
+		mocks.existingInviteEmails = [];
+		mocks.existingMemberEmails = [];
+		vi.mocked(provisionOrganizationInvitee).mockReset();
+		vi.mocked(provisionOrganizationInvitee).mockResolvedValue(
+			provisioned({ memberCreated: true }),
+		);
 	});
 
 	it("preserves skipped invite records and reports them separately", async () => {
@@ -98,5 +133,251 @@ describe("organization invite delivery", () => {
 		expect(new MySqlDialect().sqlToQuery(condition).params).toEqual([
 			"invite-2",
 		]);
+	});
+
+	it("checks the invite send limit for the organization and the sender", async () => {
+		mocks.sendEmail.mockResolvedValue({ data: { id: "sent" }, error: null });
+		await sendOrganizationInvites(
+			["person@example.com"],
+			Organisation.OrganisationId.make("org-1"),
+		);
+		expect(RATE_LIMIT_IDS.ORGANIZATION_INVITE).toBeTypeOf("string");
+		expect(mocks.isRateLimited).toHaveBeenCalledWith(
+			RATE_LIMIT_IDS.ORGANIZATION_INVITE,
+			{ key: "organization-invite:organization:org-1" },
+		);
+		expect(mocks.isRateLimited).toHaveBeenCalledWith(
+			RATE_LIMIT_IDS.ORGANIZATION_INVITE,
+			{ key: "organization-invite:user:user-1" },
+		);
+		expect(mocks.sendEmail).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		"organization-invite:organization:org-1",
+		"organization-invite:user:user-1",
+	])(
+		"creates and emails nothing once %s is over the limit",
+		async (limitedKey) => {
+			mocks.isRateLimited.mockImplementation(
+				async (_ruleId: string, opts?: { key?: string }) =>
+					opts?.key === limitedKey,
+			);
+			await expect(
+				sendOrganizationInvites(
+					["one@example.com", "two@example.com"],
+					Organisation.OrganisationId.make("org-1"),
+				),
+			).rejects.toThrow("Too many invites");
+			expect(mocks.insert).not.toHaveBeenCalled();
+			expect(mocks.sendEmail).not.toHaveBeenCalled();
+		},
+	);
+
+	it("adds nothing without email notifications once over the limit", async () => {
+		mocks.isRateLimited.mockResolvedValue(true);
+		await expect(
+			sendOrganizationInvites(
+				["one@example.com"],
+				Organisation.OrganisationId.make("org-1"),
+				"member",
+				{ sendEmailNotifications: false },
+			),
+		).rejects.toThrow("Too many invites");
+		expect(provisionOrganizationInvitee).not.toHaveBeenCalled();
+	});
+
+	it("adds addresses on the inviter's company domain straight away when email is off", async () => {
+		const result = await sendOrganizationInvites(
+			["teammate@acme.dev"],
+			Organisation.OrganisationId.make("org-1"),
+			"member",
+			{ sendEmailNotifications: false },
+		);
+		expect(result).toEqual({
+			success: true,
+			failedEmails: [],
+			skippedEmails: [],
+			pendingEmails: [],
+			addedEmails: ["teammate@acme.dev"],
+		});
+		expect(provisionOrganizationInvitee).toHaveBeenCalledTimes(1);
+		expect(provisionOrganizationInvitee).toHaveBeenCalledWith({
+			organizationId: "org-1",
+			email: "teammate@acme.dev",
+			invitedByUserId: "user-1",
+			role: "member",
+		});
+		expect(mocks.insert).not.toHaveBeenCalled();
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
+	});
+
+	it("creates pending invites for other addresses when email is off", async () => {
+		const result = await sendOrganizationInvites(
+			[
+				{ email: "teammate@acme.dev", role: "admin" },
+				{ email: "someone@elsewhere.dev", role: "member" },
+				{ email: "person@gmail.com", role: "admin" },
+			],
+			Organisation.OrganisationId.make("org-1"),
+			"member",
+			{ sendEmailNotifications: false },
+		);
+		expect(result).toEqual({
+			success: true,
+			failedEmails: [],
+			skippedEmails: [],
+			pendingEmails: ["someone@elsewhere.dev", "person@gmail.com"],
+			addedEmails: ["teammate@acme.dev"],
+		});
+		expect(provisionOrganizationInvitee).toHaveBeenCalledTimes(1);
+		expect(provisionOrganizationInvitee).toHaveBeenCalledWith(
+			expect.objectContaining({ email: "teammate@acme.dev", role: "admin" }),
+		);
+		expect(mocks.insert).toHaveBeenCalledWith([
+			expect.objectContaining({
+				organizationId: "org-1",
+				invitedEmail: "someone@elsewhere.dev",
+				invitedByUserId: "user-1",
+				role: "member",
+			}),
+			expect.objectContaining({
+				invitedEmail: "person@gmail.com",
+				role: "admin",
+			}),
+		]);
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
+	});
+
+	it("reports other addresses already invited as pending, not added, when email is off", async () => {
+		mocks.existingInviteEmails = ["pending@elsewhere.dev"];
+		mocks.existingMemberEmails = ["member@elsewhere.dev"];
+		const result = await sendOrganizationInvites(
+			["pending@elsewhere.dev", "member@elsewhere.dev", "new@elsewhere.dev"],
+			Organisation.OrganisationId.make("org-1"),
+			"member",
+			{ sendEmailNotifications: false },
+		);
+		expect(result.pendingEmails).toEqual([
+			"pending@elsewhere.dev",
+			"new@elsewhere.dev",
+		]);
+		expect(result.addedEmails).toEqual([]);
+		expect(provisionOrganizationInvitee).not.toHaveBeenCalled();
+		expect(mocks.insert).toHaveBeenCalledWith([
+			expect.objectContaining({ invitedEmail: "new@elsewhere.dev" }),
+		]);
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
+	});
+
+	it("reports teammates whose direct add failed when email is off", async () => {
+		vi.mocked(provisionOrganizationInvitee).mockRejectedValueOnce(
+			new Error("failed"),
+		);
+		const result = await sendOrganizationInvites(
+			["teammate@acme.dev"],
+			Organisation.OrganisationId.make("org-1"),
+			"member",
+			{ sendEmailNotifications: false },
+		);
+		expect(result).toMatchObject({
+			failedEmails: ["teammate@acme.dev"],
+			pendingEmails: [],
+			addedEmails: [],
+		});
+	});
+
+	it("counts only direct adds that succeeded when email is off", async () => {
+		vi.mocked(provisionOrganizationInvitee).mockRejectedValueOnce(
+			new Error("failed"),
+		);
+		const result = await sendOrganizationInvites(
+			["failed@acme.dev", "added@acme.dev", "someone@elsewhere.dev"],
+			Organisation.OrganisationId.make("org-1"),
+			"member",
+			{ sendEmailNotifications: false },
+		);
+		expect(result).toMatchObject({
+			failedEmails: ["failed@acme.dev"],
+			pendingEmails: ["someone@elsewhere.dev"],
+			addedEmails: ["added@acme.dev"],
+		});
+	});
+
+	it("reports nobody added or pending when everyone is already a member and email is off", async () => {
+		vi.mocked(provisionOrganizationInvitee).mockResolvedValue(
+			provisioned({ memberCreated: false }),
+		);
+		mocks.existingMemberEmails = ["member@elsewhere.dev"];
+		const result = await sendOrganizationInvites(
+			["teammate@acme.dev", "member@elsewhere.dev"],
+			Organisation.OrganisationId.make("org-1"),
+			"member",
+			{ sendEmailNotifications: false },
+		);
+		expect(result).toEqual({
+			success: true,
+			failedEmails: [],
+			skippedEmails: [],
+			pendingEmails: [],
+			addedEmails: [],
+		});
+		expect(mocks.insert).not.toHaveBeenCalled();
+	});
+
+	it("does not consult the limit when no address is valid", async () => {
+		const result = await sendOrganizationInvites(
+			["not-an-email"],
+			Organisation.OrganisationId.make("org-1"),
+		);
+		expect(result).toMatchObject({ failedEmails: [], skippedEmails: [] });
+		expect(mocks.isRateLimited).not.toHaveBeenCalled();
+	});
+
+	it("still skips addresses already invited or already members", async () => {
+		mocks.existingInviteEmails = ["pending@example.com"];
+		mocks.existingMemberEmails = ["member@example.com"];
+		mocks.sendEmail.mockResolvedValue({ data: { id: "sent" }, error: null });
+		await sendOrganizationInvites(
+			["Pending@example.com", "member@example.com", "new@example.com"],
+			Organisation.OrganisationId.make("org-1"),
+		);
+		expect(mocks.insert).toHaveBeenCalledWith([
+			expect.objectContaining({ invitedEmail: "new@example.com" }),
+		]);
+		expect(mocks.sendEmail).toHaveBeenCalledTimes(1);
+		expect(mocks.sendEmail).toHaveBeenCalledWith(
+			expect.objectContaining({ email: "new@example.com" }),
+		);
+	});
+
+	it("does not count a batch whose addresses are all invited or members", async () => {
+		mocks.existingInviteEmails = ["pending@example.com"];
+		mocks.existingMemberEmails = ["member@example.com"];
+		mocks.isRateLimited.mockResolvedValue(true);
+		const result = await sendOrganizationInvites(
+			["Pending@example.com", "member@example.com"],
+			Organisation.OrganisationId.make("org-1"),
+		);
+		expect(result).toEqual({
+			success: true,
+			failedEmails: [],
+			skippedEmails: [],
+			pendingEmails: [],
+			addedEmails: [],
+		});
+		expect(mocks.isRateLimited).not.toHaveBeenCalled();
+		expect(mocks.insert).not.toHaveBeenCalled();
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
+	});
+
+	it("still rejects batches over the per-call maximum", async () => {
+		await expect(
+			sendOrganizationInvites(
+				Array.from({ length: 51 }, (_, i) => `person-${i}@example.com`),
+				Organisation.OrganisationId.make("org-1"),
+			),
+		).rejects.toThrow("Cannot send more than 50 invites at once");
+		expect(mocks.insert).not.toHaveBeenCalled();
 	});
 });

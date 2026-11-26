@@ -1,15 +1,8 @@
 "use client";
 
-import {
-	Button,
-	Card,
-	CardDescription,
-	CardHeader,
-	CardTitle,
-	Input,
-} from "@cap/ui";
+import { Button, Input } from "@cap/ui";
 import { useCurrency } from "hooks/useCurrency";
-import { Copy, ExternalLink, RefreshCw, ShieldCheck } from "lucide-react";
+import { Copy, ExternalLink, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
 	useCallback,
@@ -33,6 +26,12 @@ import {
 	isSupportedCurrency,
 	type SupportedCurrency,
 } from "@/utils/currency";
+import { KeyDoodle } from "../_components/doodles";
+import {
+	SettingsNotice,
+	SettingsRow,
+	StatusChip,
+} from "../_components/settings-ui";
 
 type SsoAction = "checkout" | "portal" | "invoices" | "refresh" | "confirm";
 
@@ -108,7 +107,7 @@ export function SsoCard({
 					timeZone: "UTC",
 				})}`
 			: "at the end of your billing period";
-	let statusLabel = "Optional add-on";
+	let statusLabel = "Add-on";
 	if (settings.entitled) {
 		statusLabel = isActive ? "Active" : "Ready to configure";
 	} else if (hasExistingSubscription) {
@@ -219,33 +218,102 @@ export function SsoCard({
 		});
 	};
 
-	return (
-		<Card>
-			<div className="flex flex-wrap gap-4 justify-between items-start">
-				<div className="flex gap-3 items-start">
-					<div className="flex justify-center items-center rounded-xl bg-gray-3 size-10 shrink-0">
-						<ShieldCheck className="size-5 text-gray-11" aria-hidden="true" />
-					</div>
-					<CardHeader>
-						<CardTitle>SAML SSO</CardTitle>
-						<CardDescription className="max-w-xl">
-							Let your team sign in to Cap with your organization's identity
-							provider, including Okta, Microsoft Entra ID, and Google
-							Workspace.
-						</CardDescription>
-					</CardHeader>
-				</div>
-				<span
-					className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-						isActive ? "bg-green-50 text-green-700" : "bg-gray-3 text-gray-11"
-					}`}
-				>
-					{statusLabel}
-				</span>
-			</div>
+	const needsDomain = settings.entitled && !settings.domains.length;
+	const setupButton = settings.entitled ? (
+		<Button
+			type="button"
+			size="xs"
+			variant="dark"
+			className="px-4"
+			onClick={() => openPortal()}
+			disabled={busy || !settings.ssoAvailable}
+			spinner={pendingAction === "portal"}
+		>
+			{!hasVerifiedDomain
+				? "Verify domain"
+				: settings.connection || settings.connectionIssue
+					? "Manage SSO"
+					: "Set up SAML SSO"}
+			<ExternalLink className="ml-1 size-3.5" aria-hidden="true" />
+		</Button>
+	) : null;
+	const canPurchase =
+		!settings.entitled && settings.canManageBilling && !hasExistingSubscription;
 
-			<div className="flex flex-col gap-4 mt-5">
-				<p className="text-sm leading-6 text-gray-11">
+	return (
+		<SettingsRow
+			anchor="sso"
+			icon={<KeyDoodle />}
+			title="SAML SSO"
+			meta={
+				<StatusChip tone={isActive ? "positive" : "neutral"}>
+					{statusLabel}
+				</StatusChip>
+			}
+			description="Let your team sign in to Cap with your organization's identity provider, including Okta, Microsoft Entra ID, and Google Workspace."
+			control={
+				canPurchase ? (
+					<>
+						{price && settings.prices.length > 1 && (
+							<>
+								<label htmlFor={currencyInputId} className="sr-only">
+									Billing currency
+								</label>
+								<select
+									id={currencyInputId}
+									value={price.currency}
+									onChange={(event) => {
+										if (isSupportedCurrency(event.target.value)) {
+											setSelectedCurrency(event.target.value);
+										}
+									}}
+									disabled={busy || !settings.ssoAvailable}
+									className="px-3 h-8 text-xs font-medium rounded-full border shadow-xs border-gray-4 bg-gray-1 text-gray-12"
+								>
+									{settings.prices.map((candidate) => (
+										<option key={candidate.currency} value={candidate.currency}>
+											{candidate.currency.toUpperCase()}
+										</option>
+									))}
+								</select>
+							</>
+						)}
+						<Button
+							type="button"
+							size="xs"
+							variant="dark"
+							className="px-4"
+							disabled={
+								busy ||
+								!settings.ssoAvailable ||
+								!price ||
+								Boolean(checkoutSessionId)
+							}
+							spinner={pendingAction === "checkout"}
+							onClick={() => {
+								if (!price) return;
+								setSelectedCurrency(price.currency);
+								runAction("checkout", async () => {
+									const { url } = await startOrganizationSsoCheckout(
+										organizationId,
+										price.currency,
+									);
+									window.location.assign(url);
+								});
+							}}
+						>
+							{monthlyAmount
+								? `Add SAML SSO · ${monthlyAmount}/month`
+								: "Pricing unavailable"}
+						</Button>
+					</>
+				) : needsDomain ? null : (
+					setupButton
+				)
+			}
+		>
+			<div className="flex flex-col gap-3 mt-4 sm:pl-[58px]">
+				<p className="text-[13px] leading-5 text-gray-10">
 					People who sign in with your SSO connection are automatically added to{" "}
 					<span className="font-medium text-gray-12">
 						{settings.organizationName}
@@ -254,13 +322,13 @@ export function SsoCard({
 				</p>
 
 				{!settings.ssoAvailable && (
-					<p className="rounded-xl border border-gray-4 bg-gray-2 p-3 text-sm text-gray-11">
+					<SettingsNotice>
 						SSO setup is currently unavailable. Contact{" "}
 						<a className="underline" href="mailto:hello@cap.so">
 							hello@cap.so
 						</a>{" "}
 						for help.
-					</p>
+					</SettingsNotice>
 				)}
 
 				{settings.entitled ? (
@@ -270,7 +338,7 @@ export function SsoCard({
 								{settings.domains.map((entry) => (
 									<span
 										key={entry.domain}
-										className="rounded-lg border border-gray-4 px-3 py-1.5 text-xs text-gray-11"
+										className="px-3 py-1.5 text-xs rounded-full border border-gray-4 text-gray-11"
 									>
 										<span className="font-medium text-gray-12">
 											{entry.domain}
@@ -283,22 +351,26 @@ export function SsoCard({
 								))}
 							</div>
 						) : (
-							<div className="flex flex-col gap-2 max-w-sm">
+							<div className="flex flex-col gap-2">
 								<label
 									htmlFor={domainInputId}
-									className="text-sm font-medium text-gray-12"
+									className="text-[13px] font-medium text-gray-12"
 								>
 									Organization domain
 								</label>
-								<Input
-									id={domainInputId}
-									value={domain}
-									onChange={(event) => setDomain(event.target.value)}
-									placeholder="company.com"
-									autoCapitalize="none"
-									autoCorrect="off"
-									disabled={busy || !settings.ssoAvailable}
-								/>
+								<div className="flex flex-wrap gap-2 items-center">
+									<Input
+										id={domainInputId}
+										value={domain}
+										onChange={(event) => setDomain(event.target.value)}
+										placeholder="company.com"
+										autoCapitalize="none"
+										autoCorrect="off"
+										disabled={busy || !settings.ssoAvailable}
+										className="flex-1 max-w-xs h-9 min-w-40"
+									/>
+									{setupButton}
+								</div>
 							</div>
 						)}
 						<p className="text-xs leading-5 text-gray-10">
@@ -307,234 +379,62 @@ export function SsoCard({
 								: "First, verify your organization's domain in WorkOS. Then return here to set up the SAML connection."}
 						</p>
 						{settings.connection && (
-							<p className="text-sm text-gray-11">
+							<p className="text-[13px] text-gray-11">
 								{settings.connection.name}
 								{" · "}
 								{isActive ? "Ready for sign-in" : "Setup not complete"}
 							</p>
 						)}
 						{settings.connectionIssue && (
-							<output className="text-sm text-gray-11">
+							<output className="text-[13px] text-gray-11">
 								{settings.connectionIssue}
 							</output>
 						)}
-						<div className="flex flex-wrap gap-2">
-							<Button
-								type="button"
-								size="sm"
-								variant="dark"
-								onClick={() => openPortal()}
-								disabled={busy || !settings.ssoAvailable}
-								spinner={pendingAction === "portal"}
-							>
-								{!hasVerifiedDomain
-									? "Verify domain"
-									: settings.connection || settings.connectionIssue
-										? "Manage SSO"
-										: "Set up SAML SSO"}
-								<ExternalLink className="ml-1 size-3.5" aria-hidden="true" />
-							</Button>
-							{hasVerifiedDomain &&
-								settings.domains.some(
-									(entry) => entry.state !== "verified",
-								) && (
-									<Button
-										type="button"
-										size="sm"
-										variant="gray"
-										onClick={() => openPortal("domain_verification")}
-										disabled={busy || !settings.ssoAvailable}
-									>
-										Verify domains
-									</Button>
-								)}
-						</div>
 						{settings.cancelAtPeriodEnd && (
-							<p className="text-sm text-gray-11">
+							<p className="text-[13px] text-gray-11">
 								Your SSO add-on is scheduled to end {periodEndLabel}.
 							</p>
 						)}
 					</>
 				) : settings.canManageBilling ? (
-					<div className="flex flex-col gap-3">
-						{hasExistingSubscription ? (
-							<p className="text-sm text-gray-11">
-								Your SSO subscription needs attention before setup is available.
-								Contact{" "}
-								<a className="underline" href="mailto:hello@cap.so">
-									hello@cap.so
-								</a>{" "}
-								for help with the existing subscription; you don't need to
-								purchase it again.
-							</p>
-						) : (
-							<div className="flex flex-wrap gap-3 items-end">
-								{price && settings.prices.length > 1 && (
-									<div className="flex flex-col gap-1.5">
-										<label
-											htmlFor={currencyInputId}
-											className="text-xs font-medium text-gray-11"
-										>
-											Billing currency
-										</label>
-										<select
-											id={currencyInputId}
-											value={price.currency}
-											onChange={(event) => {
-												if (isSupportedCurrency(event.target.value)) {
-													setSelectedCurrency(event.target.value);
-												}
-											}}
-											disabled={busy || !settings.ssoAvailable}
-											className="h-10 rounded-lg border border-gray-4 bg-gray-1 px-3 text-sm text-gray-12"
-										>
-											{settings.prices.map((candidate) => (
-												<option
-													key={candidate.currency}
-													value={candidate.currency}
-												>
-													{candidate.currency.toUpperCase()}
-												</option>
-											))}
-										</select>
-									</div>
-								)}
-								<Button
-									type="button"
-									size="sm"
-									variant="dark"
-									disabled={
-										busy ||
-										!settings.ssoAvailable ||
-										!price ||
-										Boolean(checkoutSessionId)
-									}
-									spinner={pendingAction === "checkout"}
-									onClick={() => {
-										if (!price) return;
-										setSelectedCurrency(price.currency);
-										runAction("checkout", async () => {
-											const { url } = await startOrganizationSsoCheckout(
-												organizationId,
-												price.currency,
-											);
-											window.location.assign(url);
-										});
-									}}
-								>
-									{monthlyAmount
-										? `Add SAML SSO · ${monthlyAmount}/month`
-										: "Pricing unavailable"}
-								</Button>
-							</div>
-						)}
-					</div>
+					hasExistingSubscription && (
+						<p className="text-[13px] leading-5 text-gray-11">
+							Your SSO subscription needs attention before setup is available.
+							Contact{" "}
+							<a className="underline" href="mailto:hello@cap.so">
+								hello@cap.so
+							</a>{" "}
+							for help with the existing subscription; you don't need to
+							purchase it again.
+						</p>
+					)
 				) : (
-					<p className="text-sm text-gray-11">
+					<p className="text-[13px] leading-5 text-gray-11">
 						Ask your organization owner to add SAML SSO. Once subscribed, owners
 						and admins can configure it here.
 					</p>
 				)}
 
-				{settings.canManageBilling && settings.hasSubscription && (
-					<div className="flex flex-col gap-3">
-						<Button
-							type="button"
-							size="sm"
-							variant="gray"
-							className="w-fit"
-							disabled={busy}
-							spinner={pendingAction === "invoices"}
-							onClick={() => {
-								setInvoiceHistory(null);
-								runAction("invoices", async () => {
-									setInvoiceHistory(
-										await getOrganizationSsoInvoices(organizationId),
-									);
-								});
-							}}
-						>
-							View invoices
-						</Button>
-						{invoiceHistory && (
-							<div className="rounded-xl border border-gray-4 p-4">
-								<h3 className="text-sm font-medium text-gray-12">
-									SSO invoices
-								</h3>
-								{invoiceHistory.invoices.length ? (
-									<ul className="mt-3 flex flex-col gap-3">
-										{invoiceHistory.invoices.map((invoice) => (
-											<li
-												key={invoice.id}
-												className="flex flex-wrap items-center justify-between gap-2 text-sm"
-											>
-												<span className="text-gray-11">
-													{invoice.number ?? invoice.id}
-													{" · "}
-													{new Date(invoice.created * 1000).toLocaleDateString(
-														"en-GB",
-														{ timeZone: "UTC" },
-													)}
-												</span>
-												{invoice.pdfUrl ? (
-													<a
-														href={invoice.pdfUrl}
-														target="_blank"
-														rel="noopener noreferrer"
-														className="font-medium underline"
-													>
-														Download PDF
-														<span className="sr-only">
-															{" "}
-															for invoice {invoice.number ?? invoice.id}
-														</span>
-													</a>
-												) : (
-													<span className="text-gray-10">
-														PDF not available yet
-													</span>
-												)}
-											</li>
-										))}
-									</ul>
-								) : (
-									<p className="mt-2 text-sm text-gray-11">
-										No SSO invoices found.
-									</p>
-								)}
-								{invoiceHistory.hasMore && (
-									<p className="mt-3 text-sm text-gray-11">
-										Showing the latest 100 invoices. Contact{" "}
-										<a href="mailto:hello@cap.so" className="underline">
-											hello@cap.so
-										</a>{" "}
-										for older invoices.
-									</p>
-								)}
-							</div>
-						)}
-					</div>
-				)}
-
 				{isActive && settings.signInUrl && (
-					<div className="flex flex-col gap-2 rounded-xl border border-gray-4 bg-gray-2 p-4">
+					<div className="flex flex-col gap-2">
 						<label
 							htmlFor={signInLinkInputId}
-							className="text-sm font-medium text-gray-12"
+							className="text-[13px] font-medium text-gray-12"
 						>
 							Share your SSO sign-in link
 						</label>
-						<div className="flex flex-col gap-2 sm:flex-row">
+						<div className="flex flex-wrap gap-2 items-center">
 							<Input
 								id={signInLinkInputId}
 								value={settings.signInUrl}
 								readOnly
-								className="min-w-0 flex-1"
+								className="flex-1 h-9 min-w-40"
 							/>
 							<Button
 								type="button"
-								size="sm"
-								variant="gray"
+								size="xs"
+								variant="outline"
+								className="px-4"
 								onClick={async () => {
 									try {
 										await navigator.clipboard.writeText(
@@ -556,31 +456,125 @@ export function SsoCard({
 				)}
 
 				{pendingAction === "confirm" && (
-					<output className="text-sm text-gray-11">
+					<output className="text-[13px] text-gray-11">
 						Confirming your SSO subscription…
 					</output>
 				)}
 				{error && (
-					<p
-						className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"
-						role="alert"
-					>
+					<SettingsNotice tone="danger" role="alert">
 						{error}
-					</p>
+					</SettingsNotice>
 				)}
-				<Button
-					type="button"
-					size="sm"
-					variant="outline"
-					className="w-fit"
-					onClick={refreshSettings}
-					disabled={busy}
-					spinner={pendingAction === "refresh" || pendingAction === "confirm"}
-				>
-					{!busy && <RefreshCw className="mr-1 size-3.5" aria-hidden="true" />}
-					Refresh status
-				</Button>
+
+				<div className="flex flex-wrap gap-2">
+					{settings.entitled &&
+						hasVerifiedDomain &&
+						settings.domains.some((entry) => entry.state !== "verified") && (
+							<Button
+								type="button"
+								size="xs"
+								variant="outline"
+								className="px-4"
+								onClick={() => openPortal("domain_verification")}
+								disabled={busy || !settings.ssoAvailable}
+							>
+								Verify domains
+							</Button>
+						)}
+					{settings.canManageBilling && settings.hasSubscription && (
+						<Button
+							type="button"
+							size="xs"
+							variant="outline"
+							className="px-4"
+							disabled={busy}
+							spinner={pendingAction === "invoices"}
+							onClick={() => {
+								setInvoiceHistory(null);
+								runAction("invoices", async () => {
+									setInvoiceHistory(
+										await getOrganizationSsoInvoices(organizationId),
+									);
+								});
+							}}
+						>
+							View invoices
+						</Button>
+					)}
+					<Button
+						type="button"
+						size="xs"
+						variant="outline"
+						className="px-4"
+						onClick={refreshSettings}
+						disabled={busy}
+						spinner={pendingAction === "refresh" || pendingAction === "confirm"}
+					>
+						{!busy && (
+							<RefreshCw className="mr-1 size-3.5" aria-hidden="true" />
+						)}
+						Refresh status
+					</Button>
+				</div>
+
+				{invoiceHistory && (
+					<div className="p-4 rounded-xl border border-gray-3 bg-gray-2">
+						<h3 className="text-[13px] font-medium text-gray-12">
+							SSO invoices
+						</h3>
+						{invoiceHistory.invoices.length ? (
+							<ul className="flex flex-col gap-3 mt-3">
+								{invoiceHistory.invoices.map((invoice) => (
+									<li
+										key={invoice.id}
+										className="flex flex-wrap gap-2 justify-between items-center text-[13px]"
+									>
+										<span className="text-gray-11">
+											{invoice.number ?? invoice.id}
+											{" · "}
+											{new Date(invoice.created * 1000).toLocaleDateString(
+												"en-GB",
+												{ timeZone: "UTC" },
+											)}
+										</span>
+										{invoice.pdfUrl ? (
+											<a
+												href={invoice.pdfUrl}
+												target="_blank"
+												rel="noopener noreferrer"
+												className="font-medium underline text-gray-12"
+											>
+												Download PDF
+												<span className="sr-only">
+													{" "}
+													for invoice {invoice.number ?? invoice.id}
+												</span>
+											</a>
+										) : (
+											<span className="text-gray-10">
+												PDF not available yet
+											</span>
+										)}
+									</li>
+								))}
+							</ul>
+						) : (
+							<p className="mt-2 text-[13px] text-gray-11">
+								No SSO invoices found.
+							</p>
+						)}
+						{invoiceHistory.hasMore && (
+							<p className="mt-3 text-[13px] text-gray-11">
+								Showing the latest 100 invoices. Contact{" "}
+								<a href="mailto:hello@cap.so" className="underline">
+									hello@cap.so
+								</a>{" "}
+								for older invoices.
+							</p>
+						)}
+					</div>
+				)}
 			</div>
-		</Card>
+		</SettingsRow>
 	);
 }

@@ -13,6 +13,7 @@ mod image;
 mod keyboard;
 mod mask;
 mod notch;
+mod shape;
 mod text;
 
 use std::sync::OnceLock;
@@ -139,6 +140,7 @@ pub use image::*;
 pub use keyboard::*;
 pub use mask::*;
 pub use notch::*;
+pub use shape::*;
 pub use text::*;
 
 #[cfg(test)]

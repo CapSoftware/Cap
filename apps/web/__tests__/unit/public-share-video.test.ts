@@ -14,6 +14,7 @@ const candidate = (
 	hasPassword: false,
 	hasInheritedPassword: false,
 	allowedEmailDomain: null,
+	linkOpenToAnyone: false,
 	isScreenshot: false,
 	hasActiveUpload: false,
 	sourceType: "desktopMP4",
@@ -41,6 +42,30 @@ describe("public share video eligibility", () => {
 		expect(isPublicShareVideoCandidateEligible(candidate(override))).toBe(
 			false,
 		);
+	});
+
+	it("accepts a restricted organization's recording once its link is opened to anyone", () => {
+		expect(
+			isPublicShareVideoCandidateEligible(
+				candidate({ allowedEmailDomain: "cap.so", linkOpenToAnyone: true }),
+			),
+		).toBe(true);
+	});
+
+	it.each([
+		{ public: false },
+		{ hasPassword: true },
+		{ hasInheritedPassword: true },
+	])("keeps an opened link behind %j", (override) => {
+		expect(
+			isPublicShareVideoCandidateEligible(
+				candidate({
+					allowedEmailDomain: "cap.so",
+					linkOpenToAnyone: true,
+					...override,
+				}),
+			),
+		).toBe(false);
 	});
 
 	it("requires MediaConvert playback to be complete or explicitly skipped", () => {

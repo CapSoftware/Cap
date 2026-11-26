@@ -1,0 +1,238 @@
+{
+	"kind": "calendar#events",
+	"etag": "\"p33c9ff7tq2m8g0g\"",
+	"summary": "me@acme.example",
+	"updated": "2026-03-01T12:00:00.000Z",
+	"timeZone": "America/New_York",
+	"accessRole": "owner",
+	"nextPageToken": "CigKGjdrdWt1cXJmZWRsbTJmOXQ2dm8ybWgxbG41GAEggICA2r",
+	"items": [
+		{
+			"id": "7kukuqrfedlm2f9t6vo2mh1ln5_20260309T130000Z",
+			"status": "confirmed",
+			"htmlLink": "https://www.google.com/calendar/event?eid=N2t1a3VxcmZlZGxtMmY5dDZ2bzJtaDFsbjVfMjAyNjAzMDlUMTMwMDAwWiBtZUBhY21lLmV4YW1wbGU",
+			"summary": "Product sync",
+			"description": "Weekly product sync, bring updates.",
+			"location": "NYC-4-Hudson (8)",
+			"start": {
+				"dateTime": "2026-03-09T09:00:00-04:00",
+				"timeZone": "America/New_York"
+			},
+			"end": {
+				"dateTime": "2026-03-09T09:30:00-04:00",
+				"timeZone": "America/New_York"
+			},
+			"recurringEventId": "7kukuqrfedlm2f9t6vo2mh1ln5",
+			"originalStartTime": {
+				"dateTime": "2026-03-09T09:00:00-04:00",
+				"timeZone": "America/New_York"
+			},
+			"organizer": {
+				"email": "alice@acme.example",
+				"displayName": "Alice Chen"
+			},
+			"attendees": [
+				{
+					"email": "alice@acme.example",
+					"displayName": "Alice Chen",
+					"organizer": true,
+					"responseStatus": "accepted"
+				},
+				{
+					"email": "me@acme.example",
+					"self": true,
+					"responseStatus": "accepted"
+				},
+				{ "email": "bob@acme.example", "responseStatus": "needsAction" },
+				{
+					"email": "c_188abc@resource.calendar.google.com",
+					"displayName": "NYC-4-Hudson (8)",
+					"resource": true,
+					"responseStatus": "accepted"
+				}
+			],
+			"hangoutLink": "https://meet.google.com/abc-defg-hij",
+			"conferenceData": {
+				"entryPoints": [
+					{
+						"entryPointType": "video",
+						"uri": "https://meet.google.com/abc-defg-hij",
+						"label": "meet.google.com/abc-defg-hij"
+					},
+					{
+						"entryPointType": "more",
+						"uri": "https://tel.meet/abc-defg-hij?pin=123456789",
+						"pin": "123456789"
+					},
+					{
+						"regionCode": "US",
+						"entryPointType": "phone",
+						"uri": "tel:+1-555-0100",
+						"label": "+1 555-0100",
+						"pin": "123456789"
+					}
+				],
+				"conferenceSolution": {
+					"key": { "type": "hangoutsMeet" },
+					"name": "Google Meet"
+				},
+				"conferenceId": "abc-defg-hij"
+			},
+			"eventType": "default"
+		},
+		{
+			"id": "birthday_20260312",
+			"status": "confirmed",
+			"summary": "Sam's birthday",
+			"start": { "date": "2026-03-12" },
+			"end": { "date": "2026-03-13" },
+			"transparency": "transparent",
+			"eventType": "birthday"
+		},
+		{
+			"id": "wl_20260310",
+			"status": "confirmed",
+			"summary": "Home",
+			"start": { "date": "2026-03-10" },
+			"end": { "date": "2026-03-11" },
+			"eventType": "workingLocation"
+		},
+		{
+			"id": "ooo_1",
+			"status": "confirmed",
+			"summary": "Out of office",
+			"start": { "dateTime": "2026-03-11T13:00:00-04:00" },
+			"end": { "dateTime": "2026-03-11T17:00:00-04:00" },
+			"eventType": "outOfOffice"
+		},
+		{
+			"id": "focus_1",
+			"status": "confirmed",
+			"summary": "Focus time",
+			"start": { "dateTime": "2026-03-11T09:00:00-04:00" },
+			"end": { "dateTime": "2026-03-11T11:00:00-04:00" },
+			"eventType": "focusTime"
+		},
+		{
+			"id": "zoomaddon1",
+			"status": "confirmed",
+			"htmlLink": "https://www.google.com/calendar/event?eid=em9vbWFkZG9uMQ",
+			"summary": "Globex renewal",
+			"description": "<b>Agenda</b><br>Pricing<br><br>Join: <a href=\"https://acme.zoom.us/j/84512345678?pwd=aBcDeF\">link</a>",
+			"start": { "dateTime": "2026-03-10T13:00:00-04:00" },
+			"end": { "dateTime": "2026-03-10T13:45:00-04:00" },
+			"organizer": { "email": "me@acme.example", "self": true },
+			"attendees": [
+				{
+					"email": "me@acme.example",
+					"self": true,
+					"organizer": true,
+					"responseStatus": "accepted"
+				},
+				{
+					"email": "bob@globex.example",
+					"displayName": "Bob Stone",
+					"responseStatus": "tentative"
+				}
+			],
+			"conferenceData": {
+				"entryPoints": [
+					{
+						"entryPointType": "video",
+						"uri": "https://acme.zoom.us/j/84512345678?pwd=aBcDeF",
+						"meetingCode": "84512345678",
+						"passcode": "123456"
+					}
+				],
+				"conferenceSolution": {
+					"key": { "type": "addOn" },
+					"name": "Zoom Meeting"
+				},
+				"conferenceId": "84512345678"
+			},
+			"eventType": "default"
+		},
+		{
+			"id": "declined1",
+			"status": "confirmed",
+			"summary": "Optional brown bag",
+			"start": { "dateTime": "2026-03-10T16:00:00Z" },
+			"end": { "dateTime": "2026-03-10T17:00:00Z" },
+			"organizer": { "email": "hr@acme.example" },
+			"attendees": [
+				{
+					"email": "me@acme.example",
+					"self": true,
+					"responseStatus": "declined"
+				},
+				{
+					"email": "hr@acme.example",
+					"organizer": true,
+					"responseStatus": "accepted"
+				}
+			],
+			"hangoutLink": "https://meet.google.com/xyz-abcd-efg"
+		},
+		{
+			"id": "7kukuqrfedlm2f9t6vo2mh1ln5_20260330T130000Z",
+			"status": "cancelled",
+			"recurringEventId": "7kukuqrfedlm2f9t6vo2mh1ln5",
+			"originalStartTime": {
+				"dateTime": "2026-03-30T09:00:00-04:00",
+				"timeZone": "America/New_York"
+			}
+		},
+		{
+			"id": "teamsdesc1",
+			"status": "tentative",
+			"summary": "Partner intro",
+			"location": "Room 4",
+			"description": "________________________________________________________________________________\nMicrosoft Teams meeting\nJoin on your computer, mobile app or room device\nClick here to join the meeting<https://teams.microsoft.com/l/meetup-join/19%3ameeting_ZDQ4YTI2%40thread.v2/0?context=%7b%22Tid%22%3a%22abc%22%7d>\nMeeting ID: 111 222 333 444\n",
+			"start": { "dateTime": "2026-03-12T10:00:00-04:00" },
+			"end": { "dateTime": "2026-03-12T10:30:00-04:00" },
+			"organizer": { "email": "partner@initech.example" },
+			"attendees": [
+				{
+					"email": "me@acme.example",
+					"self": true,
+					"responseStatus": "needsAction"
+				},
+				{
+					"email": "partner@initech.example",
+					"organizer": true,
+					"responseStatus": "accepted"
+				}
+			]
+		},
+		{
+			"id": "solo1",
+			"status": "confirmed",
+			"summary": "Write quarterly letter",
+			"start": { "dateTime": "2026-03-12T14:00:00-04:00" },
+			"end": { "dateTime": "2026-03-12T15:00:00-04:00" },
+			"organizer": { "email": "me@acme.example", "self": true },
+			"creator": { "email": "me@acme.example", "self": true }
+		},
+		{
+			"id": "nooffset1",
+			"status": "confirmed",
+			"summary": "London catch-up",
+			"start": {
+				"dateTime": "2026-03-13T10:00:00",
+				"timeZone": "Europe/London"
+			},
+			"end": { "dateTime": "2026-03-13T10:30:00", "timeZone": "Europe/London" }
+		},
+		{
+			"id": "garbage1",
+			"status": "confirmed",
+			"summary": "Broken start",
+			"start": "tomorrow"
+		},
+		{
+			"id": "garbage2",
+			"summary": "No start at all"
+		},
+		42
+	]
+}

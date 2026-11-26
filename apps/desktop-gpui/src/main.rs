@@ -6,7 +6,9 @@
 mod app_sounds;
 mod app_windows;
 mod assets;
+mod audio_project;
 mod auth;
+mod automation;
 mod blur_recovery;
 #[cfg(target_os = "macos")]
 mod camera_bench;
@@ -15,7 +17,9 @@ mod camera_blur;
 #[cfg(any(not(target_os = "macos"), test))]
 mod camera_blur_portable;
 mod camera_loading;
+mod camera_picture;
 mod camera_window;
+mod caption_export;
 mod clean_up;
 mod controls_window;
 mod crash_capture;
@@ -26,6 +30,7 @@ mod diagnostics;
 mod doodle;
 mod draw_bench;
 mod editor_audio;
+mod editor_audio_only;
 mod editor_bench;
 mod editor_canvas;
 mod editor_clean_up;
@@ -35,22 +40,33 @@ mod editor_crop;
 mod editor_edits;
 mod editor_export;
 mod editor_hover_bench;
+mod editor_latency;
+mod editor_latency_bench;
 #[cfg(target_os = "linux")]
 mod editor_modal;
 mod editor_panels;
 mod editor_preparing;
+mod editor_shapes;
+mod editor_side_panel;
 mod editor_sidebar;
 mod editor_tabs;
 mod editor_timeline;
+mod editor_voice_eq;
 mod editor_window;
+mod encoder_recovery;
 mod feeds;
 mod focus_border;
+mod foreign_window;
+#[cfg(debug_assertions)]
+mod glass_probe;
 mod hotkeys;
 mod i18n;
 mod import;
 mod installer;
 mod jpeg_thumbnail;
+mod keylat;
 mod library;
+mod library_window;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
 #[cfg(target_os = "linux")]
@@ -59,29 +75,35 @@ mod linux_display;
 mod linux_portal_id;
 #[cfg(target_os = "linux")]
 mod linux_wallpaper;
+mod live_draw;
+mod local_page;
 mod main_window;
 mod media_access;
+mod meetings;
+mod meetings_ui;
 mod menus;
 mod mode_select_window;
+mod notifications;
 mod onboarding_audio;
 mod onboarding_doodles;
 mod onboarding_window;
 mod overlay_backdrop;
 mod permission_guide;
+mod permission_help;
 mod permissions;
 mod permissions_ui;
 #[cfg(test)]
 mod picker_benchmark;
 #[cfg(debug_assertions)]
-mod glass_probe;
-#[cfg(debug_assertions)]
 mod picker_probe;
 #[cfg(debug_assertions)]
 mod picker_ui_benchmark;
 mod platform;
+mod power;
 mod presets;
 mod project_save;
 mod recording;
+mod recordings_overlay;
 mod screenshot;
 mod screenshot_annotations;
 mod screenshot_crop;
@@ -95,17 +117,22 @@ mod sign_in;
 mod single_instance;
 #[cfg(debug_assertions)]
 mod snapshot;
+mod startup;
 mod store;
+mod style_presets;
 mod target_overlay;
 mod target_thumbnails;
 mod teleprompter_window;
 mod theme;
+mod transcript;
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+mod parakeet_split;
 mod transcription;
 mod tray;
 mod ui;
+mod unused_media;
 mod updates;
 mod upload;
-mod foreign_window;
 mod window_arrange;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
@@ -288,6 +315,10 @@ fn app_runtime() -> tokio::runtime::Runtime {
 }
 
 fn main() {
+    // A copy of Cap started to self-test a hardware H264 encoder runs only
+    // that test and exits, before logging, crash capture or single-instance.
+    cap_enc_ffmpeg::isolated_self_test::run_child_or_register_host();
+
     #[cfg(target_os = "linux")]
     if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {
         // Mesa counts host CPUs inside containers; apply the process limit before logging starts threads.
@@ -297,7 +328,7 @@ fn main() {
     }
 
     #[cfg(target_os = "linux")]
-    if let Some(config) = cap_utils::linux_package::appimage_alsa_config_path() {
+    if let Some(config) = cap_utils::linux_package::bundled_alsa_config_path() {
         // Logging starts a worker thread, so configure the process environment first.
         unsafe {
             std::env::set_var("ALSA_CONFIG_PATH", config);
@@ -331,7 +362,7 @@ fn main() {
         std::process::exit(status);
     }
 
-    let _log_guard = init_logging();
+    startup::begin(init_logging());
     crash_capture::install(&diagnostics::logs_dir());
     #[cfg(target_os = "linux")]
     if let Some(wayland_display) = stale_wayland_display {
@@ -342,11 +373,27 @@ fn main() {
     }
 
     single_instance::acquire();
+    #[cfg(target_os = "linux")]
+    {
+        app_sounds::prepare_output();
+        cap_editor::set_linux_output(cap_recording::sources::screen_capture::sound_server_output);
+    }
     let previous_session = crash_capture::begin_session(&diagnostics::logs_dir());
-    blur_recovery::configure(previous_session);
+    encoder_recovery::configure(previous_session.as_ref());
+    blur_recovery::configure(previous_session.as_ref());
 
     #[cfg(target_os = "macos")]
     platform::install_appkit_exception_guards();
+    #[cfg(target_os = "macos")]
+    let dock_icon = {
+        let (loaded, dock_icon) = flume::bounded(1);
+        std::thread::spawn(move || {
+            let _ = loaded.send(platform::load_dock_icon(include_bytes!(
+                "../assets/dock-icon.png"
+            )));
+        });
+        dock_icon
+    };
     platform::install_url_scheme_handler();
     for argument in std::env::args().skip(1) {
         if argument.contains("token") || argument.contains("api_key") {
@@ -378,7 +425,18 @@ fn main() {
         gpui_tokio::Tokio::spawn(cx, cap_utils::operation_diagnostics::run_checkpoints()).detach();
         // The dock icon: an unbundled dev binary shows the generic terminal
         // document without it. The bytes are the shipping app's icon.png.
-        platform::set_dock_icon(include_bytes!("../assets/dock-icon.png"));
+        #[cfg(target_os = "macos")]
+        match dock_icon.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(Some(icon)) => platform::set_dock_icon(icon),
+            Err(flume::RecvTimeoutError::Timeout) => cx
+                .spawn(async move |_| {
+                    if let Ok(Some(icon)) = dock_icon.recv_async().await {
+                        platform::set_dock_icon(icon);
+                    }
+                })
+                .detach(),
+            _ => {}
+        }
 
         if let Err(error) = Assets.load_fonts(cx) {
             tracing::error!("failed to load embedded fonts: {error:#}");
@@ -393,15 +451,20 @@ fn main() {
         // binding consumes the keystroke before any `on_key_down` listener on
         // the path runs (`gpui/src/window.rs:5280-5296`).
         ui::bind_text_input_keys(cx);
+        cap_notes_ui::bind_keys(cx);
+        crate::meetings_ui::documents::bind_keys(cx);
         let general_settings = crate::store::GeneralSettings::load();
         crate::i18n::init(general_settings.ui_language.as_deref());
         crate::theme::init(general_settings.theme, cx);
         platform::follow_system_reduce_motion(cx);
+        keylat::install(cx);
 
         let session = RecordingSession::init(cx);
         crate::sign_in::SignIn::init(cx);
         crate::feeds::Feeds::init(cx);
         crate::media_access::MediaAccess::init(cx);
+        crate::meetings::Meetings::init(cx);
+        crate::meetings_ui::init(cx);
         crate::target_overlay::TargetSelect::init(cx);
 
         let dev_restore = dev_restore::load();
@@ -471,11 +534,10 @@ fn main() {
                     move |window, cx| cx.new(|cx| MainWindow::new(session, window, cx))
                 },
             )
-            .inspect_err(|error| tracing::error!("failed to open the main window: {error:#}"));
-        let Ok(window_handle) = window_handle else {
-            cx.quit();
-            return;
-        };
+            .unwrap_or_else(|error| {
+                startup::fail(format!("The main window could not be opened: {error:#}"))
+            });
+        startup::finished();
 
         cx.on_app_quit(|_| async {
             crash_capture::mark_clean_exit();
@@ -483,19 +545,20 @@ fn main() {
         .detach();
 
         app_windows::init(window_handle, session, cx);
+        power::install(cx);
         #[cfg(target_os = "macos")]
         match platform::install_native_quit_handler() {
             Ok(requests) => {
                 cx.spawn(async move |cx| {
                     while requests.recv_async().await.is_ok() {
-                        cx.update(menus::quit);
+                        cx.update(|cx| menus::quit(menus::QuitSource::NativeTermination, cx));
                     }
                 })
                 .detach();
             }
             Err(error) => {
                 tracing::error!(%error, "Could not install safe native Quit handling");
-                menus::quit(cx);
+                menus::quit(menus::QuitSource::NativeQuitHandlerUnavailable, cx);
                 return;
             }
         }
@@ -505,6 +568,7 @@ fn main() {
         app_windows::schedule_launch_render_warmup(cx);
         upload::queue::init(cx);
         upload::instant_cleanup::init(cx);
+        automation::init(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both
         // reach into the window registry, so they come after it -- and the menu
@@ -517,6 +581,11 @@ fn main() {
         }
         // The store's global shortcuts, after the registry they dispatch into.
         hotkeys::init(cx);
+        // Remember which grants this process started with: an Input Monitoring
+        // grant that lands later only reaches the next launch.
+        cx.background_executor()
+            .spawn(async { crate::permissions::note_launch_grants() })
+            .detach();
         // The gate's TCC queries (screen recording preflight, AXIsProcessTrusted)
         // are ~30ms of synchronous XPC on this Mac -- the whole startup delta
         // between the 08-17 and 08-18 builds. Both are thread-safe reads, so
@@ -700,8 +769,20 @@ fn main() {
         }
 
         permissions_ui::auto_open_from_env(cx); // `CAP_GPUI_AUTO_PERMISSIONS=1`: the permissions surface.
+        library_window::auto_open_from_env(cx); // `CAP_GPUI_AUTO_LIBRARY=home`: the library window.
+        library_window::bench::run_from_env(cx); // `CAP_GPUI_LIBRARY_BENCH=window|panel`: perf gate.
         #[cfg(debug_assertions)]
         snapshot::arm_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings::dev::run_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings_ui::live::debug::run_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings_ui::setup::dev::run_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings_ui::documents::dev::run_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings_ui::cap_ai::run_from_env(cx);
 
         // `CAP_GPUI_AUTO_MODE_SELECT=1`: open the 580x340 mode picker the way
         // the mode dot does, main window hidden included. A mode name instead
@@ -768,19 +849,31 @@ fn main() {
             }
         }
 
-        // `CAP_GPUI_AUTO_HOTKEY=<store key>`: run a hotkey action's dispatch
-        // arm (e.g. `screenshotDisplay`) as if the OS shortcut fired.
-        if let Ok(action) = std::env::var("CAP_GPUI_AUTO_HOTKEY")
-            && !action.is_empty()
+        // `CAP_GPUI_AUTO_OVERLAY_CARD=<path-to-.cap>`: show that recording's
+        // card in the recordings overlay, as the end of a Studio recording
+        // does, so a test can start an overlay action on a project that is
+        // also open in the editor.
+        if cfg!(debug_assertions)
+            && let Some(path) = std::env::var_os("CAP_GPUI_AUTO_OVERLAY_CARD")
         {
-            let action = action.clone();
+            crate::recordings_overlay::show_studio_recording(path.into(), cx);
+        }
+
+        // `CAP_GPUI_AUTO_HOTKEY=<store key>[,<store key>...]`: run hotkey
+        // actions' dispatch arms (e.g. `screenshotDisplay`) as if the OS
+        // shortcuts fired, two seconds apart.
+        if let Ok(actions) = std::env::var("CAP_GPUI_AUTO_HOTKEY")
+            && !actions.is_empty()
+        {
             cx.spawn(async move |cx| {
-                // Give enumeration and the first paint the same beat the
-                // other harness hooks give them.
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(2))
-                    .await;
-                cx.update(|cx| hotkeys::dispatch_for_harness(&action, cx));
+                for action in actions.split(',').map(str::trim) {
+                    // Give enumeration and the first paint the same beat the
+                    // other harness hooks give them.
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(2))
+                        .await;
+                    cx.update(|cx| hotkeys::dispatch_for_harness(action, cx));
+                }
             })
             .detach();
         }
@@ -798,6 +891,12 @@ fn main() {
                     "CAP_GPUI_AUTO_SCREENSHOT_EDITOR: no screenshot .cap to open"
                 ),
             }
+        }
+
+        // `CAP_GPUI_AUTO_IMPORT_AUDIO=<file>`: import a sound file as an
+        // audio-only project and open it, as the Import picker does.
+        if let Some(path) = std::env::var_os("CAP_GPUI_AUTO_IMPORT_AUDIO") {
+            import::import_audio_from_path(std::path::PathBuf::from(path), cx);
         }
 
         // `CAP_GPUI_AUTO_RECORD=studio:5` / `instant:4` / `screenshot`: arm
@@ -836,6 +935,7 @@ fn main() {
         }
     });
     runtime.shutdown_background();
+    startup::flush_log();
 }
 
 #[cfg(all(
@@ -943,7 +1043,9 @@ mod logging_tests {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_writer(move || writer.clone())
-                .with_filter(tracing_subscriber::EnvFilter::new(super::DEFAULT_LOG_FILTER)),
+                .with_filter(tracing_subscriber::EnvFilter::new(
+                    super::DEFAULT_LOG_FILTER,
+                )),
         );
         tracing::subscriber::with_default(subscriber, || {
             tracing::warn!(target: "zbus::proxy", "Failed to populate properties cache");
@@ -952,9 +1054,15 @@ mod logging_tests {
             tracing::info!(target: "cap_gpui::session", "recording started");
         });
         let logged = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
-        assert!(!logged.contains("Failed to populate properties cache"), "{logged}");
+        assert!(
+            !logged.contains("Failed to populate properties cache"),
+            "{logged}"
+        );
         assert!(logged.contains("a zbus error still shows"), "{logged}");
-        assert!(logged.contains("other zbus warnings still show"), "{logged}");
+        assert!(
+            logged.contains("other zbus warnings still show"),
+            "{logged}"
+        );
         assert!(logged.contains("recording started"), "{logged}");
     }
 

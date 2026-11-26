@@ -2,6 +2,7 @@ import { buildEnv } from "@cap/env";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createMessengerConversation } from "@/actions/messenger";
+import { MESSENGER_RATE_LIMITED_MESSAGE } from "@/lib/messenger/constants";
 import { listViewerMessengerConversations } from "@/lib/messenger/data";
 
 const relativeTime = (date: Date | null) => {
@@ -20,15 +21,22 @@ const relativeTime = (date: Date | null) => {
 	}).format(date);
 };
 
-export default async function MessengerPage() {
+export default async function MessengerPage({
+	searchParams,
+}: {
+	searchParams: Promise<{ limited?: string }>;
+}) {
 	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") notFound();
+
+	const { limited } = await searchParams;
 
 	const { viewer, conversations } = await listViewerMessengerConversations();
 
 	async function startConversation() {
 		"use server";
-		const conversationId = await createMessengerConversation();
-		redirect(`/messenger/${conversationId}`);
+		const conversation = await createMessengerConversation();
+		if (typeof conversation !== "string") redirect("/messenger?limited=1");
+		redirect(`/messenger/${conversation}`);
 	}
 
 	return (
@@ -85,6 +93,11 @@ export default async function MessengerPage() {
 							Start a new chat
 						</button>
 					</form>
+					{limited && (
+						<p role="alert" className="mt-3 text-center text-sm text-gray-10">
+							{MESSENGER_RATE_LIMITED_MESSAGE}
+						</p>
+					)}
 				</div>
 
 				{conversations.length > 0 && (

@@ -31,6 +31,27 @@ describe("mobile API contract schemas", () => {
 		).toBe(true);
 	});
 
+	it("gates free recordings on the segments when the reported total is lower", () => {
+		const segments = Array.from({ length: 300 }, () => ({ duration: 2 }));
+		const gated = Mobile.mobileRecordingGateDurationSeconds({
+			durationSeconds: 240,
+			videoSegments: segments,
+		});
+		expect(gated).toBe(600);
+		expect(
+			Mobile.isMobileRecordingDurationAllowed({
+				durationSeconds: gated,
+				isPro: false,
+			}),
+		).toBe(false);
+		expect(
+			Mobile.mobileRecordingGateDurationSeconds({
+				durationSeconds: 61.2,
+				videoSegments: Array.from({ length: 30 }, () => ({ duration: 2 })),
+			}),
+		).toBe(61.2);
+	});
+
 	it("decodes bootstrap responses without exposing database rows", () => {
 		const decoded = Schema.decodeUnknownSync(Mobile.MobileBootstrapResponse)({
 			user: {

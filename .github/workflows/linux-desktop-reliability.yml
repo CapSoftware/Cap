@@ -7,6 +7,7 @@ name: Linux desktop reliability
 # the tray, approve the screen share), stops it, and checks it finished.
 
 on:
+  merge_group:
   pull_request:
     paths:
       - "apps/desktop-gpui/**"
@@ -47,10 +48,27 @@ jobs:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
-      run: ${{ steps.scope.outputs.run }}
+      run: ${{ steps.queue.outputs.run || steps.scope.outputs.run }}
     steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'merge_group'
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          filter: blob:none
+          sparse-checkout: |
+            .github/workflows
+            scripts/ci
+      - name: Merge queue scope
+        id: queue
+        if: github.event_name == 'merge_group'
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.merge_group.head_sha }}
+        run: python3 scripts/ci/merge_queue.py scope --workflow .github/workflows/linux-desktop-reliability.yml --base "$BASE" --head "$HEAD" >> "$GITHUB_OUTPUT"
       - name: Scope
         id: scope
+        if: github.event_name != 'merge_group'
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
@@ -68,6 +86,69 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "A fork pull request that changes no app code does not run the Linux desktop suite." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+
+  # One build serves the GNOME editor, Hyprland and niri jobs, so they start
+  # as soon as the app is built instead of after every GNOME scenario.
+  build:
+    name: Build cap-gpui (Linux)
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Run setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+
+      - name: Prepare GPUI dependency
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      # With debug assertions, wgpu-types turns on Vulkan debug labels, which
+      # release builds never use. Labelling a GPUI buffer races with the
+      # export creating its own Vulkan instance, and the Vulkan loader
+      # (1.4.341) crashes in loader_get_icd_and_device about once per 100
+      # exports. Building only wgpu-types without them gives the app the
+      # release build's instance flags.
+      - name: Build cap-gpui
+        run: >-
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --bin cap-gpui
+          --config 'profile.dev.package.wgpu-types.debug-assertions=false'
+
+      - name: Package the build
+        run: |
+          mkdir -p "$RUNNER_TEMP/build/libs"
+          cp apps/desktop-gpui/target/debug/cap-gpui "$RUNNER_TEMP/build/cap-gpui"
+          strip --strip-debug "$RUNNER_TEMP/build/cap-gpui"
+          cp -a target/native-deps/lib/. "$RUNNER_TEMP/build/libs/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cap-gpui-linux
+          path: ${{ runner.temp }}/build
+          retention-days: 1
 
   desktops:
     name: Record on GNOME
@@ -106,8 +187,16 @@ jobs:
           node scripts/sync-desktop-versions.mjs
           ./scripts/prepare-gpui-dependency.sh
 
+      # With debug assertions, wgpu-types turns on Vulkan debug labels, which
+      # release builds never use. Labelling a GPUI buffer races with the
+      # export creating its own Vulkan instance, and the Vulkan loader
+      # (1.4.341) crashes in loader_get_icd_and_device about once per 100
+      # exports. Building only wgpu-types without them gives the app the
+      # release build's instance flags.
       - name: Build cap-gpui
-        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --bin cap-gpui
+        run: >-
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --bin cap-gpui
+          --config 'profile.dev.package.wgpu-types.debug-assertions=false'
 
       # niri 26.04 shares screencasts only as DMA-BUFs with a mandatory
       # modifier (GitHub #2941). niri itself refuses software rendering, so a
@@ -205,10 +294,45 @@ jobs:
             grep -qx "$line" "$RUNNER_TEMP/out/gnome-no-control/result.txt"
           done
 
+      - name: Check results
+        run: |
+          bash scripts/linux-desktop-harness/check-results.sh \
+            "$RUNNER_TEMP/out/gnome" "$RUNNER_TEMP/out/gnome-tray" "$RUNNER_TEMP/out/gnome-terminal"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-desktop-reliability-gnome
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
+
+  gnome-apps:
+    name: Record on GNOME (editor, screenshots, relaunch)
+    needs: build
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cap-gpui-linux
+          path: ${{ runner.temp }}/build
+
+      - name: Make the build executable
+        run: chmod +x "$RUNNER_TEMP/build/cap-gpui"
+
+      - name: Fetch the Cap package for desktop integration
+        run: |
+          curl --fail --location --retry 3 -o "$RUNNER_TEMP/cap.deb" "$CAP_DEB_URL"
+          echo "$CAP_DEB_SHA256  $RUNNER_TEMP/cap.deb" | sha256sum --check
+
       - name: GNOME 50 settings window closes from its own button
         env:
-          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
-          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          DEV_BIN: ${{ runner.temp }}/build/cap-gpui
+          DEV_LIBS: ${{ runner.temp }}/build/libs
           SCENARIO: settings-close
         run: |
           sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
@@ -218,8 +342,8 @@ jobs:
 
       - name: GNOME 50 relaunch from the app grid reaches the running Cap
         env:
-          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
-          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          DEV_BIN: ${{ runner.temp }}/build/cap-gpui
+          DEV_LIBS: ${{ runner.temp }}/build/libs
           SCENARIO: reopen
         run: |
           sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
@@ -229,8 +353,8 @@ jobs:
 
       - name: GNOME 50 relaunch brings Cap to the front over its settings
         env:
-          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
-          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          DEV_BIN: ${{ runner.temp }}/build/cap-gpui
+          DEV_LIBS: ${{ runner.temp }}/build/libs
           SCENARIO: raise
         run: |
           for window in main onboarding; do
@@ -242,8 +366,8 @@ jobs:
 
       - name: GNOME 50 editor background image from the portal file chooser
         env:
-          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
-          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          DEV_BIN: ${{ runner.temp }}/build/cap-gpui
+          DEV_LIBS: ${{ runner.temp }}/build/libs
           SCENARIO: pick-background
         run: |
           sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
@@ -256,8 +380,8 @@ jobs:
       # GNOME's default wallpaper is JPEG XL.
       - name: GNOME 50 editor background from the desktop wallpaper
         env:
-          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
-          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          DEV_BIN: ${{ runner.temp }}/build/cap-gpui
+          DEV_LIBS: ${{ runner.temp }}/build/libs
           SCENARIO: wallpaper
         run: |
           sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
@@ -272,8 +396,8 @@ jobs:
       # has focus.
       - name: GNOME 50 screenshot, allowed when the portal asks
         env:
-          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
-          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          DEV_BIN: ${{ runner.temp }}/build/cap-gpui
+          DEV_LIBS: ${{ runner.temp }}/build/libs
           SCENARIO: screenshot
         run: |
           sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
@@ -285,8 +409,8 @@ jobs:
 
       - name: GNOME 50 screenshot from a terminal launch (Cap names itself so.cap.Cap)
         env:
-          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
-          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          DEV_BIN: ${{ runner.temp }}/build/cap-gpui
+          DEV_LIBS: ${{ runner.temp }}/build/libs
           SCENARIO: screenshot
         run: |
           sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
@@ -298,8 +422,8 @@ jobs:
 
       - name: GNOME 50 area recording (portal stream cropped to the area)
         env:
-          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
-          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          DEV_BIN: ${{ runner.temp }}/build/cap-gpui
+          DEV_LIBS: ${{ runner.temp }}/build/libs
         run: |
           sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
             "$RUNNER_TEMP/out/gnome-area" LAUNCH=dock APPROVE_SHORTCUT_AFTER=6 AREA=200,150,800,450
@@ -310,8 +434,8 @@ jobs:
 
       - name: GNOME 50 editor export to MP4 and GIF
         env:
-          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
-          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          DEV_BIN: ${{ runner.temp }}/build/cap-gpui
+          DEV_LIBS: ${{ runner.temp }}/build/libs
           SCENARIO: export
         run: |
           sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
@@ -322,35 +446,17 @@ jobs:
             grep -qx "$line" "$RUNNER_TEMP/out/gnome-export/result.txt"
           done
 
-      - name: Check results
-        run: |
-          bash scripts/linux-desktop-harness/check-results.sh \
-            "$RUNNER_TEMP/out/gnome" "$RUNNER_TEMP/out/gnome-tray" "$RUNNER_TEMP/out/gnome-terminal"
-
-      - name: Package the build for the Hyprland job
-        run: |
-          mkdir -p "$RUNNER_TEMP/build/libs"
-          cp apps/desktop-gpui/target/debug/cap-gpui "$RUNNER_TEMP/build/cap-gpui"
-          strip --strip-debug "$RUNNER_TEMP/build/cap-gpui"
-          cp -a target/native-deps/lib/. "$RUNNER_TEMP/build/libs/"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cap-gpui-linux
-          path: ${{ runner.temp }}/build
-          retention-days: 1
-
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-desktop-reliability-gnome
+          name: linux-desktop-reliability-gnome-apps
           path: ${{ runner.temp }}/out
           if-no-files-found: ignore
 
   hyprland:
     name: Record on Hyprland
-    needs: desktops
+    needs: build
     # vkms, the virtual display Hyprland runs on, is in the hosted runner's
     # extra kernel modules; Blacksmith's kernel does not ship it.
     runs-on: ubuntu-24.04
@@ -374,6 +480,9 @@ jobs:
             sudo modprobe vkms
           fi
           ls -la /dev/dri
+
+      - name: Arch Linux base image
+        run: sudo bash scripts/linux-desktop-harness/pull-arch-base.sh
 
       - name: Hyprland (portal refuses host apps, tray Stop control)
         run: |
@@ -404,13 +513,48 @@ jobs:
             grep -qx "$line" "$RUNNER_TEMP/out/hyprland-screenshot/result.txt"
           done
 
+      # A GPU device lost while the main window is hidden is found by the
+      # frame that maps the window again. The window must still come back
+      # (GitHub #3946).
+      - name: Hyprland GPU device lost while the window is hidden
+        env:
+          SCENARIO: device-loss
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-device-loss"
+          cat "$RUNNER_TEMP/out/hyprland-device-loss/result.txt"
+          for line in first_shown=yes hidden=yes shown_again=yes device_lost=1 restore_failed=0 cap_alive=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/hyprland-device-loss/result.txt"
+          done
+
+      # A screenshot taken through the area picker must match the desktop as
+      # it was before Cap started: nothing of the selection overlay left in
+      # it. Hyprland's own border and shadow are off, because it draws them
+      # around a closing window whatever the window shows.
+      - name: Hyprland area screenshot without the selection overlay
+        env:
+          SCENARIO: screenshot
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-area-screenshot" LAUNCH=dock AREA=200,150,800,450 WINDOW_DECORATIONS=off
+          cat "$RUNNER_TEMP/out/hyprland-area-screenshot/result.txt"
+          for line in screenshot_taken=yes screenshot_size=yes capture_failed=0 overlay_left=no cap_alive=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/hyprland-area-screenshot/result.txt"
+          done
+
       # The hosted runner can build v4l2loopback; Blacksmith's kernel cannot.
       - name: Install Linux desktop dependencies
         uses: ./.github/actions/install-desktop-deps
 
-      - name: X11 recording with a camera
+      - name: Install camera test dependencies
+        timeout-minutes: 10
         run: |
           sudo apt-get install -y -qq "linux-headers-$(uname -r)" v4l2loopback-dkms xvfb xdotool ffmpeg dbus >/dev/null
+
+      - name: X11 recording with a camera
+        run: |
           chmod +x "$RUNNER_TEMP/build/cap-gpui"
           # Each format Cap's Linux camera path converts: packed YUYV, NV12 and
           # MJPEG (decoded before use).
@@ -478,7 +622,7 @@ jobs:
     # connects a capture stream through the real launchers, with the AppDir as
     # 0.6.1 shipped it and as scripts/finalize-linux-appimage.mjs lays it out.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -489,8 +633,11 @@ jobs:
           echo "$CAP_APPIMAGE_SHA256  $RUNNER_TEMP/Cap.AppImage" | sha256sum --check
 
       - name: Connect a capture stream in NixOS appimage-run
+        timeout-minutes: 30
+        env:
+          NIX_GITHUB_TOKEN: ${{ github.token }}
         run: |
-          sudo bash scripts/linux-desktop-harness/appimage-pipewire/run.sh \
+          sudo --preserve-env=NIX_GITHUB_TOKEN bash scripts/linux-desktop-harness/appimage-pipewire/run.sh \
             "$RUNNER_TEMP/Cap.AppImage" "$RUNNER_TEMP/out/appimage-nixos"
 
       - name: Check results
@@ -517,7 +664,7 @@ jobs:
 
   niri:
     name: Record on niri
-    needs: desktops
+    needs: build
     # niri 26.04 shares screencasts only as DMA-BUFs with a mandatory
     # modifier (GitHub #2941). It refuses software rendering, so this builds
     # the release with only that check removed and runs it on vkms.
@@ -542,6 +689,9 @@ jobs:
             sudo modprobe vkms
           fi
           ls -la /dev/dri
+
+      - name: Arch Linux base image
+        run: sudo bash scripts/linux-desktop-harness/pull-arch-base.sh
 
       - name: Build niri
         run: |

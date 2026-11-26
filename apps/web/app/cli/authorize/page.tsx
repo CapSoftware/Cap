@@ -1,8 +1,9 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { agentApiAuthorizationCodes } from "@cap/database/schema";
+import { agentApiAuthorizationCodes, users } from "@cap/database/schema";
 import { Logo } from "@cap/ui";
+import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import {
 	buildAgentCallbackUrl,
@@ -11,6 +12,7 @@ import {
 	parseAgentAuthorizationRequest,
 } from "@/lib/agent-auth";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { shouldRefuseTorExit } from "@/lib/tor-exit-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -94,6 +96,9 @@ export default async function CliAuthorizePage(props: {
 		if (!currentUser) {
 			redirect("/login");
 		}
+		if (await shouldRefuseTorExit("cli-authorize")) {
+			redirect("/login?error=SignupBlocked");
+		}
 		if (
 			await isRateLimited(RATE_LIMIT_IDS.AGENT_AUTHORIZATION, {
 				key: `agent-authorization:${currentUser.id}`,
@@ -102,9 +107,18 @@ export default async function CliAuthorizePage(props: {
 			throw new Error("Too many authorization attempts. Try again later.");
 		}
 		const code = createAgentAuthorizationCode();
-		await db()
-			.insert(agentApiAuthorizationCodes)
-			.values({
+		await db().transaction(async (tx) => {
+			// "Sign out of all devices" bumps this row, so a code can't be issued
+			// from a session that was signed out while this request ran.
+			const [account] = await tx
+				.select({ authSessionVersion: users.authSessionVersion })
+				.from(users)
+				.where(eq(users.id, currentUser.id))
+				.limit(1)
+				.for("update");
+			if (account?.authSessionVersion !== currentUser.authSessionVersion)
+				throw new Error("Session expired");
+			await tx.insert(agentApiAuthorizationCodes).values({
 				id: nanoId(),
 				userId: currentUser.id,
 				codeHash: hashAgentSecret(code),
@@ -113,6 +127,7 @@ export default async function CliAuthorizePage(props: {
 				scopes: submitted.scopes,
 				expiresAt: new Date(Date.now() + 5 * 60 * 1000),
 			});
+		});
 		const callback = buildAgentCallbackUrl(submitted.redirectUri, {
 			state: submitted.state,
 			code,

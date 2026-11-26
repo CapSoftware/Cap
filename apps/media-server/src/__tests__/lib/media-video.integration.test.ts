@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
 	existsSync,
@@ -33,8 +33,19 @@ import {
 	uploadFileToS3,
 	uploadFileToStorage,
 	uploadToS3,
+	writeDashRepresentationPlaylist,
 } from "../../lib/media-video";
 import { ensureTempDir, getTempDir } from "../../lib/temp-files";
+
+const previousStreamingHosts = process.env.MEDIA_SERVER_STREAMING_HOSTS;
+beforeAll(() => {
+	process.env.MEDIA_SERVER_STREAMING_HOSTS = "127.0.0.1,localhost,cdn.example";
+});
+afterAll(() => {
+	if (previousStreamingHosts === undefined)
+		delete process.env.MEDIA_SERVER_STREAMING_HOSTS;
+	else process.env.MEDIA_SERVER_STREAMING_HOSTS = previousStreamingHosts;
+});
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const TEST_VIDEO_WITH_AUDIO = join(FIXTURES_DIR, "test-with-audio.mp4");
@@ -369,7 +380,8 @@ describe("generateThumbnail integration tests", () => {
 			},
 		});
 		const controller = new AbortController();
-		const input = `http://127.0.0.1:${server.port}/${crypto.randomUUID()}.mp4`;
+		const name = `${crypto.randomUUID()}.mp4`;
+		const input = `http://127.0.0.1:${server.port}/${name}`;
 		const reason = new Error("Recording worker lease expired");
 		const outcome = generateThumbnail(input, 5, {}, controller.signal).catch(
 			(error: unknown) => error,
@@ -398,7 +410,7 @@ describe("generateThumbnail integration tests", () => {
 							.split("\n");
 			const pids = commands
 				.filter(
-					(command) => command.includes("ffmpeg") && command.includes(input),
+					(command) => command.includes("ffmpeg") && command.includes(name),
 				)
 				.map((command) => Number.parseInt(command.trim(), 10));
 			expect(pids).toHaveLength(1);
@@ -526,6 +538,67 @@ describe("generatePreviewGif integration tests", () => {
 			generatePreviewGif(TEST_VIDEO_WITH_AUDIO, 10, {}, controller.signal),
 		).rejects.toThrow("Preview GIF generation aborted");
 	});
+
+	test.each([
+		["untagged BT.709", "bt709", "unknown", "unknown"],
+		["tagged BT.709", "bt709", "bt709", "tv"],
+		["tagged BT.601", "bt601", "smpte170m", "tv"],
+	])(
+		"keeps colours accurate for %s video",
+		async (label, matrix, tag, range) => {
+			const orange = [224, 122, 48];
+			await ensureTempDir();
+			const input = join(
+				getTempDir(),
+				`gif-colour-${label.replace(/\W+/g, "-")}-${Date.now()}.mp4`,
+			);
+			tempFiles.push(input);
+			execFileSync("ffmpeg", [
+				"-hide_banner",
+				"-v",
+				"error",
+				"-f",
+				"lavfi",
+				"-i",
+				"color=c=0xE07A30:s=320x180:r=10:d=3",
+				"-vf",
+				`scale=out_color_matrix=${matrix}:out_range=tv,format=yuv420p,setparams=colorspace=${tag}:color_primaries=${tag}:color_trc=${tag}:range=${range}`,
+				"-c:v",
+				"libx264",
+				"-qp",
+				"0",
+				"-y",
+				input,
+			]);
+
+			const preview = await generatePreviewGif(input, 3, { startTime: 0 });
+			try {
+				const pixel = execFileSync("ffmpeg", [
+					"-hide_banner",
+					"-v",
+					"error",
+					"-i",
+					preview.path,
+					"-frames:v",
+					"1",
+					"-vf",
+					"crop=1:1:80:45",
+					"-f",
+					"rawvideo",
+					"-pix_fmt",
+					"rgb24",
+					"-",
+				]);
+				for (const [index, channel] of orange.entries()) {
+					expect(Math.abs((pixel[index] ?? 0) - channel)).toBeLessThanOrEqual(
+						8,
+					);
+				}
+			} finally {
+				await preview.cleanup();
+			}
+		},
+	);
 });
 
 describe("processVideo integration tests", () => {
@@ -1413,6 +1486,42 @@ describe("processVideo integration tests", () => {
 			rmSync(workDir, { recursive: true, force: true });
 		}
 	}, 120000);
+
+	test("keeps audio in a codec the probe cannot name, as AAC", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-unnamed-audio-"));
+		try {
+			const losslessPath = join(workDir, "input.mov");
+			execFileSync("ffmpeg", [
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-i",
+				TEST_VIDEO_WITH_AUDIO,
+				"-c:v",
+				"copy",
+				"-c:a",
+				"alac",
+				losslessPath,
+			]);
+
+			const metadata = await probeVideo(`file://${losslessPath}`);
+			expect(metadata.audioCodec).toBeNull();
+			expect(metadata.audioChannels).not.toBeNull();
+
+			for (const options of [{}, { remuxOnly: true }]) {
+				const tempFile = await processVideo(losslessPath, metadata, options);
+				tempFiles.push(tempFile.path);
+				const output = await probeVideo(`file://${tempFile.path}`);
+				expect(output.videoCodec).toBe("h264");
+				expect(output.audioCodec).toBe("aac");
+				expect(output.audioChannels).toBe(metadata.audioChannels);
+				await tempFile.cleanup();
+			}
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	}, 120000);
 });
 
 describe("ffmpeg-backed media utilities integration tests", () => {
@@ -1630,4 +1739,366 @@ describe("ffmpeg-backed media utilities integration tests", () => {
 			rmSync(workDir, { recursive: true, force: true });
 		}
 	}, 60000);
+});
+
+describe("DASH segment expansion", () => {
+	async function withManifest<T>(
+		manifest: string,
+		run: (dir: string) => Promise<T>,
+	): Promise<T> {
+		const originalFetch = globalThis.fetch;
+		const dir = mkdtempSync(join(tmpdir(), "cap-mpd-segments-"));
+		globalThis.fetch = (async () =>
+			new Response(manifest, {
+				status: 200,
+				statusText: "OK",
+			})) as unknown as typeof fetch;
+		try {
+			return await run(dir);
+		} finally {
+			globalThis.fetch = originalFetch;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	async function materializeNormalized(url: string, manifest: string) {
+		return withManifest(manifest, async (dir) => {
+			let master = readFileSync(
+				await materializeMpdAsHlsPlaylist(url, dir),
+				"utf8",
+			);
+			const paths = [...master.matchAll(/(\/[^\s"]+\.m3u8)/g)].map(
+				(match) => match[1] ?? "",
+			);
+			const playlists = paths.map((path) => readFileSync(path, "utf8"));
+			paths.forEach((path, index) => {
+				master = master.replace(path, `playlist-${index}`);
+			});
+			return { master, playlists };
+		});
+	}
+
+	const longTemplate = (seconds: number, representations = 1) =>
+		`<MPD mediaPresentationDuration="PT${seconds}S"><Period><AdaptationSet mimeType="video/mp4">${Array.from(
+			{ length: representations },
+			(_, index) =>
+				`<Representation id="v${index}" bandwidth="1000000"><SegmentTemplate media="seg-$Number$.m4s" initialization="init.mp4" duration="1" timescale="1"/></Representation>`,
+		).join("")}</AdaptationSet></Period></MPD>`;
+
+	test("produces the same playlists for SegmentTemplate durations", async () => {
+		const result = await materializeNormalized(
+			"https://cdn.example/video/manifest.mpd?Policy=a&Signature=b",
+			`<MPD mediaPresentationDuration="PT7.5S">
+				<Period>
+					<AdaptationSet contentType="video" mimeType="video/mp4" codecs="avc1.4d401f" width="1280" height="720">
+						<BaseURL>video/</BaseURL>
+						<Representation id="v1" bandwidth="2400000">
+							<SegmentTemplate timescale="1000" duration="2000" initialization="init-$RepresentationID$.mp4" media="chunk-$RepresentationID$-$Number%05d$.m4s" startNumber="3"/>
+						</Representation>
+					</AdaptationSet>
+					<AdaptationSet contentType="audio" mimeType="audio/mp4" codecs="mp4a.40.2">
+						<Representation id="a1" bandwidth="128000">
+							<SegmentTemplate timescale="48000" duration="96000" initialization="audio/init.mp4" media="audio/chunk-$Time$.m4s"/>
+						</Representation>
+					</AdaptationSet>
+				</Period>
+			</MPD>`,
+		);
+
+		expect(result.master).toBe(
+			[
+				"#EXTM3U",
+				"#EXT-X-VERSION:7",
+				'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="dash-audio",NAME="audio",DEFAULT=YES,AUTOSELECT=YES,URI="playlist-0"',
+				'#EXT-X-STREAM-INF:BANDWIDTH=2528000,RESOLUTION=1280x720,CODECS="avc1.4d401f,mp4a.40.2",AUDIO="dash-audio"',
+				"playlist-1",
+			].join("\n"),
+		);
+		expect(result.playlists).toEqual([
+			[
+				"#EXTM3U",
+				"#EXT-X-VERSION:7",
+				"#EXT-X-PLAYLIST-TYPE:VOD",
+				"#EXT-X-TARGETDURATION:2",
+				'#EXT-X-MAP:URI="https://cdn.example/video/audio/init.mp4?Policy=a&Signature=b"',
+				"#EXTINF:2.000000,",
+				"https://cdn.example/video/audio/chunk-0.m4s?Policy=a&Signature=b",
+				"#EXTINF:2.000000,",
+				"https://cdn.example/video/audio/chunk-96000.m4s?Policy=a&Signature=b",
+				"#EXTINF:2.000000,",
+				"https://cdn.example/video/audio/chunk-192000.m4s?Policy=a&Signature=b",
+				"#EXTINF:1.500000,",
+				"https://cdn.example/video/audio/chunk-288000.m4s?Policy=a&Signature=b",
+				"#EXT-X-ENDLIST",
+			].join("\n"),
+			[
+				"#EXTM3U",
+				"#EXT-X-VERSION:7",
+				"#EXT-X-PLAYLIST-TYPE:VOD",
+				"#EXT-X-TARGETDURATION:2",
+				'#EXT-X-MAP:URI="https://cdn.example/video/video/init-v1.mp4?Policy=a&Signature=b"',
+				"#EXTINF:2.000000,",
+				"https://cdn.example/video/video/chunk-v1-00003.m4s?Policy=a&Signature=b",
+				"#EXTINF:2.000000,",
+				"https://cdn.example/video/video/chunk-v1-00004.m4s?Policy=a&Signature=b",
+				"#EXTINF:2.000000,",
+				"https://cdn.example/video/video/chunk-v1-00005.m4s?Policy=a&Signature=b",
+				"#EXTINF:1.500000,",
+				"https://cdn.example/video/video/chunk-v1-00006.m4s?Policy=a&Signature=b",
+				"#EXT-X-ENDLIST",
+			].join("\n"),
+		]);
+	});
+
+	test("produces the same playlists for SegmentTimeline repeats", async () => {
+		const result = await materializeNormalized(
+			"https://luna.example/id/x/resource/dash/playlist.mpd?Signature=s",
+			`<MPD mediaPresentationDuration="PT12.5S">
+				<Period id="0">
+					<AdaptationSet id="1" contentType="video" mimeType="video/webm" codecs="vp9" width="1920" height="1080">
+						<Representation id="1" bandwidth="900000">
+							<SegmentTemplate timescale="1000000" initialization="loom-video-init.webm" media="loom-video-$Number$.webm" startNumber="0">
+								<SegmentTimeline>
+									<S t="0" d="3539000" r="2"/>
+									<S d="1883000"/>
+									<S t="12500000" d="0"/>
+								</SegmentTimeline>
+							</SegmentTemplate>
+						</Representation>
+					</AdaptationSet>
+					<AdaptationSet id="2" contentType="audio" mimeType="audio/webm" codecs="opus">
+						<Representation id="2" bandwidth="64000">
+							<SegmentTemplate timescale="48000" initialization="loom-audio-init.webm" media="loom-audio-$Time$.webm">
+								<SegmentTimeline>
+									<S t="0" d="96000" r="-1"/>
+								</SegmentTimeline>
+							</SegmentTemplate>
+						</Representation>
+					</AdaptationSet>
+				</Period>
+			</MPD>`,
+		);
+
+		expect(result.master).toBe(
+			[
+				"#EXTM3U",
+				"#EXT-X-VERSION:7",
+				'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="dash-audio",NAME="audio",DEFAULT=YES,AUTOSELECT=YES,URI="playlist-0"',
+				'#EXT-X-STREAM-INF:BANDWIDTH=964000,RESOLUTION=1920x1080,CODECS="vp9,opus",AUDIO="dash-audio"',
+				"playlist-1",
+			].join("\n"),
+		);
+		const base = "https://luna.example/id/x/resource/dash";
+		expect(result.playlists).toEqual([
+			[
+				"#EXTM3U",
+				"#EXT-X-VERSION:7",
+				"#EXT-X-PLAYLIST-TYPE:VOD",
+				"#EXT-X-TARGETDURATION:2",
+				`#EXT-X-MAP:URI="${base}/loom-audio-init.webm?Signature=s"`,
+				...[0, 96000, 192000, 288000, 384000, 480000, 576000].flatMap(
+					(time) => [
+						"#EXTINF:2.000000,",
+						`${base}/loom-audio-${time}.webm?Signature=s`,
+					],
+				),
+				"#EXT-X-ENDLIST",
+			].join("\n"),
+			[
+				"#EXTM3U",
+				"#EXT-X-VERSION:7",
+				"#EXT-X-PLAYLIST-TYPE:VOD",
+				"#EXT-X-TARGETDURATION:4",
+				`#EXT-X-MAP:URI="${base}/loom-video-init.webm?Signature=s"`,
+				"#EXTINF:3.539000,",
+				`${base}/loom-video-0.webm?Signature=s`,
+				"#EXTINF:3.539000,",
+				`${base}/loom-video-1.webm?Signature=s`,
+				"#EXTINF:3.539000,",
+				`${base}/loom-video-2.webm?Signature=s`,
+				"#EXTINF:1.883000,",
+				`${base}/loom-video-3.webm?Signature=s`,
+				"#EXT-X-ENDLIST",
+			].join("\n"),
+		]);
+	});
+
+	test("keeps every segment of a long manifest under the limit", async () => {
+		const { playlists } = await materializeNormalized(
+			"https://cdn.example/long/manifest.mpd",
+			longTemplate(150_000),
+		);
+
+		expect(playlists[0]?.match(/#EXTINF:1\.000000,/g)?.length).toBe(150_000);
+		expect(playlists[0]).toContain("#EXT-X-TARGETDURATION:1\n");
+		expect(playlists[0]).toContain("https://cdn.example/long/seg-150000.m4s");
+	});
+
+	test("writes a representation playlist with a million segments", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "cap-mpd-million-"));
+		try {
+			const segments = Array.from({ length: 1_000_000 }, (_, index) => ({
+				duration: index === 0 ? 2.5 : 1,
+				url: `https://cdn.example/seg-${index}.m4s`,
+			}));
+			const playlist = readFileSync(
+				await writeDashRepresentationPlaylist(
+					dir,
+					"https://cdn.example/init.mp4",
+					segments,
+				),
+				"utf8",
+			);
+
+			expect(playlist).toContain("#EXT-X-TARGETDURATION:3\n");
+			expect(playlist).toContain("https://cdn.example/seg-999999.m4s");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("falls back to the generic DASH path when segments exceed the limit", async () => {
+		await withManifest(longTemplate(300_000), async (dir) => {
+			await expect(
+				materializeMpdAsHlsPlaylist(
+					"https://cdn.example/long/manifest.mpd",
+					dir,
+				),
+			).rejects.toThrow(/^DASH /);
+			const path = await materializeStreamingInput(
+				"https://cdn.example/long/manifest.mpd",
+				dir,
+			);
+			expect(path.endsWith(".mpd")).toBe(true);
+		});
+	});
+
+	test("counts segments across every representation against the limit", async () => {
+		await withManifest(longTemplate(80_000, 3), async (dir) => {
+			await expect(
+				materializeMpdAsHlsPlaylist(
+					"https://cdn.example/long/manifest.mpd",
+					dir,
+				),
+			).rejects.toThrow(/^DASH /);
+		});
+	});
+
+	test("stops a day-long millisecond SegmentTemplate before expanding it", async () => {
+		const startedAt = performance.now();
+		await withManifest(
+			'<MPD mediaPresentationDuration="PT24H"><Period><AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1000000"><SegmentTemplate media="seg-$Number$.m4s" initialization="init.mp4" duration="1" timescale="1000"/></Representation></AdaptationSet></Period></MPD>',
+			async (dir) => {
+				await expect(
+					materializeMpdAsHlsPlaylist(
+						"https://cdn.example/day/manifest.mpd",
+						dir,
+					),
+				).rejects.toThrow(/^DASH /);
+				const path = await materializeStreamingInput(
+					"https://cdn.example/day/manifest.mpd",
+					dir,
+				);
+				expect(path.endsWith(".mpd")).toBe(true);
+			},
+		);
+		expect(performance.now() - startedAt).toBeLessThan(5_000);
+	});
+
+	describe("audio-only manifests", () => {
+		const audioOnly =
+			'<MPD type="static" mediaPresentationDuration="PT0.000S"><Period id="0"><AdaptationSet id="0" contentType="audio"><Representation id="0" bandwidth="128000" codecs="opus" mimeType="audio/webm"><SegmentTemplate timescale="1000000" initialization="a-init.webm" media="a-$Number$.webm" startNumber="0"><SegmentTimeline><S t="0" d="4020000"/><S t="4020000" d="1320000"/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>';
+		const url = "https://cdn.example/audio/manifest.mpd?Policy=p";
+
+		test("are refused unless the caller opts in", async () => {
+			await withManifest(audioOnly, async (dir) => {
+				await expect(materializeMpdAsHlsPlaylist(url, dir)).rejects.toThrow(
+					"DASH manifest did not contain a supported video track",
+				);
+				const path = await materializeStreamingInput(url, dir);
+				expect(path.endsWith(".mpd")).toBe(true);
+			});
+		});
+
+		test("become a single audio variant when the caller opts in", async () => {
+			await withManifest(audioOnly, async (dir) => {
+				const master = readFileSync(
+					await materializeStreamingInput(url, dir, undefined, undefined, {
+						allowAudioOnly: true,
+					}),
+					"utf8",
+				);
+				expect(master).not.toContain("#EXT-X-MEDIA");
+				const variants = master
+					.split("\n")
+					.filter((line) => line.startsWith("#EXT-X-STREAM-INF:"));
+				expect(variants).toEqual([
+					'#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS="opus"',
+				]);
+				const playlist = readFileSync(
+					master.trim().split("\n").at(-1) ?? "",
+					"utf8",
+				);
+				expect(playlist).toContain(
+					'#EXT-X-MAP:URI="https://cdn.example/audio/a-init.webm?Policy=p"',
+				);
+				expect(playlist).toContain("#EXTINF:4.020000,");
+				expect(playlist).toContain(
+					"https://cdn.example/audio/a-1.webm?Policy=p",
+				);
+			});
+		});
+
+		test("are not inferred when the video uses an unsupported segment layout", async () => {
+			const unsupportedVideo = audioOnly.replace(
+				"</Period>",
+				'<AdaptationSet id="1" contentType="video"><Representation id="1" bandwidth="1500000" codecs="vp9" mimeType="video/webm" width="1280" height="720"><SegmentList><Initialization sourceURL="v-init.webm"/><SegmentURL media="v-0.webm"/></SegmentList></Representation></AdaptationSet></Period>',
+			);
+			await withManifest(unsupportedVideo, async (dir) => {
+				await expect(
+					materializeMpdAsHlsPlaylist(url, dir, undefined, {
+						allowAudioOnly: true,
+					}),
+				).rejects.toThrow(
+					"DASH manifest did not contain a supported video track",
+				);
+			});
+		});
+	});
+
+	test.each([
+		["a repeat count", "PT1S", '<S t="0" d="1" r="1000000000"/>'],
+		[
+			"an open-ended repeat up to the next entry",
+			"PT1S",
+			'<S t="0" d="1" r="-1"/><S t="86400000" d="1000"/>',
+		],
+		[
+			"an open-ended repeat up to the duration",
+			"PT24H",
+			'<S t="0" d="1" r="-1"/>',
+		],
+	])(
+		"stops a SegmentTimeline with %s before expanding it",
+		async (_, duration, timeline) => {
+			const startedAt = performance.now();
+			await withManifest(
+				`<MPD mediaPresentationDuration="${duration}"><Period><AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1000000"><SegmentTemplate media="seg-$Time$.m4s" initialization="init.mp4" timescale="1000"><SegmentTimeline>${timeline}</SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>`,
+				async (dir) => {
+					await expect(
+						materializeMpdAsHlsPlaylist(
+							"https://cdn.example/r/manifest.mpd",
+							dir,
+						),
+					).rejects.toThrow(/^DASH /);
+					const path = await materializeStreamingInput(
+						"https://cdn.example/r/manifest.mpd",
+						dir,
+					);
+					expect(path.endsWith(".mpd")).toBe(true);
+				},
+			);
+			expect(performance.now() - startedAt).toBeLessThan(5_000);
+		},
+	);
 });

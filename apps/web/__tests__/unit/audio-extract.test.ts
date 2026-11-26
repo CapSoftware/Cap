@@ -24,11 +24,19 @@ class MockChildProcess extends EventEmitter {
 }
 
 let mockProcess: MockChildProcess;
-let spawnArgs: { command: string; args: string[] }[] = [];
+let spawnArgs: {
+	command: string;
+	args: string[];
+	env?: Record<string, string | undefined>;
+}[] = [];
 
 vi.mock("node:child_process", () => ({
-	spawn: (command: string, args: string[]) => {
-		spawnArgs.push({ command, args });
+	spawn: (
+		command: string,
+		args: string[],
+		options?: { env?: Record<string, string | undefined> },
+	) => {
+		spawnArgs.push({ command, args, env: options?.env });
 		mockProcess = new MockChildProcess();
 		return mockProcess;
 	},
@@ -113,6 +121,35 @@ describe("audio-extract", () => {
 			expect(args).toContain("-i");
 			expect(args).toContain("-hide_banner");
 			expect(args).toContain("https://example.com/video.mp4");
+		});
+
+		it("limits remote inputs to network protocols and passes no secrets", async () => {
+			const { checkHasAudioTrack } = await import("@/lib/audio-extract");
+
+			const resultPromise = checkHasAudioTrack("https://example.com/video.mp4");
+
+			setTimeout(() => {
+				mockProcess.stderr.emit("data", Buffer.from(""));
+				mockProcess.emit("close", 1);
+			}, 10);
+
+			await expect(resultPromise).rejects.toThrow();
+
+			const { args = [], env } = spawnArgs[0] ?? {};
+			const input = args.indexOf("-i");
+			expect(args.slice(input - 4, input - 1)).toEqual([
+				"-protocol_whitelist",
+				"http,https,tcp,tls",
+				"-format_whitelist",
+			]);
+			const formats = (args[input - 1] ?? "").split(",");
+			expect(formats).toContain("mp4");
+			for (const nested of ["hls", "dash", "concat"])
+				expect(formats).not.toContain(nested);
+			expect(env).toEqual({
+				NODE_ENV: process.env.NODE_ENV,
+				PATH: process.env.PATH ?? "",
+			});
 		});
 	});
 

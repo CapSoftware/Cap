@@ -70,6 +70,13 @@ export async function requestEmailCode({
 		return null;
 	}
 
+	if (response?.error === "DisposableEmail") {
+		toast.error(
+			"Temporary email addresses can't be used with Cap. Please use your work or personal email.",
+		);
+		return null;
+	}
+
 	toast.error(
 		response?.error === "EmailSignin"
 			? "Please wait 30 seconds before requesting a new code."

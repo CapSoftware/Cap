@@ -34,9 +34,11 @@ This removes any old signature. The host must provide its Wayland client and Pip
 Run the package builder as an ordinary user in an Arch environment with `makepkg` and `bsdtar`:
 
 ```sh
-bash scripts/build-linux-arch-package.sh Cap_0.6.0_amd64.deb ./arch-packages
-sudo pacman -U ./arch-packages/cap-bin-0.6.0-1-x86_64.pkg.tar.zst
+bash scripts/build-linux-arch-package.sh Cap_0.6.2_amd64.deb ./arch-packages
+sudo pacman -U ./arch-packages/cap-bin-0.6.2-1-x86_64.pkg.tar.zst
 ```
+
+The output filename omits the epoch. Package metadata retains version `1:0.6.2-1` in this example, which `pacman` uses for upgrade ordering.
 
 The builder reuses the exact DEB payload, changes the package-format marker, and declares Arch dependencies. It does not strip or rebuild the executables. Release CI uses a pinned Arch container without network access during packaging.
 
@@ -49,6 +51,8 @@ On Linux, `cap record start --mode instant --camera DEVICE` composites the camer
 This CLI default does not change desktop camera-window settings or Studio's separate, editable camera track.
 
 ## Updates and verification
+
+The RPM carries its own ALSA pulse plugin in `/usr/lib/cap/alsa-lib` instead of requiring `alsa-plugins-pulseaudio`, which conflicts with openSUSE's `pipewire-alsa`. Cap loads it only when the host has no pulse plugin of its own and `ALSA_CONFIG_PATH` is unset. The configuration includes the distribution's `alsa.conf` itself, because openSUSE's alsa-lib ignores an `ALSA_CONFIG_PATH` that lists several files.
 
 DEB and AppImage installations use separate updater targets. RPM and Arch installations direct users to update through their package manager or install the latest package, avoiding an incompatible DEB update.
 

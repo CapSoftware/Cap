@@ -21,6 +21,7 @@ import {
 	isCompleteTranslation,
 	joinTranslationChunks,
 	readCachedTranslation,
+	sourceDigest,
 	splitTranslationChunks,
 	withSourceFingerprint,
 } from "./translation-vtt";
@@ -29,6 +30,8 @@ interface TranslateResult {
 	success: boolean;
 	translatedVtt?: string;
 	message: string;
+	inProgress?: boolean;
+	rateLimited?: boolean;
 }
 
 export async function translateTranscript(
@@ -57,7 +60,7 @@ export async function translateTranscript(
 	}
 
 	if (await isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT)) {
-		return { success: false, message: "Too many requests" };
+		return { success: false, rateLimited: true, message: "Too many requests" };
 	}
 
 	const exit = await Effect.gen(function* () {
@@ -80,63 +83,329 @@ export async function translateTranscript(
 
 	const { video } = query[0];
 
-	const translatedKey = `${video.ownerId}/${videoId}/transcription.${targetLanguage}.vtt`;
+	const [bucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
+	).pipe(runPromise);
 
-	const originalVtt = await Effect.gen(function* () {
-		const [bucket] = yield* Storage.getAccessForVideo(
-			decodeStorageVideo(video),
-		);
-		return yield* bucket.getObject(
-			`${video.ownerId}/${videoId}/transcription.vtt`,
-		);
-	}).pipe(runPromise);
+	const originalVtt = await bucket
+		.getObject(`${video.ownerId}/${videoId}/transcription.vtt`)
+		.pipe(runPromise);
 
 	if (Option.isNone(originalVtt)) {
 		return { success: false, message: "Original transcript not found" };
 	}
 
-	try {
-		const existingTranslation = await Effect.gen(function* () {
-			const [bucket] = yield* Storage.getAccessForVideo(
-				decodeStorageVideo(video),
-			);
-			return yield* bucket.getObject(translatedKey);
-		}).pipe(runPromise);
+	const digest = sourceDigest(originalVtt.value);
+	const pairKey = `${videoId}:${targetLanguage}:${digest}`;
+	const running = translationsInFlight.get(pairKey);
+	if (running) return waitForRunningTranslation(running);
 
-		const cachedTranslation = Option.isSome(existingTranslation)
-			? readCachedTranslation(originalVtt.value, existingTranslation.value)
+	const translation = translateOnce({
+		bucket,
+		pairKey,
+		digest,
+		source: originalVtt.value,
+		targetLanguage,
+		translatedKey: `${video.ownerId}/${videoId}/transcription.${targetLanguage}.vtt`,
+		attemptKey: `${video.ownerId}/${videoId}/translation-status/${targetLanguage}.${digest.slice(0, 16)}.json`,
+	}).finally(() => translationsInFlight.delete(pairKey));
+	translationsInFlight.set(pairKey, translation);
+	return translation;
+}
+
+type VideoBucket = Effect.Effect.Success<
+	ReturnType<typeof Storage.getAccessForVideo>
+>[0];
+
+interface PairTranslation {
+	bucket: VideoBucket;
+	pairKey: string;
+	digest: string;
+	source: string;
+	targetLanguage: LanguageCode;
+	translatedKey: string;
+	attemptKey: string;
+}
+
+interface TranslationAttempt {
+	state: "pending" | "failed";
+	source: string;
+	at: number;
+}
+
+type TranslationClaim =
+	| { kind: "owned"; eTag: string | undefined }
+	| { kind: "untracked" }
+	| { kind: "busy" }
+	| { kind: "failed"; at: number };
+
+// The owner renews its pending marker after every chunk, so the lease only has
+// to outlast one chunk's model calls; an older marker belongs to a stopped pass.
+const PENDING_TRANSLATION_LEASE_MS = 5 * 60 * 1000;
+const FAILED_TRANSLATION_RETRY_MS = 10 * 60 * 1000;
+// A request that finds another pass running waits briefly and then hands back
+// to the share page, which asks again until the translation is stored.
+const TRANSLATION_WAIT_MS = 20 * 1000;
+const TRANSLATION_WAIT_POLL_MS = 5 * 1000;
+
+const TRANSLATION_FAILED: TranslateResult = {
+	success: false,
+	message: "Translation failed",
+};
+
+const TRANSLATION_IN_PROGRESS: TranslateResult = {
+	success: false,
+	inProgress: true,
+	message: "Translation in progress",
+};
+
+const translationsInFlight = new Map<string, Promise<TranslateResult>>();
+const recentTranslationFailures = new Map<string, number>();
+
+function hasRecentFailure(pairKey: string) {
+	const failedAt = recentTranslationFailures.get(pairKey);
+	return (
+		failedAt !== undefined &&
+		Date.now() - failedAt < FAILED_TRANSLATION_RETRY_MS
+	);
+}
+
+function recordFailure(pairKey: string, failedAt: number) {
+	for (const [key, value] of recentTranslationFailures) {
+		if (Date.now() - value >= FAILED_TRANSLATION_RETRY_MS) {
+			recentTranslationFailures.delete(key);
+		}
+	}
+	recentTranslationFailures.set(pairKey, failedAt);
+}
+
+async function readStoredTranslation(translation: PairTranslation) {
+	try {
+		const existing = await translation.bucket
+			.getObject(translation.translatedKey)
+			.pipe(runPromise);
+		return Option.isSome(existing)
+			? readCachedTranslation(translation.source, existing.value)
 			: null;
-		if (cachedTranslation) {
+	} catch (e) {
+		console.debug("[translateTranscript] No cached translation found:", e);
+		return null;
+	}
+}
+
+function parseAttempt(body: string): TranslationAttempt | null {
+	try {
+		const value = JSON.parse(body) as Partial<TranslationAttempt>;
+		if (
+			(value.state === "pending" || value.state === "failed") &&
+			typeof value.source === "string" &&
+			typeof value.at === "number"
+		) {
+			return { state: value.state, source: value.source, at: value.at };
+		}
+	} catch {}
+	return null;
+}
+
+function attemptBody(
+	translation: PairTranslation,
+	state: TranslationAttempt["state"],
+) {
+	const attempt: TranslationAttempt = {
+		state,
+		source: translation.digest,
+		at: Date.now(),
+	};
+	return JSON.stringify(attempt);
+}
+
+function errorStatus(error: unknown) {
+	const pending = [error];
+	for (let index = 0; index < pending.length && index < 16; index++) {
+		const value = pending[index];
+		if (typeof value !== "object" || value === null) continue;
+		const record = value as Record<string, unknown>;
+		const status = (record.$metadata as { httpStatusCode?: unknown } | null)
+			?.httpStatusCode;
+		if (typeof status === "number") return status;
+		pending.push(record.cause, record.error);
+	}
+	return undefined;
+}
+
+function isClaimConflict(error: unknown) {
+	const status = errorStatus(error);
+	return status === 412 || status === 409;
+}
+
+async function claimTranslation(
+	translation: PairTranslation,
+): Promise<TranslationClaim> {
+	const unclaimed: TranslationClaim = { kind: "untracked" };
+	const { bucket } = translation;
+	if (bucket.provider !== "s3") return unclaimed;
+
+	try {
+		const current = await bucket
+			.getObjectWithETag(translation.attemptKey)
+			.pipe(runPromise);
+		const attempt = Option.isSome(current)
+			? parseAttempt(current.value.body)
+			: null;
+		if (attempt?.source === translation.digest) {
+			const age = Date.now() - attempt.at;
+			if (attempt.state === "failed" && age < FAILED_TRANSLATION_RETRY_MS) {
+				return { kind: "failed", at: attempt.at };
+			}
+			if (attempt.state === "pending" && age < PENDING_TRANSLATION_LEASE_MS) {
+				return { kind: "busy" };
+			}
+		}
+		if (Option.isSome(current) && !current.value.eTag) return unclaimed;
+
+		const written = await bucket
+			.putObjectWithETag(
+				translation.attemptKey,
+				attemptBody(translation, "pending"),
+				{
+					contentType: "application/json",
+					...(Option.isSome(current)
+						? { ifMatch: current.value.eTag }
+						: { ifNoneMatch: "*" }),
+				},
+			)
+			.pipe(runPromise);
+		return { kind: "owned", eTag: written.ETag };
+	} catch (error) {
+		if (isClaimConflict(error)) return { kind: "busy" };
+		console.warn("[translateTranscript] Could not claim translation:", error);
+		return unclaimed;
+	}
+}
+
+async function updateClaim(
+	translation: PairTranslation,
+	claim: TranslationClaim,
+	state: TranslationAttempt["state"],
+) {
+	const { bucket } = translation;
+	if (claim.kind !== "owned" || !claim.eTag || bucket.provider !== "s3") {
+		return;
+	}
+	try {
+		const written = await bucket
+			.putObjectWithETag(
+				translation.attemptKey,
+				attemptBody(translation, state),
+				{ contentType: "application/json", ifMatch: claim.eTag },
+			)
+			.pipe(runPromise);
+		claim.eTag = written.ETag;
+	} catch (error) {
+		console.warn("[translateTranscript] Could not update claim:", error);
+	}
+}
+
+async function releaseClaim(
+	translation: PairTranslation,
+	claim: TranslationClaim,
+) {
+	if (claim.kind !== "owned") return;
+	try {
+		await translation.bucket
+			.deleteObject(translation.attemptKey)
+			.pipe(runPromise);
+	} catch (error) {
+		console.warn("[translateTranscript] Could not release claim:", error);
+	}
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForRunningTranslation(
+	running: Promise<TranslateResult>,
+): Promise<TranslateResult> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const waitLimit = new Promise<TranslateResult>((resolve) => {
+		timer = setTimeout(
+			() => resolve(TRANSLATION_IN_PROGRESS),
+			TRANSLATION_WAIT_MS,
+		);
+	});
+	try {
+		return await Promise.race([running, waitLimit]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+async function translateOnce(
+	translation: PairTranslation,
+): Promise<TranslateResult> {
+	const startedAt = Date.now();
+	for (let round = 0; ; round++) {
+		if (round > 0) await sleep(TRANSLATION_WAIT_POLL_MS);
+
+		const stored = await readStoredTranslation(translation);
+		if (stored) {
 			return {
 				success: true,
-				translatedVtt: cachedTranslation,
+				translatedVtt: stored,
 				message: "Retrieved cached translation",
 			};
 		}
-	} catch (e) {
-		console.debug("[translateTranscript] No cached translation found:", e);
-	}
 
+		if (hasRecentFailure(translation.pairKey)) return TRANSLATION_FAILED;
+
+		const claim = await claimTranslation(translation);
+		if (claim.kind === "failed") {
+			recordFailure(translation.pairKey, claim.at);
+			return TRANSLATION_FAILED;
+		}
+		if (claim.kind === "owned") {
+			const storedAfterClaim = await readStoredTranslation(translation);
+			if (storedAfterClaim) {
+				await releaseClaim(translation, claim);
+				return {
+					success: true,
+					translatedVtt: storedAfterClaim,
+					message: "Retrieved cached translation",
+				};
+			}
+		}
+		if (claim.kind === "owned" || claim.kind === "untracked") {
+			return runTranslation(translation, claim);
+		}
+		if (Date.now() - startedAt >= TRANSLATION_WAIT_MS) {
+			return TRANSLATION_IN_PROGRESS;
+		}
+	}
+}
+
+async function runTranslation(
+	translation: PairTranslation,
+	claim: TranslationClaim,
+): Promise<TranslateResult> {
 	const translatedVtt = await translateVttContent(
-		originalVtt.value,
-		targetLanguage,
+		translation.source,
+		translation.targetLanguage,
+		() => updateClaim(translation, claim, "pending"),
 	);
 
 	if (!translatedVtt) {
-		return { success: false, message: "Translation failed" };
+		recordFailure(translation.pairKey, Date.now());
+		await updateClaim(translation, claim, "failed");
+		return TRANSLATION_FAILED;
 	}
 
-	const cacheBody = withSourceFingerprint(originalVtt.value, translatedVtt);
+	const cacheBody = withSourceFingerprint(translation.source, translatedVtt);
 	if (cacheBody) {
 		try {
-			await Effect.gen(function* () {
-				const [bucket] = yield* Storage.getAccessForVideo(
-					decodeStorageVideo(video),
-				);
-				yield* bucket.putObject(translatedKey, cacheBody, {
+			await translation.bucket
+				.putObject(translation.translatedKey, cacheBody, {
 					contentType: "text/vtt",
-				});
-			}).pipe(runPromise);
+				})
+				.pipe(runPromise);
 		} catch (error) {
 			console.error(
 				"[translateTranscript] Failed to cache translation:",
@@ -144,6 +413,7 @@ export async function translateTranscript(
 			);
 		}
 	}
+	await releaseClaim(translation, claim);
 
 	return {
 		success: true,
@@ -155,6 +425,7 @@ export async function translateTranscript(
 async function translateVttContent(
 	vttContent: string,
 	targetLanguage: LanguageCode,
+	onChunkTranslated: () => Promise<void>,
 ): Promise<string | null> {
 	const targetLanguageName = SUPPORTED_LANGUAGES[targetLanguage];
 	const chunks = splitTranslationChunks(vttContent);
@@ -199,6 +470,7 @@ ${chunk}`;
 				},
 			);
 			translations.push(translatedChunk);
+			if (translations.length < chunks.length) await onChunkTranslated();
 		} catch (error) {
 			console.error("[translateVttContent] Translation error:", error);
 			return null;

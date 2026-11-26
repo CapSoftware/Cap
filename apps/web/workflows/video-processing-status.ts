@@ -3,6 +3,7 @@ import { videos, videoUploads } from "@cap/database/schema";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { FatalError, sleep } from "workflow";
+import { isMediaPolicyProcessingError } from "@/lib/media-processing-policy";
 
 export interface ProcessedVideoMetadata {
 	duration: number;
@@ -68,6 +69,9 @@ export async function readVideoProcessingStatus(
 				fps: video.fps,
 			},
 		};
+	}
+	if (isMediaPolicyProcessingError(upload.processingError)) {
+		return { status: "error", message: upload.processingError };
 	}
 	if (upload.processingError || upload.phase === "error") {
 		return {

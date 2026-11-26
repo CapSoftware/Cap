@@ -12,10 +12,15 @@ use cap_cursor_info::CursorFamily;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::DisplayNotch;
+use crate::{AudioVisualsConfiguration, DisplayNotch};
 
 #[cfg(test)]
+mod clip_transition_tests;
+mod markers;
+#[cfg(test)]
 mod style_resolution_tests;
+
+pub use markers::{PlacedMarker, TimelineMarker};
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -211,6 +216,26 @@ pub enum CornerStyle {
     Rounded,
 }
 
+/// How `BackgroundConfiguration::padding` turns into margins in auto aspect.
+///
+/// `Proportional` grows each side by the same fraction of its own length, so a
+/// 16:9 screen gets wider side margins than top and bottom ones. `Even` puts
+/// the same margin on every side, a fraction of the shorter side. Projects
+/// saved without the field keep `Proportional`.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PaddingMode {
+    #[default]
+    Proportional,
+    Even,
+}
+
+impl PaddingMode {
+    pub fn is_proportional(&self) -> bool {
+        *self == Self::Proportional
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
@@ -354,6 +379,11 @@ pub struct BackgroundConfiguration {
     pub source: BackgroundSource,
     pub blur: f64,
     pub padding: f64,
+    /// Absent in every project saved before the setting existed, which keeps
+    /// their framing. Skipped when proportional so those files round-trip
+    /// unchanged.
+    #[serde(skip_serializing_if = "PaddingMode::is_proportional")]
+    pub padding_mode: PaddingMode,
     pub rounding: f64,
     pub rounding_type: CornerStyle,
     pub inset: u32,
@@ -391,6 +421,7 @@ impl Default for BackgroundConfiguration {
             source: BackgroundSource::default(),
             blur: 0.0,
             padding: 0.0,
+            padding_mode: PaddingMode::default(),
             rounding: 0.0,
             rounding_type: CornerStyle::default(),
             inset: 0,
@@ -675,6 +706,220 @@ impl Default for AudioConfiguration {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum VoiceEqPreset {
+    #[default]
+    Natural,
+    Clear,
+    Warm,
+    Bright,
+    Broadcast,
+    Custom,
+}
+
+impl VoiceEqPreset {
+    pub const ALL: [Self; 5] = [
+        Self::Natural,
+        Self::Clear,
+        Self::Warm,
+        Self::Bright,
+        Self::Broadcast,
+    ];
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum VoiceDeclick {
+    #[default]
+    Off,
+    Light,
+    Strong,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceEqBand {
+    pub hz: f32,
+    pub gain_db: f32,
+    #[serde(default = "VoiceEqBand::default_q")]
+    pub q: f32,
+}
+
+impl VoiceEqBand {
+    const fn new(hz: f32, gain_db: f32, q: f32) -> Self {
+        Self { hz, gain_db, q }
+    }
+
+    fn default_q() -> f32 {
+        1.0
+    }
+
+    fn sanitized(self, kind: VoiceEqBandKind, fallback: Self) -> Self {
+        Self {
+            hz: clamp_finite(self.hz, kind.hz_range(), fallback.hz),
+            gain_db: clamp_finite(self.gain_db, VoiceEq::GAIN_RANGE, fallback.gain_db),
+            q: clamp_finite(self.q, VoiceEq::Q_RANGE, fallback.q),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum VoiceEqBandKind {
+    Low,
+    LowMid,
+    HighMid,
+    High,
+}
+
+impl VoiceEqBandKind {
+    pub const ALL: [Self; 4] = [Self::Low, Self::LowMid, Self::HighMid, Self::High];
+
+    pub fn hz_range(self) -> (f32, f32) {
+        match self {
+            Self::Low => (40.0, 600.0),
+            Self::LowMid => (100.0, 2_000.0),
+            Self::HighMid => (600.0, 10_000.0),
+            Self::High => (2_000.0, 16_000.0),
+        }
+    }
+
+    pub fn is_shelf(self) -> bool {
+        matches!(self, Self::Low | Self::High)
+    }
+}
+
+/// `enabled` bypasses the EQ without losing it; de-click runs on its own
+/// switch.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VoiceEq {
+    pub enabled: bool,
+    pub preset: VoiceEqPreset,
+    pub high_pass: bool,
+    pub high_pass_hz: f32,
+    pub low: VoiceEqBand,
+    pub low_mid: VoiceEqBand,
+    pub high_mid: VoiceEqBand,
+    pub high: VoiceEqBand,
+    pub declick: VoiceDeclick,
+}
+
+impl Default for VoiceEq {
+    fn default() -> Self {
+        Self::from_preset(VoiceEqPreset::Natural)
+    }
+}
+
+impl VoiceEq {
+    pub const GAIN_RANGE: (f32, f32) = (-12.0, 12.0);
+    pub const Q_RANGE: (f32, f32) = (0.3, 4.0);
+    pub const HIGH_PASS_RANGE: (f32, f32) = (20.0, 300.0);
+
+    pub fn from_preset(preset: VoiceEqPreset) -> Self {
+        let (high_pass_hz, low, low_mid, high_mid, high) = match preset {
+            VoiceEqPreset::Natural | VoiceEqPreset::Custom => (
+                80.0,
+                VoiceEqBand::new(150.0, 0.0, 0.7),
+                VoiceEqBand::new(300.0, -2.0, 1.0),
+                VoiceEqBand::new(3_500.0, 1.5, 0.8),
+                VoiceEqBand::new(10_000.0, 0.0, 0.7),
+            ),
+            VoiceEqPreset::Clear => (
+                90.0,
+                VoiceEqBand::new(150.0, -1.5, 0.7),
+                VoiceEqBand::new(320.0, -3.0, 1.2),
+                VoiceEqBand::new(3_500.0, 3.5, 0.9),
+                VoiceEqBand::new(10_000.0, 2.0, 0.7),
+            ),
+            VoiceEqPreset::Warm => (
+                70.0,
+                VoiceEqBand::new(160.0, 3.0, 0.7),
+                VoiceEqBand::new(400.0, -1.0, 1.0),
+                VoiceEqBand::new(3_000.0, 1.0, 0.8),
+                VoiceEqBand::new(9_000.0, -2.0, 0.7),
+            ),
+            VoiceEqPreset::Bright => (
+                100.0,
+                VoiceEqBand::new(180.0, -2.0, 0.7),
+                VoiceEqBand::new(350.0, -2.0, 1.0),
+                VoiceEqBand::new(4_500.0, 3.0, 0.8),
+                VoiceEqBand::new(10_000.0, 4.5, 0.7),
+            ),
+            VoiceEqPreset::Broadcast => (
+                80.0,
+                VoiceEqBand::new(110.0, 3.5, 0.7),
+                VoiceEqBand::new(380.0, -3.5, 1.4),
+                VoiceEqBand::new(2_800.0, 3.0, 1.0),
+                VoiceEqBand::new(9_000.0, 2.5, 0.7),
+            ),
+        };
+        Self {
+            enabled: true,
+            preset,
+            high_pass: true,
+            high_pass_hz,
+            low,
+            low_mid,
+            high_mid,
+            high,
+            declick: VoiceDeclick::Off,
+        }
+    }
+
+    pub fn with_preset(self, preset: VoiceEqPreset) -> Self {
+        Self {
+            enabled: self.enabled,
+            declick: self.declick,
+            ..Self::from_preset(preset)
+        }
+    }
+
+    pub fn band(&self, kind: VoiceEqBandKind) -> VoiceEqBand {
+        match kind {
+            VoiceEqBandKind::Low => self.low,
+            VoiceEqBandKind::LowMid => self.low_mid,
+            VoiceEqBandKind::HighMid => self.high_mid,
+            VoiceEqBandKind::High => self.high,
+        }
+    }
+
+    pub fn band_mut(&mut self, kind: VoiceEqBandKind) -> &mut VoiceEqBand {
+        match kind {
+            VoiceEqBandKind::Low => &mut self.low,
+            VoiceEqBandKind::LowMid => &mut self.low_mid,
+            VoiceEqBandKind::HighMid => &mut self.high_mid,
+            VoiceEqBandKind::High => &mut self.high,
+        }
+    }
+
+    pub fn sanitized(&self) -> Self {
+        let fallback = Self::from_preset(self.preset);
+        let mut clean = *self;
+        clean.high_pass_hz = clamp_finite(
+            self.high_pass_hz,
+            Self::HIGH_PASS_RANGE,
+            fallback.high_pass_hz,
+        );
+        for kind in VoiceEqBandKind::ALL {
+            *clean.band_mut(kind) = self.band(kind).sanitized(kind, fallback.band(kind));
+        }
+        clean
+    }
+
+    pub fn shapes_tone(&self) -> bool {
+        self.enabled
+            && (self.high_pass
+                || VoiceEqBandKind::ALL
+                    .iter()
+                    .any(|kind| self.sanitized().band(*kind).gain_db.abs() >= 0.01))
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.shapes_tone() || self.declick != VoiceDeclick::Off
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CursorType {
@@ -798,6 +1043,10 @@ pub struct ScreenMovementSpring {
     pub stiffness: f32,
     pub damping: f32,
     pub mass: f32,
+    /// Starts each zoom-in this far ahead of its segment so the zoom has
+    /// landed when the segment begins. Off unless chosen.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub start_zooms_early: bool,
 }
 
 impl Default for ScreenMovementSpring {
@@ -806,8 +1055,59 @@ impl Default for ScreenMovementSpring {
             stiffness: 200.0,
             damping: 40.0,
             mass: 2.25,
+            start_zooms_early: false,
         }
     }
+}
+
+/// Export and paused-preview enhancement of the screen recording: debanding
+/// and an edge-aware upscale of magnified content.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenEnhancement {
+    pub enabled: bool,
+    pub strength: f32,
+}
+
+impl ScreenEnhancement {
+    pub const DEFAULT_STRENGTH: f32 = 0.5;
+
+    pub const fn on() -> Self {
+        Self {
+            enabled: true,
+            strength: Self::DEFAULT_STRENGTH,
+        }
+    }
+
+    pub fn effective_strength(&self) -> f32 {
+        if self.enabled && self.strength.is_finite() {
+            self.strength.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+}
+
+impl Default for ScreenEnhancement {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            strength: Self::DEFAULT_STRENGTH,
+        }
+    }
+}
+
+impl ScreenMovementSpring {
+    /// How far ahead of its segment an early zoom starts moving.
+    pub const EARLY_START_SECS: f64 = 0.35;
+
+    /// New projects' zoom motion: reaches 90% of a zoom in 317 ms with no
+    /// overshoot and settles within 1% by 500 ms.
+    pub const NEW_PROJECT: Self = Self {
+        stiffness: 205.0,
+        damping: 33.3,
+        mass: 1.5,
+        start_zooms_early: false,
+    };
 }
 
 impl CursorAnimationStyle {
@@ -863,6 +1163,17 @@ pub struct CursorConfiguration {
     pub stop_movement_in_last_seconds: Option<f32>,
     #[serde(default)]
     pub ripple: CursorRippleConfig,
+    /// The cursor meets the recorded pointer at presses, releases, drags and
+    /// shape changes. New projects turn it on; configs saved without the field
+    /// keep the plain spring they were made with.
+    #[serde(default)]
+    pub interaction_anchors: bool,
+    /// Also meet the pointer where the UI under it visibly reacts, found by
+    /// analysing the screen video in the background while the editor is open
+    /// and idle. New projects turn it on; configs saved without the field
+    /// keep it off.
+    #[serde(default)]
+    pub hover_anchors: bool,
 }
 
 impl Default for CursorConfiguration {
@@ -888,6 +1199,8 @@ impl Default for CursorConfiguration {
             click_spring: None,
             stop_movement_in_last_seconds: None,
             ripple: CursorRippleConfig::default(),
+            interaction_anchors: true,
+            hover_anchors: true,
         };
 
         if let Some(preset) = animation_style.preset() {
@@ -944,6 +1257,8 @@ pub struct TimelineSegment {
     pub volume: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_cursor: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_eq: Option<VoiceEq>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -996,6 +1311,12 @@ fn deserialize_timescale<'de, D: serde::Deserializer<'de>>(
 impl TimelineSegment {
     pub fn hides_cursor(&self) -> bool {
         self.hide_cursor.unwrap_or(false)
+    }
+
+    pub fn active_voice_eq(&self) -> Option<VoiceEq> {
+        self.voice_eq
+            .filter(VoiceEq::is_active)
+            .map(|voice_eq| voice_eq.sanitized())
     }
 
     pub fn volume(&self) -> f64 {
@@ -1799,21 +2120,139 @@ pub const MIN_CLIP_TRANSITION_DURATION: f64 = 0.05;
 /// (and to fade back in before leaving the hidden run).
 pub const CLIP_CURSOR_FADE_SECS: f64 = 0.3;
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum ClipTransitionType {
     #[default]
     CrossFade,
     FadeThroughBlack,
+    FadeThroughWhite,
+    PushLeft,
+    PushRight,
+    PushUp,
+    PushDown,
+    WipeLeft,
+    WipeRight,
+    WipeUp,
+    WipeDown,
+    Zoom,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
-#[serde(rename_all = "camelCase")]
+impl ClipTransitionType {
+    pub const ALL: [Self; 12] = [
+        Self::CrossFade,
+        Self::FadeThroughBlack,
+        Self::FadeThroughWhite,
+        Self::PushLeft,
+        Self::PushRight,
+        Self::PushUp,
+        Self::PushDown,
+        Self::WipeLeft,
+        Self::WipeRight,
+        Self::WipeUp,
+        Self::WipeDown,
+        Self::Zoom,
+    ];
+
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::CrossFade => "cross-fade",
+            Self::FadeThroughBlack => "fade-through-black",
+            Self::FadeThroughWhite => "fade-through-white",
+            Self::PushLeft => "push-left",
+            Self::PushRight => "push-right",
+            Self::PushUp => "push-up",
+            Self::PushDown => "push-down",
+            Self::WipeLeft => "wipe-left",
+            Self::WipeRight => "wipe-right",
+            Self::WipeUp => "wipe-up",
+            Self::WipeDown => "wipe-down",
+            Self::Zoom => "zoom",
+        }
+    }
+
+    pub fn from_wire_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.wire_name() == name)
+    }
+
+    /// The kind written to the `type` field, which 0.6.2 and earlier read
+    /// and reject anything but these two. A dip keeps dipping there so its
+    /// audio matches; every other kind plays as a crossfade.
+    pub fn legacy_fallback(self) -> Self {
+        match self {
+            Self::FadeThroughBlack | Self::FadeThroughWhite => Self::FadeThroughBlack,
+            _ => Self::CrossFade,
+        }
+    }
+
+    /// Dips pass through silence (and a solid colour); every other kind
+    /// blends the two clips' audio with an equal-power crossfade.
+    pub fn dips(self) -> bool {
+        matches!(self, Self::FadeThroughBlack | Self::FadeThroughWhite)
+    }
+}
+
+/// A transition on the boundary between `segments[segment_index - 1]` and
+/// `segments[segment_index]`. The two clips overlap by `duration` output
+/// seconds, so every transition shortens the timeline by its duration.
+///
+/// On disk, `type` only ever holds a kind 0.6.2 understands and `effect`
+/// carries the real kind when it differs, so projects stay loadable there.
+#[derive(Type, Clone, Copy, Debug, PartialEq)]
 pub struct ClipTransition {
     pub segment_index: u32,
-    #[serde(rename = "type")]
     pub kind: ClipTransitionType,
     pub duration: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipTransitionOut {
+    segment_index: u32,
+    #[serde(rename = "type")]
+    legacy_kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effect: Option<&'static str>,
+    duration: f64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipTransitionIn {
+    segment_index: u32,
+    #[serde(rename = "type", default)]
+    legacy_kind: Option<String>,
+    #[serde(default)]
+    effect: Option<String>,
+    duration: f64,
+}
+
+impl Serialize for ClipTransition {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let legacy = self.kind.legacy_fallback();
+        ClipTransitionOut {
+            segment_index: self.segment_index,
+            legacy_kind: legacy.wire_name(),
+            effect: (legacy != self.kind).then(|| self.kind.wire_name()),
+            duration: self.duration,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ClipTransition {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = ClipTransitionIn::deserialize(deserializer)?;
+        let parse = |name: Option<&str>| name.and_then(ClipTransitionType::from_wire_name);
+        let kind = parse(wire.effect.as_deref())
+            .or_else(|| parse(wire.legacy_kind.as_deref()))
+            .unwrap_or_default();
+        Ok(Self {
+            segment_index: wire.segment_index,
+            kind,
+            duration: wire.duration,
+        })
+    }
 }
 
 fn deserialize_clip_transitions<'de, D>(deserializer: D) -> Result<Vec<ClipTransition>, D::Error>
@@ -1864,6 +2303,8 @@ pub struct TimelineConfiguration {
     pub style_segments: Vec<StyleSegment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub image_segments: Vec<ImageSegment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shape_segments: Vec<crate::ShapeSegment>,
     // Explicit rename: the digit boundary makes rename_all's camelCase output
     // easy to second-guess, and the editor TypeScript hardcodes this name.
     #[serde(default, rename = "camera3dSegments")]
@@ -2324,6 +2765,19 @@ pub struct CaptionSegment {
     pub text: String,
     #[serde(default)]
     pub words: Vec<CaptionWord>,
+    /// The recording clip this caption belongs to, set only when its times
+    /// cannot say: a caption in a clip's held tail (an edited late-audio clip
+    /// trimmed past its media end, see `migrate_late_audio_alignment`) sits
+    /// where the shared source clock starts the next clip, and a part of a
+    /// caption that migration cut where two clips meet may round across the
+    /// boundary. Such a caption is shown only through this clip's timeline
+    /// segments.
+    #[serde(
+        rename = "recordingSegment",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub recording_clip: Option<u32>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
@@ -2375,6 +2829,19 @@ pub struct CaptionSettings {
     #[serde(alias = "highlightStyle")]
     pub highlight_style: String,
     pub uppercase: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub show_filler_words: bool,
+    /// The language whose hesitation fillers these captions hide, set when
+    /// they are generated: only English is supported, and captions from
+    /// before it existed hide nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filler_language: Option<String>,
+}
+
+impl CaptionSettings {
+    pub fn hides_fillers(&self) -> bool {
+        !self.show_filler_words && self.filler_language.as_deref() == Some("en")
+    }
 }
 
 impl CaptionSettings {
@@ -2440,6 +2907,8 @@ impl Default for CaptionSettings {
             animation: Self::default_animation(),
             highlight_style: Self::default_highlight_style(),
             uppercase: false,
+            show_filler_words: false,
+            filler_language: None,
         }
     }
 }
@@ -2657,6 +3126,16 @@ pub enum OverlayTrackKind {
     Mask,
     Image,
     Text,
+    Shape,
+}
+
+impl OverlayTrackKind {
+    /// Kinds every shipped build can parse. 0.6.2 and earlier fail to load a
+    /// project whose `overlayOrder` names any other kind, so newer kinds are
+    /// kept out of that field.
+    pub fn is_legacy(self) -> bool {
+        !matches!(self, Self::Shape)
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2676,8 +3155,17 @@ pub struct ProjectConfiguration {
     pub cursor: CursorConfiguration,
     pub hotkeys: HotkeysConfiguration,
     pub timeline: Option<TimelineConfiguration>,
+    /// The saved stacking order, restricted to [`OverlayTrackKind::is_legacy`]
+    /// kinds so older builds can still open the project. Read and write the
+    /// order through [`ProjectConfiguration::overlay_order`] and
+    /// [`ProjectConfiguration::set_overlay_order`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overlay_order: Vec<OverlayTrack>,
+    /// The full saved stacking order whenever it includes a newer track kind.
+    /// Builds that do not know this field drop it, and fall back to
+    /// `overlay_order`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlay_order_with_shapes: Vec<OverlayTrack>,
     pub captions: Option<CaptionsData>,
     pub keyboard: Option<KeyboardData>,
     pub clips: Vec<ClipConfiguration>,
@@ -2688,11 +3176,24 @@ pub struct ProjectConfiguration {
     pub screen_motion_blur: f32,
     #[serde(default)]
     pub screen_movement_spring: ScreenMovementSpring,
+    /// Set for one render by the export page's option or the editor's preview
+    /// toggle; never read from or written to a project file.
+    #[serde(skip)]
+    pub screen_enhancement: ScreenEnhancement,
     /// Per-layer cinematic color grades. Field-level default keeps old
     /// project files (and old saved presets) deserializing to the identity
     /// grade.
     #[serde(default)]
     pub color_correction: ColorCorrectionConfiguration,
+    /// How clip audio offsets, markers and caption words of a segment with a
+    /// late audio track are timed. 0 (legacy): against the late audio start,
+    /// which also set where the segment's video began. 1: against the screen
+    /// and camera start (`MultipleSegment::latest_start_time`); legacy configs
+    /// are migrated by `migrate_late_audio_alignment` when the recording is
+    /// opened. The field-level default keeps old files at 0 while
+    /// `Default::default()` produces the current version.
+    #[serde(default)]
+    pub clip_alignment_version: u32,
     /// How text segment font sizes are interpreted. 0 (legacy): the renderer
     /// multiplied `font_size` by `size.y / 0.2`, coupling glyph size to the
     /// box. 1: `font_size` alone determines glyph size (1080p-relative);
@@ -2707,10 +3208,39 @@ pub struct ProjectConfiguration {
     /// durations from `fade_duration`.
     #[serde(default)]
     pub text_anim_version: u32,
+    /// Which rules generate auto zoom segments, see
+    /// [`crate::auto_zoom::auto_zoom_segments`]. Absent (0) keeps the
+    /// original rules; new projects start on
+    /// [`crate::auto_zoom::AUTO_ZOOM_VERSION`].
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub auto_zoom_version: u32,
+    /// Only new projects carry it, and the editor's first open clears it, so
+    /// saved projects can never have zooms generated over them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_zoom_pending: bool,
+    #[serde(
+        default,
+        deserialize_with = "markers::deserialize_markers",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub markers: Vec<TimelineMarker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_visuals: Option<Box<AudioVisualsConfiguration>>,
+    /// A still picture, relative to the project, shown where the camera would
+    /// be in a recording that has no camera track. It sits outside `camera`
+    /// so presets and style segments, which copy `camera` whole, never carry
+    /// one project's picture into another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_picture: Option<String>,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
 pub const TEXT_ANIM_VERSION: u32 = 1;
+pub const CLIP_ALIGNMENT_VERSION: u32 = 1;
 
 /// The keys [`ProjectConfiguration::load`] migrates on presence, read in a pass
 /// that skips every value instead of building a JSON tree of a file that can
@@ -2748,6 +3278,7 @@ impl Default for ProjectConfiguration {
             hotkeys: Default::default(),
             timeline: Default::default(),
             overlay_order: Vec::new(),
+            overlay_order_with_shapes: Vec::new(),
             captions: Default::default(),
             keyboard: Default::default(),
             clips: Default::default(),
@@ -2755,9 +3286,16 @@ impl Default for ProjectConfiguration {
             hidden_text_segments: Default::default(),
             screen_motion_blur: Self::default_screen_motion_blur(),
             screen_movement_spring: Default::default(),
+            screen_enhancement: Default::default(),
             color_correction: Default::default(),
+            clip_alignment_version: CLIP_ALIGNMENT_VERSION,
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
+            auto_zoom_version: 0,
+            auto_zoom_pending: false,
+            markers: Vec::new(),
+            audio_visuals: None,
+            camera_picture: None,
         }
     }
 }
@@ -2824,36 +3362,104 @@ impl ProjectStyleCache {
     }
 }
 
+/// Rounding a new project gets when its background first gains padding: a
+/// tighter corner than older projects' 7.5, about 30 px on a 1080p screen.
+pub const NEW_PROJECT_ROUNDING: f64 = 5.5;
+
 impl ProjectConfiguration {
+    /// Where a new recording or import starts. Differs from `Default` (which
+    /// is what an older project missing a field reads as) only in framing
+    /// and motion: even padding, a lighter and softer card shadow, the
+    /// new-project zoom spring and the newer auto zoom rules. At zero padding both padding modes lay out
+    /// identically and the card fills the frame, so neither shows until the
+    /// card has room around it.
+    pub fn for_new_project() -> Self {
+        let mut config = Self::default();
+        config.background.padding_mode = PaddingMode::Even;
+        config.background.shadow = 50.0;
+        config.background.advanced_shadow = Some(ShadowConfiguration {
+            size: 0.0,
+            opacity: 62.4,
+            blur: 46.7,
+        });
+        config.screen_movement_spring = ScreenMovementSpring::NEW_PROJECT;
+        config.auto_zoom_version = crate::auto_zoom::AUTO_ZOOM_VERSION;
+        config.auto_zoom_pending = true;
+        config
+    }
+
     pub fn with_preset(&self, mut preset: Self) -> Self {
         let settings = preset.captions.take().map(|captions| captions.settings);
         preset.captions = match (self.captions.clone(), settings) {
             (Some(mut captions), settings) => {
-                captions.settings = settings.unwrap_or_default();
+                let filler_language = captions.settings.filler_language.take();
+                captions.settings = CaptionSettings {
+                    filler_language,
+                    ..settings.unwrap_or_default()
+                };
                 Some(captions)
             }
             (None, Some(settings)) => Some(CaptionsData {
-                settings,
+                settings: CaptionSettings {
+                    filler_language: None,
+                    ..settings
+                },
                 ..Default::default()
             }),
             (None, None) => None,
         };
         preset.timeline = self.timeline.clone();
+        preset.clip_alignment_version = self.clip_alignment_version;
         preset.text_size_version = self.text_size_version;
         preset.text_anim_version = self.text_anim_version;
+        preset.auto_zoom_version = self.auto_zoom_version;
+        preset.auto_zoom_pending = self.auto_zoom_pending;
         preset.overlay_order = self.overlay_order.clone();
+        preset.overlay_order_with_shapes = self.overlay_order_with_shapes.clone();
         preset.clips = self.clips.clone();
+        preset.markers = self.markers.clone();
+        preset.camera_picture = self.camera_picture.clone();
         preset
     }
 
+    /// The saved overlay stacking order, top first.
+    pub fn overlay_order(&self) -> &[OverlayTrack] {
+        if self.overlay_order_with_shapes.is_empty() {
+            &self.overlay_order
+        } else {
+            &self.overlay_order_with_shapes
+        }
+    }
+
+    pub fn has_overlay_order(&self) -> bool {
+        !self.overlay_order().is_empty()
+    }
+
+    /// Saves `order`, writing the newer kinds only to the field older builds
+    /// ignore.
+    pub fn set_overlay_order(&mut self, order: Vec<OverlayTrack>) {
+        if order.iter().all(|track| track.kind.is_legacy()) {
+            self.overlay_order = order;
+            self.overlay_order_with_shapes.clear();
+        } else {
+            self.overlay_order = order
+                .iter()
+                .copied()
+                .filter(|track| track.kind.is_legacy())
+                .collect();
+            self.overlay_order_with_shapes = order;
+        }
+    }
+
     pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
+        let saved = self.overlay_order();
         let mut ordered = Vec::with_capacity(available.len());
         for track in available {
-            if !self.overlay_order.contains(track) && !ordered.contains(track) {
+            if !saved.contains(track) && !ordered.contains(track) {
                 ordered.push(*track);
             }
         }
-        for track in &self.overlay_order {
+        for track in saved {
             if available.contains(track) && !ordered.contains(track) {
                 ordered.push(*track);
             }
@@ -2871,6 +3477,14 @@ impl ProjectConfiguration {
                 OverlayTrackKind::Text,
                 timeline
                     .text_segments
+                    .iter()
+                    .map(|segment| segment.track)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                OverlayTrackKind::Shape,
+                timeline
+                    .shape_segments
                     .iter()
                     .map(|segment| segment.track)
                     .collect::<Vec<_>>(),
@@ -3031,7 +3645,10 @@ impl ProjectConfiguration {
     pub fn load(project_path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
         let project_path = project_path.as_ref();
         let config_path = project_path.join("project-config.json");
-        let config_str = std::fs::read_to_string(&config_path)?;
+        let config_str = String::from_utf8(std::fs::read(&config_path)?).map_err(|error| {
+            keep_unreadable_config(&config_path, error.as_bytes());
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error.utf8_error())
+        })?;
         let migration_keys = serde_json::from_str::<MigrationKeys>(&config_str).ok();
         let missing_screen_motion_blur = migration_keys
             .as_ref()
@@ -3042,8 +3659,10 @@ impl ProjectConfiguration {
             .is_some_and(|camera| {
                 camera.zoom_size || camera.advanced_shadow || camera.rounding_type
             });
-        let mut config: Self = serde_json::from_str(&config_str)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let mut config: Self = serde_json::from_str(&config_str).map_err(|error| {
+            keep_unreadable_config(&config_path, config_str.as_bytes());
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+        })?;
         let cursor_motion_blur = config.cursor.motion_blur.clamp(0.0, 1.0);
         let screen_motion_blur = config.screen_motion_blur.clamp(0.0, 1.0);
         let needs_motion_blur_clamp = (config.cursor.motion_blur - cursor_motion_blur).abs()
@@ -3102,9 +3721,10 @@ impl ProjectConfiguration {
             }
         }
 
-        config
-            .validate()
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        config.validate().map_err(|error| {
+            keep_unreadable_config(&config_path, config_str.as_bytes());
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+        })?;
 
         if needs_camera_migration
             || needs_motion_blur_clamp
@@ -3258,10 +3878,367 @@ mod notch_tests {
     }
 }
 
+/// Callers fall back to a default configuration when the file cannot be
+/// read (written by a newer Cap, edited by hand) and save over it on the next
+/// edit. A copy named after its contents keeps the original recoverable.
+fn write_new_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(contents)
+        .and_then(|()| file.sync_all())
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(path);
+        })
+}
+
+fn keep_unreadable_config(config_path: &Path, contents: &[u8]) {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    contents.hash(&mut hasher);
+    let backup = config_path.with_file_name(format!(
+        "project-config.json.unreadable-{:016x}",
+        hasher.finish()
+    ));
+    if backup.symlink_metadata().is_ok() {
+        return;
+    }
+    // A fresh exclusively created file, never a predictable path that a
+    // project folder from elsewhere could already hold as a symlink.
+    let result = config_path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("project config has no folder"))
+        .and_then(tempfile::NamedTempFile::new_in)
+        .and_then(|mut staged| {
+            staged.write_all(contents)?;
+            match staged.persist_noclobber(&backup) {
+                Ok(_) => Ok(()),
+                Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    Err(error.error)
+                }
+                // exFAT on macOS and some network volumes refuse the
+                // no-replace move. Claim the name with O_EXCL instead, which
+                // also never follows or replaces an existing entry.
+                Err(_) => write_new_file(&backup, contents),
+            }
+        });
+    match result {
+        Ok(()) => {
+            tracing::warn!(path = %backup.display(), "kept a copy of an unreadable project config")
+        }
+        Err(error) => {
+            tracing::warn!(path = %backup.display(), %error, "could not keep a copy of an unreadable project config");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn an_unreadable_config_is_kept_before_callers_fall_back_to_defaults() {
+        let project = tempfile::tempdir().unwrap();
+        let config_path = project.path().join("project-config.json");
+        let unreadable = r#"{"aspectRatio":"ultrawide","timeline":{"segments":[]}}"#;
+        std::fs::write(&config_path, unreadable).unwrap();
+        let backups = || {
+            let mut names: Vec<String> = std::fs::read_dir(project.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .filter(|name| name.starts_with("project-config.json.unreadable-"))
+                .collect();
+            names.sort();
+            names
+        };
+
+        for _ in 0..2 {
+            let error = ProjectConfiguration::load(project.path()).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        }
+        let kept = backups();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(
+            std::fs::read_to_string(project.path().join(&kept[0])).unwrap(),
+            unreadable
+        );
+
+        ProjectConfiguration::default()
+            .write(project.path())
+            .unwrap();
+        ProjectConfiguration::load(project.path()).unwrap();
+        assert_eq!(backups(), kept);
+        // exFAT on macOS adds `._` AppleDouble files next to each one.
+        let files = std::fs::read_dir(project.path())
+            .unwrap()
+            .filter(|entry| {
+                !entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("._")
+            })
+            .count();
+        assert_eq!(files, 2);
+    }
+
+    #[test]
+    fn a_config_that_is_not_utf8_is_kept_too() {
+        let project = tempfile::tempdir().unwrap();
+        let unreadable = b"{\"aspectRatio\":\"wide\xff\"}".to_vec();
+        std::fs::write(project.path().join("project-config.json"), &unreadable).unwrap();
+
+        let error = ProjectConfiguration::load(project.path()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        let kept: Vec<_> = std::fs::read_dir(project.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("project-config.json.unreadable-")
+            })
+            .collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(std::fs::read(&kept[0]).unwrap(), unreadable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_exclusive_fallback_never_replaces_or_follows_an_existing_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.txt");
+        std::fs::write(&victim, "keep me").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+
+        assert!(write_new_file(&link, b"copy").is_err());
+        assert!(write_new_file(&victim, b"copy").is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+
+        let fresh = dir.path().join("fresh");
+        write_new_file(&fresh, b"copy").unwrap();
+        assert_eq!(std::fs::read(&fresh).unwrap(), b"copy");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keeping_a_copy_never_writes_through_a_symlink_in_the_project() {
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("victim.txt");
+        std::fs::write(&victim, "keep me").unwrap();
+        for name in ["project-config.json.tmp", "project-config.tmp"] {
+            std::os::unix::fs::symlink(&victim, project.path().join(name)).unwrap();
+        }
+        std::fs::write(
+            project.path().join("project-config.json"),
+            "{\"aspectRatio\":1}",
+        )
+        .unwrap();
+
+        ProjectConfiguration::load(project.path()).unwrap_err();
+
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+    }
+
+    #[test]
+    fn new_projects_use_the_newer_auto_zoom_rules_and_saved_ones_keep_theirs() {
+        assert_eq!(
+            ProjectConfiguration::for_new_project().auto_zoom_version,
+            crate::auto_zoom::AUTO_ZOOM_VERSION
+        );
+        let saved: ProjectConfiguration = serde_json::from_str("{}").unwrap();
+        assert_eq!(saved.auto_zoom_version, 0);
+        let written = serde_json::to_value(&saved).unwrap();
+        assert!(written.get("autoZoomVersion").is_none());
+        let fresh = serde_json::to_value(ProjectConfiguration::for_new_project()).unwrap();
+        assert_eq!(fresh["autoZoomVersion"], 1);
+        let reloaded: ProjectConfiguration = serde_json::from_value(fresh).unwrap();
+        assert_eq!(reloaded.auto_zoom_version, 1);
+        let styled = saved.with_preset(ProjectConfiguration::for_new_project());
+        assert_eq!(styled.auto_zoom_version, 0);
+    }
+
+    #[test]
+    fn only_new_projects_wait_for_their_first_auto_zoom() {
+        assert!(ProjectConfiguration::for_new_project().auto_zoom_pending);
+        let saved: ProjectConfiguration = serde_json::from_str("{}").unwrap();
+        assert!(!saved.auto_zoom_pending);
+        assert!(
+            serde_json::to_value(&saved)
+                .unwrap()
+                .get("autoZoomPending")
+                .is_none()
+        );
+        let fresh = serde_json::to_value(ProjectConfiguration::for_new_project()).unwrap();
+        assert_eq!(fresh["autoZoomPending"], true);
+        assert!(
+            !saved
+                .with_preset(ProjectConfiguration::for_new_project())
+                .auto_zoom_pending
+        );
+    }
+
+    #[test]
+    fn interaction_anchors_are_on_for_new_projects_and_off_for_saved_ones() {
+        assert!(ProjectConfiguration::default().cursor.interaction_anchors);
+        assert!(ProjectConfiguration::default().cursor.hover_anchors);
+        assert!(ProjectConfiguration::for_new_project().cursor.hover_anchors);
+
+        let saved: ProjectConfiguration =
+            serde_json::from_str(r#"{"cursor":{"tension":470.0,"mass":3.0,"friction":70.0}}"#)
+                .unwrap();
+        assert!(!saved.cursor.interaction_anchors);
+        assert!(!saved.cursor.hover_anchors);
+
+        let round_trip: ProjectConfiguration =
+            serde_json::from_value(serde_json::to_value(ProjectConfiguration::default()).unwrap())
+                .unwrap();
+        assert!(round_trip.cursor.interaction_anchors);
+        assert!(round_trip.cursor.hover_anchors);
+
+        let turned_off: ProjectConfiguration =
+            serde_json::from_str(r#"{"cursor":{"interactionAnchors":true,"hoverAnchors":false}}"#)
+                .unwrap();
+        assert!(!turned_off.cursor.hover_anchors);
+    }
+
+    #[test]
+    fn filler_settings_are_off_for_old_projects_and_only_written_when_set() {
+        let legacy: CaptionSettings =
+            serde_json::from_str(r#"{"enabled":true,"uppercase":true}"#).unwrap();
+        assert!(!legacy.show_filler_words);
+        let written = serde_json::to_value(&legacy).unwrap();
+        assert!(written.get("showFillerWords").is_none());
+
+        assert!(written.get("fillerLanguage").is_none());
+        assert!(!legacy.hides_fillers());
+
+        let english = CaptionSettings {
+            filler_language: Some("en".into()),
+            ..legacy.clone()
+        };
+        assert!(english.hides_fillers());
+        let shown = CaptionSettings {
+            show_filler_words: true,
+            ..english
+        };
+        assert!(!shown.hides_fillers());
+        let written = serde_json::to_value(&shown).unwrap();
+        assert_eq!(written["showFillerWords"], Value::Bool(true));
+        assert_eq!(written["fillerLanguage"], Value::from("en"));
+        let restored: CaptionSettings = serde_json::from_value(written).unwrap();
+        assert!(restored.show_filler_words);
+        assert_eq!(restored.filler_language.as_deref(), Some("en"));
+        assert!(restored.uppercase);
+    }
+
+    #[test]
+    fn padding_mode_is_proportional_for_saved_projects_and_only_written_when_even() {
+        let saved: BackgroundConfiguration =
+            serde_json::from_str(r#"{"padding":10.0,"rounding":7.5}"#).unwrap();
+        assert_eq!(saved.padding_mode, PaddingMode::Proportional);
+        let written = serde_json::to_value(&saved).unwrap();
+        assert!(written.get("paddingMode").is_none());
+
+        let project = ProjectConfiguration::default();
+        let bytes = serde_json::to_vec(&project).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("paddingMode"));
+
+        let mut even = saved.clone();
+        even.padding_mode = PaddingMode::Even;
+        let written = serde_json::to_value(&even).unwrap();
+        assert_eq!(written["paddingMode"], "even");
+        let restored: BackgroundConfiguration = serde_json::from_value(written).unwrap();
+        assert_eq!(restored.padding_mode, PaddingMode::Even);
+    }
+
+    #[test]
+    fn screen_enhancement_is_never_saved_or_loaded_with_the_project() {
+        let config = ProjectConfiguration {
+            screen_enhancement: ScreenEnhancement::on(),
+            ..ProjectConfiguration::default()
+        };
+        let written = serde_json::to_value(&config).unwrap();
+        assert!(written.get("screenEnhancement").is_none());
+        assert_eq!(
+            written,
+            serde_json::to_value(ProjectConfiguration::default()).unwrap()
+        );
+
+        let mut saved = written;
+        saved["screenEnhancement"] = serde_json::json!({"enabled": true, "strength": 1.0});
+        let loaded: ProjectConfiguration = serde_json::from_value(saved).unwrap();
+        assert_eq!(loaded.screen_enhancement, ScreenEnhancement::default());
+        assert!(
+            !ProjectConfiguration::for_new_project()
+                .screen_enhancement
+                .enabled
+        );
+    }
+
+    #[test]
+    fn new_projects_pad_evenly_and_differ_from_default_only_in_framing() {
+        let fresh = ProjectConfiguration::for_new_project();
+        assert_eq!(fresh.background.padding_mode, PaddingMode::Even);
+        assert_eq!(fresh.background.padding, 0.0);
+        assert_eq!(fresh.background.rounding, 0.0);
+
+        let mut framing_reset = serde_json::to_value(&fresh).unwrap();
+        let default = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        for key in ["paddingMode", "shadow", "advancedShadow"] {
+            framing_reset["background"][key] = default["background"][key].clone();
+        }
+        framing_reset["background"]
+            .as_object_mut()
+            .unwrap()
+            .remove("paddingMode");
+        framing_reset["screenMovementSpring"] = default["screenMovementSpring"].clone();
+        framing_reset
+            .as_object_mut()
+            .unwrap()
+            .remove("autoZoomVersion");
+        framing_reset
+            .as_object_mut()
+            .unwrap()
+            .remove("autoZoomPending");
+        assert_eq!(framing_reset, default);
+    }
+
+    #[test]
+    fn zoom_spring_keeps_saved_values_and_only_writes_early_start_when_on() {
+        let saved: ProjectConfiguration = serde_json::from_str(
+            r#"{"screenMovementSpring":{"stiffness":200.0,"damping":40.0,"mass":2.25}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            saved.screen_movement_spring,
+            ScreenMovementSpring::default()
+        );
+        let written = serde_json::to_value(saved.screen_movement_spring).unwrap();
+        assert!(written.get("startZoomsEarly").is_none());
+
+        let early = ScreenMovementSpring {
+            start_zooms_early: true,
+            ..ScreenMovementSpring::NEW_PROJECT
+        };
+        let written = serde_json::to_value(early).unwrap();
+        assert_eq!(written["startZoomsEarly"], true);
+        assert_eq!(
+            serde_json::from_value::<ScreenMovementSpring>(written).unwrap(),
+            early
+        );
+        assert_eq!(
+            ProjectConfiguration::for_new_project().screen_movement_spring,
+            ScreenMovementSpring::NEW_PROJECT
+        );
+    }
 
     #[test]
     fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {
@@ -3320,6 +4297,7 @@ mod tests {
                     speed_audio_mode: None,
                     volume: None,
                     hide_cursor: None,
+                    voice_eq: None,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -3330,6 +4308,7 @@ mod tests {
                     speed_audio_mode: None,
                     volume: None,
                     hide_cursor: None,
+                    voice_eq: None,
                 },
             ],
             transitions,
@@ -3342,6 +4321,7 @@ mod tests {
             audio_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             camera3d_segments: Vec::new(),
         }
     }
@@ -4252,6 +5232,74 @@ mod tests {
     }
 
     #[test]
+    fn voice_eq_is_absent_until_set_and_survives_partial_or_out_of_range_values() {
+        let mut segment: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "recordingSegment": 0,
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 4.0
+        }))
+        .unwrap();
+        assert!(segment.voice_eq.is_none());
+        assert!(segment.active_voice_eq().is_none());
+        assert!(
+            serde_json::to_value(&segment)
+                .unwrap()
+                .get("voiceEq")
+                .is_none()
+        );
+
+        segment.voice_eq = Some(VoiceEq {
+            enabled: false,
+            ..VoiceEq::from_preset(VoiceEqPreset::Warm)
+        });
+        assert!(segment.active_voice_eq().is_none());
+        segment.voice_eq = Some(VoiceEq {
+            declick: VoiceDeclick::Light,
+            ..VoiceEq::from_preset(VoiceEqPreset::Warm)
+        });
+        let saved = serde_json::to_string(&segment).unwrap();
+        let restored: TimelineSegment = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.voice_eq, segment.voice_eq);
+        assert_eq!(restored.active_voice_eq(), segment.voice_eq);
+
+        let partial: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 4.0,
+            "voiceEq": { "declick": "strong", "enabled": false }
+        }))
+        .unwrap();
+        assert_eq!(
+            partial.voice_eq,
+            Some(VoiceEq {
+                enabled: false,
+                declick: VoiceDeclick::Strong,
+                ..VoiceEq::default()
+            })
+        );
+        assert!(partial.active_voice_eq().is_some());
+
+        let damaged: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 4.0,
+            "voiceEq": {
+                "highPassHz": 1e9,
+                "low": { "hz": -5.0, "gainDb": 400.0 },
+                "highMid": { "hz": 3500.0, "gainDb": -90.0, "q": 0.0 }
+            }
+        }))
+        .unwrap();
+        let active = damaged.active_voice_eq().unwrap();
+        assert_eq!(active.high_pass_hz, VoiceEq::HIGH_PASS_RANGE.1);
+        assert_eq!(active.low.hz, VoiceEqBandKind::Low.hz_range().0);
+        assert_eq!(active.low.gain_db, VoiceEq::GAIN_RANGE.1);
+        assert_eq!(active.high_mid.gain_db, VoiceEq::GAIN_RANGE.0);
+        assert_eq!(active.high_mid.q, VoiceEq::Q_RANGE.0);
+    }
+
+    #[test]
     fn timeline_segment_speed_audio_mode_is_backward_compatible() {
         let legacy: TimelineSegment = serde_json::from_value(serde_json::json!({
             "recordingSegment": 0,
@@ -4410,6 +5458,7 @@ mod tests {
             speed_audio_mode: None,
             volume: None,
             hide_cursor: hide_cursor.then_some(true),
+            voice_eq: None,
         }
     }
 
@@ -4803,6 +5852,57 @@ mod tests {
         assert_eq!(loaded.background.display_position, Some(XY::new(0.5, 0.4)));
     }
 
+    #[test]
+    fn manual_caption_position_loads_from_old_projects_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut value = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        value["captions"] = serde_json::json!({
+            "segments": [],
+            "settings": { "enabled": true, "position": "manual" },
+        });
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+        let old = ProjectConfiguration::load(dir.path()).unwrap();
+        let settings = &old.captions.as_ref().unwrap().settings;
+        assert_eq!(settings.position, "manual");
+        assert_eq!(settings.manual_position, None);
+
+        value["captions"]["settings"]["manualPosition"] = serde_json::json!({ "x": 0.3, "y": 0.2 });
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+        let tauri = ProjectConfiguration::load(dir.path()).unwrap();
+        assert_eq!(
+            tauri.captions.as_ref().unwrap().settings.manual_position,
+            Some(XY::new(0.3, 0.2))
+        );
+
+        let mut config = tauri;
+        config.captions.as_mut().unwrap().settings.manual_position =
+            Some(XY::new(0.423_7, 0.123_4));
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            saved["captions"]["settings"]["manualPosition"],
+            serde_json::json!({ "x": 0.423_7_f32, "y": 0.123_4_f32 })
+        );
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
+        let reopened = ProjectConfiguration::load(dir.path()).unwrap();
+        assert_eq!(
+            reopened.captions.as_ref().unwrap().settings.manual_position,
+            Some(XY::new(0.423_7, 0.123_4))
+        );
+    }
+
     fn write_config_with_text_segment(
         project_path: &std::path::Path,
         font_size: f32,
@@ -4854,6 +5954,7 @@ mod tests {
                 audio_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             }),
             ..Default::default()
@@ -4963,6 +6064,7 @@ mod tests {
                 audio_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             }),
             ..Default::default()
@@ -5285,6 +6387,124 @@ mod overlay_order_tests {
             project.resolved_overlay_order(&[text, new_image, image]),
             [new_image, image, text]
         );
+    }
+
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    enum ShippedKind {
+        Mask,
+        Image,
+        Text,
+    }
+
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    struct ShippedTrack {
+        kind: ShippedKind,
+        track: u32,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ShippedProject {
+        #[serde(default)]
+        overlay_order: Vec<ShippedTrack>,
+    }
+
+    #[test]
+    fn shape_layers_stay_out_of_the_field_shipped_builds_parse() {
+        let text = layer(OverlayTrackKind::Text, 0);
+        let shape = layer(OverlayTrackKind::Shape, 0);
+        let image = layer(OverlayTrackKind::Image, 0);
+        let mut project = ProjectConfiguration::default();
+        project.set_overlay_order(vec![shape, text, image]);
+        assert_eq!(project.overlay_order, [text, image]);
+        assert_eq!(project.overlay_order(), [shape, text, image]);
+
+        let json = serde_json::to_string(&project).unwrap();
+        let shipped: ShippedProject = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            shipped.overlay_order,
+            [
+                ShippedTrack {
+                    kind: ShippedKind::Text,
+                    track: 0
+                },
+                ShippedTrack {
+                    kind: ShippedKind::Image,
+                    track: 0
+                }
+            ]
+        );
+
+        let restored: ProjectConfiguration = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            restored.resolved_overlay_order(&[text, shape, image]),
+            [shape, text, image]
+        );
+    }
+
+    #[test]
+    fn an_order_without_shapes_clears_the_shape_aware_copy() {
+        let text = layer(OverlayTrackKind::Text, 0);
+        let shape = layer(OverlayTrackKind::Shape, 0);
+        let image = layer(OverlayTrackKind::Image, 0);
+        let mut project = ProjectConfiguration::default();
+        project.set_overlay_order(vec![shape, text]);
+        project.set_overlay_order(vec![image, text]);
+        assert!(project.overlay_order_with_shapes.is_empty());
+        assert_eq!(project.overlay_order(), [image, text]);
+        let json = serde_json::to_value(&project).unwrap();
+        assert!(json.get("overlayOrderWithShapes").is_none());
+        project.set_overlay_order(Vec::new());
+        assert!(!project.has_overlay_order());
+    }
+
+    #[test]
+    fn shape_tracks_default_between_text_and_images() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [],
+                "zoomSegments": [],
+                "textSegments": [{"start": 0.0, "end": 1.0}],
+                "maskSegments": [{
+                    "start": 0.0, "end": 1.0, "maskType": "sensitive",
+                    "center": {"x": 0.5, "y": 0.5}, "size": {"x": 0.2, "y": 0.2}
+                }],
+                "shapeSegments": [{"start": 0.0, "end": 1.0}, {"start": 0.0, "end": 1.0, "track": 1}]
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            project.overlay_tracks(),
+            [
+                layer(OverlayTrackKind::Text, 0),
+                layer(OverlayTrackKind::Shape, 1),
+                layer(OverlayTrackKind::Shape, 0),
+                layer(OverlayTrackKind::Mask, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn projects_without_shapes_serialize_without_shape_fields() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {"segments": [], "zoomSegments": []}
+        }))
+        .unwrap();
+        assert!(project.timeline.as_ref().unwrap().shape_segments.is_empty());
+        let json = serde_json::to_value(&project).unwrap();
+        assert!(json["timeline"].get("shapeSegments").is_none());
+        assert!(json.get("overlayOrderWithShapes").is_none());
+    }
+
+    #[test]
+    fn preset_application_keeps_the_shape_aware_order() {
+        let shape = layer(OverlayTrackKind::Shape, 0);
+        let text = layer(OverlayTrackKind::Text, 0);
+        let mut current = ProjectConfiguration::default();
+        current.set_overlay_order(vec![text, shape]);
+        let applied = current.with_preset(ProjectConfiguration::default());
+        assert_eq!(applied.overlay_order(), [text, shape]);
     }
 }
 

@@ -34,6 +34,7 @@ pub fn selection_label(noun: &str, count: usize) -> String {
         "caption" => tr::ui::selection::caption(count),
         "audio" => tr::ui::selection::audio(count),
         "mask" => tr::ui::selection::mask(count),
+        "shape" => tr::ui::selection::shape(count),
         "keyboard" => tr::ui::selection::keyboard(count),
         "3D" => tr::ui::selection::three_d(count),
         "scene" => tr::ui::selection::scene(count),

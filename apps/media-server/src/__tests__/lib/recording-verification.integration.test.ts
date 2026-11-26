@@ -30,6 +30,7 @@ import {
 	inspectRecordingSources,
 	isRetryableRecordingVerificationError,
 	type PreverifiedVideoRun,
+	referenceGapsExplaining,
 	verifyRecording,
 	verifyRemoteRecording,
 	verifyRemoteRecordingBytes,
@@ -533,7 +534,7 @@ describe("encoded recording preservation", () => {
 						]),
 					).rejects.toMatchObject({ retryable: true });
 					expect(performance.now() - started).toBeLessThan(2000);
-					expect(await decoderPids(path)).toEqual([]);
+					expect(await decodersStopped(path)).toEqual([]);
 				} finally {
 					if (timer) clearTimeout(timer);
 					controller.abort();
@@ -673,7 +674,7 @@ describe("encoded recording preservation", () => {
 				timeoutMs: 1,
 			}),
 		).rejects.toThrow();
-		expect(await decoderPids(silent)).toEqual([]);
+		expect(await decodersStopped(silent)).toEqual([]);
 	});
 
 	test.each([true, false])(
@@ -2056,7 +2057,22 @@ describe("source-preserving recording mux", () => {
 	});
 });
 
-async function decoderPids(input: string): Promise<number[]> {
+// A stopped decoder can still be exiting for a moment on a slow machine. A
+// decoder that was never stopped is still there after this wait.
+async function decodersStopped(source: string): Promise<number[]> {
+	let pids = await decoderPids(source);
+	for (let attempt = 0; attempt < 40 && pids.length; attempt++) {
+		await Bun.sleep(50);
+		pids = await decoderPids(source);
+	}
+	return pids;
+}
+
+async function decoderPids(source: string): Promise<number[]> {
+	// FFmpeg reads a remote input through the relay, which keeps its file name.
+	const input = /^https?:/.test(source)
+		? (new URL(source).pathname.split("/").pop() ?? source)
+		: source;
 	if (process.platform === "linux") {
 		const processes = (await readdir("/proc")).filter((name) =>
 			/^\d+$/.test(name),
@@ -2406,7 +2422,7 @@ describe("recording verification lifetime", () => {
 						: "Fixture pipe read failed",
 				);
 				expect(modified).toBe(true);
-				expect(await decoderPids(silent)).toEqual([]);
+				expect(await decodersStopped(silent)).toEqual([]);
 			} finally {
 				iterator.mockRestore();
 			}
@@ -2435,7 +2451,7 @@ describe("recording verification lifetime", () => {
 				).rejects.toThrow("cancelled");
 				expect(streams.length).toBe(2);
 				expect(streams.every((stream) => stream.destroyed)).toBe(true);
-				expect(await decoderPids(silent)).toEqual([]);
+				expect(await decodersStopped(silent)).toEqual([]);
 				const replacement = openSync(silent, "r");
 				try {
 					Bun.gc(true);
@@ -2478,7 +2494,7 @@ describe("recording verification lifetime", () => {
 					inspectRecordingSources(silent, silent, { timeoutMs: 2_000 }),
 				).rejects.toThrow("timed out");
 				expect(modified).toBe(true);
-				expect(await decoderPids(silent)).toEqual([]);
+				expect(await decodersStopped(silent)).toEqual([]);
 			} finally {
 				iterator.mockRestore();
 			}
@@ -4141,4 +4157,145 @@ describe("remote recording object identity", () => {
 			}
 		},
 	);
+});
+
+describe("sources missing a reference frame", () => {
+	async function recordingMissingPacket(name: string, dropped?: number) {
+		const fragments = await mkdtemp(join(directory, `${name}-`));
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-f",
+			"lavfi",
+			"-i",
+			"testsrc2=size=320x180:rate=30",
+			"-frames:v",
+			"120",
+			"-c:v",
+			"libx264",
+			"-profile:v",
+			"baseline",
+			"-preset",
+			"ultrafast",
+			"-g",
+			"30",
+			"-keyint_min",
+			"30",
+			"-sc_threshold",
+			"0",
+			"-pix_fmt",
+			"yuv420p",
+			...(dropped === undefined
+				? []
+				: ["-bsf:v", `noise=drop=eq(n\\,${dropped})`]),
+			"-f",
+			"dash",
+			"-seg_duration",
+			"1",
+			"-init_seg_name",
+			"init.mp4",
+			"-media_seg_name",
+			"fragment-$Number%05d$.m4s",
+			join(fragments, "manifest.mpd"),
+		]);
+		const init = join(fragments, "init.mp4");
+		const segments = (await readdir(fragments))
+			.filter((file) => /^fragment-\d+\.m4s$/.test(file))
+			.sort()
+			.map((file) => join(fragments, file));
+		const combined = join(directory, `${name}-combined.mp4`);
+		await writeFile(
+			combined,
+			Buffer.concat(
+				await Promise.all([init, ...segments].map((path) => readFile(path))),
+			),
+		);
+		const output = join(directory, `${name}-output.mp4`);
+		await muxMediaTracksToMp4(combined, null, output);
+		return { init, segments, combined, output };
+	}
+
+	const previous = process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+	afterAll(() => {
+		if (previous === undefined)
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		else process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS = previous;
+	});
+
+	// Packet 16 carries frame_num 0 after the counter wraps, the loss that makes
+	// the decoder withhold the frames behind it instead of concealing them.
+	test("accepts frames withheld behind a lost reference frame, in one pass or in chunks", async () => {
+		const recording = await recordingMissingPacket("reference-gap", 16);
+		expect(recording.segments.length).toBe(4);
+		const warn = spyOn(console, "warn");
+		try {
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+			const single = await verifyRemuxedRecording(
+				recording.combined,
+				null,
+				recording.output,
+				{ requireAudio: false },
+			);
+			process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS = "2";
+			const chunked = await verifyRemuxedRecording(
+				recording.combined,
+				null,
+				recording.output,
+				{ requireAudio: false },
+				{ init: recording.init, segments: recording.segments },
+			);
+			expect(single.sourcePreserved).toBe(true);
+			expect(single.video.frameCount).toBeLessThan(119);
+			expect(single.video.frameCount).toBeGreaterThan(119 - 16);
+			expect(chunked.video.frameCount).toBe(single.video.frameCount);
+			const accepted = warn.mock.calls
+				.map((call) => String(call[0]))
+				.filter((line) => line.includes("recording_reference_gaps_accepted"))
+				.map((line) => JSON.parse(line));
+			expect(accepted).toHaveLength(2);
+			expect(accepted[0]).toMatchObject({
+				packets: 119,
+				missingFrames: 119 - single.video.frameCount,
+				gaps: 1,
+				frameNumCycle: 16,
+			});
+		} finally {
+			warn.mockRestore();
+			delete process.env.MEDIA_SERVER_VERIFY_DECODE_CHUNKS;
+		}
+	});
+
+	test("explains a shortfall only with gaps that can account for it", async () => {
+		const clean = await recordingMissingPacket("reference-clean");
+		const gap = await recordingMissingPacket("reference-gap-bound", 16);
+		const signal = new AbortController().signal;
+		expect(await referenceGapsExplaining(clean.combined, 1, signal)).toBeNull();
+		expect(await referenceGapsExplaining(gap.combined, 16, signal)).toEqual({
+			gaps: 1,
+			frameNumCycle: 16,
+		});
+		expect(await referenceGapsExplaining(gap.combined, 17, signal)).toBeNull();
+	});
+
+	test("needs no gap check when the decoder conceals the lost frame", async () => {
+		const recording = await recordingMissingPacket("reference-concealed", 20);
+		const warn = spyOn(console, "warn");
+		try {
+			const verified = await verifyRemuxedRecording(
+				recording.combined,
+				null,
+				recording.output,
+				{ requireAudio: false },
+			);
+			expect(verified.video.frameCount).toBe(119);
+			expect(
+				warn.mock.calls.some((call) =>
+					String(call[0]).includes("recording_reference_gaps_accepted"),
+				),
+			).toBe(false);
+		} finally {
+			warn.mockRestore();
+		}
+	});
 });

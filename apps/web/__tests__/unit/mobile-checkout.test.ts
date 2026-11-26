@@ -1,3 +1,4 @@
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as startGuestCheckout } from "@/app/api/settings/billing/guest-checkout/route";
 import { GET } from "@/app/mobile/checkout/complete/route";
@@ -35,11 +36,11 @@ vi.mock("@/lib/server-analytics", () => ({
 }));
 
 const makeGuestCheckoutRequest = (body: Record<string, unknown>) =>
-	new Request("https://cap.so/api/settings/billing/guest-checkout", {
+	new NextRequest("https://cap.so/api/settings/billing/guest-checkout", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
-	}) as unknown as import("next/server").NextRequest;
+	});
 
 describe("checkout redirects", () => {
 	beforeEach(() => {

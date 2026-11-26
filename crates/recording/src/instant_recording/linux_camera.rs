@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 const CAMERA_ATTACH_TIMEOUT: Duration = Duration::from_millis(1500);
 const CAMERA_STALE_AFTER: Duration = Duration::from_secs(1);
 const SCREEN_CHANNEL_CAPACITY: usize = 4;
+const STILL_RECHECK: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Coordinates refer to the capture frame before the encoder applies output resizing.
@@ -227,15 +228,65 @@ impl std::fmt::Debug for LinuxCameraPixels {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinuxCameraSampleFormat {
+    Bgra,
+    Yuyv422,
+}
+
 #[derive(Debug, Clone)]
 pub struct LinuxProcessedCameraFrame {
-    pub bgra: LinuxCameraPixels,
+    pub pixels: LinuxCameraPixels,
+    pub format: LinuxCameraSampleFormat,
     pub dimensions: (u32, u32),
     pub stride: usize,
     pub timestamp: Timestamp,
     pub generation: u64,
     pub processing: LinuxCameraProcessing,
     pub mask: Option<LinuxCameraMaskReceipt>,
+}
+
+impl LinuxProcessedCameraFrame {
+    /// Tight copy of an even-width `YUYV422` camera plane. Blur stays on the
+    /// BGRA path: a blurred sample is already filtered, so it cannot be a raw
+    /// YUYV plane.
+    pub fn from_yuyv422(
+        frame: &ffmpeg::frame::Video,
+        timestamp: Timestamp,
+        generation: u64,
+        processing: LinuxCameraProcessing,
+    ) -> Option<Self> {
+        if processing.blur != LinuxCameraBlur::Off || frame.format() != Pixel::YUYV422 {
+            return None;
+        }
+        let width = frame.width();
+        let height = frame.height();
+        if width == 0 || height == 0 || !width.is_multiple_of(2) {
+            return None;
+        }
+        let row = (width as usize).checked_mul(2)?;
+        let source_stride = frame.stride(0);
+        if source_stride < row {
+            return None;
+        }
+        let source = frame.data(0);
+        let mut packed = vec![0u8; row.checked_mul(height as usize)?];
+        for y in 0..height as usize {
+            let start = y.checked_mul(source_stride)?;
+            let src = source.get(start..start + row)?;
+            packed[y * row..y * row + row].copy_from_slice(src);
+        }
+        Some(Self {
+            pixels: LinuxCameraPixels::new(packed),
+            format: LinuxCameraSampleFormat::Yuyv422,
+            dimensions: (width, height),
+            stride: row,
+            timestamp,
+            generation,
+            processing,
+            mask: None,
+        })
+    }
 }
 
 pub const LINUX_CAMERA_MAX_MASK_AGE: Duration = Duration::from_millis(750);
@@ -287,6 +338,36 @@ impl Drop for LinuxCameraPublisher {
 pub struct LinuxProcessedCameraSource {
     reader: ProcessedCameraReader,
     camera_feed: Arc<CameraFeedLock>,
+}
+
+/// A still picture shown in place of a camera: tightly packed RGBA rows.
+#[derive(Debug, Clone)]
+pub struct LinuxCameraPicture {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Arc<[u8]>,
+}
+
+impl LinuxCameraPicture {
+    fn to_frame(&self) -> anyhow::Result<FFmpegVideoFrame> {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        anyhow::ensure!(
+            width > 0 && height > 0 && self.rgba.len() == width * height * 4,
+            "Camera picture has invalid dimensions"
+        );
+        let mut frame = ffmpeg::frame::Video::new(Pixel::RGBA, self.width, self.height);
+        let stride = frame.stride(0);
+        let row = width * 4;
+        let data = frame.data_mut(0);
+        for (y, source) in self.rgba.chunks_exact(row).enumerate() {
+            data[y * stride..y * stride + row].copy_from_slice(source);
+        }
+        Ok(FFmpegVideoFrame {
+            inner: frame,
+            timestamp: Timestamp::Instant(Instant::now()),
+        })
+    }
 }
 
 struct ProcessedCameraReader {
@@ -438,34 +519,68 @@ fn validate_processed_frame(
         _ => anyhow::bail!("Processed camera blur was not applied as requested"),
     }
     let (width, height) = frame.dimensions;
+    let bytes_per_pixel = match frame.format {
+        LinuxCameraSampleFormat::Bgra => 4usize,
+        LinuxCameraSampleFormat::Yuyv422 => {
+            anyhow::ensure!(
+                expected.blur == LinuxCameraBlur::Off,
+                "YUYV camera samples cannot carry background blur"
+            );
+            anyhow::ensure!(width.is_multiple_of(2), "YUYV camera width must be even");
+            2
+        }
+    };
     let row = usize::try_from(width)
         .ok()
-        .and_then(|width| width.checked_mul(4))
+        .and_then(|width| width.checked_mul(bytes_per_pixel))
         .context("Processed camera row overflow")?;
     let size = frame
         .stride
         .checked_mul(height as usize)
         .context("Processed camera size overflow")?;
     anyhow::ensure!(
-        width > 0 && height > 0 && frame.stride >= row && frame.bgra.len() == size,
-        "Processed camera has invalid BGRA dimensions or stride"
+        width > 0 && height > 0 && frame.stride >= row && frame.pixels.len() == size,
+        "Processed camera has invalid dimensions or stride"
     );
     Ok(())
 }
 
 fn processed_to_ffmpeg(frame: &LinuxProcessedCameraFrame) -> anyhow::Result<FFmpegVideoFrame> {
     let (width, height) = frame.dimensions;
-    let mut inner = ffmpeg::frame::Video::new(Pixel::BGRA, width, height);
+    // Blur-off YUYV is mirrored in the packed plane, then scaled once to the
+    // overlay. That is not the previous two-stage bilinear (full BGRA, then
+    // BGRA to RGBA): chroma and edge pixels can differ.
+    let (pixel, bytes_per_pixel, mirror) = match frame.format {
+        LinuxCameraSampleFormat::Bgra => (Pixel::BGRA, 4usize, false),
+        LinuxCameraSampleFormat::Yuyv422 => (Pixel::YUYV422, 2usize, frame.processing.mirrored),
+    };
+    let mut inner = ffmpeg::frame::Video::new(pixel, width, height);
     let stride = inner.stride(0);
-    let row = width as usize * 4;
+    let row = width as usize * bytes_per_pixel;
     for y in 0..height as usize {
-        inner.data_mut(0)[y * stride..y * stride + row]
-            .copy_from_slice(&frame.bgra[y * frame.stride..y * frame.stride + row]);
+        let src = &frame.pixels[y * frame.stride..y * frame.stride + row];
+        let dst = &mut inner.data_mut(0)[y * stride..y * stride + row];
+        if mirror {
+            mirror_yuyv_row(src, dst);
+        } else {
+            dst.copy_from_slice(src);
+        }
     }
     Ok(FFmpegVideoFrame {
         inner,
         timestamp: frame.timestamp,
     })
+}
+
+fn mirror_yuyv_row(src: &[u8], dst: &mut [u8]) {
+    let pairs = src.len() / 4;
+    for (index, dst_pair) in dst.chunks_exact_mut(4).enumerate() {
+        let src_pair = &src[(pairs - 1 - index) * 4..][..4];
+        dst_pair[0] = src_pair[2];
+        dst_pair[1] = src_pair[1];
+        dst_pair[2] = src_pair[0];
+        dst_pair[3] = src_pair[3];
+    }
 }
 
 pub(super) struct Config {
@@ -474,9 +589,9 @@ pub(super) struct Config {
 }
 
 pub(super) struct PreparedCamera {
-    camera_feed: Arc<CameraFeedLock>,
+    camera_feed: Option<Arc<CameraFeedLock>>,
     frames: PreparedCameraFrames,
-    mjpeg_overlay: camera::MjpegOverlayHold,
+    mjpeg_overlay: Option<camera::MjpegOverlayHold>,
 }
 
 /// Portable blur downscales the camera to this before the matte. Scaled IDCT
@@ -549,9 +664,35 @@ impl PreparedCamera {
         let (frames, timestamps) = prepare_camera_frames(receiver, info, presentation).await?;
         Ok((
             Self {
-                camera_feed,
+                camera_feed: Some(camera_feed),
                 frames,
-                mjpeg_overlay,
+                mjpeg_overlay: Some(mjpeg_overlay),
+            },
+            timestamps,
+        ))
+    }
+
+    /// A picture is shown as the bubble shows it: never mirrored or blurred.
+    pub(super) async fn prepare_picture(
+        picture: LinuxCameraPicture,
+        presentation: Option<LinuxCameraPresentation>,
+        reference_size: Option<(u32, u32)>,
+        info: VideoInfo,
+    ) -> anyhow::Result<(Self, cap_timestamp::Timestamps)> {
+        let mut presentation = presentation
+            .unwrap_or_else(|| LinuxCameraPresentation::default_for(info.width, info.height));
+        if let Some(reference) = reference_size {
+            presentation = presentation.resolve(reference, (info.width, info.height))?;
+        }
+        presentation.mirrored = false;
+        presentation.effect = LinuxCameraEffect::None;
+        let receiver = CameraReceiver::Still(picture.to_frame()?);
+        let (frames, timestamps) = prepare_camera_frames(receiver, info, presentation).await?;
+        Ok((
+            Self {
+                camera_feed: None,
+                frames,
+                mjpeg_overlay: None,
             },
             timestamps,
         ))
@@ -581,9 +722,9 @@ async fn prepare_camera_frames(
 pub(super) struct CameraCompositeSource {
     inner: screen_capture::VideoSource,
     info: VideoInfo,
-    _camera_feed: Arc<CameraFeedLock>,
+    _camera_feed: Option<Arc<CameraFeedLock>>,
     _compositor_stop: tokio_util::sync::DropGuard,
-    _mjpeg_overlay: camera::MjpegOverlayHold,
+    _mjpeg_overlay: Option<camera::MjpegOverlayHold>,
 }
 
 impl VideoSource for CameraCompositeSource {
@@ -608,7 +749,9 @@ impl VideoSource for CameraCompositeSource {
             first: first_camera,
             presentation,
         } = frames;
-        validate_camera_frame(&first_camera, Instant::now())?;
+        if !camera_rx.is_still() {
+            validate_camera_frame(&first_camera, Instant::now())?;
+        }
         let (screen_tx, screen_rx) = mpsc::channel(SCREEN_CHANNEL_CAPACITY);
         let inner = screen_capture::VideoSource::setup(config.screen_capture, screen_tx, ctx)
             .await
@@ -653,11 +796,21 @@ impl VideoSource for CameraCompositeSource {
 enum CameraReceiver {
     Raw(flume::Receiver<FFmpegVideoFrame>),
     Processed(ProcessedCameraReader),
+    /// A picture never changes and never goes stale.
+    Still(FFmpegVideoFrame),
 }
 
 impl CameraReceiver {
+    fn is_still(&self) -> bool {
+        matches!(self, Self::Still(_))
+    }
+
     async fn first(&mut self, stop: &CancellationToken) -> anyhow::Result<FFmpegVideoFrame> {
         match self {
+            Self::Still(frame) => Ok(FFmpegVideoFrame {
+                inner: frame.inner.clone(),
+                timestamp: frame.timestamp,
+            }),
             Self::Raw(rx) => first_camera_frame(rx, stop, CAMERA_ATTACH_TIMEOUT).await,
             Self::Processed(source) => {
                 tokio::select! {
@@ -678,6 +831,7 @@ impl CameraReceiver {
                 .recv_async()
                 .await
                 .context("Required camera disconnected"),
+            Self::Still(_) => std::future::pending().await,
             Self::Processed(source) => loop {
                 source
                     .state
@@ -700,6 +854,7 @@ impl CameraReceiver {
                     anyhow::bail!("Required camera disconnected")
                 }
             },
+            Self::Still(_) => Ok(None),
             Self::Processed(source) => {
                 if source
                     .state
@@ -754,6 +909,7 @@ fn compositor_thread(
 ) -> anyhow::Result<()> {
     let result = futures::executor::block_on(async {
         let mut screen_rx = screen_rx.fuse();
+        let still = camera_rx.is_still();
         let mut latest_camera = first_camera;
         let mut camera_generation = 0u64;
         let mut freshness_anchor = camera_freshness_anchor(&latest_camera, Instant::now());
@@ -768,7 +924,11 @@ fn compositor_thread(
                 let stop = stop_token.cancelled().fuse();
                 let camera = camera_rx.recv().fuse();
                 let screen = screen_rx.next().fuse();
-                let remaining = CAMERA_STALE_AFTER.saturating_sub(freshness_anchor.elapsed());
+                let remaining = if still {
+                    STILL_RECHECK
+                } else {
+                    CAMERA_STALE_AFTER.saturating_sub(freshness_anchor.elapsed())
+                };
                 let stale = tokio::time::sleep(remaining).fuse();
                 futures::pin_mut!(stop, camera, screen, stale);
                 futures::select_biased! {
@@ -780,6 +940,7 @@ fn compositor_thread(
             };
             match event {
                 Event::Stop | Event::Screen(None) => break,
+                Event::Stale if still => {}
                 Event::Stale => anyhow::bail!("Required camera stopped delivering fresh frames"),
                 Event::Camera(frame) => {
                     latest_camera = frame?;
@@ -793,7 +954,9 @@ fn compositor_thread(
                         camera_generation += 1;
                         freshness_anchor = camera_freshness_anchor(&latest_camera, Instant::now());
                     }
-                    validate_camera_frame(&latest_camera, Instant::now())?;
+                    if !still {
+                        validate_camera_frame(&latest_camera, Instant::now())?;
+                    }
                     let output = compositor
                         .compose(screen, &latest_camera, camera_generation)
                         .context("Required camera composition failed")?;
@@ -1313,6 +1476,10 @@ impl RgbaConverter {
         {
             return Err(anyhow!("invalid video dimensions for compositor"));
         }
+        let mut flags = ffmpeg::software::scaling::Flags::BILINEAR;
+        if source_format == Pixel::YUYV422 && destination_format == Pixel::RGBA {
+            flags |= ffmpeg::software::scaling::Flags::FULL_CHR_H_INT;
+        }
         let context = ffmpeg::software::scaling::Context::get(
             source_format,
             source_width,
@@ -1320,7 +1487,7 @@ impl RgbaConverter {
             destination_format,
             destination_width,
             destination_height,
-            ffmpeg::software::scaling::Flags::BILINEAR,
+            flags,
         )?;
         Ok(Self {
             context,
@@ -2257,10 +2424,11 @@ mod tests {
 
     fn processed_frame(now: Instant, generation: u64) -> LinuxProcessedCameraFrame {
         LinuxProcessedCameraFrame {
-            bgra: LinuxCameraPixels::new([
+            pixels: LinuxCameraPixels::new([
                 10, 20, 30, 255, 40, 50, 60, 255, 99, 99, 99, 99, 70, 80, 90, 255, 100, 110, 120,
                 255, 99, 99, 99, 99u8,
             ]),
+            format: LinuxCameraSampleFormat::Bgra,
             dimensions: (2, 2),
             stride: 12,
             timestamp: Timestamp::Instant(now),
@@ -2281,10 +2449,10 @@ mod tests {
         validate_processed_frame(&frame, frame.processing, 7, now, now).unwrap();
         let converted = processed_to_ffmpeg(&frame).unwrap();
         assert_eq!(converted.inner.format(), Pixel::BGRA);
-        assert_eq!(&converted.inner.data(0)[..8], &frame.bgra[..8]);
+        assert_eq!(&converted.inner.data(0)[..8], &frame.pixels[..8]);
         assert_eq!(
             &converted.inner.data(0)[converted.inner.stride(0)..][..8],
-            &frame.bgra[12..20]
+            &frame.pixels[12..20]
         );
         assert!(matches!(converted.timestamp, Timestamp::Instant(timestamp) if timestamp == now));
         let mut compositor = Compositor::new(
@@ -2342,7 +2510,7 @@ mod tests {
         invalid.stride = 7;
         assert!(validate_processed_frame(&invalid, frame.processing, 7, now, now).is_err());
         invalid = frame.clone();
-        invalid.bgra = LinuxCameraPixels::new([0u8; 23]);
+        invalid.pixels = LinuxCameraPixels::new([0u8; 23]);
         assert!(validate_processed_frame(&invalid, frame.processing, 7, now, now).is_err());
         invalid = frame.clone();
         invalid.timestamp = Timestamp::SystemTime(std::time::SystemTime::now());
@@ -2914,6 +3082,58 @@ mod tests {
         assert!(worker.output.next().await.is_none());
     }
 
+    #[tokio::test]
+    async fn a_picture_is_drawn_on_every_frame_and_never_goes_stale() {
+        ffmpeg::init().unwrap();
+        let picture = LinuxCameraPicture {
+            width: 2,
+            height: 2,
+            rgba: [200u8, 10, 20, 255].repeat(4).into(),
+        };
+        let mut first = picture.to_frame().unwrap();
+        first.timestamp =
+            Timestamp::Instant(Instant::now().checked_sub(Duration::from_secs(5)).unwrap());
+        let (mut screen_tx, screen_rx) = mpsc::channel(1);
+        let (video_tx, mut output) = mpsc::channel(1);
+        let (health_tx, _health_rx) = tokio::sync::mpsc::channel(4);
+        let stop = CancellationToken::new();
+        let thread_stop = stop.clone();
+        let runtime = tokio::runtime::Handle::current();
+        let still = CameraReceiver::Still(picture.to_frame().unwrap());
+        let worker = std::thread::spawn(move || {
+            let _runtime = runtime.enter();
+            compositor_thread(
+                screen_rx,
+                still,
+                video_tx,
+                thread_stop,
+                health_tx,
+                Compositor::new(
+                    VideoInfo::from_raw_ffmpeg(Pixel::RGBA, 4, 4, 30),
+                    presentation(2, 2),
+                ),
+                first,
+            )
+        });
+        for pts in [1, 2] {
+            if pts == 2 {
+                tokio::time::sleep(CAMERA_STALE_AFTER + Duration::from_millis(200)).await;
+            }
+            let mut screen = camera_frame();
+            screen.inner.data_mut(0).fill(0);
+            screen.inner.set_pts(Some(pts));
+            screen_tx.send(screen).await.unwrap();
+            let composed = tokio::time::timeout(Duration::from_secs(2), output.next())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(&composed.inner.data(0)[..4], &[200, 10, 20, 255]);
+        }
+        stop.cancel();
+        drop(screen_tx);
+        assert!(worker.join().unwrap().is_ok());
+    }
+
     #[test]
     fn camera_freshness_expires_after_one_second() {
         let now = Instant::now();
@@ -3050,11 +3270,12 @@ mod tests {
         for pixel in bytes.chunks_exact_mut(4) {
             pixel.copy_from_slice(&[11, 22, 33, 255]);
         }
-        let bgra = LinuxCameraPixels::new(bytes);
-        let shared_pixels = bgra.clone();
+        let pixels = LinuxCameraPixels::new(bytes);
+        let shared_pixels = pixels.clone();
         let source = shared_pixels.as_ptr();
         let processed = LinuxProcessedCameraFrame {
-            bgra,
+            pixels,
+            format: LinuxCameraSampleFormat::Bgra,
             dimensions: (size, size),
             stride: row,
             timestamp: Timestamp::Instant(now),
@@ -3066,7 +3287,7 @@ mod tests {
             mask: None,
         };
         let converted = processed_to_ffmpeg(&processed).expect("processed frame");
-        assert_eq!(processed.bgra.as_ptr(), source);
+        assert_eq!(processed.pixels.as_ptr(), source);
         assert_eq!(shared_pixels.as_ptr(), source);
         assert_ne!(converted.inner.data(0).as_ptr(), source);
         let camera_pixels = converted.inner.data(0).as_ptr();
@@ -3160,7 +3381,7 @@ mod tests {
         assert_eq!(camera_frame.inner.data(0).as_ptr(), camera_pixels);
         assert_eq!(shared_frame.data(0).as_ptr(), camera_pixels);
         assert_eq!(plane_buffer_refcount(&camera_frame.inner), 2);
-        assert_eq!(processed.bgra.as_ptr(), source);
+        assert_eq!(processed.pixels.as_ptr(), source);
         assert_eq!(shared_pixels.as_ptr(), source);
         assert_eq!(&shared_pixels[..4], &[11, 22, 33, 255]);
     }
@@ -4729,5 +4950,561 @@ mod tests {
                 }),
             );
         }
+    }
+
+    fn solid_yuyv(width: u32, height: u32, y: u8, u: u8, v: u8) -> ffmpeg::frame::Video {
+        let mut frame = ffmpeg::frame::Video::new(Pixel::YUYV422, width, height);
+        for pixel in frame.data_mut(0).chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[y, u, y, v]);
+        }
+        frame
+    }
+
+    fn split_yuyv(width: u32, height: u32) -> ffmpeg::frame::Video {
+        let mut frame = ffmpeg::frame::Video::new(Pixel::YUYV422, width, height);
+        let stride = frame.stride(0);
+        let row = width as usize * 2;
+        let half_pairs = width as usize / 4;
+        let data = frame.data_mut(0);
+        for y in 0..height as usize {
+            for (pair, pixel) in data[y * stride..y * stride + row]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let luma = if pair < half_pairs { 16 } else { 235 };
+                pixel.copy_from_slice(&[luma, 128, luma, 128]);
+            }
+        }
+        frame
+    }
+
+    fn overlay_at(width: u32, height: u32, shape: LinuxCameraShape) -> Compositor {
+        Compositor::new(
+            VideoInfo::from_raw_ffmpeg(Pixel::RGBA, width.max(16), height.max(16), 30),
+            LinuxCameraPresentation {
+                rect: LinuxCameraRect {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                },
+                shape,
+                mirrored: false,
+                effect: LinuxCameraEffect::None,
+            },
+        )
+    }
+
+    fn rgb_sum(frame: &ffmpeg::frame::Video, x: usize, y: usize) -> u16 {
+        let offset = y * frame.stride(0) + x * 4;
+        let pixel = &frame.data(0)[offset..offset + 3];
+        u16::from(pixel[0]) + u16::from(pixel[1]) + u16::from(pixel[2])
+    }
+
+    fn max_channel_delta(left: &ffmpeg::frame::Video, right: &ffmpeg::frame::Video) -> u8 {
+        assert_eq!(
+            (left.width(), left.height()),
+            (right.width(), right.height())
+        );
+        let row = left.width() as usize * 4;
+        let mut max = 0u8;
+        for y in 0..left.height() as usize {
+            let left_row = &left.data(0)[y * left.stride(0)..][..row];
+            let right_row = &right.data(0)[y * right.stride(0)..][..row];
+            for (left_byte, right_byte) in left_row.iter().zip(right_row) {
+                max = max.max(left_byte.abs_diff(*right_byte));
+            }
+        }
+        max
+    }
+
+    fn yuyv_sample(frame: &ffmpeg::frame::Video, mirrored: bool) -> LinuxProcessedCameraFrame {
+        LinuxProcessedCameraFrame::from_yuyv422(
+            frame,
+            Timestamp::Instant(Instant::now()),
+            1,
+            LinuxCameraProcessing {
+                mirrored,
+                blur: LinuxCameraBlur::Off,
+            },
+        )
+        .expect("yuyv sample")
+    }
+
+    #[test]
+    fn mirrored_yuyv_row_keeps_distinct_luma_and_chroma() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        let mut source = ffmpeg::frame::Video::new(Pixel::YUYV422, 4, 1);
+        // Hand-written mirror of distinct Y0/U/Y1/V macropixels. Deriving the
+        // expected bytes from `mirror_yuyv_row`, or repeating luma and chroma
+        // inside each pair, lets a missed luma swap or a U/V exchange pass.
+        let row = [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80];
+        source.data_mut(0)[..row.len()].copy_from_slice(&row);
+        let frame = processed_to_ffmpeg(&yuyv_sample(&source, true)).expect("mirrored yuyv");
+        assert!(frame.inner.stride(0) >= row.len());
+        assert_eq!(
+            &frame.inner.data(0)[..row.len()],
+            &[0x70, 0x60, 0x50, 0x80, 0x30, 0x20, 0x10, 0x40]
+        );
+    }
+
+    #[test]
+    fn yuyv_overlay_scales_without_expanding_to_bgra_and_mirrors_once() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        let source = split_yuyv(8, 2);
+        let plain = yuyv_sample(&source, false);
+        assert_eq!(plain.format, LinuxCameraSampleFormat::Yuyv422);
+        assert_eq!(plain.pixels.len(), 8 * 2 * 2);
+        let stored = plain.pixels.to_vec();
+        let converted = processed_to_ffmpeg(&plain).expect("yuyv frame");
+        assert_eq!(converted.inner.format(), Pixel::YUYV422);
+        assert_eq!(&*plain.pixels, stored.as_slice());
+        assert_eq!(&converted.inner.data(0)[..16], &stored[..16]);
+
+        let mirrored = yuyv_sample(&source, true);
+        let mirrored_frame = processed_to_ffmpeg(&mirrored).expect("mirrored yuyv");
+        let mut expected = vec![0u8; 16];
+        mirror_yuyv_row(&stored[..16], &mut expected);
+        assert_eq!(&mirrored_frame.inner.data(0)[..16], expected.as_slice());
+        assert_ne!(&mirrored_frame.inner.data(0)[..16], &stored[..16]);
+
+        let mut plain_compositor = overlay_at(
+            8,
+            2,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        let plain_overlay = plain_compositor
+            .camera_overlay(&converted.inner, 1)
+            .expect("plain overlay")
+            .clone();
+        assert_eq!(
+            plain_compositor
+                .camera_to_rgba
+                .as_ref()
+                .expect("scaler")
+                .source_format,
+            Pixel::YUYV422
+        );
+        assert_eq!(
+            plain_compositor
+                .camera_to_rgba
+                .as_ref()
+                .expect("scaler")
+                .destination_format,
+            Pixel::RGBA
+        );
+        assert_eq!(
+            (
+                plain_compositor
+                    .camera_to_rgba
+                    .as_ref()
+                    .expect("scaler")
+                    .destination_width,
+                plain_compositor
+                    .camera_to_rgba
+                    .as_ref()
+                    .expect("scaler")
+                    .destination_height
+            ),
+            (8, 2)
+        );
+        let mut mirrored_compositor = overlay_at(
+            8,
+            2,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        let mirrored_overlay = mirrored_compositor
+            .camera_overlay(&mirrored_frame.inner, 1)
+            .expect("mirrored overlay")
+            .clone();
+        assert!(rgb_sum(&plain_overlay, 0, 0) < rgb_sum(&plain_overlay, 7, 0));
+        assert!(rgb_sum(&mirrored_overlay, 0, 0) > rgb_sum(&mirrored_overlay, 7, 0));
+
+        let colored = solid_yuyv(8, 2, 128, 200, 100);
+        let colored_frame = processed_to_ffmpeg(&yuyv_sample(&colored, false)).expect("color");
+        let mut color_compositor = overlay_at(
+            8,
+            2,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        let color = color_compositor
+            .camera_overlay(&colored_frame.inner, 1)
+            .expect("color overlay");
+        let pixel = &color.data(0)[..4];
+        assert!(pixel[2] > pixel[0] && pixel[2] > pixel[1], "{pixel:?}");
+        assert_eq!(pixel[3], 255);
+
+        let mut round = overlay_at(8, 8, LinuxCameraShape::Round);
+        let round_source =
+            processed_to_ffmpeg(&yuyv_sample(&solid_yuyv(8, 8, 140, 128, 128), false))
+                .expect("round source");
+        let round_overlay = round
+            .camera_overlay(&round_source.inner, 1)
+            .expect("round overlay");
+        assert_eq!(round_overlay.data(0)[3], 0);
+        let center = 4 * round_overlay.stride(0) + 4 * 4;
+        assert_eq!(round_overlay.data(0)[center + 3], 255);
+
+        let wide = solid_yuyv(32, 18, 160, 128, 128);
+        let mut direct = overlay_at(
+            16,
+            9,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        let direct_frame = processed_to_ffmpeg(&yuyv_sample(&wide, false)).expect("direct");
+        let direct_scaled = direct
+            .convert_camera(&direct_frame.inner, 16, 9)
+            .expect("direct scale");
+        assert_eq!((direct_scaled.width(), direct_scaled.height()), (16, 9));
+        let mut expand =
+            RgbaConverter::new(Pixel::YUYV422, 32, 18, Pixel::BGRA, 32, 18).expect("expand");
+        let expanded = expand.convert(&wide).expect("full bgra");
+        assert_eq!(expanded.format(), Pixel::BGRA);
+        let mut two_stage = overlay_at(
+            16,
+            9,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        let staged = two_stage
+            .convert_camera(&expanded, 16, 9)
+            .expect("staged scale");
+        assert_eq!(
+            two_stage
+                .camera_to_rgba
+                .as_ref()
+                .expect("bgra scaler")
+                .source_format,
+            Pixel::BGRA
+        );
+        let delta = max_channel_delta(&direct_scaled, &staged);
+        assert!(
+            delta <= 8,
+            "solid downscale drifted from the two-stage bilinear path by {delta}"
+        );
+
+        let now = Instant::now();
+        let mut blurred = yuyv_sample(&solid_yuyv(4, 2, 16, 128, 128), false);
+        blurred.timestamp = Timestamp::Instant(now);
+        blurred.processing.blur = LinuxCameraBlur::Light;
+        blurred.mask = Some(LinuxCameraMaskReceipt {
+            generation: 1,
+            submitted_at: now,
+            completed_at: now,
+        });
+        blurred.generation = 1;
+        let error = validate_processed_frame(&blurred, blurred.processing, 1, now, now)
+            .expect_err("blur cannot ride on yuyv");
+        assert!(error.to_string().contains("YUYV"), "{error}");
+        blurred.processing.blur = LinuxCameraBlur::Off;
+        blurred.mask = None;
+        blurred.dimensions.0 = 3;
+        let error = validate_processed_frame(&blurred, blurred.processing, 1, now, now)
+            .expect_err("odd yuyv");
+        assert!(error.to_string().contains("even"), "{error}");
+        assert!(
+            LinuxProcessedCameraFrame::from_yuyv422(
+                &ffmpeg::frame::Video::new(Pixel::BGRA, 4, 2),
+                Timestamp::Instant(now),
+                1,
+                LinuxCameraProcessing {
+                    mirrored: false,
+                    blur: LinuxCameraBlur::Off,
+                },
+            )
+            .is_none()
+        );
+    }
+
+    fn chroma_psnr(left: &ffmpeg::frame::Video, right: &ffmpeg::frame::Video) -> f64 {
+        assert_eq!(
+            (left.width(), left.height()),
+            (right.width(), right.height())
+        );
+        let row = left.width() as usize * 4;
+        let mut squared_error = 0.0;
+        for y in 0..left.height() as usize {
+            let left_row = &left.data(0)[y * left.stride(0)..][..row];
+            let right_row = &right.data(0)[y * right.stride(0)..][..row];
+            for (left_pixel, right_pixel) in left_row.chunks_exact(4).zip(right_row.chunks_exact(4))
+            {
+                let r = f64::from(left_pixel[0]) - f64::from(right_pixel[0]);
+                let g = f64::from(left_pixel[1]) - f64::from(right_pixel[1]);
+                let b = f64::from(left_pixel[2]) - f64::from(right_pixel[2]);
+                let u = -0.148223 * r - 0.290993 * g + 0.439216 * b;
+                let v = 0.439216 * r - 0.367788 * g - 0.071427 * b;
+                squared_error += u * u + v * v;
+            }
+        }
+        let samples = f64::from(left.width()) * f64::from(left.height()) * 2.0;
+        10.0 * (255.0 * 255.0 * samples / squared_error).log10()
+    }
+
+    #[test]
+    fn yuyv_overlay_preserves_spatial_chroma() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        let mut source = solid_yuyv(640, 360, 128, 128, 128);
+        let stride = source.stride(0);
+        for y in 0..source.height() as usize {
+            for (pair, pixel) in source.data_mut(0)[y * stride..][..640 * 2]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let x = (pair * 2) as f64;
+                pixel[1] = (128.0 + 45.0 * (x / 8.0 + y as f64 / 15.0).sin()).round() as u8;
+                pixel[3] = (128.0 + 45.0 * (x / 15.0 - y as f64 / 18.0).cos()).round() as u8;
+            }
+        }
+        let mut compositor = overlay_at(
+            192,
+            108,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        let actual = compositor
+            .convert_camera(&source, 192, 108)
+            .expect("camera overlay");
+        let mut reference_scaler = ffmpeg::software::scaling::Context::get(
+            Pixel::YUYV422,
+            640,
+            360,
+            Pixel::RGBA,
+            192,
+            108,
+            ffmpeg::software::scaling::Flags::LANCZOS
+                | ffmpeg::software::scaling::Flags::FULL_CHR_H_INT,
+        )
+        .expect("reference scaler");
+        let mut reference = ffmpeg::frame::Video::empty();
+        reference_scaler
+            .run(&source, &mut reference)
+            .expect("reference overlay");
+        let psnr = chroma_psnr(&actual, &reference);
+        assert!(psnr > 45.0, "overlay chroma PSNR fell to {psnr:.2} dB");
+        println!("overlay chroma PSNR against Lanczos reference: {psnr:.2} dB");
+    }
+
+    #[test]
+    #[ignore = "release timing benchmark; run with --release --ignored --nocapture"]
+    fn yuyv_overlay_scale_benchmark() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        const WARMUP: usize = 8;
+        const RUNS: usize = 31;
+        let width = 1920u32;
+        let height = 1080u32;
+        let dst_w = 576u32;
+        let dst_h = 324u32;
+        let cpu = std::fs::read_to_string("/proc/cpuinfo")
+            .ok()
+            .and_then(|text| {
+                text.lines()
+                    .find(|line| line.starts_with("model name"))
+                    .and_then(|line| line.split(':').nth(1))
+                    .map(|value| value.trim().to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        println!("cpu: {cpu}");
+        println!(
+            "rustc 1.88.0; warmup {WARMUP} excluded; median is sorted index {} of {RUNS}",
+            RUNS / 2
+        );
+        println!(
+            "path: Compositor::convert_camera swscale BILINEAR | FULL_CHR_H_INT for YUYV->RGBA"
+        );
+        println!(
+            "before is full-frame YUYV->BGRA bilinear, a tight BGRA copy, then BGRA->RGBA overlay"
+        );
+        println!("after is a tight YUYV copy plus one YUYV->RGBA overlay scale");
+        println!("single-scale pixels are not bit-identical to that two-stage bilinear");
+
+        let mut yuyv = solid_yuyv(width, height, 140, 160, 90);
+        let row = width as usize * 2;
+        let stride = yuyv.stride(0);
+        for y in 0..height as usize {
+            for (x, pixel) in yuyv.data_mut(0)[y * stride..y * stride + row]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let luma = 16u8.wrapping_add((x as u8).wrapping_mul(3).wrapping_add(y as u8));
+                pixel[0] = luma;
+                pixel[2] = luma.wrapping_add(8);
+            }
+        }
+        let timestamp = Timestamp::Instant(Instant::now());
+        let unmirrored = LinuxCameraProcessing {
+            mirrored: false,
+            blur: LinuxCameraBlur::Off,
+        };
+        let mirrored = LinuxCameraProcessing {
+            mirrored: true,
+            blur: LinuxCameraBlur::Off,
+        };
+
+        let mut expand =
+            RgbaConverter::new(Pixel::YUYV422, width, height, Pixel::BGRA, width, height)
+                .expect("expand");
+        let expanded = expand.convert(&yuyv).expect("warmup expand");
+        let mut bgra_scaler = overlay_at(
+            dst_w,
+            dst_h,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        let mut yuyv_scaler = overlay_at(
+            dst_w,
+            dst_h,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        let bgra_scaled = bgra_scaler
+            .convert_camera(&expanded, dst_w, dst_h)
+            .expect("bgra scale");
+        let yuyv_scaled = yuyv_scaler
+            .convert_camera(&yuyv, dst_w, dst_h)
+            .expect("yuyv scale");
+        assert_eq!((bgra_scaled.width(), bgra_scaled.height()), (dst_w, dst_h));
+        assert_eq!((yuyv_scaled.width(), yuyv_scaled.height()), (dst_w, dst_h));
+        let delta = max_channel_delta(&bgra_scaled, &yuyv_scaled);
+        println!("max_abs_channel_delta scaler_only 1920x1080->576x324 = {delta}");
+
+        let millis = |sample: (u128, u128, u128)| {
+            (
+                sample.0 as f64 / 1_000_000.0,
+                sample.1 as f64 / 1_000_000.0,
+                sample.2 as f64 / 1_000_000.0,
+            )
+        };
+        let print_ms = |label: &str, sample: (u128, u128, u128)| {
+            let (min, median, max) = millis(sample);
+            println!("{label} median {median:.3} ms min {min:.3} max {max:.3} n={RUNS}");
+        };
+
+        print_ms(
+            "scaler BGRA 1920x1080 -> RGBA 576x324",
+            time_crop(WARMUP, RUNS, || {
+                let scaled = bgra_scaler
+                    .convert_camera(std::hint::black_box(&expanded), dst_w, dst_h)
+                    .expect("timed bgra scale");
+                std::hint::black_box(scaled.data(0)[0]);
+            }),
+        );
+        print_ms(
+            "scaler YUYV 1920x1080 -> RGBA 576x324",
+            time_crop(WARMUP, RUNS, || {
+                let scaled = yuyv_scaler
+                    .convert_camera(std::hint::black_box(&yuyv), dst_w, dst_h)
+                    .expect("timed yuyv scale");
+                std::hint::black_box(scaled.data(0)[0]);
+            }),
+        );
+
+        let mut bgra_e2e = overlay_at(
+            dst_w,
+            dst_h,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        let mut yuyv_e2e = overlay_at(
+            dst_w,
+            dst_h,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        let mut previous_yuyv_e2e = overlay_at(
+            dst_w,
+            dst_h,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        let mut previous_converter =
+            RgbaConverter::new(Pixel::YUYV422, width, height, Pixel::RGBA, dst_w, dst_h)
+                .expect("previous converter");
+        previous_converter.context = ffmpeg::software::scaling::Context::get(
+            Pixel::YUYV422,
+            width,
+            height,
+            Pixel::RGBA,
+            dst_w,
+            dst_h,
+            ffmpeg::software::scaling::Flags::BILINEAR,
+        )
+        .expect("previous bilinear scaler");
+        previous_yuyv_e2e.camera_to_rgba = Some(previous_converter);
+        let mut yuyv_mirror_e2e = overlay_at(
+            dst_w,
+            dst_h,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 0 },
+        );
+        print_ms(
+            "e2e two-stage YUYV->full BGRA + copy + BGRA->overlay",
+            time_crop(WARMUP, RUNS, || {
+                let expanded = expand.convert(std::hint::black_box(&yuyv)).expect("expand");
+                let row = width as usize * 4;
+                let mut owned = vec![0u8; row * height as usize];
+                for y in 0..height as usize {
+                    owned[y * row..y * row + row]
+                        .copy_from_slice(&expanded.data(0)[y * expanded.stride(0)..][..row]);
+                }
+                let processed = LinuxProcessedCameraFrame {
+                    pixels: LinuxCameraPixels::new(owned),
+                    format: LinuxCameraSampleFormat::Bgra,
+                    dimensions: (width, height),
+                    stride: row,
+                    timestamp,
+                    generation: 1,
+                    processing: unmirrored,
+                    mask: None,
+                };
+                let frame = processed_to_ffmpeg(&processed).expect("bgra ffmpeg");
+                let scaled = bgra_e2e
+                    .convert_camera(&frame.inner, dst_w, dst_h)
+                    .expect("e2e bgra");
+                std::hint::black_box(scaled.data(0)[0]);
+            }),
+        );
+        print_ms(
+            "e2e direct YUYV before full_chroma_int",
+            time_crop(WARMUP, RUNS, || {
+                let sample = LinuxProcessedCameraFrame::from_yuyv422(
+                    std::hint::black_box(&yuyv),
+                    timestamp,
+                    1,
+                    unmirrored,
+                )
+                .expect("previous sample");
+                let frame = processed_to_ffmpeg(&sample).expect("previous yuyv ffmpeg");
+                let scaled = previous_yuyv_e2e
+                    .convert_camera(&frame.inner, dst_w, dst_h)
+                    .expect("previous e2e yuyv");
+                std::hint::black_box(scaled.data(0)[0]);
+            }),
+        );
+        print_ms(
+            "e2e direct YUYV copy + YUYV->overlay",
+            time_crop(WARMUP, RUNS, || {
+                let sample = LinuxProcessedCameraFrame::from_yuyv422(
+                    std::hint::black_box(&yuyv),
+                    timestamp,
+                    1,
+                    unmirrored,
+                )
+                .expect("sample");
+                let frame = processed_to_ffmpeg(&sample).expect("yuyv ffmpeg");
+                let scaled = yuyv_e2e
+                    .convert_camera(&frame.inner, dst_w, dst_h)
+                    .expect("e2e yuyv");
+                std::hint::black_box(scaled.data(0)[0]);
+            }),
+        );
+        print_ms(
+            "e2e direct mirrored YUYV copy + YUYV->overlay",
+            time_crop(WARMUP, RUNS, || {
+                let sample = LinuxProcessedCameraFrame::from_yuyv422(
+                    std::hint::black_box(&yuyv),
+                    timestamp,
+                    1,
+                    mirrored,
+                )
+                .expect("mirrored sample");
+                let frame = processed_to_ffmpeg(&sample).expect("mirrored ffmpeg");
+                let scaled = yuyv_mirror_e2e
+                    .convert_camera(&frame.inner, dst_w, dst_h)
+                    .expect("e2e mirror");
+                std::hint::black_box(scaled.data(0)[0]);
+            }),
+        );
     }
 }

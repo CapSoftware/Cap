@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 pub const SHORT_CURSOR_SHAPE_DEBOUNCE_MS: f64 = 1000.0;
+pub const MIN_VISIBLE_CURSOR_SHAPE_MS: f64 = 150.0;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -98,8 +99,117 @@ impl CursorEvents {
         pointer_ids: Option<&HashSet<String>>,
         threshold_ms: f64,
     ) {
-        if self.moves.len() < 2 {
+        let Some(mut segments) = self.shape_segments() else {
             return;
+        };
+        let rest_id = rest_cursor_id(&segments, pointer_ids);
+
+        for i in 0..segments.len() {
+            let segment_id = segments[i].id.clone();
+            let is_pointer_segment = pointer_ids
+                .map(|set| set.contains(&segment_id))
+                .unwrap_or(false);
+
+            if segments[i].duration >= threshold_ms || is_pointer_segment {
+                continue;
+            }
+
+            let replacement = rest_id
+                .clone()
+                .or_else(|| {
+                    if i > 0 {
+                        Some(segments[i - 1].id.clone())
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| segments.get(i + 1).map(|segment| segment.id.clone()))
+                .unwrap_or_else(|| segment_id.clone());
+
+            if replacement == segment_id {
+                continue;
+            }
+
+            for event in &mut self.moves[segments[i].range.clone()] {
+                event.cursor_id.clone_from(&replacement);
+            }
+            segments[i].id = replacement;
+        }
+
+        self.assign_click_shapes(&segments);
+    }
+
+    /// Shows every shape the recording captured, except that no shape is shown
+    /// for less than `min_visible_ms` between the first and last: a shorter
+    /// non-pointer shape becomes the pointer, and a shorter pointer gap
+    /// between two other shapes keeps the shape before it. Moving across a
+    /// row of buttons or the edge of a text field then shows no flashes,
+    /// while a hover the user paused on keeps its shape.
+    pub fn hold_brief_cursor_shapes(
+        &mut self,
+        pointer_ids: Option<&HashSet<String>>,
+        min_visible_ms: f64,
+    ) {
+        let Some(mut segments) = self.shape_segments() else {
+            return;
+        };
+        let Some(rest_id) = rest_cursor_id(&segments, pointer_ids) else {
+            return;
+        };
+        let is_pointer =
+            |id: &str| id == rest_id || pointer_ids.is_some_and(|set| set.contains(id));
+        for segment in &mut segments {
+            if segment.duration < min_visible_ms && !is_pointer(&segment.id) {
+                segment.id.clone_from(&rest_id);
+            }
+        }
+
+        let mut runs: Vec<ShapeRun> = Vec::new();
+        for (index, segment) in segments.iter().enumerate() {
+            match runs.last_mut() {
+                Some(run) if segments[run.first].id == segment.id => {
+                    run.end = index + 1;
+                    run.duration += segment.duration;
+                }
+                _ => runs.push(ShapeRun {
+                    first: index,
+                    end: index + 1,
+                    duration: segment.duration,
+                    pointer: is_pointer(&segment.id),
+                }),
+            }
+        }
+
+        for r in 1..runs.len().saturating_sub(1) {
+            let run = &runs[r];
+            if !run.pointer
+                || run.duration >= min_visible_ms
+                || runs[r - 1].pointer
+                || runs[r + 1].pointer
+            {
+                continue;
+            }
+            let held = segments[runs[r - 1].first].id.clone();
+            for segment in &mut segments[run.first..run.end] {
+                segment.id.clone_from(&held);
+            }
+        }
+
+        for segment in &segments {
+            let range = segment.range.clone();
+            if self.moves[range.start].cursor_id != segment.id {
+                for event in &mut self.moves[range] {
+                    event.cursor_id.clone_from(&segment.id);
+                }
+            }
+        }
+
+        self.assign_click_shapes(&segments);
+    }
+
+    fn shape_segments(&self) -> Option<Vec<CursorSegment>> {
+        if self.moves.len() < 2 {
+            return None;
         }
 
         let mut segments: Vec<CursorSegment> = Vec::new();
@@ -125,7 +235,7 @@ impl CursorEvents {
         }
 
         if segments.len() < 2 {
-            return;
+            return None;
         }
 
         let last_move_time = self.moves.last().map(|event| event.time_ms).unwrap_or(0.0);
@@ -153,60 +263,10 @@ impl CursorEvents {
             };
         }
 
-        let mut duration_by_id = HashMap::<String, f64>::new();
-        for segment in &segments {
-            *duration_by_id.entry(segment.id.clone()).or_default() += segment.duration;
-        }
+        Some(segments)
+    }
 
-        let preferred_pointer = pointer_ids.and_then(|set| {
-            segments
-                .iter()
-                .find(|segment| set.contains(&segment.id))
-                .map(|segment| segment.id.clone())
-        });
-
-        let global_fallback = duration_by_id
-            .iter()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(id, _)| id.clone());
-
-        for i in 0..segments.len() {
-            let segment_id = segments[i].id.clone();
-            let is_pointer_segment = pointer_ids
-                .map(|set| set.contains(&segment_id))
-                .unwrap_or(false);
-
-            if segments[i].duration >= threshold_ms || is_pointer_segment {
-                continue;
-            }
-
-            let replacement = preferred_pointer
-                .clone()
-                .or_else(|| global_fallback.clone())
-                .or_else(|| {
-                    if i > 0 {
-                        Some(segments[i - 1].id.clone())
-                    } else {
-                        None
-                    }
-                })
-                .or_else(|| segments.get(i + 1).map(|segment| segment.id.clone()))
-                .unwrap_or_else(|| segment_id.clone());
-
-            if replacement == segment_id {
-                continue;
-            }
-
-            for event in &mut self.moves[segments[i].range.clone()] {
-                event.cursor_id.clone_from(&replacement);
-            }
-            segments[i].id = replacement;
-        }
-
-        if self.clicks.is_empty() {
-            return;
-        }
-
+    fn assign_click_shapes(&mut self, segments: &[CursorSegment]) {
         let mut segment_index = 0;
         for click in &mut self.clicks {
             while segment_index + 1 < segments.len()
@@ -330,6 +390,37 @@ struct CursorSegment {
     end_time: f64,
     duration: f64,
     id: String,
+}
+
+struct ShapeRun {
+    first: usize,
+    end: usize,
+    duration: f64,
+    pointer: bool,
+}
+
+fn rest_cursor_id(
+    segments: &[CursorSegment],
+    pointer_ids: Option<&HashSet<String>>,
+) -> Option<String> {
+    let preferred_pointer = pointer_ids.and_then(|set| {
+        segments
+            .iter()
+            .find(|segment| set.contains(&segment.id))
+            .map(|segment| segment.id.clone())
+    });
+    if preferred_pointer.is_some() {
+        return preferred_pointer;
+    }
+
+    let mut duration_by_id = HashMap::<String, f64>::new();
+    for segment in segments {
+        *duration_by_id.entry(segment.id.clone()).or_default() += segment.duration;
+    }
+    duration_by_id
+        .iter()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(id, _)| id.clone())
 }
 
 #[cfg(test)]
@@ -734,5 +825,194 @@ mod tests {
                 .iter()
                 .all(|event| event.cursor_id == "pointer")
         );
+    }
+
+    fn shapes(events: &CursorEvents) -> Vec<&str> {
+        events
+            .moves
+            .iter()
+            .map(|event| event.cursor_id.as_str())
+            .collect()
+    }
+
+    fn timeline(steps: &[(f64, &str)]) -> CursorEvents {
+        CursorEvents {
+            moves: steps
+                .iter()
+                .map(|&(time_ms, id)| move_event(time_ms, id))
+                .collect(),
+            clicks: vec![],
+        }
+    }
+
+    fn hold(events: &mut CursorEvents) {
+        let pointers = HashSet::from(["arrow".to_string()]);
+        events.hold_brief_cursor_shapes(Some(&pointers), MIN_VISIBLE_CURSOR_SHAPE_MS);
+    }
+
+    #[test]
+    fn a_hover_the_user_paused_on_keeps_its_shape() {
+        let mut events = timeline(&[
+            (0.0, "arrow"),
+            (1000.0, "hand"),
+            (1300.0, "hand"),
+            (1569.0, "arrow"),
+            (3000.0, "arrow"),
+        ]);
+        hold(&mut events);
+        assert_eq!(shapes(&events), ["arrow", "hand", "hand", "arrow", "arrow"]);
+    }
+
+    #[test]
+    fn sweeping_across_buttons_shows_no_hand_flashes() {
+        let mut events = timeline(&[
+            (0.0, "arrow"),
+            (1000.0, "hand"),
+            (1080.0, "arrow"),
+            (1110.0, "hand"),
+            (1200.0, "arrow"),
+            (1240.0, "hand"),
+            (1280.0, "arrow"),
+            (3000.0, "arrow"),
+        ]);
+        hold(&mut events);
+        assert!(shapes(&events).iter().all(|id| *id == "arrow"));
+    }
+
+    #[test]
+    fn ibeam_and_arrow_toggling_over_text_stays_an_ibeam() {
+        let mut events = timeline(&[
+            (0.0, "arrow"),
+            (1000.0, "ibeam"),
+            (1400.0, "arrow"),
+            (1440.0, "ibeam"),
+            (1740.0, "arrow"),
+            (1800.0, "ibeam"),
+            (2300.0, "arrow"),
+            (4000.0, "arrow"),
+        ]);
+        hold(&mut events);
+        assert_eq!(
+            shapes(&events),
+            [
+                "arrow", "ibeam", "ibeam", "ibeam", "ibeam", "ibeam", "arrow", "arrow"
+            ]
+        );
+    }
+
+    #[test]
+    fn passing_a_window_edge_drops_the_resize_shape_but_a_resize_drag_keeps_it() {
+        let mut events = timeline(&[
+            (0.0, "arrow"),
+            (1000.0, "resize"),
+            (1060.0, "arrow"),
+            (2000.0, "resize"),
+            (2900.0, "arrow"),
+            (4000.0, "arrow"),
+        ]);
+        events.clicks = vec![click_event(1030.0, "resize"), click_event(2100.0, "resize")];
+        hold(&mut events);
+        assert_eq!(
+            shapes(&events),
+            ["arrow", "arrow", "arrow", "resize", "arrow", "arrow"]
+        );
+        assert_eq!(events.clicks[0].cursor_id, "arrow");
+        assert_eq!(events.clicks[1].cursor_id, "resize");
+    }
+
+    #[test]
+    fn a_brief_pointer_gap_between_two_shapes_keeps_the_earlier_shape() {
+        let mut events = timeline(&[
+            (0.0, "arrow"),
+            (1000.0, "hand"),
+            (1600.0, "arrow"),
+            (1640.0, "ibeam"),
+            (2600.0, "arrow"),
+            (4000.0, "arrow"),
+        ]);
+        hold(&mut events);
+        assert_eq!(
+            shapes(&events),
+            ["arrow", "hand", "hand", "ibeam", "arrow", "arrow"]
+        );
+    }
+
+    #[test]
+    fn a_pointer_stretch_long_enough_to_see_stays_between_hovers() {
+        let mut events = timeline(&[
+            (0.0, "arrow"),
+            (1000.0, "hand"),
+            (1600.0, "arrow"),
+            (1800.0, "hand"),
+            (2400.0, "arrow"),
+            (4000.0, "arrow"),
+        ]);
+        hold(&mut events);
+        assert_eq!(
+            shapes(&events),
+            ["arrow", "hand", "arrow", "hand", "arrow", "arrow"]
+        );
+    }
+
+    #[test]
+    fn holding_uses_the_dominant_cursor_without_pointer_metadata() {
+        let mut events = timeline(&[
+            (0.0, "arrow"),
+            (1000.0, "hand"),
+            (1100.0, "arrow"),
+            (1200.0, "ibeam"),
+            (1900.0, "arrow"),
+            (4000.0, "arrow"),
+        ]);
+        events.hold_brief_cursor_shapes(None, MIN_VISIBLE_CURSOR_SHAPE_MS);
+        assert_eq!(
+            shapes(&events),
+            ["arrow", "arrow", "arrow", "ibeam", "arrow", "arrow"]
+        );
+    }
+
+    #[test]
+    fn holding_never_shows_an_inner_shape_for_less_than_the_minimum() {
+        let ids = ["arrow", "hand", "ibeam", "resize"];
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = |bound: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % bound
+        };
+        for _ in 0..2_000 {
+            let mut time_ms = 0.0;
+            let mut steps = Vec::new();
+            for _ in 0..(2 + next(40)) {
+                steps.push((time_ms, ids[next(ids.len() as u64) as usize]));
+                time_ms += [5.0, 20.0, 60.0, 140.0, 149.9, 150.0, 400.0, 1200.0][next(8) as usize];
+            }
+            let mut events = timeline(&steps);
+            let original = events.clone();
+            hold(&mut events);
+
+            let mut runs: Vec<(String, f64)> = Vec::new();
+            for event in &events.moves {
+                if runs.last().is_none_or(|(id, _)| *id != event.cursor_id) {
+                    runs.push((event.cursor_id.clone(), event.time_ms));
+                }
+            }
+            for window in runs.windows(3) {
+                let shown = window[2].1 - window[1].1;
+                assert!(
+                    shown >= MIN_VISIBLE_CURSOR_SHAPE_MS,
+                    "{:?} shows {} for {shown} ms",
+                    steps,
+                    window[1].0
+                );
+            }
+            for (before, after) in original.moves.iter().zip(&events.moves) {
+                assert_eq!(before.time_ms, after.time_ms);
+                assert!(
+                    after.cursor_id == before.cursor_id || ids.contains(&after.cursor_id.as_str())
+                );
+            }
+        }
     }
 }

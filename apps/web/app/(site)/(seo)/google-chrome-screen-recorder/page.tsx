@@ -17,7 +17,7 @@ const ogImage = ogImageUrl({
 export const metadata: Metadata = {
 	title: "Google Chrome Screen Recorder: Record & Share Free | Cap",
 	description:
-		"Cap is a free, open-source screen recorder for Google Chrome. Add the extension, click record, and get an instant shareable link — no downloads, no watermarks, no sign-up.",
+		"Cap is a free, open source screen recorder for Google Chrome. Add the extension from the Chrome Web Store and record a tab, a window, the full screen, or your camera.",
 	keywords: [
 		"google chrome screen recorder",
 		"chrome screen recorder",
@@ -32,7 +32,7 @@ export const metadata: Metadata = {
 	openGraph: {
 		title: "Google Chrome Screen Recorder: Record & Share Free | Cap",
 		description:
-			"Record your screen directly from Google Chrome with Cap's free, open-source extension. Instant shareable links, no watermarks, no downloads.",
+			"Record a browser tab, a window, the full screen, or your camera from Google Chrome with Cap, the open source screen recorder.",
 		url: "https://cap.so/google-chrome-screen-recorder",
 		siteName: "Cap",
 		images: [
@@ -50,7 +50,7 @@ export const metadata: Metadata = {
 		card: "summary_large_image",
 		title: "Google Chrome Screen Recorder | Cap",
 		description:
-			"Record your screen from Google Chrome with Cap's free, open-source extension. Instant sharing, no watermarks.",
+			"Record a browser tab, a window, the full screen, or your camera from Google Chrome with Cap, the open source screen recorder.",
 		images: [ogImage],
 	},
 };

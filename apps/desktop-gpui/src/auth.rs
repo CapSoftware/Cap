@@ -14,34 +14,6 @@ use crate::store::{self, DEFAULT_SERVER_URL};
 
 pub const PRICING_URL: &str = "https://cap.so/pricing?ref=desktop";
 
-const CALLBACK_HTML: &str = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
-  <title>Signed in — Cap</title>
-  <style>
-    html { height: 100%; }
-    body { min-height: 100%; margin: 0; padding: 24px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; text-align: center; font-family: system-ui, sans-serif; background: #f8f9fa; color: #12161f; }
-    main { width: 100%; max-width: 400px; }
-    h1 { margin: 0 0 12px; font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.02em; }
-    p { margin: 0; font-size: 15px; line-height: 24px; color: #5d6470; }
-    @media (prefers-color-scheme: dark) {
-      body { background: #18181b; color: #f4f4f5; }
-      p { color: #a1a1aa; }
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>You’re signed in</h1>
-    <p>You can close this tab and return to Cap.</p>
-  </main>
-</body>
-</html>
-"#;
-
 pub const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// How long the loopback server keeps answering after sign-in completes. The
@@ -50,8 +22,6 @@ pub const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// server that closed on the deep link would leave the browser on a
 /// "connection refused" page.
 const CALLBACK_LINGER: Duration = Duration::from_secs(30);
-
-const NOT_FOUND_HTML: &str = "<!DOCTYPE html><html><body>Not found</body></html>";
 
 static DEEP_LINK: OnceLock<Mutex<Option<DeepLinkSlot>>> = OnceLock::new();
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
@@ -256,7 +226,10 @@ pub fn apply_desktop_headers(mut request: reqwest::RequestBuilder) -> reqwest::R
 }
 
 pub fn server_url() -> String {
-    let url = store::GeneralSettings::load().server_url;
+    normalize_server_url(&store::GeneralSettings::load().server_url)
+}
+
+fn normalize_server_url(url: &str) -> String {
     if url.trim().is_empty() {
         DEFAULT_SERVER_URL.to_string()
     } else {
@@ -405,7 +378,7 @@ pub async fn authed_request_with(
     } else {
         let auth = store::auth_snapshot();
         (
-            server_url(),
+            normalize_server_url(&auth.server_url),
             auth.token.ok_or(AuthApiError::InvalidAuthentication)?,
         )
     };
@@ -623,9 +596,9 @@ fn handle_callback_connection(mut stream: TcpStream, port: u16, tx: &flume::Send
     };
     let params = parse_auth_params(&format!("http://127.0.0.1:{port}{target}"));
     let (status, body) = if params.is_some() {
-        ("200 OK", CALLBACK_HTML)
+        ("200 OK", crate::local_page::signed_in())
     } else {
-        ("404 Not Found", NOT_FOUND_HTML)
+        ("404 Not Found", crate::local_page::unknown())
     };
     if let Some(params) = params {
         let _ = tx.try_send(params);
@@ -721,6 +694,9 @@ fn query_map(url: &reqwest::Url) -> HashMap<String, String> {
 }
 
 #[cfg(test)]
+mod server_change_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -787,6 +763,22 @@ mod tests {
         );
         assert!(callback.starts_with("HTTP/1.1 200"), "{callback}");
         assert!(callback.contains("signed in"));
+        let (head, body) = callback.split_once("\r\n\r\n").unwrap();
+        assert!(
+            head.contains("Content-Type: text/html; charset=utf-8"),
+            "{head}"
+        );
+        assert!(
+            head.contains(&format!("Content-Length: {}\r\n", body.len())),
+            "the length counts the page's bytes: {head}"
+        );
+        assert!(body.contains("<svg class=\"mark\"") && body.contains("badge done"));
+        let outside = body.replace("http://www.w3.org/2000/svg", "");
+        assert!(
+            !outside.contains("http://") && !outside.contains("https://"),
+            "the page loads nothing from anywhere else"
+        );
+        assert!(unrelated.contains("Nothing to see here"), "{unrelated}");
         assert_eq!(
             local.complete.recv_timeout(Duration::from_secs(5)).unwrap(),
             AuthParams::ApiKey {

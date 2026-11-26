@@ -123,8 +123,7 @@ export const Hero = () => {
 								) : null}
 								<span
 									className={classNames(
-										MONO,
-										"text-[11.5px] uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.6)]",
+										"text-[13px] leading-none text-[rgba(17,17,17,0.6)]",
 									)}
 								>
 									{name}
@@ -158,8 +157,7 @@ export const Hero = () => {
 							<li
 								key={surface}
 								className={classNames(
-									MONO,
-									"rounded-full border border-white/15 px-3 py-1.5 text-[11px] uppercase leading-none tracking-[0.05em] text-[rgba(255,255,255,0.72)]",
+									"rounded-full border border-white/15 px-3 py-1.5 text-[12.5px] leading-none text-[rgba(255,255,255,0.72)]",
 								)}
 							>
 								{surface}
@@ -169,8 +167,7 @@ export const Hero = () => {
 							<Link
 								href="/docs/agents"
 								className={classNames(
-									MONO,
-									"flex items-center gap-1.5 rounded-full bg-white px-3.5 py-2 text-[11px] uppercase leading-none tracking-[0.05em] text-[#111111] transition-colors duration-200 hover:bg-[#EDF1F6]",
+									"flex items-center gap-1.5 rounded-full bg-white px-3.5 py-2 text-[12.5px] leading-none text-[#111111] transition-colors duration-200 hover:bg-[#EDF1F6]",
 								)}
 							>
 								Agent docs

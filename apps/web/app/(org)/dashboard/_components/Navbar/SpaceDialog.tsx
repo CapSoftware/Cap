@@ -16,8 +16,8 @@ import {
 	Switch,
 } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
-import { faLayerGroup, faLock } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faLayerGroup } from "@fortawesome/free-solid-svg-icons/faLayerGroup";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
 import type React from "react";
@@ -27,6 +27,7 @@ import { toast } from "sonner";
 import * as z from "zod";
 import { updateSpace } from "@/actions/organization/update-space";
 import { FileInput } from "@/components/FileInput";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useDashboardContext } from "../../Contexts";
 import type { OrganizationSettings } from "../../dashboard-data";
 import { MemberSelect } from "../../spaces/[spaceId]/components/MemberSelect";

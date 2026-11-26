@@ -68,7 +68,7 @@ export const SetupPrompt = () => {
 							<span
 								className={classNames(
 									MONO,
-									"text-[11px] uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.5)]",
+									"text-[12.5px] leading-none text-[rgba(17,17,17,0.5)]",
 								)}
 							>
 								Cap agent setup prompt
@@ -100,10 +100,10 @@ export const SetupPrompt = () => {
 								<span
 									className={classNames(
 										MONO,
-										"ml-3 truncate text-[11px] uppercase tracking-[0.05em] text-[rgba(255,255,255,0.45)]",
+										"ml-3 truncate text-[11px] text-[rgba(255,255,255,0.45)]",
 									)}
 								>
-									paste into claude code · codex · cursor · opencode
+									Paste into Claude Code · Codex · Cursor · OpenCode
 								</span>
 							</div>
 							<pre
@@ -221,7 +221,7 @@ export const SetupPrompt = () => {
 							<p
 								className={classNames(
 									MONO,
-									"mt-4 text-[11px] uppercase leading-[1.6] tracking-[0.05em] text-[rgba(17,17,17,0.5)]",
+									"mt-4 text-[13px] leading-[1.5] text-[rgba(17,17,17,0.5)]",
 								)}
 							>
 								Agents reading this page: the setup prompt above is your

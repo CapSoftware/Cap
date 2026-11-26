@@ -1,7 +1,9 @@
 import { db } from "@cap/database";
+import { isCrossSiteRequest } from "@cap/database/auth/request-site";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
+import { ensurePersonalOrganization } from "@cap/database/organization-pointer";
 import {
 	organizationMembers,
 	organizations,
@@ -15,7 +17,6 @@ import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { makeCurrentUserLayer, Storage, Videos } from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, lte } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
@@ -28,12 +29,14 @@ import { maybeStartLiveTranscription } from "@/lib/live-transcribe";
 import { runPromise } from "@/lib/server";
 import { trackServerEvent } from "@/lib/server-analytics";
 import {
+	desktopClientInfo,
 	GOOGLE_DRIVE_UPLOAD_FEATURE,
 	hasDesktopFeature,
 	isFromDesktopSemver,
 	UPLOAD_PROGRESS_VERSION,
 } from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
+import { zValidator } from "@/utils/zod-validator";
 import { withAuth } from "../../utils";
 
 export const app = new Hono().use(withAuth);
@@ -91,6 +94,8 @@ app.get(
 		}),
 	),
 	async (c) => {
+		if (isCrossSiteRequest(c.req.raw))
+			return c.json({ error: "forbidden" }, { status: 403 });
 		try {
 			const {
 				recordingMode,
@@ -219,28 +224,8 @@ app.get(
 			// being removed from their last org); provision a personal org like
 			// signup does instead of failing every upload.
 			if (userOrganizations.length === 0) {
-				const organizationId = Organisation.OrganisationId.make(nanoId());
-				await db().transaction(async (tx) => {
-					await tx.insert(organizations).values({
-						id: organizationId,
-						ownerId: user.id,
-						name: "My Organization",
-					});
-					await tx.insert(organizationMembers).values({
-						id: nanoId(),
-						organizationId,
-						userId: user.id,
-						role: "owner",
-					});
-					await tx
-						.update(users)
-						.set({
-							activeOrganizationId: organizationId,
-							defaultOrgId: organizationId,
-						})
-						.where(eq(users.id, user.id));
-				});
-				userOrganizations.push({ id: organizationId, name: "My Organization" });
+				const created = await ensurePersonalOrganization(db(), user.id);
+				if (created) userOrganizations.push(created);
 			}
 
 			const userOrgIds = userOrganizations.map((org) => org.id);
@@ -281,9 +266,14 @@ app.get(
 			const videoName =
 				name ??
 				`Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`;
-			const metadata: VideoMetadata | undefined = name
-				? { sourceName: name }
-				: undefined;
+			const desktopClient = desktopClientInfo(c.req);
+			const metadata: VideoMetadata | undefined =
+				name || desktopClient
+					? {
+							...(name ? { sourceName: name } : {}),
+							...(desktopClient ? { desktopClient } : {}),
+						}
+					: undefined;
 			const clientSupportsGoogleDriveUpload = hasDesktopFeature(
 				c.req,
 				GOOGLE_DRIVE_UPLOAD_FEATURE,

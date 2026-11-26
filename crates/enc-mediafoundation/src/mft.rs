@@ -82,6 +82,43 @@ impl EncoderDevice {
     }
 }
 
+/// Friendly name of the hardware H264 encoder transform that FFmpeg's
+/// `h264_mf` opens: the first hardware encoder Media Foundation lists for NV12
+/// input, as FFmpeg enumerates them.
+pub fn first_hardware_h264_encoder_name() -> Option<String> {
+    use windows::Win32::Media::MediaFoundation::{
+        MF_VERSION, MFMediaType_Video, MFSTARTUP_LITE, MFShutdown, MFStartup, MFVideoFormat_H264,
+        MFVideoFormat_NV12,
+    };
+
+    let input = MFT_REGISTER_TYPE_INFO {
+        guidMajorType: MFMediaType_Video,
+        guidSubtype: MFVideoFormat_NV12,
+    };
+    let output = MFT_REGISTER_TYPE_INFO {
+        guidMajorType: MFMediaType_Video,
+        guidSubtype: MFVideoFormat_H264,
+    };
+    let started = unsafe { MFStartup(MF_VERSION, MFSTARTUP_LITE) }.is_ok();
+    let name = enumerate_mfts(
+        &MFT_CATEGORY_VIDEO_ENCODER,
+        MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
+        Some(&input),
+        Some(&output),
+    )
+    .ok()
+    .and_then(|encoders| encoders.into_iter().next())
+    .and_then(|encoder| {
+        get_string_attribute(&encoder.cast().ok()?, &MFT_FRIENDLY_NAME_Attribute)
+            .ok()
+            .flatten()
+    });
+    if started {
+        let _ = unsafe { MFShutdown() };
+    }
+    name
+}
+
 fn enumerate_mfts(
     category: &GUID,
     flags: MFT_ENUM_FLAG,

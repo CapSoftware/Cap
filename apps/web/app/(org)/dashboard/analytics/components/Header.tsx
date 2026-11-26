@@ -38,7 +38,7 @@ interface HeaderProps {
 }
 
 const chip =
-	"flex items-center gap-2 h-10 rounded-xl border border-gray-4 bg-gray-1 px-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)] outline-none transition-colors hover:bg-gray-2 focus-visible:ring-2 focus-visible:ring-blue-9/40";
+	"flex items-center gap-2 h-9 rounded-full border border-gray-4 bg-gray-1 px-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)] outline-none transition-colors hover:bg-gray-2 focus-visible:ring-2 focus-visible:ring-blue-9/40";
 
 export default function Header({
 	options,
@@ -228,7 +228,7 @@ export default function Header({
 				</SelectPrimitive.Root>
 			)}
 
-			<fieldset className="flex items-center gap-0.5 p-1 h-10 rounded-xl border shadow-[0_1px_2px_rgba(0,0,0,0.04)] border-gray-4 bg-gray-1 m-0 min-w-0">
+			<fieldset className="flex items-center gap-0.5 p-0.5 h-9 rounded-full border shadow-[0_1px_2px_rgba(0,0,0,0.04)] border-gray-4 bg-gray-1 m-0 min-w-0">
 				<legend className="sr-only">Date range</legend>
 				{options.map((option) => {
 					const selected = option.value === value;
@@ -239,14 +239,14 @@ export default function Header({
 							aria-pressed={selected}
 							onClick={() => onChange(option.value)}
 							className={clsx(
-								"relative h-full px-3 text-[13px] font-medium rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-9/40",
+								"relative h-full px-3 text-[13px] font-medium rounded-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-9/40",
 								selected ? "text-gray-1" : "text-gray-10 hover:text-gray-12",
 							)}
 						>
 							{selected && (
 								<motion.span
 									layoutId="analytics-range-pill"
-									className="absolute inset-0 rounded-lg bg-gray-12"
+									className="absolute inset-0 rounded-full bg-gray-12"
 									transition={{ type: "spring", stiffness: 500, damping: 38 }}
 								/>
 							)}
@@ -263,7 +263,7 @@ export default function Header({
 					disabled={isFetching}
 					className={clsx(
 						chip,
-						"justify-center w-10 px-0 disabled:cursor-default",
+						"justify-center w-9 px-0 disabled:cursor-default",
 					)}
 					aria-label="Refresh analytics"
 				>

@@ -81,6 +81,13 @@ describe("reply notifications", () => {
 			expect(inserts[0]?.[1]).toEqual(
 				expect.arrayContaining(["comment-author", "reply-org", "reply"]),
 			);
+			const data = inserts[0]?.[1].find(
+				(param: unknown) => typeof param === "string" && param.startsWith("{"),
+			);
+			expect(JSON.parse(data)).toMatchObject({
+				comment: { id: "reply" },
+				parentCommentId: "parent",
+			});
 			expect(mocks.sendEmail).not.toHaveBeenCalled();
 		},
 	);

@@ -9,6 +9,7 @@ use crate::{
 };
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::aac::AACEncoder;
+use cap_enc_ffmpeg::hardware_crash::{HardwareEncoderSession, hardware_encoder_disabled};
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamp;
 use futures::channel::oneshot;
@@ -24,6 +25,10 @@ use std::{
 use tracing::*;
 
 const DEFAULT_MUXER_BUFFER_SIZE: usize = 240;
+
+/// The direct Media Foundation encoder loads the same vendor transforms as
+/// FFmpeg's `h264_mf`, so it shares that name for crash recovery.
+const MEDIA_FOUNDATION_ENCODER: &str = "h264_mf";
 
 fn get_muxer_buffer_size() -> usize {
     std::env::var("CAP_MUXER_BUFFER_SIZE")
@@ -140,6 +145,7 @@ pub struct WindowsMuxerConfig {
     pub d3d_device: ID3D11Device,
     pub frame_rate: u32,
     pub bitrate_multiplier: f32,
+    pub video_bitrate: Option<u32>,
     pub output_size: Option<SizeInt32>,
     pub encoder_preferences: crate::capture_pipeline::EncoderPreferences,
     pub fragmented: bool,
@@ -231,6 +237,12 @@ impl Muxer for WindowsMuxer {
                         };
 
                         cap_enc_ffmpeg::h264::H264Encoder::builder(video_config)
+                            .with_bpp(cap_enc_ffmpeg::h264::H264EncoderBuilder::bpp_for_video_bitrate(
+                                cap_enc_ffmpeg::h264::H264EncoderBuilder::QUALITY_BPP,
+                                config.video_bitrate,
+                                &video_config,
+                                Some((fallback_width, fallback_height)),
+                            ))
                             .with_output_size(fallback_width, fallback_height)
                             .and_then(|builder| builder.build(&mut output_guard))
                             .map(either::Right)
@@ -246,13 +258,30 @@ impl Muxer for WindowsMuxer {
                         return fallback(None);
                     }
 
+                    if hardware_encoder_disabled(MEDIA_FOUNDATION_ENCODER) {
+                        return fallback(Some(
+                            "Media Foundation H264 disabled after it crashed Cap".to_string(),
+                        ));
+                    }
+
+                    let session = HardwareEncoderSession::begin(MEDIA_FOUNDATION_ENCODER);
                     match cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
                         &config.d3d_device,
                         config.pixel_format,
                         input_size,
                         output_size,
                         config.frame_rate,
-                        config.bitrate_multiplier,
+                        match config.video_bitrate {
+                            Some(video_bitrate) => {
+                                cap_enc_mediafoundation::video::bitrate_multiplier_for(
+                                    output_size.Width.max(0) as u32,
+                                    output_size.Height.max(0) as u32,
+                                    config.frame_rate,
+                                    video_bitrate,
+                                )
+                            }
+                            None => config.bitrate_multiplier,
+                        },
                     ) {
                         Ok(encoder) => {
                             if let Err(e) = encoder.validate() {
@@ -305,7 +334,7 @@ impl Muxer for WindowsMuxer {
                             };
 
                             match muxer {
-                                Ok(muxer) => Ok(either::Left((encoder, muxer))),
+                                Ok(muxer) => Ok(either::Left((encoder, muxer, session))),
                                 Err(err) => fallback(Some(err.to_string())),
                             }
                         }
@@ -338,8 +367,12 @@ impl Muxer for WindowsMuxer {
                     }
                 }
 
+                // Outlives the arm's encoder, so the encoder closes while it is
+                // still reported live.
+                let mut _media_foundation_session = None;
                 match encoder {
-                    either::Left((mut encoder, mut muxer)) => {
+                    either::Left((mut encoder, mut muxer, session)) => {
+                        _media_foundation_session = Some(session);
                         trace!("Running native encoder with frame pacing");
                         let mut pacer = FramePacer::new(config.frame_rate);
                         let mut last_texture: Option<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> = None;
@@ -790,6 +823,13 @@ impl Muxer for WindowsCameraMuxer {
                         return fallback(None);
                     }
 
+                    if hardware_encoder_disabled(MEDIA_FOUNDATION_ENCODER) {
+                        return fallback(Some(
+                            "Media Foundation H264 disabled after it crashed Cap".to_string(),
+                        ));
+                    }
+
+                    let session = HardwareEncoderSession::begin(MEDIA_FOUNDATION_ENCODER);
                     match cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
                         &d3d_device,
                         input_format,
@@ -829,7 +869,7 @@ impl Muxer for WindowsCameraMuxer {
                             };
 
                             match muxer {
-                                Ok(muxer) => Ok(either::Left((encoder, muxer))),
+                                Ok(muxer) => Ok(either::Left((encoder, muxer, session))),
                                 Err(err) => fallback(Some(err.to_string())),
                             }
                         }
@@ -862,8 +902,12 @@ impl Muxer for WindowsCameraMuxer {
                     }
                 }
 
+                // Outlives the arm's encoder, so the encoder closes while it is
+                // still reported live.
+                let mut _media_foundation_session = None;
                 match encoder {
-                    either::Left((mut encoder, mut muxer)) => {
+                    either::Left((mut encoder, mut muxer, session)) => {
+                        _media_foundation_session = Some(session);
                         info!(
                             "Windows camera encoder started (hardware) with frame pacing: {:?} {}x{} -> NV12 {}x{} @ {}fps",
                             input_format,

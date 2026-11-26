@@ -35,7 +35,7 @@
 
 ## Current Status
 
-**Last Updated**: 2026-08-17
+**Last Updated**: 2026-11-24
 
 ### Performance Summary
 
@@ -76,8 +76,14 @@
 
 - [ ] **Test fragmented mode** - Run playback tests on fragmented recordings
 - [ ] **Investigate display decoder init time** - 337ms may be optimizable
+- [ ] **Fewer software decode threads during playback (Windows, Linux)** - Frame threading costs about 35% more CPU than one thread for the same frames (see the 2026-11-24 session); needs slow CPUs, 4K sources, seeks and export checked before any change
+- [ ] **Show the Windows and Linux preview without a readback** - About 18% of playback CPU is memory copies (plane uploads, the readback, the window's upload)
+- [ ] **Even frame cadence on 120 Hz displays** - About 5% of playback frames are shown for three refreshes instead of two on a 120 Hz display, before and after #4508; the engine clock would have to follow the display's refresh
+- [ ] **Hardware decode for the Windows and Linux editor** - The largest remaining cost; Linux NVDEC with frames copied to system memory raised memory by about 1 GB, and Windows preview decode is pinned to software for sync
 
 ### Completed
+- [x] **Stop playback showing half its frames when the engine clock sits near the display refresh** - #4508 (2026-11-24)
+- [x] **Stream the Windows and Linux preview into one texture** - #4509 (2026-11-24)
 - [x] **Optimize GPUI editor playback** - Reduced median playback CPU from 85.66% to 17.52% and average RSS from 847.68 MB to 440.09 MB while retaining 60 FPS and zero drops (2026-08-17)
 - [x] **Run initial baseline** - Established current playback performance metrics (2026-01-28)
 - [x] **Profile decoder init time** - Hardware acceleration confirmed (AVAssetReader) (2026-01-28)
@@ -872,6 +878,41 @@ A later session ran main, the branch before the wait change and the branch with 
 - The camera-blur preview runs on its own device and thread, so it has no shared-device stall; its timing change was not measured. Nothing here was built or run on Windows or Linux.
 
 **Stopping point**: The remaining tail quantization comes from the vendored Metal HAL sleeping 1 ms between checks in `Device::wait`. A wait driven by the fence's `MTLSharedEvent` (a listener plus a condition variable with the same timeout) would remove it, as a second local patch to the vendored HAL.
+
+---
+
+### Session 2026-11-24 (Playback Frame Pacing; Windows and Linux Preview Stream)
+
+**Goal**: Measure GPUI editor playback in the real app on macOS, Windows and Linux, and fix what the numbers show without changing what is drawn.
+
+**Method**: The app's own latency bench (`CAP_GPUI_AUTO_LATENCY_BENCH=1`, `playback` plus the interaction scenarios) on the reference recording (3024x1964 60 fps screen, 1080p camera), builds interleaved, 10 s of playback per run. Linux and Windows ran on NVIDIA T4 machines with a 1920x1080 60 Hz display; hosted Linux and Windows runners only have software adapters (24 fps and under 1 fps) and say nothing about playback rate. macOS ran on a virtual M4 runner (60 Hz) and on a MacBook Pro M4 Max with its built-in 120 Hz display.
+
+**What was found**:
+1. On every platform some playbacks showed about half their frames for as long as the engine's frame clock sat close to the display's refresh: two frames reached the window inside one refresh and none inside the next. Before the fix the worst runs were 36.0 fps (Linux), 32.7 fps (Windows) and 48.4 fps (macOS) with 215, 245 and 103 source frames never painted.
+2. Windows and Linux converted every preview frame on the CPU and uploaded it as a new image, on Linux into a new texture each time.
+3. Linux playback CPU by where it runs: 73% H.264 software decode threads, about 18% memory copies (11 to 12% on the render worker for plane uploads and the readback, 6.5% on the main thread for the window's upload), about 5% this repository's code.
+4. Decoding the screen track alone with FFmpeg takes 0.34 of a core at real time on one thread and 0.47 on four; one thread still decodes it 2.9 times faster than real time on that machine. The camera track adds about 0.30.
+
+**Changes Made**:
+- `apps/desktop-gpui/src/editor_window.rs`: a playback frame that arrives while the frame before it is unpainted waits for that paint, once a collision repeats within a second of playback (#4508).
+- `apps/desktop-gpui/src/editor_window.rs`, `app_windows.rs`: Windows and Linux readback frames go into one `StreamingImage` per editor window, written when the window accepts the frame (#4509).
+
+**Results** (before → after both changes):
+
+| Platform | Runs each | fps, median (min..max) | Frames never painted per run | CPU cores | Peak memory |
+|---|---|---|---|---|---|
+| Linux, NVIDIA T4 | 12 | 60.0 (36.0..60.0) → 60.0 (59.9..60.0) | 0 (0..215) → 0 (0..1) | 1.40 → 1.33 | 1215 → 1197 MB |
+| Windows, NVIDIA T4 | 12 | 60.0 (32.7..60.0) → 60.0 (59.9..60.1) | 0 (0..245) → 0 (0..1) | 1.30 → 1.26 | 842 → 839 MB |
+| macOS, virtual M4 (pacing only) | 10 | 59.0 (48.4..60.0) → 59.9 (59.7..60.0) | 9 (0..103) → 1 (0..3) | 0.26 → 0.26 | unchanged |
+| macOS, MacBook Pro M4 Max, 120 Hz (pacing only) | 6 | 60.0 (59.9..60.0) → 60.0 (59.9..60.1) | 0 (0..0) → 0 (0..0) | 0.32 → 0.32 | unchanged |
+
+- On the 120 Hz display no frame collided in either build, so pacing never started there and frame timing is the same as before. In both builds about 5% of frames stay up for three refreshes (25 ms) instead of two, because the engine's 60 fps clock is not aligned to the 120 Hz refresh.
+- At full preview quality on Linux the stream saves more: 1.59 → 1.43 cores and 1304 → 1236 MB.
+- Scrub, zoom drag, slider and pause latency stayed within run-to-run noise on Linux and Windows.
+- Frame order under 21 play, pause and seek cycles and a 90-seek drag during playback: one jump per seek and no backward step, on all three platforms.
+- The settled paused frame is byte-identical. A screen capture of the paused editor is identical on Windows; on Linux 144 preview pixels differ by 1 of 255 in a channel, because the scaled-down frame is now sampled from a texture of its own size.
+
+**Stopping point**: Once pacing starts, frames are painted one refresh later for the rest of that playback. The decode, copy and 120 Hz cadence items are in Next Steps; none was changed here.
 
 ---
 

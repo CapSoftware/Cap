@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { integer } from "@/utils/zod";
 
 export const SOURCE_COMMIT_PAGE_SIZE = 16;
 // Cap's own AWS bucket answers fast enough to finish 16x larger pages well inside a step's deadline.
@@ -34,7 +35,7 @@ export const desktopRecordingSourceCheckpointSchema = z.object({
 	version: z.literal(1),
 	generation: identifier,
 	snapshotId: identifier,
-	revision: z.number().int().nonnegative(),
+	revision: integer().nonnegative(),
 	phase: z.enum(["plan", "enumerate", "copy", "verify", "finalize"]),
 	plan: sourceCommitReferenceSchema.optional(),
 	cursor: z.number().int().nonnegative().max(SOURCE_COMMIT_MAX_OBJECTS),

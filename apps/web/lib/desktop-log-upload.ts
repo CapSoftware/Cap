@@ -3,6 +3,9 @@ import { analyzeDesktopDiagnostics } from "./desktop-diagnostic-analysis";
 
 const MAX_CONTEXT_BYTES = 512 * 1024;
 const MAX_REPORT_BYTES = 2 * 1024 * 1024;
+const MAX_LOG_BYTES = 4 * 1024 * 1024;
+const MAX_LABEL_LENGTH = 256;
+const LOG_OMISSION_MARKER = "[Earlier bytes omitted by the server]\n";
 
 type DesktopLogUpload = {
 	log: string;
@@ -18,6 +21,20 @@ export function confirmedDesktopLogWebhookUrl(value: string): URL {
 	const url = new URL(value);
 	url.searchParams.set("wait", "true");
 	return url;
+}
+
+function boundLogTail(log: string) {
+	if (Buffer.byteLength(log, "utf8") <= MAX_LOG_BYTES) return log;
+	const bytes = Buffer.from(log, "utf8");
+	const budget = MAX_LOG_BYTES - Buffer.byteLength(LOG_OMISSION_MARKER, "utf8");
+	const tail = bytes
+		.subarray(bytes.length - budget)
+		.toString("utf8")
+		.replace(/^\uFFFD+/, "");
+	const lineStart = tail.indexOf("\n");
+	return (
+		LOG_OMISSION_MARKER + (lineStart === -1 ? tail : tail.slice(lineStart + 1))
+	);
 }
 
 function parseAttachment(value: string | undefined, maxBytes: number) {
@@ -46,7 +63,13 @@ function parseAttachment(value: string | undefined, maxBytes: number) {
 	}
 }
 
-export function createDesktopLogUpload(input: DesktopLogUpload): FormData {
+export function createDesktopLogUpload(upload: DesktopLogUpload): FormData {
+	const input = {
+		...upload,
+		log: boundLogTail(upload.log),
+		os: upload.os?.slice(0, MAX_LABEL_LENGTH),
+		version: upload.version?.slice(0, MAX_LABEL_LENGTH),
+	};
 	const diagnostics = parseAttachment(input.diagnostics, MAX_CONTEXT_BYTES);
 	const report = parseAttachment(input.report, MAX_REPORT_BYTES);
 	const context = parseAttachment(input.context, MAX_CONTEXT_BYTES);

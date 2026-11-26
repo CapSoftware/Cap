@@ -81,8 +81,11 @@ use crate::{
 
 mod frame;
 mod loading;
+mod markers;
 mod scenes;
 mod snap;
+mod style_preset_ui;
+mod transitions;
 
 // ---------------------------------------------------------------------------
 // Window geometry
@@ -115,6 +118,8 @@ pub const TRAFFIC_LIGHTS: Option<Point<Pixels>> = Some(point(px(20.), px(20.)));
 /// on the `preview_tx` tuple, so the app owns it.
 pub const EDITOR_PREVIEW_FPS: u32 = 60;
 
+const PREVIEW_SPEED_BUTTON_WIDTH: f32 = 46.;
+
 /// `OUTPUT_SIZE = { x: 1920, y: 1080 }` (`context.ts:150-153`,
 /// `lib.rs:147`).
 const EDITOR_OUTPUT_SIZE: XY<u32> = XY { x: 1920, y: 1080 };
@@ -134,6 +139,28 @@ pub fn preview_resolution(quality: crate::store::EditorPreviewQuality) -> XY<u32
 
 pub fn default_preview_resolution() -> XY<u32> {
     preview_resolution(crate::store::EditorPreviewQuality::Half)
+}
+
+/// The last frame a paused request renders; later requests are clamped to it
+/// (`EditorInstance::spawn_preview_renderer`).
+fn last_preview_frame(duration: f64) -> Option<u32> {
+    if duration <= 0.0 {
+        return None;
+    }
+    let fps = f64::from(EDITOR_PREVIEW_FPS);
+    let mut last = ((duration * fps).ceil() as u32).saturating_sub(1);
+    if f64::from(last) / fps >= duration {
+        last = last.saturating_sub(1);
+    }
+    Some(last)
+}
+
+/// Whether a frame of `shown` output pixels is magnified on a canvas of
+/// `canvas` device pixels. The output keeps the canvas's aspect, so one side
+/// reaching the canvas (within the renderer's rounding) means it is drawn 1:1.
+fn sharp_preview_needed(canvas: [u32; 2], shown: (f32, f32)) -> bool {
+    let covers = |shown: f32, canvas: u32| shown >= canvas as f32 * 0.98;
+    canvas[0] > 0 && canvas[1] > 0 && !covers(shown.0, canvas[0]) && !covers(shown.1, canvas[1])
 }
 
 // ---------------------------------------------------------------------------
@@ -240,8 +267,8 @@ fn compact_header_controls(viewport_width: f32, windows: bool, captions: bool) -
     viewport_width < actions_width * 2. + 144. + caption_controls_width
 }
 
-fn editor_player_width(viewport_width: f32) -> f32 {
-    (viewport_width - SIDEBAR_WIDTH - 8. - 16. - 2.).max(0.)
+fn editor_player_width(viewport_width: f32, panel_width: f32) -> f32 {
+    (viewport_width - panel_width - crate::editor_side_panel::PANEL_GAP - 16. - 2.).max(0.)
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +330,20 @@ fn seeked_playhead(time: f64, frame: u32, playing: bool) -> f64 {
     if playing { time } else { frame_seconds(frame) }
 }
 
+/// The part of a frame layout the canvas overlay draws from. A preset
+/// caption has no box on the canvas, and the overlay only draws while the
+/// player is hovered or dragged, so a new caption under the playhead only
+/// rebuilds the editor when its box could be on screen. Hovering the player
+/// rebuilds the editor anyway, which picks up the latest box.
+fn canvas_hit_layout(layout: FrameLayout, overlay_live: bool) -> FrameLayout {
+    FrameLayout {
+        caption: layout
+            .caption
+            .filter(|caption| overlay_live && caption.is_manual()),
+        ..layout
+    }
+}
+
 fn frame_layout_requires_editor_invalidation(
     first_frame: bool,
     playing: bool,
@@ -360,6 +401,10 @@ pub struct ProjectSummary {
     /// `editorInstance.recordings.segments.length`, which is what
     /// `SyncOffsetsConfig` iterates: offsets are per *recording* clip.
     pub recording_clips: usize,
+    /// Each recording clip's display and camera frame rate as the recorder
+    /// stored it in `recording-meta.json`: the rate it captured at, where the
+    /// probed rate in `recordings` is the track's average.
+    pub recorded_fps: Vec<(u32, Option<u32>)>,
 }
 
 /// Validate a `.cap` before handing it to `EditorInstance::new`.
@@ -382,6 +427,8 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     if !path.exists() {
         return Err(tr::editor::window::open::not_found(path.display()));
     }
+
+    crate::unused_media::settle(path).map_err(tr::editor::window::open::meta_failed)?;
 
     // Repairs tracks older recorders stamped at the wrong rate, and display
     // fps that finalization replaced with the average rate, before anything
@@ -459,6 +506,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    voice_eq: None,
                     volume: None,
                 })
                 .collect(),
@@ -475,6 +523,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
             camera3d_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
         });
     }
 
@@ -504,7 +553,29 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
             .and_then(|segment| segment.mic.as_ref())
             .map(|mic| mic.channels),
         recording_clips: recordings.segments.len(),
+        recorded_fps: match studio.as_ref() {
+            StudioRecordingMeta::SingleSegment { segment } => vec![(
+                segment.display.fps,
+                segment.camera.as_ref().map(|camera| camera.fps),
+            )],
+            StudioRecordingMeta::MultipleSegments { inner } => inner
+                .segments
+                .iter()
+                .map(|segment| {
+                    (
+                        segment.display.fps,
+                        segment.camera.as_ref().map(|camera| camera.fps),
+                    )
+                })
+                .collect(),
+        },
     })
+}
+
+/// The amount drawn and generated zooms start at: the Default zoom amount
+/// setting, falling back to the default for the project's auto zoom rules.
+fn new_zoom_amount(auto_zoom_version: u32) -> f64 {
+    f64::from(crate::store::GeneralSettings::load().zoom_amount_for(auto_zoom_version))
 }
 
 fn load_recording_clicks(
@@ -593,12 +664,57 @@ pub fn frame_image(frame: &RenderedFrame) -> Option<Arc<RenderImage>> {
     ])))
 }
 
-/// What the frame pump hands the window.
 #[derive(Clone)]
 pub(crate) enum EditorPreviewFrame {
     Image(Arc<RenderImage>),
+    #[cfg(not(target_os = "macos"))]
+    Stream(gpui::StreamingImage),
     #[cfg(target_os = "macos")]
     Surface(CVPixelBuffer),
+}
+
+/// What the frame pump hands the window.
+pub(crate) enum ArrivingFrame {
+    Ready(EditorPreviewFrame),
+    /// Readback rows as the renderer produced them. They reach the preview
+    /// texture only once the window accepts the frame, so a frame it turns
+    /// away is never painted.
+    #[cfg(not(target_os = "macos"))]
+    Rgba(RenderedFrame),
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn frame_can_stream(frame: &RenderedFrame) -> bool {
+    let stride = frame.padded_bytes_per_row as usize;
+    let Some(row_bytes) = (frame.width as usize).checked_mul(4) else {
+        return false;
+    };
+    frame.width > 0
+        && frame.height > 0
+        && i32::try_from(frame.width).is_ok()
+        && i32::try_from(frame.height).is_ok()
+        && stride >= row_bytes
+        && stride.is_multiple_of(4)
+        && stride
+            .checked_mul(frame.height as usize)
+            .is_some_and(|bytes| frame.data.len() >= bytes)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn stream_frame(stream: &gpui::StreamingImage, frame: RenderedFrame) -> bool {
+    let size = gpui::size(
+        gpui::DevicePixels(frame.width as i32),
+        gpui::DevicePixels(frame.height as i32),
+    );
+    let stride = frame.padded_bytes_per_row as usize;
+    let streamed = match Arc::try_unwrap(frame.data) {
+        Ok(rows) => stream.set_frame(size, stride, rows).map(drop),
+        Err(rows) => stream.copy_frame(size, stride, &rows),
+    };
+    if let Err(error) = &streamed {
+        tracing::warn!(%error, "a rendered frame could not be streamed to the preview");
+    }
+    streamed.is_ok()
 }
 
 impl EditorPreviewFrame {
@@ -607,6 +723,10 @@ impl EditorPreviewFrame {
         match self {
             Self::Image(image) => {
                 let _ = window.paint_image(bounds, corners, Arc::clone(image), 0, false);
+            }
+            #[cfg(not(target_os = "macos"))]
+            Self::Stream(stream) => {
+                let _ = window.paint_streaming_image(bounds, corners, stream, false);
             }
             #[cfg(target_os = "macos")]
             Self::Surface(surface) => {
@@ -625,25 +745,130 @@ const PREVIEW_RADIUS: f32 = 6.;
 const PLAYER_STAGE_PADDING: f32 = 16.;
 const STAGE_INSET: f32 = PLAYER_STAGE_PADDING - PLAYER_CANVAS_PADDING;
 
+/// How long a paused preview has to sit still before it is redrawn at the
+/// canvas's device-pixel size. Scrubs and slider drags deliver a frame every
+/// 16 to 60 ms, so they stay on the cheaper interactive size.
+const SHARP_PREVIEW_IDLE: Duration = Duration::from_millis(150);
+/// A pause stops the engine on the transport task, and the preview renderer
+/// ignores paused requests until it has.
+const SHARP_PREVIEW_ENGINE_WAIT: Duration = Duration::from_millis(500);
+const SHARP_PREVIEW_ENGINE_POLL: Duration = Duration::from_millis(10);
+
+type PreviewRequests = tokio::sync::watch::Receiver<Option<(u32, u32, XY<u32>)>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SharpPreview {
+    Scheduled,
+    Playing,
+    ChosenQuality,
+    Handoff,
+    NoEngine,
+    NoCanvas,
+    AlreadySharp,
+}
+
+pub(crate) type PreviewCanvasPx = Rc<std::cell::Cell<Option<[u32; 2]>>>;
+
+#[derive(Default)]
+pub(crate) struct PreviewPaints {
+    painted: std::cell::Cell<u64>,
+    waiting: std::cell::Cell<bool>,
+}
+
+/// The playback frame that waits for the one before it to be painted.
+///
+/// The engine's frame clock and the display's refresh are not in step, so
+/// with their phases close two frames can reach the window inside one
+/// refresh and none inside the next: the first was replaced unseen and the
+/// second stayed up for two refreshes, for as long as the phases stayed
+/// close. Showing the newer one only after the older is painted puts each on
+/// its own refresh, one refresh later than it would have been shown.
+///
+/// A lone collision (the first frames of a playback) is left as it was, the
+/// older frame replaced, so playback whose frames arrive apart is never
+/// delayed. Only a second collision within [`COLLISION_WINDOW`] frames, a
+/// second of playback, starts the waiting. At most one frame waits, frames
+/// are never reordered, and a third arrival shows the waiting one at once,
+/// so the picture is never more than one frame behind.
+struct WaitingFrame<T> {
+    waiting: Option<T>,
+    since_collision: u32,
+}
+
+const COLLISION_WINDOW: u32 = 60;
+
+impl<T> Default for WaitingFrame<T> {
+    fn default() -> Self {
+        Self {
+            waiting: None,
+            since_collision: u32::MAX,
+        }
+    }
+}
+
+impl<T> WaitingFrame<T> {
+    fn arrive(&mut self, frame: T, may_wait: bool, previous_unpainted: bool) -> [Option<T>; 2] {
+        let earlier = self.waiting.take();
+        if !may_wait {
+            self.since_collision = u32::MAX;
+            return [earlier, Some(frame)];
+        }
+        let collided = previous_unpainted || earlier.is_some();
+        let repeated = earlier.is_some() || self.since_collision < COLLISION_WINDOW;
+        self.since_collision = if collided {
+            0
+        } else {
+            self.since_collision.saturating_add(1)
+        };
+        if collided && repeated {
+            self.waiting = Some(frame);
+            [earlier, None]
+        } else {
+            [earlier, Some(frame)]
+        }
+    }
+
+    fn take(&mut self) -> Option<T> {
+        self.waiting.take()
+    }
+
+    fn is_some(&self) -> bool {
+        self.waiting.is_some()
+    }
+}
+
 struct PreviewFrameView {
     frame: Option<EditorPreviewFrame>,
     frame_size: (f32, f32),
     frame_rect: crate::editor_canvas::CanvasRect,
+    canvas_px: PreviewCanvasPx,
+    paints: Rc<PreviewPaints>,
+    editor: WeakEntity<EditorWindow>,
     stats: Option<Arc<PumpStats>>,
     frame_sequence: u64,
+    frame_number: u32,
     /// The stage's lift under the preview. A canvas paints raw quads, so the
     /// shadow cannot come from a style and is carried here instead.
     shadow: Vec<gpui::BoxShadow>,
 }
 
 impl PreviewFrameView {
-    fn new(frame_rect: crate::editor_canvas::CanvasRect) -> Self {
+    fn new(
+        frame_rect: crate::editor_canvas::CanvasRect,
+        canvas_px: PreviewCanvasPx,
+        paints: Rc<PreviewPaints>,
+        editor: WeakEntity<EditorWindow>,
+    ) -> Self {
         Self {
             frame: None,
             frame_size: (1920., 1080.),
             frame_rect,
+            canvas_px,
+            paints,
+            editor,
             stats: None,
             frame_sequence: 0,
+            frame_number: 0,
             shadow: crate::theme::preview_shadow(),
         }
     }
@@ -651,6 +876,7 @@ impl PreviewFrameView {
     fn set_frame(
         &mut self,
         frame: EditorPreviewFrame,
+        frame_number: u32,
         frame_size: (f32, f32),
         stats: Option<Arc<PumpStats>>,
         cx: &mut Context<Self>,
@@ -658,6 +884,16 @@ impl PreviewFrameView {
         self.frame_size = frame_size;
         self.stats = stats;
         self.frame_sequence = self.frame_sequence.wrapping_add(1);
+        self.frame_number = frame_number;
+        crate::editor_latency::mark(
+            crate::editor_latency::Stage::Arrived,
+            frame_number,
+            self.frame_sequence,
+        );
+        crate::editor_latency::sized(
+            self.frame_sequence,
+            [frame_size.0 as u32, frame_size.1 as u32],
+        );
         let previous = self.frame.replace(frame);
         cx.notify();
         previous
@@ -671,13 +907,17 @@ impl Render for PreviewFrameView {
         };
         let frame_size = self.frame_size;
         let frame_rect = self.frame_rect.clone();
+        let canvas_px = self.canvas_px.clone();
+        let paints = self.paints.clone();
+        let editor = self.editor.clone();
         let painted = self.stats.clone();
         let frame_sequence = self.frame_sequence;
+        let frame_number = self.frame_number;
         let shadow = self.shadow.clone();
 
         gpui::canvas(
             |bounds, _window, _cx| bounds,
-            move |_, bounds, window, _cx| {
+            move |_, bounds, window, cx| {
                 let container_width: f32 = bounds.size.width.into();
                 let container_height: f32 = bounds.size.height.into();
                 let (width, height) = letterbox(
@@ -698,6 +938,19 @@ impl Render for PreviewFrameView {
                     container: bounds,
                     frame: fitted,
                 }));
+                let scale = window.scale_factor() * crate::editor_latency::backing_scale();
+                let device = [
+                    (width * scale).round() as u32,
+                    (height * scale).round() as u32,
+                ];
+                if canvas_px.replace(Some(device)) != Some(device) {
+                    let editor = editor.clone();
+                    cx.defer(move |cx| {
+                        let _ = editor.update(cx, |editor, cx| {
+                            editor.schedule_sharp_preview(SHARP_PREVIEW_IDLE, cx);
+                        });
+                    });
+                }
                 let radius = px(PREVIEW_RADIUS);
                 window.paint_drop_shadows(fitted, gpui::Corners::all(radius), &shadow);
                 window.paint_quad(gpui::fill(fitted, gpui::black()).corner_radii(radius));
@@ -713,6 +966,20 @@ impl Render for PreviewFrameView {
                 if let Some(stats) = &painted {
                     stats.record_paint(frame_sequence);
                 }
+                crate::editor_latency::mark(
+                    crate::editor_latency::Stage::Painted,
+                    frame_number,
+                    frame_sequence,
+                );
+                paints.painted.set(frame_sequence);
+                if paints.waiting.get() {
+                    let editor = editor.clone();
+                    window.defer(cx, move |window, cx| {
+                        let _ = editor.update(cx, |editor, cx| {
+                            editor.show_waiting_frame(window, cx);
+                        });
+                    });
+                }
             },
         )
         .size_full()
@@ -727,6 +994,7 @@ enum EditorSection {
     Transport,
     Sidebar,
     Timeline,
+    Transcript,
 }
 
 struct EditorSectionView {
@@ -758,9 +1026,8 @@ impl Render for EditorSectionView {
                     editor.render_player_toolbar(window, cx).into_any_element()
                 }
                 EditorSection::Transport => editor.render_transport(window, cx).into_any_element(),
-                // The Clips layout mode swaps the config sidebar's column for the
-                // clips sidebar; the config sidebar is hidden, not destroyed
-                // (`Editor.tsx:728-747`).
+                // The panel's Clips tab draws in the config sidebar's place; the
+                // config sidebar's state is kept, not destroyed.
                 EditorSection::Sidebar => {
                     if !editor.visual_ready() {
                         return editor.render_preparing_sidebar(!matches!(
@@ -769,7 +1036,7 @@ impl Render for EditorSectionView {
                         ));
                     }
                     let sidebar = if editor.clips.open {
-                        editor.render_clips_sidebar(cx).into_any_element()
+                        editor.render_clips_panel(cx).into_any_element()
                     } else {
                         editor.with_style_controls(|editor| {
                             editor.render_sidebar(cx).into_any_element()
@@ -781,6 +1048,7 @@ impl Render for EditorSectionView {
                         editor.render_preparing_sidebar(false),
                     )
                 }
+                EditorSection::Transcript => editor.render_transcript(window, cx),
                 EditorSection::Timeline => {
                     let viewport_width: f32 = window.viewport_size().width.into();
                     let viewport_height: f32 = window.viewport_size().height.into();
@@ -794,7 +1062,7 @@ impl Render for EditorSectionView {
 }
 
 pub struct EditorFrame {
-    pub(crate) frame: EditorPreviewFrame,
+    pub(crate) frame: ArrivingFrame,
     pub layout: FrameLayout,
     /// `RenderedFrame.frame_number` -- which frame this picture actually is.
     /// Logged at debug so a seek can be checked against what it asked for.
@@ -996,7 +1264,6 @@ pub struct Desired {
     pub seek: Option<u32>,
     pub seek_gen: u64,
     pub resolution: XY<u32>,
-    pub rate: f64,
 }
 
 impl Default for Desired {
@@ -1006,7 +1273,6 @@ impl Default for Desired {
             seek: None,
             seek_gen: 0,
             resolution: default_preview_resolution(),
-            rate: 1.0,
         }
     }
 }
@@ -1072,10 +1338,6 @@ impl TransportHandle {
         self.modify(|desired| desired.resolution = resolution);
     }
 
-    pub fn set_rate(&self, rate: f64) {
-        self.modify(|desired| desired.rate = rate);
-    }
-
     pub fn play_from(&self, frame: u32) {
         self.modify(|desired| {
             desired.playing = true;
@@ -1108,7 +1370,6 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
     let fps = EDITOR_PREVIEW_FPS;
     let mut applied_playing = false;
     let mut applied_gen = 0u64;
-    let mut applied_rate = instance.playback_rate();
     // The engine's own liveness, epoch-guarded inside `EditorInstance` so a
     // deliberate stop/start transition can never masquerade as a death.
     let mut active_rx = instance.playback_watch();
@@ -1138,6 +1399,15 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
                     tracing::debug!("engine stopped without a pause request");
                     applied_playing = false;
                     let _ = driver.engine_stopped.try_send(());
+                    let resolution = driver
+                        .desired
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .resolution;
+                    let instance = instance.clone();
+                    tokio::spawn(async move {
+                        rerender_paused_frame_enhanced(&instance, resolution).await;
+                    });
                 }
                 continue;
             }
@@ -1148,11 +1418,6 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let seeking = want.seek_gen != applied_gen;
-
-        if want.rate != applied_rate {
-            applied_rate = want.rate;
-            instance.set_playback_rate(want.rate);
-        }
 
         // A pause stops the engine outright. A seek no longer does: the
         // engine holds a live-seek input (`PlaybackHandle::seek`), so
@@ -1168,6 +1433,13 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
             };
             if let Some(handle) = handle {
                 handle.stop();
+            }
+            if !seeking {
+                let instance = instance.clone();
+                let resolution = want.resolution;
+                tokio::spawn(async move {
+                    rerender_paused_frame_enhanced(&instance, resolution).await;
+                });
             }
         }
 
@@ -1251,6 +1523,10 @@ enum Scrub {
     Press { time: f64 },
 }
 
+/// The narrowest an audio fade's double-click target gets, so a short fade
+/// can still be reset.
+const FADE_RESET_MIN_PX: f64 = 8.;
+
 /// `PROJECT_SAVE_DEBOUNCE_MS` (`ED/context.ts:185`).
 const PROJECT_SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
 
@@ -1282,6 +1558,17 @@ enum DragKind {
     ClipTrimEnd {
         end: f64,
     },
+    /// The length of the transition into clip `index`: a press on the clip's
+    /// body dragged onto the clip before it, or on one of the transition's
+    /// edges. `grow` is +1 when moving right lengthens it and -1 when moving
+    /// left does.
+    TransitionDuration {
+        index: usize,
+        initial: f64,
+        grow: f64,
+        kind: cap_project::ClipTransitionType,
+        from_body: bool,
+    },
     /// `TL/ZoomTrack.tsx:188-295`: a press on bare zoom track, which becomes a
     /// segment either on the first move (dragged to length) or on release
     /// (the default one-`minDuration` box).
@@ -1292,6 +1579,28 @@ enum DragKind {
         min_duration: f64,
         created: Option<usize>,
     },
+}
+
+/// `kind` with its bounds narrowed so the segment stays inside `window` (a
+/// tied caption's clip piece): a handle stops at the window's edge and a move
+/// slides up to it, snapping as at any other limit.
+fn keep_drag_in_window(kind: DragKind, window: (f64, f64)) -> DragKind {
+    match kind {
+        DragKind::TrimStart { start, bounds } => DragKind::TrimStart {
+            start,
+            bounds: edits::window_trim_start_bounds(window, bounds),
+        },
+        DragKind::TrimEnd { end, bounds } => DragKind::TrimEnd {
+            end,
+            bounds: edits::window_trim_end_bounds(window, bounds),
+        },
+        DragKind::Move { start, end, bounds } => DragKind::Move {
+            start,
+            end,
+            bounds: edits::window_move_bounds(window, (start, end), bounds),
+        },
+        other => other,
+    }
 }
 
 /// One live pointer drag on a segment.
@@ -1372,7 +1681,17 @@ pub struct EditorWindow {
     preparing_frame_presented: bool,
     preparing_seed: Option<Arc<crate::editor_preparing::presentation::PreparingTimelineSeed>>,
     pub(crate) latest_frame: Option<EditorPreviewFrame>,
+    #[cfg(not(target_os = "macos"))]
+    preview_stream: gpui::StreamingImage,
     preview: Entity<PreviewFrameView>,
+    preview_paints: Rc<PreviewPaints>,
+    waiting_frame: WaitingFrame<(std::sync::Weak<EditorInstance>, EditorFrame)>,
+    preview_canvas_px: PreviewCanvasPx,
+    sharp_preview: Option<gpui::Task<()>>,
+    /// Subscribed when playback stops: changed once a paused request has been
+    /// sent since, which is when the latest request names the frame the
+    /// preview is heading to.
+    paused_requests: Option<PreviewRequests>,
     header: Entity<EditorSectionView>,
     toolbar: Entity<EditorSectionView>,
     transport_controls: Entity<EditorSectionView>,
@@ -1382,13 +1701,17 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
+    pub(crate) audio_levels: Option<Arc<cap_rendering::AudioLevels>>,
+    /// Held from the window opening until it gives up its engine, so the
+    /// library refuses to delete the project from under an open editor.
+    open_project: Option<crate::library::ProjectOpenInEditor>,
     focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
     /// `editorState.playing`.
     pub(crate) playing: bool,
     /// `editorState.playbackTime`, in seconds.
-    playhead: f64,
+    pub(crate) playhead: f64,
     last_playhead_redraw: Instant,
     /// Whether the current play epoch has applied at least one engine sample.
     /// Every path that (re)starts the engine clears it -- `start_playback`,
@@ -1416,9 +1739,9 @@ pub struct EditorWindow {
 
     // -- Timeline -----------------------------------------------------------
     /// Every track the strip draws.
-    timeline: TimelineModel,
+    pub(crate) timeline: TimelineModel,
     /// The viewport, the hover ghost and the hovered track.
-    view: TimelineView,
+    pub(crate) view: TimelineView,
     playback_follow: timeline::PlaybackFollow,
     /// `onMount`'s `checkBounds` runs once, when the timeline first has a
     /// width (`TL/index.tsx:689-703`). There is no mount hook here, so the
@@ -1472,6 +1795,11 @@ pub struct EditorWindow {
     pub(crate) keyboard_generation_message: Option<String>,
     pub(crate) clean_up: crate::clean_up::CleanUpState,
     clip_speed: Option<ClipSpeedMenu>,
+    markers: markers::MarkersState,
+    transition_popover: Option<TransitionPopover>,
+    /// The timeline as it was when a transition drag began; every step of the
+    /// drag is applied to a copy of it.
+    transition_drag_base: Option<TimelineConfiguration>,
     timeline_scroll: gpui::ScrollHandle,
     minimap_drag: Option<timeline::MinimapDrag>,
     /// Magnetic edges for the live drag: playhead, clip cuts and every other
@@ -1489,7 +1817,7 @@ pub struct EditorWindow {
     clip_anim_generation: u64,
     /// `editorInstance.recordings.segments[i].display.duration`, which the clip
     /// trim clamps read (`TL/ClipTrack.tsx:1160-1162`).
-    clip_display_durations: Vec<f64>,
+    pub(crate) clip_display_durations: Vec<f64>,
     /// `editorInstance.recordingDuration` = `recordings.duration()`.
     recording_duration: f64,
     /// `meta().hasCamera` and "more than one recording clip", the two facts
@@ -1577,9 +1905,25 @@ pub struct EditorWindow {
     pub(crate) canvas_overlay_rect: Option<crate::editor_canvas::NormRect>,
     /// `snapGuides()`.
     pub(crate) snap_guides: Vec<crate::editor_canvas::SnapGuide>,
+    /// The live gesture on the Shape layer: a move, a handle drag or a draw.
+    pub(crate) shape_drag: Option<crate::editor_shapes::ShapeDrag>,
+    /// The shape under the pointer, by config index.
+    pub(crate) shape_hover: Option<usize>,
+    /// The armed draw tool: the next press on the preview draws this kind.
+    pub(crate) shape_tool: Option<cap_project::ShapeKind>,
+    pub(crate) shape_tool_menu: bool,
+    pub(crate) shape_tool_trigger: Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
+    /// What a new shape is: the kind last drawn, added or picked.
+    pub(crate) last_shape_kind: cap_project::ShapeKind,
+    pub(crate) shape_clipboard: Vec<cap_project::ShapeSegment>,
 
     preview_quality: crate::store::EditorPreviewQuality,
-    pub(crate) playback_rate: f64,
+    preview_speed: cap_editor::PreviewSpeed,
+    /// The transport's Enhance toggle: the paused preview shows the enhanced
+    /// frame. Never saved with the project.
+    preview_enhance: bool,
+    /// Compare is held down: the paused preview shows the original.
+    preview_comparing: bool,
     pub(crate) tracks: TrackLanes,
     toolbar_menu: Option<OpenToolbarMenu>,
     text_menu: Option<OpenTextMenu>,
@@ -1613,12 +1957,17 @@ pub struct EditorWindow {
     /// exactly as the Solid dialogs replace the dropdown.
     presets_menu: Option<PresetsMenu>,
     preset_dialog: Option<PresetDialog>,
+    style_presets: style_preset_ui::StylePresetsState,
     caption_sync_signature: Option<u64>,
     pub(crate) export: Option<ExportUi>,
     pub(crate) sharing: Option<cap_project::SharingMeta>,
-    /// The Clips layout mode (`ClipsSidebar.tsx`): while open, the config
-    /// sidebar's column draws the clips sidebar instead.
+    /// The panel's Clips tab (`ClipsSidebar.tsx`): while open, the config
+    /// sidebar's place in the panel draws the clips list instead.
     pub(crate) clips: crate::editor_clips::ClipsState,
+    pub(crate) transcript: crate::transcript::TranscriptState,
+    transcript_view: Entity<EditorSectionView>,
+    /// The right-hand panel's shared width and its grip drag.
+    pub(crate) panel: crate::editor_side_panel::PanelState,
 }
 
 struct PresetsMenu {
@@ -1641,6 +1990,7 @@ enum PresetDialog {
     Create { default: bool },
     Rename { index: usize },
     Delete { index: usize },
+    Style(style_preset_ui::StyleDialog),
 }
 
 /// The add-track tray, computed once when it opens. It slides out of the
@@ -1696,6 +2046,44 @@ const CLIP_MENU_WIDTH: f32 = 300.;
 const DEFAULT_CLIP_TRANSITION_DURATION: f64 = 0.5;
 /// Lengths longer than half the shorter clip are left out of the menu.
 const CLIP_TRANSITION_DURATIONS: [f64; 4] = [0.25, 0.5, 1.0, 1.5];
+const TRANSITION_POPOVER_WIDTH: f32 = 340.;
+/// A press this close to a transition's edge resizes it.
+const TRANSITION_EDGE_PX: f32 = 6.;
+const TRANSITION_JOIN_CHIP: f32 = 18.;
+
+/// The transition editor: opened by clicking a transition on the timeline,
+/// adding one at a cut, or from the clip menu.
+#[derive(Clone, Copy)]
+struct TransitionPopover {
+    index: usize,
+    left: Pixels,
+    anchor: ClipMenuAnchor,
+    /// The kind tile under the pointer, whose preview plays.
+    hovered: Option<cap_project::ClipTransitionType>,
+    /// The two clips the transition joins, so an edit that renumbers the
+    /// clips (a split, a delete, an undo) closes the popover instead of
+    /// leaving it on another cut.
+    clips: [TransitionClipKey; 2],
+}
+
+type TransitionClipKey = (u32, u64, u64);
+
+fn transition_clip_keys(
+    timeline: &TimelineConfiguration,
+    index: usize,
+) -> Option<[TransitionClipKey; 2]> {
+    let key = |segment: &cap_project::TimelineSegment| {
+        (
+            segment.recording_clip,
+            segment.start.to_bits(),
+            segment.end.to_bits(),
+        )
+    };
+    Some([
+        key(timeline.segments.get(index.checked_sub(1)?)?),
+        key(timeline.segments.get(index)?),
+    ])
+}
 const TEXT_MENU_WIDTH: f32 = 250.;
 /// Roughly the menu's laid-out height; only decides which side of its anchor
 /// the card opens on.
@@ -1913,14 +2301,8 @@ fn clip_menu_row(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolbarMenu {
     AspectRatio,
-    PlaybackRate,
-}
-
-pub(crate) const PLAYBACK_RATES: [f64; 7] = [0.5, 0.75, 1.0, 1.2, 1.5, 1.75, 2.0];
-
-pub(crate) fn playback_rate_label(rate: f64) -> String {
-    let label = format!("{rate:.2}");
-    format!("{}×", label.trim_end_matches('0').trim_end_matches('.'))
+    PreviewSpeed,
+    CaptionDownload,
 }
 
 struct OpenToolbarMenu {
@@ -1939,6 +2321,11 @@ impl EditorWindow {
         crate::theme::bind_window(window, cx);
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
+                if let Some(crop) = this.crop.as_mut()
+                    && crop.keys.release()
+                {
+                    cx.notify();
+                }
                 let minimap_canceled = this.minimap_drag.take().is_some();
                 let lane_reorder_canceled = this.lane_reorder.is_some();
                 if lane_reorder_canceled {
@@ -1986,6 +2373,7 @@ impl EditorWindow {
                 return false;
             }
             let path = path.clone();
+            crate::transcription::cancel_refinement(&path);
             cx.defer(move |cx| crate::app_windows::editor_closed(&path, window_id, cx));
             true
         });
@@ -2052,8 +2440,17 @@ impl EditorWindow {
                 _ => {}
             },
         ));
+        let markers_state = markers::MarkersState::new(window, cx, &mut text_events);
         let player_frame_rect = crate::editor_canvas::canvas_rect_cell();
-        let preview = cx.new(|_| PreviewFrameView::new(player_frame_rect.clone()));
+        let preview_canvas_px = PreviewCanvasPx::default();
+        let preview_paints = Rc::new(PreviewPaints::default());
+        let preview = cx.new({
+            let frame_rect = player_frame_rect.clone();
+            let canvas_px = preview_canvas_px.clone();
+            let paints = preview_paints.clone();
+            let editor = cx.entity().downgrade();
+            move |_| PreviewFrameView::new(frame_rect, canvas_px, paints, editor)
+        });
         let editor = cx.entity();
         let header = cx.new({
             let editor = editor.clone();
@@ -2075,6 +2472,10 @@ impl EditorWindow {
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Sidebar, cx)
         });
+        let transcript_view = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::Transcript, cx)
+        });
         let timeline_view =
             cx.new(move |cx| EditorSectionView::new(&editor, EditorSection::Timeline, cx));
 
@@ -2088,6 +2489,7 @@ impl EditorWindow {
                 .ok()
                 .and_then(|meta| meta.sharing),
             pending_save: Rc::new(RefCell::new(PendingProjectSave::new(project_path.clone()))),
+            open_project: None,
             project_path,
             state: LoadState::Loading,
             preparing_consumer: None,
@@ -2102,7 +2504,14 @@ impl EditorWindow {
             preparing_frame_presented: false,
             preparing_seed: None,
             latest_frame: None,
+            #[cfg(not(target_os = "macos"))]
+            preview_stream: gpui::StreamingImage::new(gpui::StreamingImageFormat::Rgba8),
             preview,
+            preview_paints,
+            waiting_frame: WaitingFrame::default(),
+            preview_canvas_px,
+            sharp_preview: None,
+            paused_requests: None,
             header,
             toolbar,
             transport_controls,
@@ -2110,6 +2519,7 @@ impl EditorWindow {
             timeline_view,
             frame_layout: None,
             instance: None,
+            audio_levels: None,
             focus: cx.focus_handle(),
             playing: false,
             playhead: 0.0,
@@ -2148,6 +2558,9 @@ impl EditorWindow {
             clean_up: crate::clean_up::CleanUpState::default(),
             keyboard_generation_message: None,
             clip_speed: None,
+            markers: markers_state,
+            transition_popover: None,
+            transition_drag_base: None,
             timeline_scroll: gpui::ScrollHandle::new(),
             minimap_drag: None,
             drag_snap_targets: snap::SnapTargets::default(),
@@ -2186,8 +2599,17 @@ impl EditorWindow {
             canvas_drag_camera_rect: None,
             canvas_overlay_rect: None,
             snap_guides: Vec::new(),
+            shape_drag: None,
+            shape_hover: None,
+            shape_tool: None,
+            shape_tool_menu: false,
+            shape_tool_trigger: Rc::new(std::cell::Cell::new(None)),
+            last_shape_kind: cap_project::ShapeKind::Arrow,
+            shape_clipboard: Vec::new(),
             preview_quality: crate::store::GeneralSettings::load().editor_preview_quality,
-            playback_rate: 1.0,
+            preview_speed: crate::store::GeneralSettings::load().editor_preview_speed,
+            preview_enhance: crate::store::GeneralSettings::load().editor_preview_enhance,
+            preview_comparing: false,
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
             toolbar_menu: None,
             text_menu: None,
@@ -2210,15 +2632,40 @@ impl EditorWindow {
             timeline_resize: None,
             presets_menu: None,
             preset_dialog: None,
+            style_presets: style_preset_ui::StylePresetsState::load(),
             caption_sync_signature: None,
             export: None,
             clips: crate::editor_clips::ClipsState::default(),
+            transcript: crate::transcript::TranscriptState::new(cx.focus_handle()),
+            transcript_view,
+            panel: crate::editor_side_panel::PanelState::load(window.window_handle()),
         }
     }
 
     /// `frameNumberToRender`'s time: `previewTime ?? playbackTime`
     /// (`Editor.tsx:515-519`), floored at zero.
     /// Where the playhead stands, for the panels that mark the pose on it.
+    fn player_width(&self, viewport_width: f32) -> f32 {
+        editor_player_width(viewport_width, self.panel_width(viewport_width))
+    }
+
+    /// The right-hand panel's body: the sidebar's cached section (Style and
+    /// Clips) or the transcript's own, so a playing transcript repaints alone.
+    pub(crate) fn cached_panel_body(
+        &self,
+        transcript: bool,
+        style: StyleRefinement,
+    ) -> gpui::AnyElement {
+        if transcript {
+            self.transcript_view
+                .clone()
+                .cached(style)
+                .into_any_element()
+        } else {
+            self.sidebar_view.clone().cached(style).into_any_element()
+        }
+    }
+
     pub(crate) fn playhead_time(&self) -> f64 {
         self.playhead
     }
@@ -2313,6 +2760,7 @@ impl EditorWindow {
         self.canvas_selection = None;
         self.project = config;
         self.synchronize_caption_track(true);
+        self.transcript.dirty = true;
         self.history = ProjectHistory::new(self.project.clone());
         self.tracks = TrackLanes::from_project(&self.project, self.has_camera);
         self.rebuild_timeline();
@@ -2346,6 +2794,7 @@ impl EditorWindow {
         self.timeline.imported_waveforms = imported;
         self.timeline.waveform_paths = waveform_paths;
         self.imported_waveforms_stale = true;
+        self.refresh_markers();
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
             // Deleting or trimming the clip under the playhead shortens the
@@ -2407,6 +2856,15 @@ impl EditorWindow {
     fn dismiss_transient_menus(&mut self) {
         dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
         self.text_menu = None;
+        if let Some(popover) = self.transition_popover {
+            let still_there = self.project.timeline.as_ref().is_some_and(|timeline| {
+                timeline.effective_transition(popover.index).is_some()
+                    && transition_clip_keys(timeline, popover.index) == Some(popover.clips)
+            });
+            if !still_there {
+                self.transition_popover = None;
+            }
+        }
     }
 
     /// `getMicWaveforms()` / `getSystemAudioWaveforms()` resolving
@@ -2422,6 +2880,7 @@ impl EditorWindow {
     ) {
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
+        self.refresh_audio_levels();
         cx.notify();
         window.refresh();
     }
@@ -2556,6 +3015,97 @@ impl EditorWindow {
         true
     }
 
+    /// A double-click on a zoom or scene handle runs that edge to its
+    /// neighbour, and one inside an audio fade resets it. The segment the
+    /// first click selected stays selected, as it did in 0.6.0. `pointer_time`
+    /// is the time under the pointer without the snap to zero near the
+    /// timeline's start, the same mapping the hit test used.
+    #[allow(clippy::too_many_arguments)]
+    fn double_click_segment(
+        &mut self,
+        kind: TrackKind,
+        lane: u32,
+        hit: edits::Hit,
+        pointer_time: f64,
+        secs_per_pixel: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let selection = self.selection.clone();
+        let changed = match (kind, hit) {
+            (TrackKind::Zoom | TrackKind::Scene, edits::Hit::Handle { index, start }) => {
+                let segments = self.timeline.segments(kind);
+                if index >= segments.len() {
+                    return false;
+                }
+                let edge =
+                    edits::fill_gap_edge(segments, lane, index, start, self.total_duration());
+                let changed = self.edit(
+                    |timeline| {
+                        if start {
+                            edits::set_segment_start(timeline, kind, index, edge)
+                        } else {
+                            edits::set_segment_end(timeline, kind, index, edge)
+                        }
+                    },
+                    window,
+                    cx,
+                );
+                if changed {
+                    self.set_preview_time(edge);
+                    self.note_edit("fill-gap", Some(kind));
+                }
+                changed
+            }
+            // A short fade lies wholly inside the 10 px trim-handle zone, so a
+            // handle hit can be a fade double-click too.
+            (TrackKind::Audio, edits::Hit::Body { index } | edits::Hit::Handle { index, .. }) => {
+                let Some(fade_in) = self
+                    .project
+                    .timeline
+                    .as_ref()
+                    .and_then(|timeline| timeline.audio_segments.get(index))
+                    .and_then(|segment| {
+                        edits::fade_reset_at(
+                            segment.start,
+                            segment.end,
+                            segment.fade_in,
+                            segment.fade_out,
+                            pointer_time,
+                            FADE_RESET_MIN_PX * secs_per_pixel,
+                        )
+                    })
+                else {
+                    return false;
+                };
+                let changed = self.edit(
+                    |timeline| {
+                        let Some(segment) = timeline.audio_segments.get_mut(index) else {
+                            return false;
+                        };
+                        if fade_in {
+                            segment.fade_in = 0.;
+                        } else {
+                            segment.fade_out = 0.;
+                        }
+                        true
+                    },
+                    window,
+                    cx,
+                );
+                if changed {
+                    self.note_edit("fade-reset", Some(kind));
+                }
+                changed
+            }
+            _ => return false,
+        };
+        if changed {
+            self.set_selection(selection, cx);
+        }
+        changed
+    }
+
     pub(crate) fn edit(
         &mut self,
         change: impl FnOnce(&mut TimelineConfiguration) -> bool,
@@ -2574,7 +3124,7 @@ impl EditorWindow {
         )
     }
 
-    fn edit_timeline_project(
+    pub(crate) fn edit_timeline_project(
         &mut self,
         change: impl FnOnce(&mut ProjectConfiguration) -> bool,
         window: &mut Window,
@@ -2671,6 +3221,8 @@ impl EditorWindow {
         }
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
+        self.transcript.dirty = true;
+        self.style_presets.close_menu();
         if rebuild_timeline {
             self.rebuild_timeline();
         } else {
@@ -2688,8 +3240,68 @@ impl EditorWindow {
         }
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
+        self.transcript.dirty = true;
         self.publish_project();
         cx.notify();
+    }
+
+    /// Swaps refined word times into the project and into every undo entry
+    /// they apply to, so the refinement is not an undo step of its own and
+    /// undoing an earlier edit keeps the refined times.
+    pub(crate) fn land_caption_refinement(
+        &mut self,
+        refined: &crate::transcription::RefinedCaptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.project_ready() {
+            return;
+        }
+        let durations = self.clip_display_durations.clone();
+        let removed_takes = self
+            .project
+            .timeline
+            .as_ref()
+            .map(|timeline| self.history.removed_takes(timeline))
+            .unwrap_or_default();
+        let energy = self.transcript.energy.clone();
+        let mut landing = crate::transcript::RefinementLanding::new(
+            refined,
+            &durations,
+            &removed_takes,
+            energy.as_deref(),
+        );
+        let moves_cuts = landing
+            .land(&mut self.project.clone())
+            .is_some_and(|moved| moved > 0);
+        if moves_cuts {
+            self.end_field_edit(cx);
+            self.close_color_picker(cx);
+            self.dismiss_frame_controls(cx);
+            self.canvas_mouse_up(window, cx);
+            self.end_timeline_gesture(window, cx);
+        }
+        let landed = landing.land(&mut self.project);
+        self.history.amend_all(|entry| {
+            landing.land(entry);
+        });
+        let Some(moved_cuts) = landed else {
+            return;
+        };
+        self.caption_sync_signature = self.caption_projection_signature();
+        self.transcript.dirty = true;
+        if moved_cuts > 0 {
+            self.transcript.selection = None;
+            self.transcript.hovered_cut = None;
+            self.set_selection(None, cx);
+            self.canvas_selection = None;
+            self.rebuild_timeline();
+            self.note_edit("caption-refinement", Some(TrackKind::Clip));
+        }
+        self.publish_project();
+        self.schedule_save(window, cx);
+        cx.notify();
+        window.refresh();
     }
 
     fn synchronize_caption_track(&mut self, force: bool) {
@@ -2748,7 +3360,9 @@ impl EditorWindow {
         let Some(instance) = &self.instance else {
             return;
         };
-        instance.project_config.0.send(self.project.clone()).ok();
+        let mut config = self.project.clone();
+        config.screen_enhancement = self.preview_screen_enhancement();
+        instance.project_config.0.send(config).ok();
         if !self.playing {
             let time = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
             request_frame(
@@ -2786,11 +3400,12 @@ impl EditorWindow {
     /// `projectHistory.undo()` -- reconcile the previous snapshot back over the
     /// store. The playhead is not moved and the selection is not restored;
     /// neither is in the snapshot (`editorState` is a separate store).
-    fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
         self.close_color_picker(cx);
         self.canvas_mouse_up(window, cx);
+        self.end_timeline_gesture(window, cx);
         let Some(config) = self.history.undo().cloned() else {
             return;
         };
@@ -2798,11 +3413,12 @@ impl EditorWindow {
         self.note_edit("undo", None);
     }
 
-    fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
         self.close_color_picker(cx);
         self.canvas_mouse_up(window, cx);
+        self.end_timeline_gesture(window, cx);
         let Some(config) = self.history.redo().cloned() else {
             return;
         };
@@ -2821,6 +3437,7 @@ impl EditorWindow {
         self.sidebar.style_target = None;
         self.sidebar.menu = None;
         self.text_menu = None;
+        self.style_presets.close_menu();
         self.selection = None;
         self.sidebar.image_asset_status = None;
         self.canvas_selection = None;
@@ -2829,6 +3446,8 @@ impl EditorWindow {
         self.canvas_drag_camera_rect = None;
         self.canvas_overlay_rect = None;
         self.snap_guides.clear();
+        self.shape_drag = None;
+        self.shape_hover = None;
         let previous_animated_gradient = self.animated_gradient_config().cloned();
         let animated_background_changed = self.animated_gradient_config()
             != match &config.background.source {
@@ -2838,7 +3457,15 @@ impl EditorWindow {
             || crate::editor_sidebar::is_none_background(&self.project)
                 != crate::editor_sidebar::is_none_background(&config);
         self.project = config;
+        // History holds the project, not the row flags, and these two rows
+        // show exactly when their overlay renders.
+        let restored = TrackLanes::from_project(&self.project, self.has_camera);
+        self.tracks.caption = restored.caption;
+        self.tracks.keyboard = restored.keyboard;
         self.synchronize_caption_track(false);
+        self.transcript.dirty = true;
+        self.transcript.selection = None;
+        self.transcript.hovered_cut = None;
         self.rebuild_timeline();
         if self.animated_gradient_config().is_some() {
             self.sidebar.source_tab = crate::editor_sidebar::initial_source_tab(&self.project);
@@ -3159,11 +3786,39 @@ impl EditorWindow {
         if instance.preparing_adoption().is_some() {
             self.ordinary_handoff_frame = None;
         }
+        instance.set_preview_speed(self.preview_speed);
+        // A restored Enhance toggle reaches the renderer before its first
+        // frame, not only once something publishes the project.
+        let enhancement = self.preview_screen_enhancement();
+        instance
+            .project_config
+            .0
+            .send_modify(|config| config.screen_enhancement = enhancement);
         self.instance = Some(instance);
     }
 
+    fn preview_screen_enhancement(&self) -> cap_project::ScreenEnhancement {
+        if self.preview_enhance && !self.preview_comparing {
+            cap_project::ScreenEnhancement::on()
+        } else {
+            cap_project::ScreenEnhancement::default()
+        }
+    }
+
+    pub(crate) fn hold_project(&mut self, project: crate::library::ProjectOpenInEditor) {
+        self.open_project = Some(project);
+    }
+
+    /// Every way an editor window goes away takes its engine first: closing,
+    /// reloading after an import, and the editor's own Delete.
     pub fn take_instance(&mut self) -> Option<Arc<EditorInstance>> {
+        self.open_project = None;
         self.instance.take()
+    }
+
+    pub(crate) fn unused_media_request(&self) -> Option<crate::unused_media::Request> {
+        let instance = self.instance.as_ref()?;
+        crate::unused_media::Request::new(&self.project, &instance.recordings)
     }
 
     pub fn timeline_transform(&self) -> Transform {
@@ -3184,6 +3839,9 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The render device exists by now, so a software fallback has been
+        // noted and an unchosen default can step down to Half.
+        self.preview_quality = crate::store::GeneralSettings::load().editor_preview_quality;
         transport.set_resolution(self.preview_resolution());
         self.transport = Some(transport);
         self.stats = Some(stats);
@@ -3288,6 +3946,7 @@ impl EditorWindow {
 
         self.last_playhead_redraw = Instant::now();
         self.invalidate_playback_chrome(window, cx);
+        self.transcript_sync_active(true, cx);
     }
 
     /// While the Clean Up marks are on screen, playback previews the cut: a
@@ -3299,7 +3958,7 @@ impl EditorWindow {
             self.silence_skip_target = None;
             return;
         }
-        let frame = self.effective_playback_rate().max(1.) / f64::from(EDITOR_PREVIEW_FPS);
+        let frame = self.preview_speed.as_f64().max(1.) / f64::from(EDITOR_PREVIEW_FPS);
         if let Some(target) = self.silence_skip_target {
             if now < target - frame {
                 return;
@@ -3342,6 +4001,11 @@ impl EditorWindow {
             self.view.playing = false;
             self.report_playback();
         }
+        self.paused_requests = self
+            .instance
+            .as_ref()
+            .map(|instance| instance.preview_tx.subscribe());
+        self.schedule_sharp_preview(Duration::ZERO, cx);
         cx.notify();
     }
 
@@ -3364,12 +4028,15 @@ impl EditorWindow {
     }
 
     fn start_playback(&mut self, from: f64, cx: &mut Context<Self>) {
+        // Compare only applies to a paused frame, so playing ends it.
+        self.set_preview_comparing(false, cx);
         let Some(transport) = &self.transport else {
             return;
         };
         self.ordinary_handoff_frame = None;
         self.preparing_presentation = None;
         self.preparing_seed = None;
+        self.sharp_preview = None;
         self.playback_follow.reset();
         // `Math.floor(editorState.playbackTime * FPS)`.
         let frame = (from.max(0.0) * EDITOR_PREVIEW_FPS as f64).floor() as u32;
@@ -3505,8 +4172,18 @@ impl EditorWindow {
     /// picture for one decode instead of paying a warmup per tick.
     pub fn seek_to_time(&mut self, time: f64, cx: &mut Context<Self>) {
         if self.apply_seek(time) {
+            self.transcript_sync_active(true, cx);
             cx.notify();
         }
+    }
+
+    pub(crate) fn play_range(&mut self, from: f64, until: f64, cx: &mut Context<Self>) {
+        if self.playing {
+            self.stop_playback(cx);
+        }
+        self.start_playback(from.max(0.0), cx);
+        self.play_until = Some(until);
+        cx.notify();
     }
 
     /// One pointer move of a ruler scrub. While paused, the playhead is read
@@ -3521,6 +4198,7 @@ impl EditorWindow {
         if !self.apply_seek(time) {
             return;
         }
+        self.transcript_sync_active(true, cx);
         if self.playing || self.ordinary_handoff_frame.is_some() {
             cx.notify();
             return;
@@ -3641,6 +4319,58 @@ impl EditorWindow {
         self.seek_to_time(time, cx);
     }
 
+    /// Harness only (`CAP_GPUI_AUTO_FRAME_STATS`): redraws every frame for
+    /// `seconds` and logs the intervals between frames, so background work
+    /// can be checked for jank in the editor.
+    pub fn measure_frame_times(
+        &mut self,
+        seconds: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let started = std::time::Instant::now();
+        let refining = crate::transcription::ui_snapshot(&self.project_path).refining;
+        tracing::info!(seconds, refining, "frame stats: start");
+        self.frame_stats_tick(started, started, seconds, Vec::new(), window, cx);
+    }
+
+    fn frame_stats_tick(
+        &mut self,
+        started: std::time::Instant,
+        last: std::time::Instant,
+        seconds: f64,
+        mut intervals: Vec<f64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let now = std::time::Instant::now();
+        if last != started {
+            intervals.push(now.duration_since(last).as_secs_f64() * 1000.0);
+        }
+        if now.duration_since(started).as_secs_f64() >= seconds {
+            intervals.sort_by(f64::total_cmp);
+            let at = |share: f64| {
+                intervals
+                    .get(((intervals.len() as f64 - 1.0) * share).round() as usize)
+                    .copied()
+                    .unwrap_or(0.0)
+            };
+            tracing::info!(
+                frames = intervals.len(),
+                p50_ms = format!("{:.2}", at(0.5)),
+                p99_ms = format!("{:.2}", at(0.99)),
+                max_ms = format!("{:.2}", at(1.0)),
+                refining = crate::transcription::ui_snapshot(&self.project_path).refining,
+                "frame stats"
+            );
+            return;
+        }
+        cx.on_next_frame(window, move |this, window, cx| {
+            this.frame_stats_tick(started, now, seconds, intervals, window, cx);
+        });
+        cx.notify();
+    }
+
     /// Harness only (`CAP_GPUI_AUTO_PLAYBACK`): stop and emit the run's
     /// numbers. Identical to pressing pause -- the report is emitted on every
     /// stop, this just guarantees one happens.
@@ -3668,6 +4398,43 @@ impl EditorWindow {
 
     pub(crate) fn waveform_cache_stats(&self) -> crate::editor_timeline::WaveformPathStats {
         self.timeline.waveform_paths.stats()
+    }
+
+    pub(crate) fn bench_preview_canvas(&self, window: &Window) -> Option<[u32; 2]> {
+        let frame = self.player_frame_rect.get()?.frame;
+        let scale = window.scale_factor() * crate::editor_latency::backing_scale();
+        let device = |length: Pixels| (f32::from(length) * scale).round() as u32;
+        Some([device(frame.size.width), device(frame.size.height)])
+    }
+
+    pub(crate) fn bench_pump_snapshot(&self) -> Option<StatsSnapshot> {
+        self.stats.as_ref().map(|stats| stats.snapshot())
+    }
+
+    pub(crate) fn bench_zoom_end_handle(
+        &self,
+        index: usize,
+        viewport_width: f32,
+    ) -> Option<(u32, f32)> {
+        let segment = self.timeline.segments(TrackKind::Zoom).get(index)?;
+        let content = timeline::content_width(viewport_width);
+        let x = ((segment.end - self.view.transform.position) / self.secs_per_pixel(viewport_width))
+            as f32
+            - 2.;
+        (2.0..content)
+            .contains(&x)
+            .then(|| (segment.lane, timeline::content_left() + x))
+    }
+
+    pub(crate) fn bench_zoom_segment(&self, index: usize) -> Option<(f64, f64)> {
+        self.timeline
+            .segments(TrackKind::Zoom)
+            .get(index)
+            .map(|segment| (segment.start, segment.end))
+    }
+
+    pub(crate) fn bench_zoom_count(&self) -> usize {
+        self.timeline.segments(TrackKind::Zoom).len()
     }
 
     pub(crate) fn bench_zoom_to(&mut self, seconds: f64, cx: &mut Context<Self>) {
@@ -3766,6 +4533,40 @@ impl EditorWindow {
         // The canvas arrow-key nudge is scoped outside `useEditorShortcuts`
         // precisely so held keys repeat (`CanvasElementsOverlay.tsx:561-565`),
         // so it is the one editor shortcut that runs on a repeat.
+        if (self.shape_tool.is_some() || self.shape_tool_menu)
+            && event.keystroke.key == "escape"
+            && !event.is_held
+        {
+            self.arm_shape_tool(None, cx);
+            cx.stop_propagation();
+            window.refresh();
+            return;
+        }
+        if !event.keystroke.modifiers.platform
+            && !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.alt
+            && !ui::text_input_has_focus(window, cx)
+            && self.canvas_overlay_visible()
+            && self
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.track == TrackKind::Shape)
+        {
+            let direction = match event.keystroke.key.as_str() {
+                "left" => Some((-1., 0.)),
+                "right" => Some((1., 0.)),
+                "up" => Some((0., -1.)),
+                "down" => Some((0., 1.)),
+                _ => None,
+            };
+            if let Some(direction) = direction
+                && self.shape_nudge(direction, event.keystroke.modifiers.shift, window, cx)
+            {
+                cx.stop_propagation();
+                window.refresh();
+                return;
+            }
+        }
         if !event.keystroke.modifiers.platform
             && !event.keystroke.modifiers.control
             && !event.keystroke.modifiers.alt
@@ -3845,16 +4646,25 @@ impl EditorWindow {
             cx.notify();
             return;
         }
+        if self.transition_popover.is_some() && event.keystroke.key.as_str() == "escape" {
+            self.transition_popover = None;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if self.sidebar.color_picker.is_some() && event.keystroke.key.as_str() == "escape" {
             self.close_color_picker(cx);
             cx.stop_propagation();
             return;
         }
         if event.keystroke.key.as_str() == "escape"
-            && (self.presets_menu.is_some() || self.preset_dialog.is_some())
+            && (self.presets_menu.is_some()
+                || self.preset_dialog.is_some()
+                || self.style_presets.menu_open())
         {
             self.presets_menu = None;
             self.preset_dialog = None;
+            self.style_presets.close_menu();
             cx.stop_propagation();
             cx.notify();
             return;
@@ -3865,12 +4675,22 @@ impl EditorWindow {
             cx.stop_propagation();
             return;
         }
+        if event.keystroke.key.as_str() == "escape" && self.markers.popover_open() {
+            self.marker_escape(window, cx);
+            cx.stop_propagation();
+            return;
+        }
         if event.keystroke.key.as_str() == "escape" && self.clean_up.reviewing {
             self.stop_silence_review(window, cx);
             cx.stop_propagation();
             return;
         }
         if ui::text_input_has_focus(window, cx) {
+            return;
+        }
+        if self.marker_key(&event.keystroke, window, cx) {
+            cx.stop_propagation();
+            window.refresh();
             return;
         }
         let keystroke = &event.keystroke;
@@ -3906,6 +4726,33 @@ impl EditorWindow {
                     window.refresh();
                     return;
                 }
+                "d" if !keystroke.modifiers.shift
+                    && self
+                        .selection
+                        .as_ref()
+                        .is_some_and(|selection| selection.track == TrackKind::Shape) =>
+                {
+                    cx.stop_propagation();
+                    self.duplicate_shapes(window, cx);
+                    window.refresh();
+                    return;
+                }
+                "c" if !keystroke.modifiers.shift
+                    && self
+                        .selection
+                        .as_ref()
+                        .is_some_and(|selection| selection.track == TrackKind::Shape) =>
+                {
+                    cx.stop_propagation();
+                    self.copy_shapes();
+                    return;
+                }
+                "v" if !keystroke.modifiers.shift && !self.shape_clipboard.is_empty() => {
+                    cx.stop_propagation();
+                    self.paste_shapes(window, cx);
+                    window.refresh();
+                    return;
+                }
                 // `Cmd/Ctrl+A` expands the selection to the whole track.
                 "a" if !keystroke.modifiers.shift => {
                     cx.stop_propagation();
@@ -3936,6 +4783,13 @@ impl EditorWindow {
             }
             return;
         }
+        if let Some(faster) = preview_speed_shortcut(keystroke)
+            && !self.has_open_menu()
+        {
+            cx.stop_propagation();
+            self.step_preview_speed(faster, window, cx);
+            return;
+        }
         if keystroke.modifiers.platform
             || keystroke.modifiers.control
             || keystroke.modifiers.alt
@@ -3964,9 +4818,11 @@ impl EditorWindow {
                     || self.text_menu.is_some()
                     || self.add_track.is_some()
                     || self.clip_speed.is_some()
+                    || self.transition_popover.is_some()
                     || self.sidebar.color_picker.is_some()
                     || self.presets_menu.is_some()
                     || self.preset_dialog.is_some()
+                    || self.style_presets.menu_open()
                     || self.clips.has_open_menu()
                     || self.audio_picker.is_some()
                     || self.camera3d_picker
@@ -4021,11 +4877,17 @@ impl EditorWindow {
                     self.close_camera3d_picker(cx);
                     return;
                 }
+                if self.marker_escape(window, cx) {
+                    window.refresh();
+                    return;
+                }
                 if self.split_mode {
                     self.toggle_split_mode(cx);
                 } else if self.selection.is_some() {
                     self.set_selection(None, cx);
                     self.note_edit("deselect", None);
+                } else {
+                    self.panel_escape(window, cx);
                 }
                 window.refresh();
             }
@@ -4205,6 +5067,135 @@ impl EditorWindow {
         );
     }
 
+    /// Redraw the paused frame once at the canvas's device-pixel size.
+    ///
+    /// Playback and paused interactions keep rendering at the saved preview
+    /// quality, so their cost does not change. Half and Full frames are
+    /// smaller than a large Retina canvas and get magnified, so once the
+    /// preview has been still for `delay` (a pause, the end of a scrub or an
+    /// edit, a resize) the same frame is rendered again at the canvas size.
+    /// Quarter is an explicit choice for speed and is drawn as chosen.
+    pub(crate) fn schedule_sharp_preview(
+        &mut self,
+        delay: Duration,
+        cx: &mut Context<Self>,
+    ) -> SharpPreview {
+        self.sharp_preview = None;
+        if self.playing {
+            return SharpPreview::Playing;
+        }
+        if self.preview_quality == crate::store::EditorPreviewQuality::Quarter {
+            return SharpPreview::ChosenQuality;
+        }
+        if self.preparing_presentation.is_some()
+            || self.ordinary_handoff_frame.is_some()
+            || self.preparing_transport_active()
+        {
+            return SharpPreview::Handoff;
+        }
+        let Some(instance) = self.instance.clone() else {
+            return SharpPreview::NoEngine;
+        };
+        let Some(canvas) = self.preview_canvas_px.get() else {
+            return SharpPreview::NoCanvas;
+        };
+        if !sharp_preview_needed(canvas, self.preview.read(cx).frame_size) {
+            return SharpPreview::AlreadySharp;
+        }
+        // A newer paused request means the preview is moving again; its frame
+        // schedules its own redraw when it lands.
+        let requests = instance.preview_tx.subscribe();
+        self.sharp_preview = Some(cx.spawn(async move |this, cx| {
+            if !delay.is_zero() {
+                cx.background_executor().timer(delay).await;
+            }
+            let engine = instance.playback_watch();
+            let mut waited = Duration::ZERO;
+            while *engine.borrow() {
+                if waited >= SHARP_PREVIEW_ENGINE_WAIT {
+                    return;
+                }
+                cx.background_executor()
+                    .timer(SHARP_PREVIEW_ENGINE_POLL)
+                    .await;
+                waited += SHARP_PREVIEW_ENGINE_POLL;
+            }
+            if requests.has_changed().unwrap_or(true) {
+                return;
+            }
+            let _ = this.update(cx, |view, cx| {
+                if view.playing || !view.is_instance(&instance) {
+                    return;
+                }
+                let Some(canvas) = view.preview_canvas_px.get() else {
+                    return;
+                };
+                // The frame on screen, not one rebuilt from the playhead: a
+                // stale hover time or a seconds round trip would redraw a
+                // different moment.
+                let frame = view.preview.read(cx).frame_number;
+                // A paused request sent before this was scheduled but not yet
+                // answered: redrawing the old frame would replace it.
+                let requested_since_pause = view
+                    .paused_requests
+                    .as_ref()
+                    .is_none_or(|requests| requests.has_changed().unwrap_or(true));
+                let duration = instance
+                    .project_config
+                    .1
+                    .borrow()
+                    .timeline
+                    .as_ref()
+                    .map_or(0.0, |timeline| timeline.duration());
+                let pending = instance
+                    .preview_tx
+                    .borrow()
+                    .is_some_and(|(requested, _, _)| {
+                        last_preview_frame(duration).map_or(requested, |last| requested.min(last))
+                            != frame
+                    });
+                if requested_since_pause && pending {
+                    return;
+                }
+                instance.preview_tx.send_modify(|value| {
+                    *value = Some((frame, EDITOR_PREVIEW_FPS, XY::new(canvas[0], canvas[1])))
+                });
+            });
+        }));
+        SharpPreview::Scheduled
+    }
+
+    /// A handoff from the preparing preview finished. While it was running the
+    /// guards above turned every redraw away, including the one the handoff's
+    /// own frame asked for, so a paused editor asks again here.
+    fn paused_handoff_done(&mut self, cx: &mut Context<Self>) -> Option<SharpPreview> {
+        (!self.playing).then(|| self.schedule_sharp_preview(Duration::ZERO, cx))
+    }
+
+    fn finish_ordinary_handoff(
+        &mut self,
+        target: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<SharpPreview> {
+        if self.ordinary_handoff_frame != Some(target) {
+            return None;
+        }
+        self.ordinary_handoff_frame = None;
+        let resume = self
+            .preparing_presentation
+            .take()
+            .is_some_and(|presentation| presentation.playback.playing);
+        self.preparing_seed = None;
+        if resume {
+            self.start_playback(self.playhead, cx);
+        }
+        let sharp = self.paused_handoff_done(cx);
+        cx.notify();
+        window.refresh();
+        sharp
+    }
+
     pub(crate) fn preview_frames_presented(&self) -> Option<u64> {
         self.stats
             .as_ref()
@@ -4256,6 +5247,10 @@ impl EditorWindow {
     /// toolbar, transport and timeline stay cached.
     pub(crate) fn invalidate_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_view.update(cx, |_, cx| cx.notify());
+    }
+
+    pub(crate) fn invalidate_transcript(&mut self, cx: &mut Context<Self>) {
+        self.transcript_view.update(cx, |_, cx| cx.notify());
     }
 
     fn set_hovered_track(
@@ -4336,6 +5331,7 @@ impl EditorWindow {
     /// over the timeline seeks to where it landed.
     fn timeline_mouse_up(&mut self, cx: &mut Context<Self>) {
         if let Some(Scrub::Press { time }) = self.scrub.take() {
+            self.clear_marker_selection();
             self.seek_to_time(time, cx);
             // The other half of that listener: a press on bare timeline also
             // clears the selection (`TL/index.tsx:1157-1163`). It is gated on
@@ -4365,7 +5361,7 @@ impl EditorWindow {
     // -- Editing: the pointer ------------------------------------------------
 
     /// `secsPerPixel()` (`TL/context.ts:91-92`), over the clip track's own box.
-    fn secs_per_pixel(&self, viewport_width: f32) -> f64 {
+    pub(crate) fn secs_per_pixel(&self, viewport_width: f32) -> f64 {
         self.view
             .transform
             .secs_per_pixel(timeline::content_width(viewport_width))
@@ -4406,8 +5402,10 @@ impl EditorWindow {
 
     /// `setEditorState("timeline", "selection", ...)`.
     pub(crate) fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
+        self.follow_selection_to_style(selection.as_ref(), cx);
         if self.selection != selection {
             self.text_menu = None;
+            self.style_presets.close_menu();
             self.dismiss_frame_controls(cx);
             self.end_field_edit(cx);
             self.close_color_picker(cx);
@@ -4425,9 +5423,17 @@ impl EditorWindow {
                     TrackKind::Image => Some(crate::editor_canvas::CanvasSelection::Image(index)),
                     TrackKind::Text => Some(crate::editor_canvas::CanvasSelection::Text(index)),
                     TrackKind::Mask => Some(crate::editor_canvas::CanvasSelection::Mask(index)),
+                    TrackKind::Shape => Some(crate::editor_canvas::CanvasSelection::Shape(index)),
                     _ => None,
                 }
             });
+            if selection.is_some() {
+                self.clear_marker_selection();
+                if self.audio_import_pending != Some(self.audio_picker_generation) {
+                    self.audio_picker = None;
+                    self.audio_picker_request = None;
+                }
+            }
             self.selection = selection;
             self.refresh_image_asset_status();
             cx.notify();
@@ -4498,7 +5504,7 @@ impl EditorWindow {
     /// a handle trims, a body moves (or splits, in split mode), and bare track
     /// falls through to the timeline container's own press-to-seek -- except on
     /// the zoom track, which creates a segment there.
-    fn track_mouse_down(
+    pub(crate) fn track_mouse_down(
         &mut self,
         kind: TrackKind,
         lane: u32,
@@ -4592,7 +5598,17 @@ impl EditorWindow {
                 } else if kind == TrackKind::Audio {
                     cx.stop_propagation();
                     self.open_audio_picker(lane, cx);
-                } else if matches!(kind, TrackKind::Text | TrackKind::Mask | TrackKind::Scene) {
+                } else if kind == TrackKind::Caption {
+                    cx.stop_propagation();
+                    let length = (1.0_f64).max(secs_per_pixel * 80.);
+                    if self.add_caption_at(press_time, length, true, window, cx) {
+                        self.seek_to_time(press_time, cx);
+                        self.view.preview_time = None;
+                    }
+                } else if matches!(
+                    kind,
+                    TrackKind::Text | TrackKind::Shape | TrackKind::Mask | TrackKind::Scene
+                ) {
                     cx.stop_propagation();
                     let time = if kind == TrackKind::Scene {
                         let Some(time) = timeline::preview_time_from_x(
@@ -4631,6 +5647,20 @@ impl EditorWindow {
             return;
         }
 
+        if event.click_count == 2
+            && self.double_click_segment(
+                kind,
+                lane,
+                hit,
+                position + x * secs_per_pixel,
+                secs_per_pixel,
+                window,
+                cx,
+            )
+        {
+            return;
+        }
+
         let modifiers = (
             event.modifiers.shift,
             event.modifiers.platform || event.modifiers.control,
@@ -4666,9 +5696,8 @@ impl EditorWindow {
             (TrackKind::Clip, Hit::Handle { start: false, .. }) => {
                 source_edges.map(|(_, end)| DragKind::ClipTrimEnd { end })
             }
-            // The clip's *body* drag is a crossfade-duration drag, not a move
-            // (`TL/ClipTrack.tsx:849-945`); transitions have no drawn
-            // affordance here, so a body press only ever selects.
+            // The clip's *body* drag is a transition-duration drag, not a
+            // move (`TL/ClipTrack.tsx:849-945`): see `press_clip_body`.
             (TrackKind::Clip, Hit::Body { .. }) => None,
             (_, Hit::Handle { start: true, .. }) => {
                 let min = edits::min_segment_duration(kind, secs_per_pixel);
@@ -4698,35 +5727,32 @@ impl EditorWindow {
             (_, Hit::Empty) => None,
         };
 
+        // A caption tied to its clip stays on that clip's piece: its handles
+        // and body stop at the piece's edges.
+        let kind_of_drag = match kind {
+            TrackKind::Caption => kind_of_drag.map(|drag| {
+                crate::transcription::tied_caption_window(
+                    &self.project,
+                    index,
+                    &self.clip_display_durations,
+                )
+                .map_or(drag, |window| keep_drag_in_window(drag, window))
+            }),
+            _ => kind_of_drag,
+        };
         let clip_handle = matches!(
             kind_of_drag,
             Some(DragKind::ClipTrimStart { .. } | DragKind::ClipTrimEnd { .. })
         );
         let Some(drag_kind) = kind_of_drag else {
-            // A clip body press: select on release, nothing else.
-            self.drag = Some(Drag {
-                track: kind,
+            self.press_clip_body(
                 index,
-                kind: DragKind::Move {
-                    start,
-                    end,
-                    bounds: DragBounds { min: 0., max: 0. },
-                },
-                down_x: f32::from(event.position.x),
-                origin_x: None,
-                moved: false,
-                // 4px, the clip body's own promotion (`TL/ClipTrack.tsx:875`).
-                // Nothing happens past it here -- the transition drag is not
-                // reproduced -- but the threshold still decides whether the
-                // release selects.
-                threshold: 4.,
-                selects_on_click: true,
-                shift: modifiers.0,
-                multi: modifiers.1,
+                (start, end),
+                f32::from(event.position.x),
+                modifiers,
                 press_time,
-                paused: false,
-            });
-            cx.notify();
+                cx,
+            );
             return;
         };
 
@@ -4760,6 +5786,7 @@ impl EditorWindow {
             TrackKind::Style
                 | TrackKind::Image
                 | TrackKind::Text
+                | TrackKind::Shape
                 | TrackKind::Mask
                 | TrackKind::Audio
         )
@@ -5012,6 +6039,29 @@ impl EditorWindow {
         cx.notify();
     }
 
+    /// Ends a held timeline gesture before undo or redo moves the history
+    /// under it. A drag that moved commits as one entry, so the undo reverts
+    /// that drag; a press that never moved and a lane reorder are dropped.
+    /// Left live, either would apply its next move by a segment index or lane
+    /// from before the undo.
+    fn end_timeline_gesture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.drag.is_some_and(|drag| drag.moved) {
+            self.drag_mouse_up(window, cx);
+        } else if let Some(drag) = self.drag.take() {
+            self.drag_snap_targets = snap::SnapTargets::default();
+            self.drag_snap_time = None;
+            self.clip_draft = None;
+            if matches!(drag.kind, DragKind::TransitionDuration { .. }) {
+                self.transition_drag_base = None;
+            }
+            if drag.paused {
+                let config = self.project.clone();
+                self.history.resume(&config);
+            }
+        }
+        self.cancel_lane_reorder(cx);
+    }
+
     fn cancel_lane_reorder(&mut self, cx: &mut Context<Self>) {
         let Some(reorder) = self.lane_reorder.take() else {
             return;
@@ -5107,6 +6157,7 @@ impl EditorWindow {
             TrackKind::Caption,
             TrackKind::Keyboard,
             TrackKind::Text,
+            TrackKind::Shape,
             TrackKind::Mask,
             TrackKind::Audio,
             TrackKind::Zoom,
@@ -5148,7 +6199,7 @@ impl EditorWindow {
     /// A pointer move with a segment drag live. Runs off the root's handler, so
     /// a drag that leaves its own row keeps tracking -- which is what
     /// `createEventListenerMap(window, ...)` gives the source.
-    fn drag_mouse_move(
+    pub(crate) fn drag_mouse_move(
         &mut self,
         x: f32,
         snap_disabled: bool,
@@ -5160,7 +6211,11 @@ impl EditorWindow {
         };
         // The promotion: `Math.abs(event.clientX - downEvent.clientX) > 2`,
         // capturing `initialMouseX` the first time it holds.
-        if (x - drag.down_x).abs() > drag.threshold && !drag.moved {
+        let starts_nothing = matches!(
+            drag.kind,
+            DragKind::TransitionDuration { initial, from_body: true, .. } if initial <= 0.
+        ) && x > drag.down_x;
+        if (x - drag.down_x).abs() > drag.threshold && !drag.moved && !starts_nothing {
             drag.moved = true;
             if drag.origin_x.is_none() {
                 drag.origin_x = Some(x);
@@ -5228,6 +6283,17 @@ impl EditorWindow {
                     cx,
                 ) {
                     self.set_preview_time(next);
+                }
+            }
+            DragKind::TransitionDuration {
+                index,
+                initial,
+                grow,
+                kind,
+                ..
+            } => {
+                if drag.moved {
+                    self.drag_transition(index, (initial, grow * delta), kind, cx);
                 }
             }
             DragKind::ClipTrimStart { start } => {
@@ -5609,7 +6675,7 @@ pub(crate) struct EditorNotice {
 /// How long a notice stays up.
 const EDITOR_NOTICE_DURATION: Duration = Duration::from_millis(2500);
 
-fn fresh_caption_source_id(project: &ProjectConfiguration) -> String {
+fn fresh_caption_source_id(project: &ProjectConfiguration, prefix: &str) -> String {
     use std::hash::{BuildHasher, Hasher};
 
     loop {
@@ -5620,7 +6686,7 @@ fn fresh_caption_source_id(project: &ProjectConfiguration) -> String {
         let random = std::collections::hash_map::RandomState::new()
             .build_hasher()
             .finish();
-        let id = format!("cap-split-{millis}-{random:x}");
+        let id = format!("{prefix}-{millis}-{random:x}");
         if project
             .captions
             .as_ref()
@@ -5660,18 +6726,24 @@ fn split_caption_segment(
     };
     let split_output = track.start + at;
     let source_range = Some((f64::from(source.start), f64::from(source.end)));
-    let Some(split_source) = crate::transcription::map_edited_time_to_source(
+    let Some((split_source, _)) = crate::transcription::map_edited_time_to_source(
         split_output,
         timeline,
         recording_durations,
         source_range,
+        source.recording_clip,
     ) else {
         return false;
     };
     if split_source <= f64::from(source.start) || split_source >= f64::from(source.end) {
         return false;
     }
-    let tail_id = fresh_caption_source_id(project);
+    let tail_prefix = if crate::transcription::is_manual_caption(&source) {
+        crate::transcription::MANUAL_CAPTION_PREFIX.trim_end_matches('-')
+    } else {
+        "cap-split"
+    };
+    let tail_id = fresh_caption_source_id(project, tail_prefix);
     let Some(timeline) = project.timeline.as_mut() else {
         return false;
     };
@@ -5745,7 +6817,14 @@ impl EditorWindow {
         EditorVerticalLayout::new(viewport_height, value).timeline_height
     }
 
-    fn preferred_timeline_height(&self) -> f32 {
+    pub(crate) fn preferred_timeline_height(&self) -> f32 {
+        if let Some(height) = self
+            .shape_drag
+            .as_ref()
+            .and_then(|drag| drag.timeline_height)
+        {
+            return height;
+        }
         self.timeline_height_override.unwrap_or_else(|| {
             DEFAULT_TIMELINE_HEIGHT
                 + self.initial_timeline_rows.map_or(0., |initial| {
@@ -5989,6 +7068,62 @@ impl EditorWindow {
         }
     }
 
+    /// Generated zooms become the first history entry rather than an undo
+    /// step, so undo cannot strip them from a recording that opened with them.
+    pub(crate) fn apply_pending_auto_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project.auto_zoom_pending {
+            return;
+        }
+        let path = self.project_path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let clicks = cx
+                .background_executor()
+                .spawn(async move { load_recording_clicks(&path) })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.land_pending_auto_zoom(&clicks, window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn land_pending_auto_zoom(
+        &mut self,
+        clicks: &[Vec<cap_project::CursorClickEvent>],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.project.auto_zoom_pending || !self.project_ready() {
+            return;
+        }
+        let untouched = self.history.is_untouched();
+        let settings = crate::store::GeneralSettings::load();
+        let amount = f64::from(settings.zoom_amount_for(self.project.auto_zoom_version));
+        let generated = edits::settle_pending_auto_zoom(
+            &mut self.project,
+            clicks,
+            !untouched,
+            settings.auto_zoom_on_clicks,
+            amount,
+        );
+        if generated {
+            self.history = ProjectHistory::new(self.project.clone());
+        } else {
+            self.history
+                .amend_all(|entry| entry.auto_zoom_pending = false);
+        }
+        if generated {
+            self.tracks = TrackLanes::from_project(&self.project, self.has_camera);
+            self.rebuild_timeline();
+            self.publish_project();
+            self.note_edit("auto-zoom-on-open", Some(TrackKind::Zoom));
+        }
+        self.schedule_save(window, cx);
+        cx.notify();
+        window.refresh();
+    }
+
     /// `handleGenerateZoomSegments` (`TL/ZoomTrack.tsx:84-93`): read the
     /// recorded clicks off the bundle, run the auto-zoom pass, and land the
     /// result as the zoom track.
@@ -6000,11 +7135,8 @@ impl EditorWindow {
         self.auto_zoom_message = None;
         cx.notify();
         let path = self.project_path.clone();
-        let amount = f64::from(
-            crate::store::GeneralSettings::load()
-                .default_zoom_amount
-                .unwrap_or(edits::DEFAULT_AUTO_ZOOM_AMOUNT as f32),
-        );
+        let version = self.project.auto_zoom_version;
+        let amount = new_zoom_amount(version);
         cx.spawn_in(window, async move |this, cx| {
             let clicks = cx
                 .background_executor()
@@ -6019,7 +7151,9 @@ impl EditorWindow {
                     .timeline
                     .as_ref()
                     .map_or_else(Vec::new, |timeline| {
-                        edits::generate_zoom_segments_for_timeline(&clicks, timeline, amount)
+                        edits::generate_zoom_segments_for_timeline(
+                            &clicks, timeline, amount, version,
+                        )
                     });
                 if segments.is_empty() {
                     tracing::info!("auto zoom produced no segments");
@@ -6053,6 +7187,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> usize {
         edits::ensure_timeline(&mut self.project, &self.clip_display_durations);
+        let auto_zoom_version = self.project.auto_zoom_version;
         let mut index = 0;
         self.edit(
             |timeline| {
@@ -6063,9 +7198,12 @@ impl EditorWindow {
                         timeline,
                         crate::editor_panels::new_camera3d_shot(start, end),
                     ),
-                    _ => {
-                        edits::insert_zoom_segment(timeline, start, end, edits::DEFAULT_ZOOM_AMOUNT)
-                    }
+                    _ => edits::insert_zoom_segment(
+                        timeline,
+                        start,
+                        end,
+                        new_zoom_amount(auto_zoom_version),
+                    ),
                 };
                 true
             },
@@ -6120,6 +7258,15 @@ impl EditorWindow {
                     .collect();
                 edits::find_placement(&lane_segments, time, length, total)
             }
+            TrackKind::Shape => {
+                let lane_segments: Vec<_> = timeline
+                    .shape_segments
+                    .iter()
+                    .filter(|segment| segment.track == lane)
+                    .cloned()
+                    .collect();
+                edits::find_placement(&lane_segments, time, length, total)
+            }
             TrackKind::Scene => timeline::new_scene_segment(&self.timeline, time),
             _ => None,
         };
@@ -6129,20 +7276,30 @@ impl EditorWindow {
         match kind {
             TrackKind::Text => self.tracks.text = self.tracks.text.max(lane + 1),
             TrackKind::Mask => self.tracks.mask = self.tracks.mask.max(lane + 1),
+            TrackKind::Shape => self.tracks.shape = self.tracks.shape.max(lane + 1),
             TrackKind::Scene => self.tracks.scene = true,
             _ => {}
         }
+        let new_shape =
+            (kind == TrackKind::Shape).then(|| self.new_shape_segment(start, end, lane));
+        let reveal = new_shape
+            .as_ref()
+            .map(|shape| (shape.animation_in_duration, shape.animation_out_duration));
         let mut index = 0;
         let inserted = self.edit(
             |timeline| {
                 index = match kind {
                     TrackKind::Text => edits::insert_text_segment(
                         timeline,
-                        edits::default_text_segment(start, end, lane),
+                        crate::style_presets::new_text_segment(start, end, lane),
                     ),
+                    TrackKind::Shape => match new_shape {
+                        Some(shape) => edits::insert_shape_segment(timeline, shape),
+                        None => return false,
+                    },
                     TrackKind::Mask => edits::insert_mask_segment(
                         timeline,
-                        edits::default_mask_segment(start, end, lane),
+                        crate::style_presets::new_mask_segment(start, end, lane),
                     ),
                     TrackKind::Scene => edits::insert_scene_segment(
                         timeline,
@@ -6159,22 +7316,96 @@ impl EditorWindow {
             return;
         }
         self.set_selection(Some(Selection::single(kind, index)), cx);
-        self.seek_to_time(time.clamp(start, end), cx);
+        let target = match reveal {
+            Some((animation_in, animation_out)) => {
+                crate::editor_shapes::reveal_time(time, start, end, animation_in, animation_out)
+            }
+            None => time.clamp(start, end),
+        };
+        self.seek_to_time(target, cx);
         self.view.preview_time = None;
         self.audio_picker = None;
         self.note_edit("add-track", Some(kind));
     }
 
+    pub(crate) fn add_caption_at(
+        &mut self,
+        time: f64,
+        length: f64,
+        centered: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let durations = self.clip_display_durations.clone();
+        if !edits::ensure_timeline(&mut self.project, &durations) {
+            return false;
+        }
+        let total = self.total_duration();
+        let length = length.min(total);
+        let desired = if centered { time } else { time + length / 2.0 };
+        let placement = self.project.timeline.as_ref().and_then(|timeline| {
+            edits::find_placement(&timeline.caption_segments, desired, length, total)
+        });
+        let id = fresh_caption_source_id(
+            &self.project,
+            crate::transcription::MANUAL_CAPTION_PREFIX.trim_end_matches('-'),
+        );
+        let showed_track = self.tracks.caption;
+        self.tracks.caption = true;
+        let mut added = false;
+        if let Some((start, end)) = placement {
+            self.edit_timeline_project(
+                |project| {
+                    added = edits::add_caption_segment(
+                        project,
+                        start..end,
+                        id.clone(),
+                        tr::editor::tabs::captions::new_caption(),
+                        &durations,
+                    )
+                    .is_some();
+                    added
+                },
+                window,
+                cx,
+            );
+        }
+        if !added {
+            self.tracks.caption = showed_track;
+            self.show_notice(tr::editor::window::no_room_for_caption(), window, cx);
+            return false;
+        }
+        let index = self.project.timeline.as_ref().and_then(|timeline| {
+            timeline
+                .caption_segments
+                .iter()
+                .position(|segment| cap_project::source_caption_id(&segment.id) == id)
+        });
+        if let Some(index) = index {
+            self.set_selection(Some(Selection::single(TrackKind::Caption, index)), cx);
+        }
+        self.note_edit("add-caption", Some(TrackKind::Caption));
+        true
+    }
+
     /// `finish(e)`: resume the history, and -- if the drag never promoted --
     /// select instead, which also moves the playhead
     /// (`props.handleUpdatePlayhead(e)`).
-    fn drag_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn drag_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.drag_snap_targets = snap::SnapTargets::default();
         self.drag_snap_time = None;
         let Some(drag) = self.drag.take() else {
             self.clip_draft = None;
             return;
         };
+        let transition_drag = matches!(drag.kind, DragKind::TransitionDuration { .. });
+        if transition_drag {
+            self.transition_drag_base = None;
+            if drag.moved {
+                self.view.preview_time = None;
+                self.emit_preview_frame();
+            }
+        }
 
         // The ghost trim's single commit, before the history resume below so
         // the resumed snapshot records the committed config.
@@ -6231,7 +7462,9 @@ impl EditorWindow {
 
         if matches!(
             drag.kind,
-            DragKind::ClipTrimStart { .. } | DragKind::ClipTrimEnd { .. }
+            DragKind::ClipTrimStart { .. }
+                | DragKind::ClipTrimEnd { .. }
+                | DragKind::TransitionDuration { .. }
         ) {
             self.on_handle_released(cx);
         }
@@ -6239,6 +7472,7 @@ impl EditorWindow {
         self.note_edit(
             match (drag.moved, drag.kind) {
                 (_, DragKind::CreateZoom { .. }) => "create",
+                (true, DragKind::TransitionDuration { .. }) => "clip-transition",
                 (true, DragKind::Move { .. }) => "move",
                 (true, _) => "trim",
                 (false, _) => "select",
@@ -6437,6 +7671,11 @@ impl EditorWindow {
     /// them in reverse and refuses to empty itself, and the scene track's
     /// action takes one index at a time for the same reason.
     pub(crate) fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(popover) = self.transition_popover.take() {
+            self.set_clip_transition(popover.index, None, window, cx);
+            cx.notify();
+            return;
+        }
         let Some(selection) = self.selection.clone() else {
             return;
         };
@@ -6492,6 +7731,7 @@ impl EditorWindow {
             TrackKind::Image => &mut self.tracks.image,
             TrackKind::Text => &mut self.tracks.text,
             TrackKind::Mask => &mut self.tracks.mask,
+            TrackKind::Shape => &mut self.tracks.shape,
             TrackKind::Audio => &mut self.tracks.audio,
             _ => return,
         };
@@ -6501,6 +7741,7 @@ impl EditorWindow {
             (TrackKind::Image, Some(timeline)) => edits::used_lane_count(&timeline.image_segments),
             (TrackKind::Text, Some(timeline)) => edits::used_lane_count(&timeline.text_segments),
             (TrackKind::Mask, Some(timeline)) => edits::used_lane_count(&timeline.mask_segments),
+            (TrackKind::Shape, Some(timeline)) => edits::used_lane_count(&timeline.shape_segments),
             (TrackKind::Audio, Some(timeline)) => edits::used_lane_count(&timeline.audio_segments),
             _ => 0,
         };
@@ -6510,6 +7751,7 @@ impl EditorWindow {
             TrackKind::Image => self.tracks.image = next,
             TrackKind::Text => self.tracks.text = next,
             TrackKind::Mask => self.tracks.mask = next,
+            TrackKind::Shape => self.tracks.shape = next,
             TrackKind::Audio => self.tracks.audio = next,
             _ => {}
         }
@@ -6705,7 +7947,58 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.display_frame(frame, true, window, cx);
+        let Some(instance) = self.instance.as_ref() else {
+            self.display_frame(frame, true, window, cx);
+            return;
+        };
+        let may_wait = self.playing
+            && self.ordinary_handoff_frame.is_none()
+            && self.preparing_candidate_frame.is_none()
+            && instance.preparing_adoption().is_none();
+        let previous_unpainted = {
+            let preview = self.preview.read(cx);
+            preview.frame.is_some() && preview.frame_sequence != self.preview_paints.painted.get()
+        };
+        let frame = (Arc::downgrade(instance), frame);
+        let show = self
+            .waiting_frame
+            .arrive(frame, may_wait, previous_unpainted);
+        self.preview_paints
+            .waiting
+            .set(self.waiting_frame.is_some());
+        for (instance, frame) in show.into_iter().flatten() {
+            if self.holds_instance(&instance) {
+                self.display_frame(frame, true, window, cx);
+            }
+        }
+    }
+
+    fn show_waiting_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.preview_paints.waiting.set(false);
+        if let Some((instance, frame)) = self.waiting_frame.take()
+            && self.holds_instance(&instance)
+        {
+            self.display_frame(frame, true, window, cx);
+        }
+    }
+
+    /// The only place the preview texture is written.
+    fn accepted_picture(&mut self, frame: ArrivingFrame) -> Option<EditorPreviewFrame> {
+        match frame {
+            ArrivingFrame::Ready(picture) => Some(picture),
+            #[cfg(not(target_os = "macos"))]
+            ArrivingFrame::Rgba(rgba) => {
+                let started = Instant::now();
+                let streamed = stream_frame(&self.preview_stream, rgba);
+                if let Some(stats) = &self.stats {
+                    stats
+                        .convert_nanos
+                        .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    stats.convert_samples.fetch_add(1, Ordering::Relaxed);
+                }
+                streamed.then(|| EditorPreviewFrame::Stream(self.preview_stream.clone()))
+            }
+        }
     }
 
     fn display_frame(
@@ -6746,9 +8039,16 @@ impl EditorWindow {
         {
             return;
         }
+        let Some(picture) = self.accepted_picture(frame.frame) else {
+            return;
+        };
         let handoff_target = self.transport.as_ref().and(self.ordinary_handoff_frame);
         let first_frame = self.latest_frame.is_none();
-        let layout_changed = self.frame_layout != Some(frame.layout);
+        let overlay_live = self.player_panel_hovered || self.canvas_drag.is_some();
+        let layout_changed = self
+            .frame_layout
+            .map(|layout| canvas_hit_layout(layout, overlay_live))
+            != Some(canvas_hit_layout(frame.layout, overlay_live));
         if self.frame_layout.map(|layout| layout.output_size) != Some(frame.layout.output_size) {
             tracing::info!(
                 output_size = ?frame.layout.output_size,
@@ -6770,15 +8070,33 @@ impl EditorWindow {
             frame.layout.output_size[0] as f32,
             frame.layout.output_size[1] as f32,
         );
-        self.latest_frame = Some(frame.frame.clone());
+        self.latest_frame = Some(picture.clone());
         let previous = self.preview.update(cx, |preview, cx| {
-            preview.set_frame(frame.frame, frame_size, self.stats.clone(), cx)
+            preview.set_frame(picture, frame.number, frame_size, self.stats.clone(), cx)
         });
         if let Some(EditorPreviewFrame::Image(previous)) = previous {
             let _ = window.drop_image(previous);
         }
         if let Some(stats) = &self.stats {
             stats.presented.fetch_add(1, Ordering::Relaxed);
+        }
+        let interactive = self.preview_resolution();
+        if !self.playing
+            && frame_size.0 <= interactive.x as f32
+            && frame_size.1 <= interactive.y as f32
+        {
+            // Frames the engine finished after a pause are still playback, not
+            // a scrub: nothing is moving, so redraw them without the idle wait.
+            let playback_tail = self
+                .paused_requests
+                .as_ref()
+                .is_some_and(|requests| !requests.has_changed().unwrap_or(true));
+            let delay = if playback_tail {
+                Duration::ZERO
+            } else {
+                SHARP_PREVIEW_IDLE
+            };
+            self.schedule_sharp_preview(delay, cx);
         }
         if frame_layout_requires_editor_invalidation(
             first_frame,
@@ -6809,6 +8127,7 @@ impl EditorWindow {
                     this.preparing_seed = None;
                     this.ordinary_handoff_frame = None;
                     drop(this.preparing_consumer.take());
+                    this.paused_handoff_done(cx);
                 } else {
                     this.retry_preparing_candidate(window, cx);
                 }
@@ -6818,20 +8137,7 @@ impl EditorWindow {
             window.refresh();
         } else if let Some(target) = handoff_target {
             cx.on_next_frame(window, move |this, window, cx| {
-                if this.ordinary_handoff_frame != Some(target) {
-                    return;
-                }
-                this.ordinary_handoff_frame = None;
-                let resume = this
-                    .preparing_presentation
-                    .take()
-                    .is_some_and(|presentation| presentation.playback.playing);
-                this.preparing_seed = None;
-                if resume {
-                    this.start_playback(this.playhead, cx);
-                }
-                cx.notify();
-                window.refresh();
+                this.finish_ordinary_handoff(target, window, cx);
             });
             window.refresh();
         }
@@ -6930,6 +8236,9 @@ impl EditorWindow {
         self.name_input
             .update(cx, |input, cx| input.set_text(draft.clone(), cx));
         tracing::info!(name = %draft, "renamed project");
+        // The main window, Settings and the tray list recordings by name, and
+        // closing the editor refreshes them only when the thumbnail changed.
+        cx.defer(crate::app_windows::refresh_library_after_delete);
         cx.notify();
         Ok(())
     }
@@ -7253,50 +8562,80 @@ impl EditorWindow {
                     })
                     .collect()
             }
-            ToolbarMenu::PlaybackRate => PLAYBACK_RATES
+            ToolbarMenu::PreviewSpeed => cap_editor::PreviewSpeed::ALL
                 .iter()
-                .map(|rate| {
-                    ui::MenuItem::new(
-                        playback_rate_label(*rate),
-                        (rate - self.playback_rate).abs() < 1e-6,
-                    )
-                })
+                .map(|speed| ui::MenuItem::new(speed.label(), *speed == self.preview_speed))
+                .collect(),
+            ToolbarMenu::CaptionDownload => crate::caption_export::CaptionFormat::ALL
+                .iter()
+                .map(|format| ui::MenuItem::new(format.label(), false))
                 .collect(),
         }
     }
 
-    // The preparing playback path plays audio at 1x only, so the rate stays
-    // locked until the ordinary engine owns playback; otherwise the playhead
-    // and the audio would drift apart.
-    fn playback_rate_locked(&self) -> bool {
-        self.preparing_consumer.is_some()
-            || self
-                .instance
-                .as_ref()
-                .is_some_and(|instance| instance.preparing_adoption().is_some())
+    pub(crate) fn caption_download_menu_open(&self) -> bool {
+        self.toolbar_menu
+            .as_ref()
+            .is_some_and(|menu| menu.kind == ToolbarMenu::CaptionDownload)
     }
 
-    pub(crate) fn effective_playback_rate(&self) -> f64 {
-        if self.playback_rate_locked() {
-            1.0
-        } else {
-            self.playback_rate
-        }
+    pub(crate) fn open_caption_download_menu(
+        &mut self,
+        trigger_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_toolbar_menu(ToolbarMenu::CaptionDownload, trigger_bounds, window, cx);
     }
 
-    fn set_playback_rate(&mut self, rate: f64, cx: &mut Context<Self>) {
-        if !rate.is_finite()
-            || self.playback_rate_locked()
-            || (rate - self.playback_rate).abs() < 1e-6
-        {
+    pub(crate) fn download_captions(
+        &mut self,
+        format: crate::caption_export::CaptionFormat,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cues = crate::caption_export::cues(&self.project);
+        if cues.is_empty() {
             return;
         }
-        self.playback_rate = rate;
-        if let Some(transport) = &self.transport {
-            transport.set_rate(rate);
-        }
-        tracing::info!(rate, "preview playback rate");
-        cx.notify();
+        let contents = crate::caption_export::format(&cues, format);
+        let extension = format.extension();
+        let pretty_name = self
+            .summary()
+            .map(|summary| summary.pretty_name.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "Cap Recording".into());
+        let name = crate::editor_export::export_file_name(&pretty_name, extension);
+        tracing::info!(format = extension, cues = cues.len(), "caption download");
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(path) = crate::platform::save_file_panel_async(&name, &[extension], cx).await
+            else {
+                return;
+            };
+            let written = cx
+                .background_executor()
+                .spawn({
+                    let path = path.clone();
+                    async move { std::fs::write(&path, contents) }
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| match written {
+                Ok(()) => {
+                    tracing::info!(path = %path.display(), "captions saved");
+                    this.show_notice(tr::editor::transcript::captions_saved(), window, cx);
+                }
+                Err(error) => {
+                    tracing::error!(%error, "saving captions failed");
+                    this.show_notice(
+                        tr::editor::transcript::captions_save_failed(error.to_string()),
+                        window,
+                        cx,
+                    );
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn open_toolbar_menu(
@@ -7369,9 +8708,14 @@ impl EditorWindow {
                     true
                 });
             }
-            ToolbarMenu::PlaybackRate => {
-                if let Some(rate) = PLAYBACK_RATES.get(index) {
-                    self.set_playback_rate(*rate, cx);
+            ToolbarMenu::PreviewSpeed => {
+                if let Some(speed) = cap_editor::PreviewSpeed::ALL.get(index) {
+                    self.set_preview_speed(*speed, window, cx);
+                }
+            }
+            ToolbarMenu::CaptionDownload => {
+                if let Some(format) = crate::caption_export::CaptionFormat::ALL.get(index) {
+                    self.download_captions(*format, window, cx);
                 }
             }
         }
@@ -7385,11 +8729,11 @@ impl EditorWindow {
         let items = self.toolbar_menu_items(kind);
         Some(
             ui::Menu::editor(&self.theme, "toolbar-menu", items, &menu.state)
-                .min_width(px(if kind == ToolbarMenu::PlaybackRate {
-                    96.
-                } else {
-                    200.
-                }))
+                .min_width(match kind {
+                    ToolbarMenu::AspectRatio => px(200.),
+                    ToolbarMenu::PreviewSpeed => px(96.),
+                    ToolbarMenu::CaptionDownload => px(160.),
+                })
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
                     this.choose_toolbar_menu(kind, *index, window, cx);
                 }))
@@ -7401,11 +8745,94 @@ impl EditorWindow {
         )
     }
 
+    /// Preview only: the playback engine and the audio callback read the
+    /// shared speed on their next frame, so a running playback changes pace
+    /// in place without a restart, and export never sees it.
+    fn set_preview_speed(
+        &mut self,
+        speed: cap_editor::PreviewSpeed,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if speed == self.preview_speed {
+            return;
+        }
+        self.preview_speed = speed;
+        if let Some(instance) = &self.instance {
+            instance.set_preview_speed(speed);
+        }
+        tracing::info!(speed = speed.as_f64(), "preview speed");
+        if !crate::store::set_store_setting(
+            crate::store::GENERAL_SETTINGS,
+            crate::store::EDITOR_PREVIEW_SPEED_KEY,
+            serde_json::json!(speed.as_f64()),
+        ) {
+            tracing::warn!("failed to persist preview speed");
+        }
+        self.invalidate_playback_chrome(window, cx);
+        cx.notify();
+    }
+
+    fn toggle_preview_enhance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.preview_enhance = !self.preview_enhance;
+        self.preview_comparing = false;
+        if !crate::store::set_store_setting(
+            crate::store::GENERAL_SETTINGS,
+            crate::store::EDITOR_PREVIEW_ENHANCE_KEY,
+            serde_json::json!(self.preview_enhance),
+        ) {
+            tracing::warn!("failed to persist the preview enhance toggle");
+        }
+        self.publish_project();
+        cx.notify();
+        window.refresh();
+    }
+
+    /// Holding Compare shows the original paused frame; letting go shows the
+    /// enhanced one again.
+    fn set_preview_comparing(&mut self, comparing: bool, cx: &mut Context<Self>) {
+        if self.preview_comparing == comparing {
+            return;
+        }
+        self.preview_comparing = comparing;
+        self.publish_project();
+        cx.notify();
+    }
+
+    fn has_open_menu(&self) -> bool {
+        self.sidebar.menu.is_some()
+            || self.toolbar_menu.is_some()
+            || self.text_menu.is_some()
+            || self.add_track.is_some()
+            || self.clip_speed.is_some()
+            || self.sidebar.color_picker.is_some()
+            || self.presets_menu.is_some()
+            || self.preset_dialog.is_some()
+            || self.clips.has_open_menu()
+            || self.audio_picker.is_some()
+            || self.camera3d_picker
+            || self.frame_controls.is_open()
+    }
+
+    fn step_preview_speed(&mut self, faster: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let next = if faster {
+            self.preview_speed.faster()
+        } else {
+            self.preview_speed.slower()
+        };
+        if let Some(next) = next {
+            self.set_preview_speed(next, window, cx);
+        }
+    }
+
     fn set_preview_quality(
         &mut self,
         quality: crate::store::EditorPreviewQuality,
         cx: &mut Context<Self>,
     ) {
+        if !crate::store::set_editor_preview_quality(quality) {
+            tracing::warn!("failed to persist preview quality");
+        }
         if quality == self.preview_quality {
             return;
         }
@@ -7415,14 +8842,6 @@ impl EditorWindow {
         let resolution = self.preview_resolution();
         if let Some(transport) = &self.transport {
             transport.set_resolution(resolution);
-        }
-        let value = serde_json::Value::String(quality.as_json().to_string());
-        if !crate::store::set_store_setting(
-            crate::store::GENERAL_SETTINGS,
-            "editorPreviewQuality",
-            value,
-        ) {
-            tracing::warn!("failed to persist preview quality");
         }
         if was_playing {
             self.stop_playback(cx);
@@ -7564,6 +8983,27 @@ impl EditorWindow {
         self.apply_project_preset(next, window, cx);
     }
 
+    /// An automation's Apply preset. The preset is on disk when this returns,
+    /// not 250 ms later, because the rule's next action (an Export, say)
+    /// reads the project from disk straight away.
+    pub(crate) fn apply_preset_config(
+        &mut self,
+        config: &serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if !self.project_ready() {
+            return Err(crate::automation::EDITOR_LOADING.to_string());
+        }
+        let next = crate::presets::apply_preset(config, &self.project)
+            .ok_or_else(|| "The preset could not be read".to_string())?;
+        self.apply_project_preset(next, window, cx);
+        self.pending_save
+            .borrow_mut()
+            .try_flush()
+            .map_err(|error| tr::editor::window::save_failed(self.project_path.display(), error))
+    }
+
     /// The built-in Default row: Cap's own look, with this project's timeline
     /// and clips kept.
     fn apply_default_preset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -7571,7 +9011,7 @@ impl EditorWindow {
         self.apply_project_preset(next, window, cx);
     }
 
-    fn apply_project_preset(
+    pub(crate) fn apply_project_preset(
         &mut self,
         next: ProjectConfiguration,
         window: &mut Window,
@@ -7666,6 +9106,11 @@ impl EditorWindow {
                 store.delete(index);
                 if !store.save() {
                     tracing::warn!("the presets store could not be written");
+                }
+            }
+            PresetDialog::Style(dialog) => {
+                if !self.commit_style_dialog(dialog, &name, window, cx) {
+                    return;
                 }
             }
         }
@@ -7771,6 +9216,7 @@ impl EditorWindow {
             TrackKind::Text | TrackKind::Mask => {
                 self.add_overlay_segment(kind, window, cx);
             }
+            TrackKind::Shape => self.add_shape_at_playhead(window, cx),
             _ => {}
         }
         cx.notify();
@@ -7803,6 +9249,10 @@ impl EditorWindow {
                 .tracks
                 .mask
                 .max(edits::used_lane_count(&timeline.mask_segments)),
+            TrackKind::Shape => self
+                .tracks
+                .shape
+                .max(edits::used_lane_count(&timeline.shape_segments)),
             _ => return,
         };
 
@@ -7822,6 +9272,15 @@ impl EditorWindow {
                 TrackKind::Mask => {
                     let lane_segments: Vec<_> = timeline
                         .mask_segments
+                        .iter()
+                        .filter(|segment| segment.track == index)
+                        .cloned()
+                        .collect();
+                    edits::place_segment_at_time(&lane_segments, time, length, total)
+                }
+                TrackKind::Shape => {
+                    let lane_segments: Vec<_> = timeline
+                        .shape_segments
                         .iter()
                         .filter(|segment| segment.track == index)
                         .cloned()
@@ -7848,6 +9307,7 @@ impl EditorWindow {
             match kind {
                 TrackKind::Text => self.tracks.text += 1,
                 TrackKind::Mask => self.tracks.mask += 1,
+                TrackKind::Shape => self.tracks.shape += 1,
                 _ => {}
             }
             self.rebuild_timeline();
@@ -7864,17 +9324,31 @@ impl EditorWindow {
         } else {
             self.tracks.mask
         };
+        self.tracks.shape = if kind == TrackKind::Shape {
+            lane_count.max(lane + 1)
+        } else {
+            self.tracks.shape
+        };
 
+        let new_shape =
+            (kind == TrackKind::Shape).then(|| self.new_shape_segment(start, end, lane));
+        let reveal = new_shape
+            .as_ref()
+            .map(|shape| (shape.animation_in_duration, shape.animation_out_duration));
         let inserted = self.edit(
             |timeline| {
                 let index = match kind {
+                    TrackKind::Shape => match new_shape {
+                        Some(shape) => edits::insert_shape_segment(timeline, shape),
+                        None => return false,
+                    },
                     TrackKind::Text => edits::insert_text_segment(
                         timeline,
-                        edits::default_text_segment(start, end, lane),
+                        crate::style_presets::new_text_segment(start, end, lane),
                     ),
                     TrackKind::Mask => edits::insert_mask_segment(
                         timeline,
-                        edits::default_mask_segment(start, end, lane),
+                        crate::style_presets::new_mask_segment(start, end, lane),
                     ),
                     _ => return false,
                 };
@@ -7910,11 +9384,29 @@ impl EditorWindow {
                         .rposition(|segment| segment.start == start && segment.track == lane)
                 })
                 .unwrap_or(0),
+            TrackKind::Shape => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| {
+                    timeline
+                        .shape_segments
+                        .iter()
+                        .rposition(|segment| segment.start == start && segment.track == lane)
+                })
+                .unwrap_or(0),
             _ => 0,
         };
         self.set_selection(Some(Selection::single(kind, index)), cx);
-        let pad = 0.15_f64.min(length / 4.0);
-        let target = time.max(start + pad).min(end - pad);
+        let target = match reveal {
+            Some((animation_in, animation_out)) => {
+                crate::editor_shapes::reveal_time(time, start, end, animation_in, animation_out)
+            }
+            None => {
+                let pad = 0.15_f64.min(length / 4.0);
+                time.max(start + pad).min(end - pad)
+            }
+        };
         if (target - time).abs() > f64::EPSILON {
             self.seek_to_time(target, cx);
         }
@@ -7946,12 +9438,7 @@ impl EditorWindow {
             |timeline| {
                 index = edits::insert_style_segment(
                     timeline,
-                    cap_project::StyleSegment {
-                        start,
-                        end,
-                        track: lane,
-                        ..Default::default()
-                    },
+                    crate::style_presets::new_style_segment(start, end, lane),
                 );
                 true
             },
@@ -8301,6 +9788,7 @@ impl EditorWindow {
             "keyboard" => TrackKind::Keyboard,
             "text" => TrackKind::Text,
             "mask" => TrackKind::Mask,
+            "shape" => TrackKind::Shape,
             "audio" => TrackKind::Audio,
             "scene" => TrackKind::Scene,
             "3d" => TrackKind::ThreeD,
@@ -8350,6 +9838,23 @@ impl EditorWindow {
         let origin = point(px(x), viewport.height - px(120.));
         self.set_selection(Some(Selection::single(TrackKind::Clip, index)), cx);
         self.open_clip_menu_at(index, origin, window, cx);
+    }
+
+    /// A click on a card in the panel's Clips tab: select that clip on the
+    /// timeline and move the playhead to its first frame, scrolling the strip
+    /// when the clip starts outside the visible window.
+    pub(crate) fn select_clip_from_panel(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(start) = self.timeline.clips.get(index).map(|clip| clip.start) else {
+            return;
+        };
+        self.set_selection(Some(Selection::single(TrackKind::Clip, index)), cx);
+        let Transform { zoom, position } = self.view.transform;
+        if start < position || start > position + zoom * 0.9 {
+            let total = self.total_duration();
+            self.view.transform.set_position(start - zoom * 0.1, total);
+        }
+        self.seek_to_time(start, cx);
+        cx.notify();
     }
 
     /// `onContextMenu` on a clip's `SegmentRoot` (`TL/ClipTrack.tsx`): select
@@ -8662,6 +10167,19 @@ impl EditorWindow {
         self.note_edit("clip-volume", Some(TrackKind::Clip));
     }
 
+    fn open_clip_voice_eq(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.clip_speed = None;
+        if self.sidebar.tab != crate::editor_sidebar::SidebarTab::Audio
+            && let Some(position) = crate::editor_sidebar::SidebarTab::ALL
+                .iter()
+                .position(|tab| *tab == crate::editor_sidebar::SidebarTab::Audio)
+        {
+            self.select_sidebar_tab(position, window, cx);
+        }
+        self.set_selection(Some(Selection::single(TrackKind::Clip, index)), cx);
+        cx.notify();
+    }
+
     fn set_clip_muted(
         &mut self,
         index: usize,
@@ -8716,7 +10234,7 @@ impl EditorWindow {
     /// The clip menu's transition chips (`setClipTransition`,
     /// `TL/ClipTrack.tsx`): a `kind` transition `duration` long on clip
     /// `index`'s leading boundary, or, with `None`, no transition.
-    fn set_clip_transition(
+    pub(crate) fn set_clip_transition(
         &mut self,
         index: usize,
         transition: Option<(cap_project::ClipTransitionType, f64)>,
@@ -8875,6 +10393,9 @@ impl EditorWindow {
         let muted = edits::clip_is_muted(segment);
         let audio_mode = segment.speed_audio_mode.unwrap_or_default();
         let cursor_hidden = segment.hides_cursor();
+        let voice_eq_active = segment.active_voice_eq().is_some();
+        let voice_eq_summary = crate::editor_voice_eq::voice_eq_summary(segment);
+        let has_microphone = self.summary().is_some_and(|summary| summary.has_microphone);
         let normal_speed = (timescale - 1.0).abs() < f64::EPSILON;
         let title = match self.timeline.clips.get(index).map(|clip| &clip.detail) {
             Some(timeline::SegmentDetail::Clip { name, .. }) => name.clone(),
@@ -9080,6 +10601,64 @@ impl EditorWindow {
                                 ))
                             }))
                             .into_any_element()
+                    })
+                    .when(has_microphone, |section| {
+                        section.child(
+                            div()
+                                .id("clip-menu-voice-eq")
+                                .h(px(40.))
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .rounded(px(8.))
+                                .px(px(8.))
+                                .cursor_pointer()
+                                .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
+                                .child(
+                                    svg()
+                                        .path("icons/sliders-horizontal.svg")
+                                        .size(px(14.))
+                                        .flex_none()
+                                        .text_color(Hsla::from(if voice_eq_active {
+                                            theme.editor.accent
+                                        } else {
+                                            theme.editor.text_2
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .text_size(px(12.5))
+                                                .text_color(Hsla::from(theme.editor.text_1))
+                                                .child(tr::editor::window::clip_menu::voice_eq()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.5))
+                                                .text_color(Hsla::from(theme.editor.text_3))
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .text_ellipsis()
+                                                .child(voice_eq_summary),
+                                        ),
+                                )
+                                .child(
+                                    svg()
+                                        .path("icons/chevron-right.svg")
+                                        .size(px(12.))
+                                        .flex_none()
+                                        .text_color(Hsla::from(theme.editor.text_3)),
+                                )
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_clip_voice_eq(index, window, cx);
+                                })),
+                        )
                     }),
             )
             .child(
@@ -9108,22 +10687,6 @@ impl EditorWindow {
                     ),
             )
             .when(index > 0 && can_transition, |card| {
-                use cap_project::ClipTransitionType;
-                let duration =
-                    transition.map_or(DEFAULT_CLIP_TRANSITION_DURATION, |current| current.duration);
-                let kinds = [
-                    ("None", tr::editor::window::clip_menu::transition_none(), None),
-                    (
-                        "Crossfade",
-                        tr::editor::window::clip_menu::transition_crossfade(),
-                        Some(ClipTransitionType::CrossFade),
-                    ),
-                    (
-                        "Fade",
-                        tr::editor::window::clip_menu::transition_fade(),
-                        Some(ClipTransitionType::FadeThroughBlack),
-                    ),
-                ];
                 card.child(
                     div()
                         .flex()
@@ -9133,54 +10696,26 @@ impl EditorWindow {
                             &theme,
                             tr::editor::window::clip_menu::transition(),
                         ))
-                        .child(chip_row().children(kinds.into_iter().map(|(id, label, kind)| {
-                            let selected = transition.map(|current| current.kind) == kind;
-                            chip(
-                                SharedString::from(format!("clip-transition-{id}")),
-                                selected,
-                                label.to_string(),
+                        .child(
+                            clip_menu_row(
+                                &theme,
+                                "clip-menu-transition",
+                                "icons/arrow-left-right.svg",
+                                transition.map_or(
+                                    tr::editor::window::clip_menu::transition_none(),
+                                    |current| transitions::transition_label(current.kind),
+                                ),
+                                ClipMenuTrailing::None,
+                                true,
+                                false,
                             )
                             .on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    this.set_clip_transition(
-                                        index,
-                                        kind.map(|kind| (kind, duration)),
-                                        window,
-                                        cx,
-                                    );
+                                move |this, event: &gpui::ClickEvent, window, cx| {
+                                    this.clip_speed = None;
+                                    this.edit_transition_at(index, event.position(), window, cx);
                                 },
-                            ))
-                        })))
-                        .when_some(transition, |section, current| {
-                            section.child(
-                                chip_row().children(
-                                    CLIP_TRANSITION_DURATIONS
-                                        .into_iter()
-                                        .filter(|seconds| *seconds <= transition_room + 1e-9)
-                                        .map(|seconds| {
-                                            chip(
-                                                SharedString::from(format!(
-                                                    "clip-transition-{seconds}s"
-                                                )),
-                                                (current.duration - seconds).abs() < 1e-3,
-                                                tr::editor::window::clip_menu::transition_seconds(
-                                                    crate::i18n::decimal(seconds),
-                                                ),
-                                            )
-                                            .on_click(
-                                                cx.listener(move |this, _, window, cx| {
-                                                    this.set_clip_transition(
-                                                        index,
-                                                        Some((current.kind, seconds)),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }),
-                                            )
-                                        }),
-                                ),
-                            )
-                        }),
+                            )),
+                        ),
                 )
             })
             .child(divider())
@@ -9935,7 +11470,15 @@ impl EditorWindow {
         self.preset_name_input.update(cx, |input, _| {
             input.set_placeholder(tr::editor::window::presets::name_placeholder())
         });
+        let style_parts = match dialog {
+            PresetDialog::Style(style) => Some(self.style_dialog_parts(style, cx)),
+            _ => None,
+        };
         let (title, primary, danger) = match dialog {
+            PresetDialog::Style(_) => style_parts
+                .as_ref()
+                .map(|(title, primary, danger, _)| (*title, *primary, *danger))
+                .unwrap_or_default(),
             PresetDialog::Create { .. } => (
                 tr::editor::window::presets::create_title(),
                 tr::editor::window::presets::create(),
@@ -9954,6 +11497,9 @@ impl EditorWindow {
         };
 
         let body: gpui::AnyElement = match dialog {
+            PresetDialog::Style(_) => style_parts
+                .map(|(_, _, _, body)| body)
+                .unwrap_or_else(|| div().into_any_element()),
             PresetDialog::Delete { index } => div()
                 .text_size(px(14.))
                 .text_color(Hsla::from(theme.editor.text_2))
@@ -10182,16 +11728,10 @@ impl EditorWindow {
     fn render_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let name_focused = self.name_input.read(cx).focus_handle().is_focused(window);
-        let has_captions = self.project.captions.as_ref().is_some_and(|captions| {
-            captions
-                .segments
-                .iter()
-                .any(|segment| !segment.words.is_empty())
-        });
         let compact = compact_header_controls(
             f32::from(window.viewport_size().width),
             cfg!(target_os = "windows"),
-            has_captions,
+            true,
         );
 
         let drag_area = |area: gpui::Div| {
@@ -10325,16 +11865,6 @@ impl EditorWindow {
                                 this.open_presets_menu(bounds.bottom_left(), window, cx);
                             })),
                     )
-                    .child(self.render_clips_pill(compact, cx))
-                    // `<Show when={hasTranscript()}>`: the button only exists
-                    // once a transcript with words does.
-                    .children(has_captions.then(|| {
-                        self.header_pill(
-                            "icons/captions.svg",
-                            tr::editor::window::header::captions(),
-                            compact,
-                        )
-                    }))
                     .child(div().w(px(6.)).flex_none())
                     .when(self.sharing.is_some(), |group| {
                         group.child(self.render_reupload_button(cx))
@@ -10371,22 +11901,6 @@ impl EditorWindow {
             .mx(px(6.))
             .flex_none()
             .bg(Hsla::from(self.theme.editor.line_strong))
-    }
-
-    /// The Captions toggle. Inert -- the transcript layout mode does not exist
-    /// yet. Clips has its own live button (`crate::editor_clips`).
-    fn header_pill(
-        &self,
-        icon: &'static str,
-        label: &'static str,
-        compact: bool,
-    ) -> impl IntoElement {
-        let theme = self.theme;
-        ui::EditorButton::plain(&theme, "editor-captions-pill")
-            .left_icon(icon)
-            .when(!compact, |button| button.label(label))
-            .tooltip(&theme, label)
-            .disabled(true)
     }
 
     /// The Export button: the one primary control in the editor, a vertical
@@ -10540,14 +12054,11 @@ impl EditorWindow {
 
     fn render_preparing_sidebar(&self, animated: bool) -> gpui::AnyElement {
         let theme = self.theme;
+        // The panel card around it is the root's; this is only its body.
         div()
             .size_full()
             .flex()
             .flex_col()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(self.card_line())
-            .bg(self.panel_bg())
             .overflow_hidden()
             .child(
                 div()
@@ -10556,7 +12067,7 @@ impl EditorWindow {
                     .items_center()
                     .justify_between()
                     .px(px(10.))
-                    .h(px(44.))
+                    .h(px(SIDEBAR_TAB_BAR_HEIGHT))
                     .flex_none()
                     .children(
                         crate::editor_sidebar::SidebarTab::ALL
@@ -10585,7 +12096,7 @@ impl EditorWindow {
     /// preview-resolution control on the right.
     fn render_player_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let narrow = editor_player_width(f32::from(window.viewport_size().width)) < 560.;
+        let narrow = self.player_width(f32::from(window.viewport_size().width)) < 560.;
         div()
             .w_full()
             .h_full()
@@ -10663,6 +12174,7 @@ impl EditorWindow {
                     })),
             )
             .child(self.render_frame_button(narrow, cx))
+            .child(self.render_shape_tool_button(narrow, cx))
     }
 
     /// The preview-resolution control: a segmented `Full | Half | Quarter`.
@@ -10744,8 +12256,11 @@ impl EditorWindow {
     /// the sprite atlas.
     fn render_preview_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let audio_card =
+            self.project_ready() && self.is_audio_only() && !self.audio_visuals_enabled();
         let body = match (&self.state, self.latest_frame.is_some()) {
             (LoadState::Failed(message), _) => self.render_error_state(message).into_any_element(),
+            _ if audio_card => self.render_audio_card(cx),
             (_, true) => loading::reveal(
                 "editor-preview-ready",
                 self.preview
@@ -10772,7 +12287,7 @@ impl EditorWindow {
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
             // wrapper and only while a frame exists.
-            .children(if self.project_ready() {
+            .children(if self.project_ready() && !audio_card {
                 self.render_canvas_overlay(cx)
             } else {
                 None
@@ -10898,7 +12413,7 @@ impl EditorWindow {
     fn render_transport(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        let player_width = editor_player_width(f32::from(window.viewport_size().width));
+        let player_width = self.player_width(f32::from(window.viewport_size().width));
         let compact = player_width < 760.;
         let narrow = player_width < 620.;
         let total = self.total_duration();
@@ -10953,47 +12468,35 @@ impl EditorWindow {
                     .flex_row()
                     .items_center()
                     .flex_none()
-                    .text_size(px(13.))
-                    .when(narrow, |clock| clock.text_size(px(12.)))
+                    .gap(px(10.))
                     .child(
                         div()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(editor.text_1))
-                            .child(timeline::format_time(current)),
-                    )
-                    .children((!narrow).then(|| {
-                        div()
-                            .text_color(Hsla::from(editor.text_3))
-                            .child(SharedString::from(format!(
-                                " / {}",
-                                if total > 0.0 {
-                                    timeline::format_time(total)
-                                } else {
-                                    "--:--".into()
-                                }
-                            )))
-                    }))
-                    .child(div().w(px(10.)))
-                    .child(
-                        ui::EditorButton::plain(&theme, "transport-playback-rate")
-                            .text(&theme)
-                            .label(playback_rate_label(self.effective_playback_rate()))
-                            .tooltip(&theme, "Preview speed")
-                            .disabled(self.transport.is_none() || self.playback_rate_locked())
-                            .pressed(
-                                self.toolbar_menu
-                                    .as_ref()
-                                    .is_some_and(|menu| menu.kind == ToolbarMenu::PlaybackRate),
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .flex_none()
+                            .text_size(px(13.))
+                            .when(narrow, |clock| clock.text_size(px(12.)))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(Hsla::from(editor.text_1))
+                                    .child(timeline::format_time(current)),
                             )
-                            .on_open(cx.listener(|this, bounds: &Bounds<Pixels>, window, cx| {
-                                this.open_toolbar_menu(
-                                    ToolbarMenu::PlaybackRate,
-                                    *bounds,
-                                    window,
-                                    cx,
-                                );
+                            .children((!narrow).then(|| {
+                                div().text_color(Hsla::from(editor.text_3)).child(
+                                    SharedString::from(format!(
+                                        " / {}",
+                                        if total > 0.0 {
+                                            timeline::format_time(total)
+                                        } else {
+                                            "--:--".into()
+                                        }
+                                    )),
+                                )
                             })),
-                    ),
+                    )
+                    .child(self.render_preview_enhance(player_width >= 920., cx)),
             )
             .child(
                 div()
@@ -11011,6 +12514,9 @@ impl EditorWindow {
                             .justify_center()
                             .gap(px(14.))
                             .when(!live, |this| this.opacity(0.5))
+                            .when(!narrow, |this| {
+                                this.child(div().w(px(PREVIEW_SPEED_BUTTON_WIDTH)).flex_none())
+                            })
                             .child(skip(
                                 "transport-prev",
                                 "icons/prev.svg",
@@ -11052,7 +12558,8 @@ impl EditorWindow {
                                 "transport-next",
                                 "icons/next.svg",
                                 Box::new(cx.listener(|this, _, _window, cx| this.jump_to_end(cx))),
-                            )),
+                            ))
+                            .child(self.render_preview_speed(cx)),
                     ),
             )
             .child(
@@ -11063,6 +12570,8 @@ impl EditorWindow {
                     .gap(px(2.))
                     .justify_end()
                     .items_center()
+                    .child(self.render_markers_button(compact, cx))
+                    .child(self.header_divider())
                     // The split toggle (`Player.tsx:409-427`).
                     .child(
                         div()
@@ -11143,6 +12652,163 @@ impl EditorWindow {
             )
     }
 
+    /// The Enhance toggle and, while it is on, Compare: hold it to see the
+    /// paused frame without enhancement.
+    fn render_preview_enhance(&self, labels: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let ready = self.project_ready();
+        let enhance = ui::Button::plain(
+            &theme,
+            "transport-enhance",
+            if self.preview_enhance {
+                ui::ButtonVariant::Primary
+            } else {
+                ui::ButtonVariant::Gray
+            },
+            ui::ButtonSize::Sm,
+        )
+        .icon("icons/scan-text.svg")
+        .when(labels, |button| {
+            button.label(tr::editor::window::transport::enhance())
+        })
+        .radius(px(7.))
+        .disabled(!ready)
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.toggle_preview_enhance(window, cx);
+        }));
+        let comparing = self.preview_comparing;
+        let can_compare = ready && !self.playing;
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.))
+            .child(
+                div()
+                    .id("transport-enhance-tooltip")
+                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_, cx| {
+                        ui::Tooltip::new(&theme, tr::editor::window::transport::enhance_tooltip())
+                            .view(cx)
+                    })
+                    .child(enhance),
+            )
+            .children(self.preview_enhance.then(|| {
+                div()
+                    .id("transport-compare")
+                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_, cx| {
+                        ui::Tooltip::new(&theme, tr::editor::window::transport::compare_tooltip())
+                            .view(cx)
+                    })
+                    .when(can_compare, |this| {
+                        this.on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                this.set_preview_comparing(true, cx);
+                            }),
+                        )
+                    })
+                    // Release always ends Compare, even once playback has
+                    // disabled the button under the held mouse.
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                            this.set_preview_comparing(false, cx);
+                        }),
+                    )
+                    .on_mouse_up_out(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                            this.set_preview_comparing(false, cx);
+                        }),
+                    )
+                    .child(
+                        ui::Button::plain(
+                            &theme,
+                            "transport-compare-button",
+                            if comparing {
+                                ui::ButtonVariant::Primary
+                            } else {
+                                ui::ButtonVariant::Gray
+                            },
+                            ui::ButtonSize::Sm,
+                        )
+                        .icon("icons/columns-2.svg")
+                        .when(labels, |button| {
+                            button.label(tr::editor::window::transport::compare())
+                        })
+                        .radius(px(7.))
+                        .disabled(!can_compare),
+                    )
+            }))
+    }
+
+    fn render_preview_speed(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let enabled = self.visual_ready();
+        let open = self
+            .toolbar_menu
+            .as_ref()
+            .is_some_and(|menu| menu.kind == ToolbarMenu::PreviewSpeed);
+        let changed = !self.preview_speed.is_normal();
+        let accent = Hsla::from(editor.accent);
+        let trigger = div()
+            .id("transport-speed")
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .w(px(PREVIEW_SPEED_BUTTON_WIDTH))
+            .h(px(24.))
+            .rounded(px(7.))
+            .text_size(px(12.))
+            .font_weight(FontWeight::MEDIUM)
+            .map(|this| {
+                if changed {
+                    this.bg(accent.opacity(if open { 0.22 } else { 0.14 }))
+                        .text_color(accent)
+                } else if open {
+                    this.bg(Hsla::from(editor.ctl_hover))
+                        .text_color(Hsla::from(editor.text_1))
+                } else {
+                    this.text_color(Hsla::from(editor.text_2))
+                }
+            })
+            .when(!enabled, |this| this.opacity(0.45))
+            .when(enabled && !open, |this| {
+                this.cursor_pointer().hover(move |style| {
+                    if changed {
+                        style.bg(accent.opacity(0.22))
+                    } else {
+                        style
+                            .bg(Hsla::from(editor.ctl_hover))
+                            .text_color(Hsla::from(editor.text_1))
+                    }
+                })
+            })
+            .when(!open, |this| {
+                this.tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_window, cx| {
+                        ui::Tooltip::new(&theme, tr::editor::window::transport::speed())
+                            .keys(["<", ">"])
+                            .view(cx)
+                    })
+            })
+            .child(self.preview_speed.label());
+        if enabled {
+            ui::Menu::trigger(
+                trigger,
+                cx.listener(|this, bounds: &Bounds<Pixels>, window, cx| {
+                    this.open_toolbar_menu(ToolbarMenu::PreviewSpeed, *bounds, window, cx);
+                }),
+            )
+        } else {
+            trigger
+        }
+    }
+
     // -- Timeline ------------------------------------------------------------
 
     fn render_timeline(
@@ -11199,7 +12865,8 @@ impl EditorWindow {
                 self.playing,
                 self.playhead_epoch_live,
                 self.last_playhead_redraw.elapsed().as_secs_f64(),
-            ) * self.effective_playback_rate();
+                self.preview_speed.as_f64(),
+            );
             if ahead > 0.0 {
                 view.playhead = (view.playhead + ahead).min(self.total_duration());
             }
@@ -11321,6 +12988,7 @@ impl EditorWindow {
             // while paused and while the pointer is over the content
             // column.
             .children(ghost_x.map(|x| timeline::render_preview_line(&theme, x)))
+            .children(self.render_marker_lines(viewport_width))
             // The playhead (`:1279-1295`). It dims to 50 % in split
             // mode, where the cut line is the thing to watch
             // (`TL/index.tsx:1281`).
@@ -11442,6 +13110,7 @@ impl EditorWindow {
                         ),
                 )
             })
+            .children(self.render_marker_flags(viewport_width, cx))
     }
 
     /// The scroll body (`TL/index.tsx:1317-1499`): `relative flex-1 min-h-0`
@@ -11557,6 +13226,7 @@ impl EditorWindow {
                     Some(tr::editor::window::track::delete())
                 }
                 TrackKind::Text
+                | TrackKind::Shape
                 | TrackKind::Mask
                 | TrackKind::Audio
                 | TrackKind::Style
@@ -11572,6 +13242,7 @@ impl EditorWindow {
                         (kind as usize as u64) << 16 | row.lane as u64,
                     ))
                     .relative()
+                    .debug_selector(move || format!("timeline-row-{kind:?}-{lane}"))
                     // Every track sets `hoveredTrack` on enter and clears it
                     // on leave (`TL/ZoomTrack.tsx:170-171` and its eight
                     // siblings); the zoom and 3D tracks read it to decide
@@ -11685,6 +13356,10 @@ impl EditorWindow {
                     // session-dismiss X, shown while cursor data exists.
                     .children(
                         (kind == TrackKind::Clip)
+                            .then(|| self.render_transition_overlays(model, viewport_width, cx)),
+                    )
+                    .children(
+                        (kind == TrackKind::Clip)
                             .then(|| self.render_clip_speed_overlays(model, viewport_width, cx)),
                     )
                     // The empty zoom lane's prompt, as the same dashed row
@@ -11748,9 +13423,10 @@ impl EditorWindow {
                                                 }
                                             }))
                                             .child(
-                                                div().min_w_0().truncate().child(
-                                                    self.auto_zoom_prompt(),
-                                                ),
+                                                div()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .child(self.auto_zoom_prompt()),
                                             )
                                             .child(
                                                 ui::Button::plain(
@@ -11940,6 +13616,7 @@ impl EditorWindow {
                                                     this.delete_single_track(kind, window, cx);
                                                 }
                                                 TrackKind::Text
+                                                | TrackKind::Shape
                                                 | TrackKind::Mask
                                                 | TrackKind::Audio
                                                 | TrackKind::Style
@@ -12113,11 +13790,37 @@ const MAX_PLAYHEAD_EXTRAPOLATION: f64 = 0.25;
 /// back: the "playhead jumps on play, then goes back" glitch. So: no epoch
 /// sample yet, no extrapolation -- the line holds still, which is exactly
 /// what the engine is doing.
-fn playhead_extrapolation(playing: bool, epoch_has_sample: bool, since_last_sample: f64) -> f64 {
+fn playhead_extrapolation(
+    playing: bool,
+    epoch_has_sample: bool,
+    since_last_sample: f64,
+    speed: f64,
+) -> f64 {
     if !playing || !epoch_has_sample {
         return 0.0;
     }
-    since_last_sample.clamp(0.0, MAX_PLAYHEAD_EXTRAPOLATION)
+    since_last_sample.clamp(0.0, MAX_PLAYHEAD_EXTRAPOLATION) * speed
+}
+
+/// `<` and `>` step the preview speed down and up. Matched on the typed
+/// character, so the keys follow the keyboard layout: Shift-comma and
+/// Shift-period on US layouts, the dedicated `<>` key on many European ones.
+fn preview_speed_shortcut(keystroke: &gpui::Keystroke) -> Option<bool> {
+    let modifiers = keystroke.modifiers;
+    if modifiers.platform || modifiers.control || modifiers.alt || modifiers.function {
+        return None;
+    }
+    let typed = keystroke.key_char.as_deref();
+    let shifted = |key: &str, symbol: &str| {
+        modifiers.shift && keystroke.key == key && typed.is_none_or(|typed| typed == symbol)
+    };
+    if typed == Some(">") || keystroke.key == ">" || shifted(".", ">") {
+        Some(true)
+    } else if typed == Some("<") || keystroke.key == "<" || shifted(",", "<") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>) {
@@ -12128,6 +13831,7 @@ fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>)
         | SidebarMenu::TextWeight(_)
         | SidebarMenu::Camera3DEasing(_) => true,
         SidebarMenu::BackgroundCornerStyle
+        | SidebarMenu::BackgroundPaddingMode
         | SidebarMenu::CameraBlur
         | SidebarMenu::CameraShape
         | SidebarMenu::CameraCornerStyle
@@ -12231,7 +13935,8 @@ impl Render for EditorWindow {
                 DragKind::TrimStart { .. }
                 | DragKind::TrimEnd { .. }
                 | DragKind::ClipTrimStart { .. }
-                | DragKind::ClipTrimEnd { .. } => gpui::CursorStyle::ResizeLeftRight,
+                | DragKind::ClipTrimEnd { .. }
+                | DragKind::TransitionDuration { .. } => gpui::CursorStyle::ResizeLeftRight,
                 DragKind::CreateZoom { .. } => gpui::CursorStyle::Arrow,
             })
             .or(self
@@ -12311,6 +14016,7 @@ impl Render for EditorWindow {
                                         && this.drag.is_none()
                                         && this.lane_reorder.is_none()
                                         && this.minimap_drag.is_none()
+                                        && this.markers.drag.is_none()
                                     {
                                         return;
                                     }
@@ -12319,6 +14025,7 @@ impl Render for EditorWindow {
                                         // window never heard about (another
                                         // app, a system gesture): settle the
                                         // drag at its last state.
+                                        this.marker_drag_up(window, cx);
                                         this.window_mouse_up(cx);
                                         this.drag_mouse_up(window, cx);
                                         this.cancel_lane_reorder(cx);
@@ -12329,6 +14036,14 @@ impl Render for EditorWindow {
                                     }
                                     if this.lane_reorder.is_some() {
                                         this.update_lane_reorder(event.position, window, cx);
+                                        return;
+                                    }
+                                    if this.markers.drag.is_some() {
+                                        this.marker_drag_move(
+                                            f32::from(event.position.x),
+                                            window,
+                                            cx,
+                                        );
                                         return;
                                     }
                                     if let Some(drag) = this.minimap_drag {
@@ -12363,9 +14078,11 @@ impl Render for EditorWindow {
                                         && this.drag.is_none()
                                         && this.lane_reorder.is_none()
                                         && this.minimap_drag.is_none()
+                                        && this.markers.drag.is_none()
                                     {
                                         return;
                                     }
+                                    this.marker_drag_up(window, cx);
                                     this.window_mouse_up(cx);
                                     this.drag_mouse_up(window, cx);
                                     this.finish_lane_reorder(window, cx);
@@ -12434,18 +14151,12 @@ impl Render for EditorWindow {
                                             .overflow_hidden()
                                             .child(self.render_player(cx)),
                                     )
-                                    // The 8px gutter is the wrapper's, not the
-                                    // sidebar view's: a margin inside a cached
-                                    // element is not honoured.
-                                    .child(
-                                        div().flex_none().h_full().pl(px(8.)).child(
-                                            self.sidebar_view.clone().cached(
-                                                StyleRefinement::default()
-                                                    .w(px(SIDEBAR_WIDTH))
-                                                    .h_full(),
-                                            ),
-                                        ),
-                                    ),
+                                    // The gap carries the panel's resize grip;
+                                    // the panel is one card whatever its tab,
+                                    // at one width, so a switch never moves
+                                    // the player.
+                                    .child(self.render_panel_grip(cx))
+                                    .child(self.render_side_panel(viewport_width, window, cx)),
                             )
                             // The timeline card: the wrapper is owned here so
                             // `render_timeline` keeps laying out inside a plain
@@ -12555,6 +14266,19 @@ impl Render for EditorWindow {
                 )
                 .cursor(gpui::CursorStyle::ResizeRow)
             }))
+            .children(self.panel.resize.is_some().then(|| {
+                ui::Slider::drag_layer(
+                    "editor-panel-resize-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        let viewport_width = f32::from(window.viewport_size().width);
+                        this.panel_resize_move(f32::from(event.position.x), viewport_width, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                        this.panel_resize_end(cx);
+                    }),
+                )
+                .cursor(gpui::CursorStyle::ResizeLeftRight)
+            }))
             .children(self.zoom_slider_drag.then(|| {
                 ui::Slider::drag_layer(
                     "timeline-zoom-drag",
@@ -12583,6 +14307,18 @@ impl Render for EditorWindow {
             // {mousemove, mouseup})` is exactly what the pad's own press
             // installs (`ConfigSidebar.tsx:6264-6271`), and its release is
             // what closes the pad's undo bracket.
+            .children(self.voice_eq_dragging().then(|| {
+                ui::Slider::drag_layer(
+                    "voice-eq-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.voice_eq_mouse_move(event.position, window, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                        this.voice_eq_mouse_up(cx);
+                    }),
+                )
+                .cursor(gpui::CursorStyle::ClosedHand)
+            }))
             .children(self.pad_dragging().then(|| {
                 ui::Slider::drag_layer(
                     "sidebar-pad-drag",
@@ -12621,6 +14357,18 @@ impl Render for EditorWindow {
                 )
                 .cursor(cursor)
             }))
+            .children(self.shape_drag.as_ref().map(|drag| {
+                ui::Slider::drag_layer(
+                    "canvas-shape-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.shape_drag_move(event, window, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, window, cx| {
+                        this.shape_drag_up(window, cx);
+                    }),
+                )
+                .cursor(drag.cursor())
+            }))
             // The open `KSelect` menu, painted last of all so it is over the
             // sidebar and the drag layers alike.
             .children(
@@ -12642,7 +14390,9 @@ impl Render for EditorWindow {
             .children(self.render_text_menu(cx))
             .children(self.render_frame_controls(window, cx))
             .children(self.render_add_track_popover(cx))
+            .children(self.render_shape_tool_popover(cx))
             .children(self.render_clip_speed_popover(cx))
+            .children(self.render_transition_popover(cx))
             // The config sidebar's sliders take the same layer, for the same
             // reason -- and its release is what closes the undo bracket, so a
             // drag that ends outside the 32px row still records exactly one
@@ -12660,7 +14410,9 @@ impl Render for EditorWindow {
             }))
             .children(self.with_style_controls(|this| this.render_color_picker_popover(cx)))
             .children(self.render_presets_menu(cx))
+            .children(self.render_style_presets_menu(cx))
             .children(self.render_preset_dialog(cx))
+            .children(self.render_marker_overlays(window, cx))
             // The clips overlays: import menu, record modal, and the card
             // drag's window-wide layer with its floating ghost.
             .children(self.render_clips_overlays(cx))
@@ -12797,10 +14549,39 @@ fn split_camera3d_segment(timeline: &mut TimelineConfiguration, index: usize, at
     true
 }
 
+/// Playback frames are drawn without screen enhancement, so with the preview's
+/// Enhance toggle on, pausing redraws the frame under the playhead once the
+/// engine has stopped. With it off the last playback frame stays, as before.
+async fn rerender_paused_frame_enhanced(instance: &EditorInstance, resolution: XY<u32>) {
+    let enhanced = instance
+        .project_config
+        .1
+        .borrow()
+        .screen_enhancement
+        .effective_strength()
+        > 0.0;
+    if !enhanced {
+        return;
+    }
+    let mut active = instance.playback_watch();
+    let stopped = tokio::time::timeout(
+        Duration::from_millis(500),
+        active.wait_for(|playing| !*playing),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok());
+    if !stopped {
+        return;
+    }
+    let frame = instance.state.lock().await.playhead_position;
+    request_frame(instance, frame, resolution);
+}
+
 /// The instruction that actually produces a picture. `seek_to` and
 /// `set_playhead_position` would move the playhead and render nothing --
 /// the classic "the editor opened but the canvas is black" bug.
 pub fn request_frame(instance: &EditorInstance, frame_number: u32, resolution: XY<u32>) {
+    crate::editor_latency::mark(crate::editor_latency::Stage::Demand, frame_number, 0);
     instance
         .preview_tx
         .send_modify(|value| *value = Some((frame_number, EDITOR_PREVIEW_FPS, resolution)));
@@ -12817,6 +14598,15 @@ pub fn make_frame_callback(
 ) -> cap_editor::EditorFrameCallback {
     Box::new(move |output, layout| {
         stats.rendered.fetch_add(1, Ordering::Relaxed);
+        if crate::editor_latency::enabled() {
+            let frame_number = match &output {
+                EditorFrameOutput::Rgba(frame) => frame.frame_number,
+                EditorFrameOutput::Nv12(frame) => frame.frame_number,
+                #[cfg(target_os = "macos")]
+                EditorFrameOutput::Surface(frame) => frame.frame_number,
+            };
+            crate::editor_latency::mark(crate::editor_latency::Stage::Rendered, frame_number, 0);
+        }
         #[cfg(target_os = "windows")]
         let sent = tx
             .send_timeout((output, layout), Duration::from_millis(100))
@@ -12839,6 +14629,7 @@ pub(crate) fn surface_preview_frame(frame: cap_rendering::SurfaceFrame) -> Edito
 
 /// [`frame_image`], timed. The pump calls this so the CPU conversion's cost is
 /// a number rather than a hunch.
+#[cfg(target_os = "macos")]
 pub fn frame_image_timed(frame: &RenderedFrame, stats: &PumpStats) -> Option<Arc<RenderImage>> {
     let started = Instant::now();
     let image = frame_image(frame);
@@ -12858,6 +14649,350 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Two 10 s recordings: the second at 0..10, then the first held to 14 s
+    // (4..14) at output 10..20. A caption tied to the first shows at 18..19.
+    // Its handles stop at its piece's edges (10 and 20) and its body slides
+    // only within them; an untied caption's drag keeps its bounds.
+    #[test]
+    fn a_tied_caption_drag_stops_at_its_clip_piece() {
+        let durations = [10.0, 10.0];
+        let caption = |recording_clip| cap_project::CaptionSegment {
+            id: "caption-tied".into(),
+            start: 12.0,
+            end: 13.0,
+            text: "typed".into(),
+            words: Vec::new(),
+            recording_clip,
+        };
+        let project = |recording_clip| {
+            let mut project = ProjectConfiguration {
+                timeline: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "segments": [
+                            { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                            { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 }
+                        ],
+                        "zoomSegments": []
+                    }))
+                    .unwrap(),
+                ),
+                captions: Some(cap_project::CaptionsData {
+                    segments: vec![caption(recording_clip)],
+                    source_timed: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            cap_project::synchronize_captions(&mut project, &durations);
+            project
+        };
+
+        let tied = project(Some(0));
+        let item = &tied.timeline.as_ref().unwrap().caption_segments[0];
+        assert_eq!((item.start, item.end), (18.0, 19.0));
+        let window = crate::transcription::tied_caption_window(&tied, 0, &durations);
+        assert_eq!(window, Some((10.0, 20.0)));
+        let window = window.unwrap();
+
+        let free = edits::DragBounds { min: 0., max: 20. };
+        let DragKind::TrimStart { bounds, .. } = keep_drag_in_window(
+            DragKind::TrimStart {
+                start: 18.,
+                bounds: edits::DragBounds { min: 0., max: 18.5 },
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!((bounds.clamp(4.), bounds.clamp(12.)), (10., 12.));
+        let DragKind::TrimEnd { bounds, .. } = keep_drag_in_window(
+            DragKind::TrimEnd {
+                end: 19.,
+                bounds: edits::DragBounds {
+                    min: 18.5,
+                    max: 30.,
+                },
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!((bounds.clamp(25.), bounds.clamp(19.5)), (20., 19.5));
+        let DragKind::Move { bounds, .. } = keep_drag_in_window(
+            DragKind::Move {
+                start: 18.,
+                end: 19.,
+                bounds: edits::DragBounds {
+                    min: -18.,
+                    max: 11.,
+                },
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!((bounds.clamp(-12.), bounds.clamp(5.)), (-8., 1.));
+        let DragKind::TrimEnd { bounds, .. } = keep_drag_in_window(
+            DragKind::TrimEnd {
+                end: 19.,
+                bounds: free,
+            },
+            window,
+        ) else {
+            unreachable!()
+        };
+        assert_eq!(bounds.max, 20.);
+
+        let untied = project(None);
+        assert_eq!(
+            crate::transcription::tied_caption_window(&untied, 0, &durations),
+            None
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    mod side_panel {
+        use super::*;
+        use crate::editor_side_panel::PanelTab;
+
+        struct PanelView {
+            editor: Entity<EditorWindow>,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for PanelView {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                self.editor.update(cx, |editor, cx| {
+                    div()
+                        .size_full()
+                        .track_focus(&editor.focus)
+                        .on_key_down(cx.listener(EditorWindow::on_ready_key))
+                })
+            }
+        }
+
+        pub(super) fn fixture(
+            cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            cx.update(|cx| {
+                crate::session::RecordingSession::init(cx);
+            });
+            let project = tempfile::tempdir().unwrap();
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor = cx.new(|cx| EditorWindow::new(project.path().into(), window, cx));
+                editor.update(cx, |editor, cx| window.focus(&editor.focus, cx));
+                PanelView {
+                    editor,
+                    _project: project,
+                }
+            });
+            (view.read_with(cx, |view, _| view.editor.clone()), cx)
+        }
+
+        fn flags(
+            editor: &Entity<EditorWindow>,
+            cx: &mut gpui::VisualTestContext,
+        ) -> (PanelTab, bool, bool) {
+            editor.read_with(cx, |editor, _| {
+                (
+                    editor.panel_tab(),
+                    editor.transcript.open,
+                    editor.clips.open,
+                )
+            })
+        }
+
+        fn switch(editor: &Entity<EditorWindow>, tab: PanelTab, cx: &mut gpui::VisualTestContext) {
+            editor.update_in(cx, |editor, window, cx| {
+                editor.switch_panel_tab(tab, window, cx);
+                // The test view tracks the root's focus; the real transcript
+                // panel is a child of it, so keys reach the root either way.
+                window.focus(&editor.focus, cx);
+            });
+        }
+
+        #[gpui::test]
+        fn switching_tabs_keeps_the_mode_flags_on_the_active_tab(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+            switch(&editor, PanelTab::Transcript, cx);
+            assert_eq!(flags(&editor, cx), (PanelTab::Transcript, true, false));
+            switch(&editor, PanelTab::Clips, cx);
+            assert_eq!(flags(&editor, cx), (PanelTab::Clips, false, true));
+            switch(&editor, PanelTab::Transcript, cx);
+            assert_eq!(flags(&editor, cx), (PanelTab::Transcript, true, false));
+            switch(&editor, PanelTab::Style, cx);
+            assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+        }
+
+        #[gpui::test]
+        fn an_unready_project_only_opens_on_style(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            for tab in [PanelTab::Transcript, PanelTab::Clips] {
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.set_panel_tab(tab, window, cx)
+                });
+                assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+            }
+        }
+
+        #[gpui::test]
+        fn escape_returns_to_style(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            for tab in [PanelTab::Transcript, PanelTab::Clips] {
+                switch(&editor, tab, cx);
+                assert_eq!(flags(&editor, cx).0, tab);
+                cx.simulate_keystrokes("escape");
+                assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+                cx.simulate_keystrokes("escape");
+                assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+            }
+        }
+
+        #[gpui::test]
+        fn escape_clears_a_timeline_selection_before_leaving_the_tab(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = fixture(cx);
+            switch(&editor, PanelTab::Transcript, cx);
+            editor.update(cx, |editor, _| {
+                editor.selection = Some(Selection::single(TrackKind::Zoom, 0));
+            });
+            cx.simulate_keystrokes("escape");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.selection.is_none());
+                assert_eq!(editor.panel_tab(), PanelTab::Transcript);
+            });
+            cx.simulate_keystrokes("escape");
+            assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+        }
+
+        #[gpui::test]
+        fn selecting_a_segment_brings_style_forward(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            let shape = Selection::single(TrackKind::Shape, 0);
+            for tab in [PanelTab::Transcript, PanelTab::Clips] {
+                switch(&editor, tab, cx);
+                editor.update(cx, |editor, cx| {
+                    editor.set_selection(Some(shape.clone()), cx);
+                });
+                cx.run_until_parked();
+                assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.selection.as_ref(), Some(&shape));
+                });
+                editor.update(cx, |editor, cx| editor.set_selection(None, cx));
+            }
+        }
+
+        #[gpui::test]
+        fn reselecting_the_selected_segment_brings_style_forward(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            let shape = Selection::single(TrackKind::Shape, 0);
+            editor.update(cx, |editor, cx| {
+                editor.set_selection(Some(shape.clone()), cx);
+            });
+            switch(&editor, PanelTab::Transcript, cx);
+            assert_eq!(flags(&editor, cx).0, PanelTab::Transcript);
+            editor.update(cx, |editor, cx| {
+                editor.set_selection(Some(shape.clone()), cx);
+            });
+            cx.run_until_parked();
+            assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+        }
+
+        #[gpui::test]
+        fn selecting_a_clip_keeps_the_tab(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            for tab in [PanelTab::Transcript, PanelTab::Clips] {
+                switch(&editor, tab, cx);
+                editor.update(cx, |editor, cx| {
+                    editor.set_selection(Some(Selection::single(TrackKind::Clip, 0)), cx);
+                });
+                cx.run_until_parked();
+                assert_eq!(flags(&editor, cx).0, tab);
+                editor.update(cx, |editor, cx| editor.set_selection(None, cx));
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    mod paused_handoff {
+        use super::*;
+
+        fn hand_off(editor: &mut EditorWindow, target: u32) {
+            editor.preview_quality = crate::store::EditorPreviewQuality::Half;
+            editor.playing = false;
+            editor.preparing_presentation = Some(Default::default());
+            editor.ordinary_handoff_frame = Some(target);
+        }
+
+        #[gpui::test]
+        fn finishing_a_paused_handoff_asks_for_the_sharp_redraw(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = super::side_panel::fixture(cx);
+            editor.update_in(cx, |editor, window, cx| {
+                hand_off(editor, 12);
+                assert_eq!(
+                    editor.schedule_sharp_preview(Duration::ZERO, cx),
+                    SharpPreview::Handoff,
+                    "the handoff frame's own request is turned away"
+                );
+                assert_eq!(
+                    editor.finish_ordinary_handoff(12, window, cx),
+                    Some(SharpPreview::NoEngine),
+                    "once the handoff lands the redraw gets past every handoff guard"
+                );
+                assert!(editor.ordinary_handoff_frame.is_none());
+                assert!(editor.preparing_presentation.is_none());
+            });
+        }
+
+        #[gpui::test]
+        fn a_stale_handoff_target_changes_nothing(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = super::side_panel::fixture(cx);
+            editor.update_in(cx, |editor, window, cx| {
+                hand_off(editor, 12);
+                assert_eq!(editor.finish_ordinary_handoff(13, window, cx), None);
+                assert_eq!(editor.ordinary_handoff_frame, Some(12));
+                assert!(editor.preparing_presentation.is_some());
+            });
+        }
+
+        #[gpui::test]
+        fn full_gets_the_sharp_redraw_and_quarter_is_drawn_as_chosen(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = super::side_panel::fixture(cx);
+            editor.update(cx, |editor, cx| {
+                editor.playing = false;
+                editor.preview_quality = crate::store::EditorPreviewQuality::Full;
+                assert_eq!(
+                    editor.schedule_sharp_preview(Duration::ZERO, cx),
+                    SharpPreview::NoEngine
+                );
+                editor.preview_quality = crate::store::EditorPreviewQuality::Quarter;
+                assert_eq!(
+                    editor.schedule_sharp_preview(Duration::ZERO, cx),
+                    SharpPreview::ChosenQuality
+                );
+            });
+        }
+
+        #[gpui::test]
+        fn a_committed_adoption_asks_for_the_sharp_redraw_when_paused(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = super::side_panel::fixture(cx);
+            editor.update(cx, |editor, cx| {
+                editor.preview_quality = crate::store::EditorPreviewQuality::Half;
+                editor.playing = false;
+                assert_eq!(editor.paused_handoff_done(cx), Some(SharpPreview::NoEngine));
+                editor.playing = true;
+                assert_eq!(editor.paused_handoff_done(cx), None);
+            });
+        }
+    }
 
     #[cfg(target_os = "linux")]
     mod canvas_history {
@@ -12924,6 +15059,7 @@ mod tests {
                     camera_y: editor.project.camera.position.y.clone(),
                     max_width: 1000.,
                     padding_scale: 1.,
+                    even: None,
                 }),
             });
             editor.canvas_drag_rect = Some(rect);
@@ -13070,6 +15206,254 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    mod timeline_history {
+        use super::*;
+
+        struct HistoryView {
+            editor: Entity<EditorWindow>,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for HistoryView {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                self.editor.update(cx, |editor, cx| {
+                    div()
+                        .size_full()
+                        .track_focus(&editor.focus)
+                        .on_key_down(cx.listener(EditorWindow::on_ready_key))
+                })
+            }
+        }
+
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            let project = tempfile::tempdir().unwrap();
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor = cx.new(|cx| EditorWindow::new(project.path().into(), window, cx));
+                editor.update(cx, |editor, cx| window.focus(&editor.focus, cx));
+                HistoryView {
+                    editor,
+                    _project: project,
+                }
+            });
+            (view.read_with(cx, |view, _| view.editor.clone()), cx)
+        }
+
+        fn zoom_segments(editor: &EditorWindow) -> Vec<(f64, f64)> {
+            editor
+                .project
+                .timeline
+                .as_ref()
+                .map(|timeline| {
+                    timeline
+                        .zoom_segments
+                        .iter()
+                        .map(|segment| (segment.start, segment.end))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+
+        /// One recorded edit that leaves two zoom segments, the second at 6..7.
+        fn two_zooms(editor: &mut EditorWindow) {
+            editor.project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{"recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0}],
+                    "zoomSegments": [
+                        {"start": 1.0, "end": 2.0, "amount": 1.5, "mode": "auto"},
+                        {"start": 6.0, "end": 7.0, "amount": 1.5, "mode": "auto"}
+                    ]
+                }))
+                .unwrap(),
+            );
+            editor.history.record(&editor.project);
+            editor.rebuild_timeline();
+        }
+
+        /// The state `begin_segment_drag` leaves for a body drag on zoom `index`.
+        fn press_zoom(editor: &mut EditorWindow, index: usize, moved: bool) {
+            let (start, end) = zoom_segments(editor)[index];
+            editor.history.pause();
+            editor.drag = Some(Drag {
+                track: TrackKind::Zoom,
+                index,
+                kind: DragKind::Move {
+                    start,
+                    end,
+                    bounds: DragBounds {
+                        min: -10.,
+                        max: 10.,
+                    },
+                },
+                down_x: 100.,
+                origin_x: moved.then_some(100.),
+                moved,
+                threshold: 2.,
+                selects_on_click: true,
+                shift: false,
+                multi: false,
+                press_time: start,
+                paused: true,
+            });
+        }
+
+        #[gpui::test]
+        fn undo_during_a_segment_drag_reverts_that_drag(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, cx| {
+                two_zooms(editor);
+                press_zoom(editor, 1, true);
+                editor.edit_live(
+                    |timeline| edits::move_segment(timeline, TrackKind::Zoom, 1, 4.0, 5.0),
+                    cx,
+                );
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.drag.is_none());
+                assert_eq!(zoom_segments(editor), [(1.0, 2.0), (6.0, 7.0)]);
+                assert!(editor.history.can_redo());
+            });
+            editor.update_in(cx, |editor, window, cx| {
+                editor.drag_mouse_move(400., true, window, cx);
+                editor.drag_mouse_up(window, cx);
+            });
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(zoom_segments(editor), [(1.0, 2.0), (6.0, 7.0)]);
+                assert!(editor.history.can_redo());
+            });
+            cx.simulate_keystrokes("ctrl-shift-z");
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(zoom_segments(editor), [(1.0, 2.0), (4.0, 5.0)]);
+            });
+            cx.simulate_keystrokes("ctrl-z ctrl-z");
+            editor.read_with(cx, |editor, _| assert!(zoom_segments(editor).is_empty()));
+        }
+
+        #[gpui::test]
+        fn undo_during_a_press_drops_it_and_undoes_the_last_edit(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                two_zooms(editor);
+                press_zoom(editor, 1, false);
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.drag.is_none());
+                assert!(zoom_segments(editor).is_empty());
+                assert!(editor.history.can_redo());
+            });
+            editor.update_in(cx, |editor, window, cx| {
+                editor.drag_mouse_move(400., true, window, cx);
+                editor.drag_mouse_up(window, cx);
+            });
+            editor.read_with(cx, |editor, _| {
+                assert!(zoom_segments(editor).is_empty());
+                assert!(editor.history.can_redo());
+                assert!(editor.selection.is_none());
+            });
+        }
+
+        fn shows_row(editor: &EditorWindow, kind: TrackKind) -> bool {
+            editor.timeline.rows.iter().any(|row| row.kind == kind)
+        }
+
+        #[gpui::test]
+        fn undo_and_redo_bring_caption_and_keyboard_rows_back_with_their_overlay(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                editor.project.timeline = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "segments": [{"recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0}],
+                        "zoomSegments": [],
+                        "captionSegments": [{"id": "c", "start": 1.0, "end": 2.0, "text": "hi"}],
+                        "keyboardSegments": [{"id": "k", "start": 3.0, "end": 4.0, "displayText": "A"}]
+                    }))
+                    .unwrap(),
+                );
+                let mut captions = cap_project::CaptionsData::default();
+                captions.settings.enabled = true;
+                editor.project.captions = Some(captions);
+                let mut keyboard = cap_project::KeyboardData::default();
+                keyboard.settings.enabled = true;
+                editor.project.keyboard = Some(keyboard);
+                editor.tracks = TrackLanes::from_project(&editor.project, editor.has_camera);
+                editor.history.record(&editor.project);
+                editor.rebuild_timeline();
+                assert!(shows_row(editor, TrackKind::Caption));
+                assert!(shows_row(editor, TrackKind::Keyboard));
+            });
+            for kind in [TrackKind::Caption, TrackKind::Keyboard] {
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.delete_single_track(kind, window, cx);
+                    // `project_changed` records nothing until a recording loads.
+                    editor.history.record(&editor.project);
+                    editor.rebuild_timeline();
+                });
+            }
+            editor.read_with(cx, |editor, _| {
+                assert!(!shows_row(editor, TrackKind::Caption));
+                assert!(!shows_row(editor, TrackKind::Keyboard));
+            });
+
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.project.keyboard.as_ref().unwrap().settings.enabled);
+                assert!(shows_row(editor, TrackKind::Keyboard));
+                assert!(!shows_row(editor, TrackKind::Caption));
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.project.captions.as_ref().unwrap().settings.enabled);
+                assert!(shows_row(editor, TrackKind::Caption));
+                assert!(shows_row(editor, TrackKind::Keyboard));
+            });
+            cx.simulate_keystrokes("ctrl-shift-z ctrl-shift-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(!editor.project.keyboard.as_ref().unwrap().settings.enabled);
+                assert!(!shows_row(editor, TrackKind::Caption));
+                assert!(!shows_row(editor, TrackKind::Keyboard));
+            });
+        }
+
+        #[gpui::test]
+        fn undo_during_a_lane_reorder_cancels_it(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                two_zooms(editor);
+                editor.history.pause();
+                editor.lane_reorder = Some(LaneReorder {
+                    source: TrackRow {
+                        kind: TrackKind::Text,
+                        lane: 1,
+                    },
+                    target_index: 0,
+                    down_x: 0.,
+                    down_y: 0.,
+                    pointer_x: 0.,
+                    pointer_y: 0.,
+                    dragging: true,
+                    paused: true,
+                    autoscroll_pending: false,
+                });
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.lane_reorder.is_none());
+                assert!(zoom_segments(editor).is_empty());
+            });
+            editor.update(cx, |editor, _| {
+                editor.project.background.padding = 12.;
+                editor.history.record(&editor.project);
+                assert!(!editor.history.can_redo(), "history is no longer paused");
+            });
+        }
+    }
+
     /// A 0.6.1 log: the user deleted the clip under the playhead, the
     /// timeline shrank to before it, and every preview request past the new
     /// end found no segment. The playhead goes back to the end instead.
@@ -13079,6 +15463,102 @@ mod tests {
         assert_eq!(playhead_past_end(2.0, 4.0), None);
         assert_eq!(playhead_past_end(4.0, 4.0), None);
         assert_eq!(playhead_past_end(3.0, 0.0), None);
+    }
+
+    /// An editor window holds its project against deletion from the library
+    /// for as long as it has it open. Giving up the engine, which closing,
+    /// reloading and the editor's own Delete all do first, lets go.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn an_open_editor_holds_its_project_until_it_gives_up_its_engine(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let library = tempfile::tempdir().unwrap();
+        let dirs = [library.path().to_path_buf()];
+        let project_path = library.path().join("open.cap");
+        std::fs::create_dir(&project_path).unwrap();
+        let meta = project_path.join("recording-meta.json");
+        std::fs::write(&meta, b"{}").unwrap();
+        let opened = project_path.canonicalize().unwrap();
+        let held = crate::library::ProjectOpenInEditor::begin(&opened).unwrap();
+        let (editor, cx) = cx.add_window_view(move |window, cx| {
+            let mut editor = EditorWindow::new(opened.clone(), window, cx);
+            editor.hold_project(held);
+            editor
+        });
+
+        assert_eq!(
+            crate::library::delete_recording_directory_in(&dirs, &project_path),
+            Err(tr::dialog::delete_recording::open_in_editor().to_string())
+        );
+        assert!(meta.is_file());
+
+        editor.update_in(cx, |editor, _, _| assert!(editor.take_instance().is_none()));
+        assert_eq!(
+            crate::library::delete_recording_directory_in(&dirs, &project_path),
+            Ok(())
+        );
+        assert!(!project_path.exists());
+    }
+
+    /// An automation's Apply preset waits for an editor still loading its
+    /// project instead of reporting success for a preset it never applied.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn an_automation_preset_waits_for_the_editor_to_load(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        let config = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        let result = editor.update_in(cx, |editor, window, cx| {
+            editor.apply_preset_config(&config, window, cx)
+        });
+        assert_eq!(result, Err(crate::automation::EDITOR_LOADING.to_string()));
+        assert!(!project.path().join("project-config.json").exists());
+    }
+
+    /// An arrow held in the crop dialog keeps nudging every frame until its
+    /// key-up. A window that loses focus mid-hold (Cmd-Tab) never gets that
+    /// key-up, so deactivation has to release the keys itself.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn deactivating_the_window_releases_a_held_crop_nudge(cx: &mut gpui::TestAppContext) {
+        use crate::editor_crop::{CropBounds, CropState};
+
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, window, cx| {
+            window.activate_window();
+            editor.crop = Some(CropState::new(
+                (1920, 1080),
+                (401., 226.),
+                CropBounds::new(100., 50., 100., 50.),
+            ));
+            editor.crop.as_mut().unwrap().keys.keys.insert("right");
+            editor.start_crop_ticker(window, cx);
+        });
+        let start = editor.read_with(cx, |editor, _| editor.crop.as_ref().unwrap().raw.x);
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        let held = editor.read_with(cx, |editor, _| editor.crop.as_ref().unwrap().raw.x);
+        assert!(held > start, "the held arrow nudges while focused");
+
+        cx.deactivate_window();
+        let released = editor.read_with(cx, |editor, _| editor.crop.as_ref().unwrap().raw.x);
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| {
+            let crop = editor.crop.as_ref().unwrap();
+            assert!(crop.keys.keys.is_empty());
+            assert_eq!(
+                crop.raw.x, released,
+                "no nudges after the window lost focus"
+            );
+        });
+        drop(project);
     }
 
     #[cfg(target_os = "linux")]
@@ -13284,6 +15764,7 @@ mod tests {
         editor.project.timeline = Some(TimelineConfiguration {
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             segments: Vec::new(),
             transitions: Vec::new(),
             zoom_segments: Vec::new(),
@@ -13404,6 +15885,7 @@ mod tests {
                     ..Default::default()
                 }],
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             });
             editor.project = config;
@@ -13459,6 +15941,7 @@ mod tests {
                     ..Default::default()
                 }],
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             });
             editor.project = config;
@@ -13555,6 +16038,31 @@ mod tests {
     }
 
     #[test]
+    fn new_zooms_start_at_the_zoom_amount_settings_shows() {
+        let settings = tempfile::tempdir().unwrap();
+        let store = settings.path().join("store");
+        for (contents, expected) in [
+            (r#"{ "general_settings": {} }"#, 2.0),
+            (
+                r#"{ "general_settings": { "defaultZoomAmount": null } }"#,
+                2.0,
+            ),
+            (
+                r#"{ "general_settings": { "defaultZoomAmount": 2.5 } }"#,
+                2.5,
+            ),
+        ] {
+            std::fs::write(&store, contents).unwrap();
+            crate::store::set_test_tauri_store_path(Some(store.clone()));
+            let shown = crate::store::GeneralSettings::load().new_zoom_amount();
+            let amount = new_zoom_amount(cap_project::auto_zoom::AUTO_ZOOM_VERSION);
+            crate::store::set_test_tauri_store_path(None);
+            assert_eq!(f64::from(shown), expected, "{contents}");
+            assert_eq!(amount, expected, "{contents}");
+        }
+    }
+
+    #[test]
     #[ignore = "set CAP_AUTO_ZOOM_BENCH_PROJECT to a disposable recording bundle"]
     fn auto_zoom_click_loading_benchmark() {
         let path = PathBuf::from(std::env::var_os("CAP_AUTO_ZOOM_BENCH_PROJECT").unwrap());
@@ -13570,11 +16078,7 @@ mod tests {
                     .map_or_else(cap_project::CursorEvents::default, |cursor| {
                         cap_project::CursorEvents::load_from_file(&meta.path(cursor)).unwrap()
                     });
-                let pointer_ids = studio.pointer_cursor_ids();
-                events.stabilize_short_lived_cursor_shapes(
-                    (!pointer_ids.is_empty()).then_some(&pointer_ids),
-                    cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
-                );
+                studio.stabilize_cursor_shapes(None, &mut events);
                 vec![events.clicks]
             }
             StudioRecordingMeta::MultipleSegments { inner } => inner
@@ -13759,6 +16263,7 @@ mod tests {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    voice_eq: None,
                     volume: None,
                 }],
                 transitions: Vec::new(),
@@ -13772,6 +16277,7 @@ mod tests {
                 camera3d_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
             }),
             captions: Some(cap_project::CaptionsData {
                 segments: vec![cap_project::CaptionSegment {
@@ -13780,6 +16286,7 @@ mod tests {
                     end: 4.0,
                     text: "hello world".into(),
                     words,
+                    recording_clip: None,
                 }],
                 source_timed: true,
                 ..Default::default()
@@ -13801,6 +16308,92 @@ mod tests {
         assert_eq!(project.timeline.as_ref().unwrap().caption_segments.len(), 1);
     }
 
+    // A migrated 10 s recording cut into 4..12 and 12..14 (a held tail from
+    // 10 s) with a 1 s crossfade, so both pieces of the same recording
+    // overlap at 7..8. A caption tied to it at 12.2..13.8 shows at 7.2..8.8
+    // through the second piece, and splitting it at 7.9, inside the overlap,
+    // cuts it at 12.9 rather than at the first piece's 11.9.
+    #[test]
+    fn a_tied_caption_inside_a_crossfade_of_its_own_clip_splits() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "start": 4.0, "end": 12.0, "timescale": 1.0 },
+                    { "recordingSegment": 0, "start": 12.0, "end": 14.0, "timescale": 1.0 }
+                ],
+                "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 1.0 }],
+                "zoomSegments": []
+            },
+            "captions": {
+                "segments": [{
+                    "id": "caption-tail", "start": 12.2, "end": 13.8,
+                    "text": "Held tail", "recordingSegment": 0
+                }],
+                "settings": { "enabled": true },
+                "sourceTimed": true
+            }
+        }))
+        .unwrap();
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+        let track = project.timeline.as_ref().unwrap().caption_segments[0].clone();
+        assert!((track.start - 7.2).abs() < 1e-4 && (track.end - 8.8).abs() < 1e-4);
+
+        assert!(split_caption_segment(
+            &mut project,
+            0,
+            7.9 - track.start,
+            &[10.0]
+        ));
+        let halves: Vec<_> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| {
+                let near = |time: f32| (f64::from(time) * 1000.0).round() / 1000.0;
+                (
+                    near(segment.start),
+                    near(segment.end),
+                    segment.recording_clip,
+                )
+            })
+            .collect();
+        assert_eq!(halves, [(12.2, 12.9, Some(0)), (12.9, 13.8, Some(0))]);
+    }
+
+    #[test]
+    fn both_halves_of_a_split_hand_added_caption_survive_a_new_transcript() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0 }],
+                "zoomSegments": []
+            },
+            "captions": {
+                "segments": [{ "id": "caption-1-a", "start": 4.0, "end": 6.0, "text": "Chapter two" }],
+                "settings": { "enabled": true },
+                "sourceTimed": true
+            }
+        }))
+        .unwrap();
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+
+        assert!(split_caption_segment(&mut project, 0, 1.0, &[10.0]));
+        let ids: Vec<String> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| segment.id.clone())
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.iter().all(|id| id.starts_with("caption-")), "{ids:?}");
+
+        crate::transcription::apply_caption_result(&mut project, Vec::new(), "en", &[10.0], 10.0);
+        assert_eq!(project.captions.as_ref().unwrap().segments.len(), 2);
+    }
+
     #[test]
     fn caption_split_delete_survives_a_repeated_trimmed_edl() {
         let mut project = ProjectConfiguration {
@@ -13814,6 +16407,7 @@ mod tests {
                         name: None,
                         speed_audio_mode: None,
                         hide_cursor: None,
+                        voice_eq: None,
                         volume: None,
                     },
                     cap_project::TimelineSegment {
@@ -13824,6 +16418,7 @@ mod tests {
                         name: None,
                         speed_audio_mode: None,
                         hide_cursor: None,
+                        voice_eq: None,
                         volume: None,
                     },
                 ],
@@ -13838,6 +16433,7 @@ mod tests {
                 camera3d_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
             }),
             captions: Some(cap_project::CaptionsData {
                 segments: vec![cap_project::CaptionSegment {
@@ -13857,6 +16453,7 @@ mod tests {
                             end: 4.0,
                         },
                     ],
+                    recording_clip: None,
                 }],
                 source_timed: true,
                 ..Default::default()
@@ -13910,7 +16507,7 @@ mod tests {
         let layout = EditorVerticalLayout::new(652., DEFAULT_TIMELINE_HEIGHT);
         assert_eq!(layout.player_min_height, MIN_PLAYER_HEIGHT);
         assert_eq!(layout.timeline_height, DEFAULT_TIMELINE_HEIGHT);
-        assert_eq!(editor_player_width(992.), 550.);
+        assert_eq!(editor_player_width(992., SIDEBAR_WIDTH), 550.);
     }
 
     #[test]
@@ -13993,7 +16590,7 @@ mod tests {
         assert!(!compact_header_controls(992., false, true));
         assert!(compact_header_controls(800., true, false));
         assert!(compact_header_controls(800., false, true));
-        assert_eq!(editor_player_width(800.), 358.);
+        assert_eq!(editor_player_width(800., SIDEBAR_WIDTH), 358.);
     }
 
     fn open_sidebar_menu_for_test(
@@ -14032,6 +16629,7 @@ mod tests {
 
         for kind in [
             SidebarMenu::BackgroundCornerStyle,
+            SidebarMenu::BackgroundPaddingMode,
             SidebarMenu::CameraBlur,
             SidebarMenu::CameraShape,
             SidebarMenu::CameraCornerStyle,
@@ -14067,6 +16665,7 @@ mod tests {
             timeline: Some(TimelineConfiguration {
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 segments: Vec::new(),
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),
@@ -14201,6 +16800,7 @@ mod tests {
                             has_system_audio: false,
                             mic_channels: None,
                             recording_clips: 1,
+                            recorded_fps: Vec::new(),
                         },
                         window,
                         cx,
@@ -14239,6 +16839,27 @@ mod tests {
         }
 
         #[gpui::test]
+        fn a_new_zoom_starts_at_the_default_zoom_amount_setting(cx: &mut gpui::TestAppContext) {
+            let settings = tempfile::tempdir().unwrap();
+            let store = settings.path().join("store");
+            std::fs::write(
+                &store,
+                r#"{ "general_settings": { "defaultZoomAmount": 2.5 } }"#,
+            )
+            .unwrap();
+            crate::store::set_test_tauri_store_path(Some(store));
+            let (editor, cx) = fixture(cx);
+            let index = editor.update_in(cx, |editor, window, cx| {
+                editor.create_gap_segment(TrackKind::Zoom, 4., 6., window, cx)
+            });
+            let amount = editor.read_with(cx, |editor, _| {
+                editor.project.timeline.as_ref().unwrap().zoom_segments[index].amount
+            });
+            crate::store::set_test_tauri_store_path(None);
+            assert_eq!(amount, 2.5);
+        }
+
+        #[gpui::test]
         fn a_press_on_the_generate_prompt_copy_does_not_start_a_zoom(
             cx: &mut gpui::TestAppContext,
         ) {
@@ -14262,6 +16883,464 @@ mod tests {
             let lane = cx.debug_bounds("zoom-generate-prompt").unwrap();
             press(cx, point(lane.left() + px(24.), lane.center().y));
             editor.read_with(cx, |editor, _| assert!(editor.drag.is_none()));
+        }
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    mod clip_transitions {
+        use super::*;
+
+        struct ClipRowView {
+            editor: Entity<EditorWindow>,
+            _driver: TransportDriver,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for ClipRowView {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let viewport_width = f32::from(window.viewport_size().width);
+                self.editor.update(cx, |editor, cx| {
+                    div()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .child(editor.render_timeline_body(viewport_width, cx))
+                })
+            }
+        }
+
+        /// One 10s recording split at 4s: the two halves the bug report was
+        /// about.
+        fn split_clip(
+            cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            let project = tempfile::tempdir().unwrap();
+            let (handle, driver, _) = transport();
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor = cx.new(|cx| EditorWindow::new(project.path().into(), window, cx));
+                editor.update(cx, |editor, cx| {
+                    let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+                        "timeline": {
+                            "segments": [
+                                { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                                { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 10.0 }
+                            ],
+                            "zoomSegments": []
+                        }
+                    }))
+                    .unwrap();
+                    editor.set_summary(
+                        ProjectSummary {
+                            recordings: Arc::new(ProjectRecordingsMeta {
+                                segments: Vec::new(),
+                            }),
+                            pretty_name: "Recording".into(),
+                            timeline: TimelineModel::build(&config, false, false),
+                            duration: 10.,
+                            has_camera: false,
+                            has_cursor_data: false,
+                            recorded_cursor_family: None,
+                            clip_display_durations: vec![10.],
+                            recording_duration: 10.,
+                            multiple_clips: false,
+                            has_microphone: false,
+                            has_system_audio: false,
+                            mic_channels: None,
+                            recording_clips: 1,
+                            recorded_fps: Vec::new(),
+                        },
+                        window,
+                        cx,
+                    );
+                    editor.set_project(config, window, cx);
+                    editor.transport = Some(handle);
+                });
+                ClipRowView {
+                    editor,
+                    _driver: driver,
+                    _project: project,
+                }
+            });
+            (view.read_with(cx, |view, _| view.editor.clone()), cx)
+        }
+
+        /// Where output time `time` sits on screen, and the seconds one pixel
+        /// covers.
+        fn x_of(
+            editor: &Entity<EditorWindow>,
+            cx: &mut gpui::VisualTestContext,
+            time: f64,
+        ) -> (f32, f64) {
+            let viewport_width = cx.update(|window, _| f32::from(window.viewport_size().width));
+            editor.read_with(cx, |editor, _| {
+                let secs_per_pixel = editor.secs_per_pixel(viewport_width);
+                (
+                    timeline::content_left()
+                        + ((time - editor.view.transform.position) / secs_per_pixel) as f32,
+                    secs_per_pixel,
+                )
+            })
+        }
+
+        fn clip_row_y(cx: &mut gpui::VisualTestContext) -> Pixels {
+            cx.debug_bounds("timeline-row-Clip-0").unwrap().center().y
+        }
+
+        fn drag_to(editor: &Entity<EditorWindow>, cx: &mut gpui::VisualTestContext, x: f32) {
+            editor.update_in(cx, |editor, window, cx| {
+                editor.drag_mouse_move(x - 1., false, window, cx);
+                editor.drag_mouse_move(x, false, window, cx);
+                editor.drag_mouse_up(window, cx);
+            });
+            cx.run_until_parked();
+        }
+
+        fn transition(
+            editor: &Entity<EditorWindow>,
+            cx: &mut gpui::VisualTestContext,
+        ) -> Option<cap_project::ClipTransition> {
+            editor.read_with(cx, |editor, _| {
+                editor
+                    .project
+                    .timeline
+                    .as_ref()
+                    .and_then(|timeline| timeline.effective_transition(1))
+            })
+        }
+
+        #[gpui::test]
+        fn dragging_one_half_of_a_split_clip_onto_the_other_makes_a_transition(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = split_clip(cx);
+            let (x, secs_per_pixel) = x_of(&editor, cx, 7.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(
+                point(px(x), y),
+                MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            let pull = (0.6 / secs_per_pixel) as f32;
+            drag_to(&editor, cx, x - pull);
+
+            let made = transition(&editor, cx).expect("the drag made a transition");
+            assert_eq!(made.kind, cap_project::ClipTransitionType::CrossFade);
+            assert!(
+                (made.duration - 0.6).abs() < secs_per_pixel * 2.,
+                "{made:?}"
+            );
+            editor.read_with(cx, |editor, _| {
+                assert!((editor.timeline.total_duration - (10. - made.duration)).abs() < 1e-9);
+                assert!(editor.transition_drag_base.is_none());
+            });
+
+            editor.update_in(cx, |editor, window, cx| editor.undo(window, cx));
+            assert!(
+                transition(&editor, cx).is_none(),
+                "one undo takes the whole drag back"
+            );
+            editor.update_in(cx, |editor, window, cx| editor.redo(window, cx));
+            assert_eq!(
+                transition(&editor, cx).map(|t| t.duration),
+                Some(made.duration)
+            );
+        }
+
+        /// A caption is stored in recording time and projected onto the
+        /// timeline; a transition drag moves its clip, so the words have to
+        /// be projected again with the box, not only the box rippled.
+        #[gpui::test]
+        fn a_transition_drag_moves_caption_words_with_their_clip(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            editor.update(cx, |editor, cx| {
+                editor.project.captions = Some(cap_project::CaptionsData {
+                    segments: vec![cap_project::CaptionSegment {
+                        id: "said".into(),
+                        start: 6.0,
+                        end: 7.0,
+                        text: "hello there".into(),
+                        words: vec![
+                            cap_project::CaptionWord {
+                                text: "hello".into(),
+                                start: 6.0,
+                                end: 6.5,
+                            },
+                            cap_project::CaptionWord {
+                                text: "there".into(),
+                                start: 6.5,
+                                end: 7.0,
+                            },
+                        ],
+                        recording_clip: None,
+                    }],
+                    settings: Default::default(),
+                    source_timed: true,
+                });
+                editor.synchronize_caption_track(true);
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let caption = |editor: &Entity<EditorWindow>, cx: &mut gpui::VisualTestContext| {
+                editor.read_with(cx, |editor, _| {
+                    let segment =
+                        editor.project.timeline.as_ref().unwrap().caption_segments[0].clone();
+                    (segment.start, segment.words[0].start)
+                })
+            };
+            let (start, word) = caption(&editor, cx);
+            assert!((start - 6.0).abs() < 1e-6 && (f64::from(word) - 6.0).abs() < 1e-4);
+
+            let (x, secs_per_pixel) = x_of(&editor, cx, 7.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(
+                point(px(x), y),
+                MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            drag_to(&editor, cx, x - (0.6 / secs_per_pixel) as f32);
+            let made = transition(&editor, cx).expect("the drag made a transition");
+
+            let (start, word) = caption(&editor, cx);
+            let expected = 6.0 - made.duration;
+            assert!(
+                (start - expected).abs() < 1e-3,
+                "box at {start}, expected {expected}"
+            );
+            assert!(
+                (f64::from(word) - expected).abs() < 1e-3,
+                "first word at {word}, box at {start}"
+            );
+        }
+
+        #[gpui::test]
+        fn a_transition_drag_moves_transcript_words_with_their_clip(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            let word_output = |editor: &Entity<EditorWindow>, cx: &mut gpui::VisualTestContext| {
+                editor.update(cx, |editor, _| {
+                    editor.transcript_refresh();
+                    editor
+                        .transcript
+                        .edl
+                        .as_ref()
+                        .unwrap()
+                        .source_to_output(6.0)
+                })
+            };
+            editor.update(cx, |editor, _| {
+                editor.project.captions = Some(cap_project::CaptionsData {
+                    segments: vec![cap_project::CaptionSegment {
+                        id: "said".into(),
+                        start: 6.0,
+                        end: 7.0,
+                        text: "hello".into(),
+                        words: vec![cap_project::CaptionWord {
+                            text: "hello".into(),
+                            start: 6.0,
+                            end: 7.0,
+                        }],
+                        recording_clip: None,
+                    }],
+                    settings: Default::default(),
+                    source_timed: true,
+                });
+                editor.transcript.open = true;
+                editor.transcript.dirty = true;
+            });
+            assert_eq!(word_output(&editor, cx), Some(6.0));
+
+            let (x, secs_per_pixel) = x_of(&editor, cx, 7.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(
+                point(px(x), y),
+                MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            drag_to(&editor, cx, x - (0.6 / secs_per_pixel) as f32);
+            let made = transition(&editor, cx).expect("the drag made a transition");
+
+            let output = word_output(&editor, cx).unwrap();
+            let expected = 6.0 - made.duration;
+            assert!(
+                (output - expected).abs() < 1e-9,
+                "the word plays at {expected}, the transcript seeks to {output}"
+            );
+        }
+
+        #[gpui::test]
+        fn renumbering_the_clips_closes_the_transition_popover(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            editor.update(cx, |editor, cx| {
+                let timeline = editor.project.timeline.as_mut().unwrap();
+                assert!(edits::split_clip_segment(timeline, 7.0, None));
+                for index in [1, 2] {
+                    assert!(crate::editor_clips::set_clip_transition(
+                        timeline,
+                        index,
+                        cap_project::ClipTransitionType::CrossFade,
+                        0.5,
+                    ));
+                }
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            editor.update_in(cx, |editor, window, cx| {
+                editor.open_transition_popover(2, point(px(400.), px(500.)), window, cx);
+            });
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.transition_popover_index(), Some(2));
+            });
+
+            // Splitting the first clip moves the cut the popover was on to
+            // index 3, and puts a different transition at index 2.
+            editor.update(cx, |editor, cx| {
+                let timeline = editor.project.timeline.as_mut().unwrap();
+                assert!(edits::split_clip_segment(timeline, 1.0, Some(0)));
+                assert!(timeline.effective_transition(2).is_some());
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.transition_popover_index(), None);
+            });
+        }
+
+        #[gpui::test]
+        fn a_press_that_moves_right_first_only_selects_the_clip(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            let (x, _) = x_of(&editor, cx, 7.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(
+                point(px(x), y),
+                MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            drag_to(&editor, cx, x + 40.);
+            assert!(transition(&editor, cx).is_none());
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(
+                    editor.selection,
+                    Some(Selection::single(TrackKind::Clip, 1))
+                );
+            });
+        }
+
+        #[gpui::test]
+        fn the_plus_at_a_cut_adds_a_transition_and_opens_its_popover(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = split_clip(cx);
+            let (x, _) = x_of(&editor, cx, 6.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.run_until_parked();
+            let chip = cx
+                .debug_bounds("clip-transition-add-1")
+                .expect("hovering the clip shows the + at its cut");
+            cx.simulate_mouse_move(chip.center(), None, gpui::Modifiers::default());
+            cx.simulate_click(chip.center(), gpui::Modifiers::default());
+            cx.run_until_parked();
+
+            let made = transition(&editor, cx).expect("the + made a transition");
+            assert_eq!(made.kind, cap_project::ClipTransitionType::CrossFade);
+            assert_eq!(made.duration, DEFAULT_CLIP_TRANSITION_DURATION);
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.transition_popover_index(), Some(1));
+            });
+
+            editor.update_in(cx, |editor, window, cx| {
+                editor.set_clip_transition(
+                    1,
+                    Some((cap_project::ClipTransitionType::PushUp, made.duration)),
+                    window,
+                    cx,
+                );
+            });
+            assert_eq!(
+                transition(&editor, cx).map(|t| t.kind),
+                Some(cap_project::ClipTransitionType::PushUp)
+            );
+            editor.update_in(cx, |editor, window, cx| editor.delete_selection(window, cx));
+            assert!(transition(&editor, cx).is_none());
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.transition_popover.is_none());
+                assert_eq!(editor.project.timeline.as_ref().unwrap().segments.len(), 2);
+            });
+        }
+
+        #[gpui::test]
+        fn split_mode_presses_go_through_a_transition(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            editor.update(cx, |editor, cx| {
+                assert!(crate::editor_clips::set_clip_transition(
+                    editor.project.timeline.as_mut().unwrap(),
+                    1,
+                    cap_project::ClipTransitionType::Zoom,
+                    1.0,
+                ));
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            assert!(cx.debug_bounds("clip-transition-1").is_some());
+            editor.update(cx, |editor, cx| editor.toggle_split_mode(cx));
+            cx.run_until_parked();
+            assert!(
+                cx.debug_bounds("clip-transition-1").is_none(),
+                "the band steps aside so the press reaches the split"
+            );
+        }
+
+        #[gpui::test]
+        fn dragging_a_transitions_edges_changes_its_length(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            editor.update(cx, |editor, cx| {
+                assert!(crate::editor_clips::set_clip_transition(
+                    editor.project.timeline.as_mut().unwrap(),
+                    1,
+                    cap_project::ClipTransitionType::WipeLeft,
+                    1.0,
+                ));
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let (_, secs_per_pixel) = x_of(&editor, cx, 0.0);
+            let band = cx
+                .debug_bounds("clip-transition-1")
+                .expect("the transition is drawn");
+            let left_edge = point(band.left() + px(2.), band.center().y);
+            cx.simulate_mouse_move(left_edge, None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(left_edge, MouseButton::Left, gpui::Modifiers::default());
+            let grow = (0.5 / secs_per_pixel) as f32;
+            drag_to(&editor, cx, f32::from(left_edge.x) - grow);
+            let longer = transition(&editor, cx).unwrap();
+            assert_eq!(longer.kind, cap_project::ClipTransitionType::WipeLeft);
+            assert!(
+                (longer.duration - 1.5).abs() < secs_per_pixel * 2.,
+                "{longer:?}"
+            );
+
+            cx.run_until_parked();
+            let band = cx.debug_bounds("clip-transition-1").unwrap();
+            let right_edge = point(band.right() - px(2.), band.center().y);
+            cx.simulate_mouse_move(right_edge, None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(right_edge, MouseButton::Left, gpui::Modifiers::default());
+            drag_to(
+                &editor,
+                cx,
+                f32::from(right_edge.x) - (1.0 / secs_per_pixel) as f32,
+            );
+            let shorter = transition(&editor, cx).unwrap();
+            assert!(
+                (shorter.duration - 0.5).abs() < secs_per_pixel * 2.,
+                "{shorter:?}"
+            );
         }
     }
 
@@ -14321,6 +17400,31 @@ mod tests {
         cx.simulate_click(title, gpui::Modifiers::default());
 
         cx.update(|window, _| assert!(input_focus.is_focused(window)));
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn playback_ends_a_held_compare(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update(cx, |editor, cx| {
+            editor.preview_enhance = true;
+            editor.set_preview_comparing(true, cx);
+            assert!(editor.preview_comparing);
+            assert_eq!(
+                editor.preview_screen_enhancement(),
+                cap_project::ScreenEnhancement::default()
+            );
+            editor.start_playback(0.0, cx);
+            assert!(!editor.preview_comparing);
+            assert_eq!(
+                editor.preview_screen_enhancement(),
+                cap_project::ScreenEnhancement::on()
+            );
+        });
     }
 
     // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
@@ -14395,6 +17499,7 @@ mod tests {
             editor.project.timeline = Some(TimelineConfiguration {
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 segments: Vec::new(),
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),
@@ -14708,6 +17813,57 @@ mod tests {
     }
 
     #[test]
+    fn a_half_frame_on_a_retina_canvas_is_redrawn_until_the_canvas_size_lands() {
+        let mut project = ProjectConfiguration::default();
+        let options = cap_rendering::RenderOptions {
+            camera_size: None,
+            screen_size: XY::new(3024, 1964),
+            preserve_screen_alpha: false,
+        };
+        for padding in [0.0, 10.0, 30.0] {
+            project.background.padding = padding;
+            let half = cap_rendering::ProjectUniforms::get_output_size(
+                &options,
+                &project,
+                default_preview_resolution(),
+            );
+            let half = (half.0 as f32, half.1 as f32);
+            for logical in [(640., 400.), (1018., 702.), (1436., 933.), (2560., 1440.)] {
+                let (width, height) = letterbox(logical, half);
+                let canvas = [(width * 2.).round() as u32, (height * 2.).round() as u32];
+                assert!(
+                    sharp_preview_needed(canvas, half),
+                    "{padding} {logical:?}: a 2x canvas magnifies the Half frame"
+                );
+                let sharp = cap_rendering::ProjectUniforms::get_output_size(
+                    &options,
+                    &project,
+                    XY::new(canvas[0], canvas[1]),
+                );
+                assert!(
+                    !sharp_preview_needed(canvas, (sharp.0 as f32, sharp.1 as f32)),
+                    "{padding} {logical:?}: {sharp:?} must cover {canvas:?} or the redraw repeats"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_request_past_the_end_counts_as_answered_by_the_last_frame() {
+        assert_eq!(last_preview_frame(0.0), None);
+        assert_eq!(last_preview_frame(1.0), Some(59));
+        assert_eq!(last_preview_frame(1.01), Some(60));
+    }
+
+    #[test]
+    fn a_frame_drawn_at_or_above_the_canvas_size_needs_no_redraw() {
+        assert!(!sharp_preview_needed([1200, 700], (1248., 702.)));
+        assert!(!sharp_preview_needed([1000, 650], (1018., 702.)));
+        assert!(!sharp_preview_needed([0, 0], (1018., 702.)));
+        assert!(sharp_preview_needed([1436, 990], (1018., 702.)));
+    }
+
+    #[test]
     fn letterbox_fits_a_wide_frame_by_width() {
         // A 1080x702 frame (aspect 1.538) in a 1000x900 container (aspect
         // 1.117 after padding): the frame is wider, so width wins.
@@ -14765,6 +17921,42 @@ mod tests {
         ));
     }
 
+    /// Scrubbing across preset captions changes only the caption box, which
+    /// the canvas never draws, so it costs no editor rebuild. A manual
+    /// caption's box is a canvas hit target, so its change does while the
+    /// overlay is live, and not while the pointer is elsewhere.
+    #[test]
+    fn only_a_manual_caption_box_changes_the_canvas_layout() {
+        let base = FrameLayout {
+            display: [0., 0., 1920., 1080.],
+            camera: None,
+            output_size: [1920, 1080],
+            caption: None,
+        };
+        let preset = |bounds| FrameLayout {
+            caption: Some(cap_rendering::CaptionFrameBox::new(bounds, "bottom-center")),
+            ..base
+        };
+        let manual = |bounds| FrameLayout {
+            caption: Some(cap_rendering::CaptionFrameBox::new(bounds, "manual")),
+            ..base
+        };
+        assert_eq!(canvas_hit_layout(preset([0., 0., 10., 10.]), true), base);
+        assert_eq!(
+            canvas_hit_layout(preset([0., 0., 10., 10.]), true),
+            canvas_hit_layout(preset([5., 5., 50., 20.]), true)
+        );
+        assert_ne!(
+            canvas_hit_layout(manual([0., 0., 10., 10.]), true),
+            canvas_hit_layout(manual([5., 5., 50., 20.]), true)
+        );
+        assert_ne!(canvas_hit_layout(manual([0., 0., 10., 10.]), true), base);
+        assert_eq!(
+            canvas_hit_layout(manual([0., 0., 10., 10.]), false),
+            canvas_hit_layout(manual([5., 5., 50., 20.]), false)
+        );
+    }
+
     /// Every failure `EditorInstance::new` would return, plus the one it would
     /// panic on, has to come back as a message.
     #[test]
@@ -14809,36 +18001,120 @@ mod tests {
     #[test]
     fn playhead_never_extrapolates_before_the_epochs_first_sample() {
         // Freshly pressed play, stale anchor: hold the line still.
-        assert_eq!(playhead_extrapolation(true, false, 0.206), 0.0);
-        assert_eq!(playhead_extrapolation(true, false, 1.081), 0.0);
+        assert_eq!(playhead_extrapolation(true, false, 0.206, 1.0), 0.0);
+        assert_eq!(playhead_extrapolation(true, false, 1.081, 2.0), 0.0);
         // Paused, no matter what the anchor says.
-        assert_eq!(playhead_extrapolation(false, true, 0.5), 0.0);
-        assert_eq!(playhead_extrapolation(false, false, 0.5), 0.0);
-    }
-
-    #[test]
-    fn playback_rate_labels_drop_trailing_zeros() {
-        let labels: Vec<String> = PLAYBACK_RATES
-            .iter()
-            .map(|rate| playback_rate_label(*rate))
-            .collect();
-        assert_eq!(
-            labels,
-            ["0.5×", "0.75×", "1×", "1.2×", "1.5×", "1.75×", "2×"]
-        );
+        assert_eq!(playhead_extrapolation(false, true, 0.5, 1.0), 0.0);
+        assert_eq!(playhead_extrapolation(false, false, 0.5, 3.0), 0.0);
     }
 
     /// Once the epoch is live the line glides by the wall clock between
     /// samples, capped so a render stall cannot run it far ahead.
     #[test]
     fn playhead_extrapolation_tracks_the_wall_clock_and_caps() {
-        assert_eq!(playhead_extrapolation(true, true, 0.016), 0.016);
+        assert_eq!(playhead_extrapolation(true, true, 0.016, 1.0), 0.016);
         assert_eq!(
-            playhead_extrapolation(true, true, 3.0),
+            playhead_extrapolation(true, true, 3.0, 1.0),
             MAX_PLAYHEAD_EXTRAPOLATION
         );
         // A clock hiccup must not pull the playhead backwards.
-        assert_eq!(playhead_extrapolation(true, true, -0.01), 0.0);
+        assert_eq!(playhead_extrapolation(true, true, -0.01, 1.0), 0.0);
+    }
+
+    #[test]
+    fn playhead_extrapolation_runs_at_the_preview_speed() {
+        assert_eq!(playhead_extrapolation(true, true, 0.016, 2.0), 0.032);
+        assert_eq!(playhead_extrapolation(true, true, 0.016, 0.5), 0.008);
+        assert_eq!(
+            playhead_extrapolation(true, true, 3.0, 3.0),
+            MAX_PLAYHEAD_EXTRAPOLATION * 3.0
+        );
+    }
+
+    #[test]
+    fn preview_speed_shortcuts_follow_the_typed_angle_brackets() {
+        let keystroke =
+            |key: &str, key_char: Option<&str>, modifiers: gpui::Modifiers| gpui::Keystroke {
+                modifiers,
+                key: key.into(),
+                key_char: key_char.map(Into::into),
+            };
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let none = gpui::Modifiers::default();
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(".", Some(">"), shift)),
+            Some(true)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(",", Some("<"), shift)),
+            Some(false)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(".", None, shift)),
+            Some(true)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(",", None, shift)),
+            Some(false)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke("<", Some("<"), none)),
+            Some(false)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke("<", Some(">"), shift)),
+            Some(true)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(">", None, shift)),
+            Some(true)
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(".", Some(":"), shift)),
+            None
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(".", Some("."), none)),
+            None
+        );
+        assert_eq!(
+            preview_speed_shortcut(&keystroke(",", Some(","), none)),
+            None
+        );
+        for modifiers in [
+            gpui::Modifiers {
+                platform: true,
+                shift: true,
+                ..Default::default()
+            },
+            gpui::Modifiers {
+                control: true,
+                shift: true,
+                ..Default::default()
+            },
+            gpui::Modifiers {
+                alt: true,
+                shift: true,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                preview_speed_shortcut(&keystroke(".", Some(">"), modifiers)),
+                None
+            );
+        }
+        for key in ["space", "s", "c", "up", "down", "home", "end", "delete"] {
+            let parsed = gpui::Keystroke::parse(key).unwrap();
+            assert_eq!(preview_speed_shortcut(&parsed), None, "{key}");
+            assert!(!is_playback_shortcut(
+                &keystroke(".", Some(">"), shift),
+                false,
+                false
+            ));
+        }
     }
 
     /// A paused seek stores exactly the time its engine echo carries, so the
@@ -14887,6 +18163,92 @@ mod tests {
             noisy_paints.report(10.0).starts_with("playback fps=60.0 "),
             "paints must not inflate the frame rate"
         );
+    }
+
+    #[test]
+    fn a_lone_collision_replaces_the_unpainted_frame_as_before() {
+        let mut waiting = WaitingFrame::default();
+        assert_eq!(waiting.arrive(1, true, false), [None, Some(1)]);
+        assert_eq!(waiting.arrive(2, true, true), [None, Some(2)]);
+        assert!(!waiting.is_some());
+        for frame in 3..3 + COLLISION_WINDOW {
+            assert_eq!(waiting.arrive(frame, true, false), [None, Some(frame)]);
+        }
+        let later = 3 + COLLISION_WINDOW;
+        assert_eq!(waiting.arrive(later, true, true), [None, Some(later)]);
+        assert!(!waiting.is_some());
+        assert_eq!(
+            waiting.arrive(later + 1, true, false),
+            [None, Some(later + 1)]
+        );
+        assert_eq!(waiting.arrive(later + 2, true, true), [None, None]);
+        assert!(waiting.is_some());
+    }
+
+    #[test]
+    fn a_repeated_collision_waits_for_the_paint() {
+        let mut waiting = WaitingFrame::default();
+        assert_eq!(waiting.arrive(1, true, true), [None, Some(1)]);
+        assert_eq!(waiting.arrive(2, true, false), [None, Some(2)]);
+        assert_eq!(waiting.arrive(3, true, true), [None, None]);
+        assert!(waiting.is_some());
+        assert_eq!(waiting.take(), Some(3));
+        assert_eq!(waiting.arrive(4, true, true), [None, None]);
+        assert_eq!(waiting.take(), Some(4));
+        assert_eq!(waiting.take(), None);
+    }
+
+    #[test]
+    fn a_third_arrival_shows_the_waiting_frame_and_waits_in_its_place() {
+        let mut waiting = WaitingFrame::default();
+        assert_eq!(waiting.arrive(1, true, true), [None, Some(1)]);
+        assert_eq!(waiting.arrive(2, true, true), [None, None]);
+        assert_eq!(waiting.arrive(3, true, true), [Some(2), None]);
+        assert_eq!(waiting.arrive(4, true, false), [Some(3), None]);
+        assert_eq!(waiting.take(), Some(4));
+    }
+
+    #[test]
+    fn frames_that_may_not_wait_follow_the_waiting_one_and_forget_collisions() {
+        let mut waiting = WaitingFrame::default();
+        assert_eq!(waiting.arrive(1, true, true), [None, Some(1)]);
+        assert_eq!(waiting.arrive(2, true, true), [None, None]);
+        assert_eq!(waiting.arrive(3, false, true), [Some(2), Some(3)]);
+        assert!(!waiting.is_some());
+        assert_eq!(waiting.arrive(4, true, true), [None, Some(4)]);
+        assert!(!waiting.is_some());
+    }
+
+    /// Frames arrive in order and every frame handed back is in order too,
+    /// whatever the paints do: nothing is shown twice, out of turn or left
+    /// behind.
+    #[test]
+    fn waiting_never_reorders_duplicates_or_loses_frames() {
+        let mut waiting = WaitingFrame::default();
+        let mut shown = Vec::new();
+        let mut unpainted = false;
+        let mut state = 0x9e37_79b9_u32;
+        for frame in 0..10_000_u32 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            if state >> 30 != 0 {
+                unpainted = false;
+                if let Some(next) = waiting.take() {
+                    shown.push(next);
+                    unpainted = true;
+                }
+            }
+            let may_wait = (state >> 20) & 7 != 0;
+            for next in waiting
+                .arrive(frame, may_wait, unpainted)
+                .into_iter()
+                .flatten()
+            {
+                shown.push(next);
+                unpainted = true;
+            }
+        }
+        shown.extend(waiting.take());
+        assert_eq!(shown, (0..10_000).collect::<Vec<_>>());
     }
 
     #[test]
@@ -14991,5 +18353,184 @@ mod tests {
         // BGRA out: the red and blue channels are swapped, no 99 anywhere.
         assert_eq!(&bytes[0..4], &[30, 20, 10, 255]);
         assert!(!bytes.contains(&99));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn padded_frame(width: u32, height: u32, padded: u32, rows: usize) -> RenderedFrame {
+        RenderedFrame {
+            data: Arc::new((0..padded as usize * rows).map(|i| i as u8).collect()),
+            width,
+            height,
+            padded_bytes_per_row: padded,
+            frame_number: 7,
+            target_time_ns: 0,
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_streamed_frame_keeps_its_padded_rows_and_moves_an_unshared_buffer() {
+        let stream = gpui::StreamingImage::new(gpui::StreamingImageFormat::Rgba8);
+        let frame = padded_frame(1080, 2, 4352, 2);
+        let expected = frame.data.as_ref().clone();
+        let buffer = frame.data.as_ptr();
+        assert!(frame_can_stream(&frame));
+        assert!(stream_frame(&stream, frame));
+
+        let current = stream.current().expect("the stream holds the frame");
+        assert_eq!(current.size().width.0, 1080);
+        assert_eq!(current.size().height.0, 2);
+        assert_eq!(current.stride(), 4352);
+        assert_eq!(current.bytes(), expected.as_slice());
+        assert_eq!(current.bytes().as_ptr(), buffer);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_streamed_frame_whose_buffer_is_shared_is_copied() {
+        let stream = gpui::StreamingImage::new(gpui::StreamingImageFormat::Rgba8);
+        let frame = padded_frame(64, 2, 256, 2);
+        let held = Arc::clone(&frame.data);
+        assert!(stream_frame(&stream, frame));
+
+        let current = stream.current().expect("the stream holds the frame");
+        assert_eq!(current.bytes(), held.as_slice());
+        assert_ne!(current.bytes().as_ptr(), held.as_ptr());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_frame_without_its_rows_leaves_the_stream_as_it_was() {
+        let stream = gpui::StreamingImage::new(gpui::StreamingImageFormat::Rgba8);
+        assert!(stream_frame(&stream, padded_frame(64, 2, 256, 2)));
+        let shown = stream.current().expect("the stream holds the frame");
+
+        for refused in [
+            padded_frame(64, 2, 256, 1),
+            padded_frame(64, 2, 252, 2),
+            padded_frame(64, 2, 258, 2),
+            padded_frame(0, 2, 256, 2),
+            padded_frame(64, 0, 256, 2),
+        ] {
+            assert!(!frame_can_stream(&refused));
+            assert!(!stream_frame(&stream, refused));
+            let current = stream.current().expect("the stream still holds a frame");
+            assert_eq!(current.generation(), shown.generation());
+            assert_eq!(current.bytes(), shown.bytes());
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod add_caption_ui_tests {
+    use gpui::{AppContext, Context, Entity, IntoElement, Render, Window, div};
+
+    use crate::editor_window::EditorWindow;
+
+    struct View {
+        editor: Entity<EditorWindow>,
+        _project: tempfile::TempDir,
+    }
+
+    impl Render for View {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    fn fixture(
+        cx: &mut gpui::TestAppContext,
+        captions: serde_json::Value,
+    ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let (view, cx) = cx.add_window_view(move |window, cx| {
+            let editor = cx.new(|cx| EditorWindow::new(path, window, cx));
+            editor.update(cx, |editor, _| {
+                editor.project = serde_json::from_value(serde_json::json!({
+                    "timeline": {
+                        "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0 }],
+                        "zoomSegments": []
+                    },
+                    "captions": captions
+                }))
+                .unwrap();
+                editor.clip_display_durations = vec![10.0];
+                editor.total = 10.0;
+                cap_project::synchronize_captions(&mut editor.project, &[10.0]);
+            });
+            View {
+                editor,
+                _project: directory,
+            }
+        });
+        (view.read_with(cx, |view, _| view.editor.clone()), cx)
+    }
+
+    fn texts(editor: &mut EditorWindow) -> Vec<(String, f64, f64)> {
+        cap_project::synchronize_captions(&mut editor.project, &[10.0]);
+        editor
+            .project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .map(|segment| (segment.text.clone(), segment.start, segment.end))
+            .collect()
+    }
+
+    #[gpui::test]
+    fn the_playhead_caption_takes_the_next_free_gap(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(
+            cx,
+            serde_json::json!({
+                "segments": [{ "id": "segment-0", "start": 2.0, "end": 4.0, "text": "spoken",
+                    "words": [{ "text": "spoken", "start": 2.0, "end": 4.0 }] }],
+                "settings": { "enabled": false },
+                "sourceTimed": true
+            }),
+        );
+        editor.update_in(cx, |editor, window, cx| {
+            assert!(editor.add_caption_at(
+                2.5,
+                crate::editor_edits::NEW_CAPTION_LENGTH,
+                false,
+                window,
+                cx
+            ));
+            assert!(editor.tracks.caption);
+            assert!(editor.project.captions.as_ref().unwrap().settings.enabled);
+            assert_eq!(
+                texts(editor),
+                [
+                    ("spoken".to_string(), 2.0, 4.0),
+                    ("New caption".to_string(), 4.0, 6.0)
+                ]
+            );
+            assert!(editor.add_caption_at(9.5, 1.0, true, window, cx));
+            assert_eq!(texts(editor)[2], ("New caption".to_string(), 9.0, 10.0));
+            let doc =
+                crate::transcript::model::flatten_words(editor.project.captions.as_ref().unwrap());
+            assert_eq!(doc.len(), 1);
+        });
+    }
+
+    #[gpui::test]
+    fn a_full_caption_track_refuses_with_a_notice(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(
+            cx,
+            serde_json::json!({
+                "segments": [{ "id": "caption-full", "start": 0.0, "end": 10.0, "text": "all" }],
+                "settings": { "enabled": true },
+                "sourceTimed": true
+            }),
+        );
+        editor.update_in(cx, |editor, window, cx| {
+            let before = serde_json::to_value(&editor.project).unwrap();
+            assert!(!editor.add_caption_at(5.0, 2.0, false, window, cx));
+            assert_eq!(serde_json::to_value(&editor.project).unwrap(), before);
+            assert!(editor.notice.is_some());
+        });
     }
 }

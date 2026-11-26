@@ -61,11 +61,13 @@ export const launchExtensionBrowser = async ({
 	headless,
 	args,
 	allowExtensionMedia = false,
+	viewport,
 }: {
 	profilePrefix: string;
 	headless: boolean;
 	args: string[];
 	allowExtensionMedia?: boolean;
+	viewport?: null;
 }) => {
 	const userDataDir = await mkdtemp(path.join(tmpdir(), profilePrefix));
 	if (allowExtensionMedia) await allowExtensionMediaInProfile(userDataDir);
@@ -75,12 +77,14 @@ export const launchExtensionBrowser = async ({
 			? {
 					executablePath: installedBrowser,
 					headless,
+					viewport,
 					ignoreDefaultArgs: ["--disable-extensions"],
 					args: ["--enable-unsafe-extension-debugging", ...args],
 				}
 			: {
 					channel: "chromium",
 					headless,
+					viewport,
 					args: [
 						`--disable-extensions-except=${extensionPath}`,
 						`--load-extension=${extensionPath}`,

@@ -484,6 +484,16 @@ const getCameraMediaStream = (webcam: WebcamSettings) => {
 	);
 };
 
+// Without size limits Chrome captures a tab into a screen-sized frame and
+// letterboxes the page. Min and max sizes with different aspect ratios let the
+// frame follow the tab's shape, capped at what the display modes ask for.
+const TAB_CAPTURE_SIZE_LIMITS = {
+	minWidth: 2,
+	minHeight: 2,
+	maxWidth: DISPLAY_MEDIA_IDEAL.width,
+	maxHeight: DISPLAY_MEDIA_IDEAL.height,
+};
+
 const tabCaptureConstraints = (streamId: string, includeAudio: boolean) =>
 	({
 		...(includeAudio
@@ -500,6 +510,7 @@ const tabCaptureConstraints = (streamId: string, includeAudio: boolean) =>
 			mandatory: {
 				chromeMediaSource: "tab",
 				chromeMediaSourceId: streamId,
+				...TAB_CAPTURE_SIZE_LIMITS,
 			},
 		},
 	}) as unknown as MediaStreamConstraints;

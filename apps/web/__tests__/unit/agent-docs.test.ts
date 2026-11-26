@@ -145,7 +145,8 @@ describe("Cap for Agents docs", () => {
 		);
 
 		const webhooks = getDocBySlug("api/webhooks")?.content ?? "";
-		expect(webhooks).toContain(
+		expect(webhooks).toContain("POST /api/developer/v1/webhooks");
+		expect(webhooks).not.toContain(
 			"does not currently expose a documented public webhook subscription API",
 		);
 	});

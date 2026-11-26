@@ -8,6 +8,7 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { useStripeContext } from "@/app/Layout/StripeContext";
 import { WhenVisible } from "@/components/ui/WhenVisible";
+import { CHECKOUT_RATE_LIMITED_MESSAGE } from "@/lib/checkout/messages";
 import { homepageCopy } from "../../../../data/homepage-copy";
 import { BillingToggle } from "./BillingToggle";
 import { PlanFeature } from "./PlanFeature";
@@ -41,6 +42,10 @@ export const ProCard = () => {
 			});
 			const data = await response.json();
 
+			if (response.status === 429) {
+				toast.error(CHECKOUT_RATE_LIMITED_MESSAGE);
+				return;
+			}
 			if (data.url) {
 				window.location.href = data.url;
 			} else {
@@ -72,6 +77,11 @@ export const ProCard = () => {
 
 			if (data.subscription === true) {
 				toast.success("You are already on the Cap Pro plan");
+			}
+
+			if (response.status === 429) {
+				toast.error(CHECKOUT_RATE_LIMITED_MESSAGE);
+				return;
 			}
 
 			if (data.url) {

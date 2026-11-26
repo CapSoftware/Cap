@@ -1,0 +1,52 @@
+{
+	"user": {
+		"id": "user_123",
+		"name": "Richie",
+		"lastName": "McIlroy",
+		"email": "richie@example.com",
+		"imageUrl": null,
+		"activeOrganizationId": "org_123"
+	},
+	"organizations": [
+		{ "id": "org_123", "name": "Cap", "iconUrl": null, "role": "owner" },
+		{
+			"id": "org_456",
+			"name": "Acme",
+			"iconUrl": "https://cdn.example.com/acme.png",
+			"role": "superuser"
+		},
+		{ "id": 42 }
+	],
+	"activeOrganizationId": "org_123",
+	"rootFolders": [
+		{
+			"id": "folder_1",
+			"name": "Product",
+			"color": "blue",
+			"parentId": null,
+			"videoCount": 4
+		}
+	],
+	"spaces": [
+		{
+			"id": "org_123",
+			"name": "Cap",
+			"iconUrl": null,
+			"kind": "organization",
+			"privacy": "Private",
+			"role": "owner",
+			"canManage": true,
+			"hasPassword": false
+		},
+		{
+			"id": "space_1",
+			"name": "Design",
+			"iconUrl": null,
+			"kind": "space",
+			"privacy": "Public",
+			"role": null,
+			"canManage": false,
+			"hasPassword": true
+		}
+	]
+}

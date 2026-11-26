@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockDb = vi.hoisted(() => vi.fn());
 const mockTranscribeVideo = vi.hoisted(() => vi.fn());
 const mockIsAiGenerationEnabledForUser = vi.hoisted(() => vi.fn());
+const mockEnv = vi.hoisted(() => ({}) as { ASSEMBLY_API_KEY?: string });
 
 const schemaMocks = vi.hoisted(() => ({
 	users: {
@@ -18,6 +19,7 @@ const schemaMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@cap/database", () => ({ db: mockDb }));
+vi.mock("@cap/env", () => ({ serverEnv: () => mockEnv }));
 vi.mock("@cap/database/schema", () => schemaMocks);
 vi.mock("drizzle-orm", () => ({
 	eq: vi.fn((field, value) => ({ field, value })),
@@ -52,6 +54,7 @@ function makeSelectChain(rows: unknown[]) {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mockEnv.ASSEMBLY_API_KEY = "assembly-test";
 	mockIsAiGenerationEnabledForUser.mockReturnValue(true);
 	mockTranscribeVideo.mockResolvedValue({
 		success: true,
@@ -60,6 +63,19 @@ beforeEach(() => {
 });
 
 describe("queueVideoTranscription", () => {
+	it("skips quietly when no transcription provider is configured", async () => {
+		delete mockEnv.ASSEMBLY_API_KEY;
+
+		const result = await queueVideoTranscription("video-1" as Video.VideoId);
+
+		expect(result).toEqual({
+			success: true,
+			message: "Transcription is not configured",
+		});
+		expect(mockDb).not.toHaveBeenCalled();
+		expect(mockTranscribeVideo).not.toHaveBeenCalled();
+	});
+
 	it("queues transcription with the video owner's AI entitlement", async () => {
 		const owner = {
 			id: "user-1",

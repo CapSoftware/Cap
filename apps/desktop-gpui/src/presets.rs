@@ -117,35 +117,51 @@ impl PresetsStore {
             entry.config = config;
         }
     }
+
+    pub fn apply_default(&self, project: &ProjectConfiguration) -> Option<ProjectConfiguration> {
+        let entry = self.presets.get(self.default?)?;
+        let applied = apply_preset(&entry.config, project);
+        if applied.is_none() {
+            tracing::warn!(preset = %entry.name, "the default preset no longer deserializes; not applied");
+        }
+        applied
+    }
 }
 
 /// The built-in "Default" preset: what a fresh screen recording looks like
-/// with no user preset -- `ProjectConfiguration::default()` plus the
-/// presentation defaults the recorder applies (`recording.rs`
-/// `apply_screen_recording_presentation_defaults`): 10% padding, 7.5%
-/// rounding and the default screen-movement spring.
+/// with no user preset -- `ProjectConfiguration::for_new_project()` with the
+/// background revealed: 10% even padding, the new-project rounding and the
+/// new-project zoom spring.
 pub fn default_project_config(current: &ProjectConfiguration) -> ProjectConfiguration {
-    let mut config = ProjectConfiguration::default();
+    let mut config = ProjectConfiguration::for_new_project();
     if config.background.padding <= f64::EPSILON {
-        config.background.padding = 10.0;
+        config.background.padding = crate::editor_sidebar::DEFAULT_BACKGROUND_PADDING;
     }
     if config.background.rounding <= f64::EPSILON {
-        config.background.rounding = 7.5;
+        config.background.rounding =
+            crate::editor_sidebar::default_background_rounding(config.background.padding_mode);
     }
-    config.screen_movement_spring = cap_project::ScreenMovementSpring::default();
     current.with_preset(config)
 }
 
-/// Presets store styling without recording cuts, caption text or layer order.
+/// Presets store styling without recording cuts, caption text, the caption
+/// transcript's language or layer order.
 pub fn preset_config(project: &ProjectConfiguration) -> Value {
     let mut value = serde_json::to_value(project).unwrap_or(Value::Null);
     if let Some(map) = value.as_object_mut() {
         map.insert("timeline".into(), Value::Null);
         map.insert("clips".into(), Value::Array(Vec::new()));
         map.remove("overlayOrder");
+        map.remove("markers");
+        map.remove("autoZoomVersion");
+        map.remove("autoZoomPending");
+        map.remove("cameraPicture");
         if let Some(captions) = map.get_mut("captions").and_then(Value::as_object_mut) {
             captions.insert("segments".into(), Value::Array(Vec::new()));
             captions.remove("sourceTimed");
+            if let Some(settings) = captions.get_mut("settings").and_then(Value::as_object_mut) {
+                settings.remove("fillerLanguage");
+            }
         }
     }
     value
@@ -231,6 +247,24 @@ mod tests {
     }
 
     #[test]
+    fn presets_leave_markers_with_their_recording() {
+        let project = ProjectConfiguration {
+            markers: vec![cap_project::TimelineMarker::new(0, 2.0)],
+            ..ProjectConfiguration::default()
+        };
+        let config = preset_config(&project);
+        assert!(config.get("markers").is_none());
+        let other = ProjectConfiguration {
+            markers: vec![cap_project::TimelineMarker::new(1, 4.0)],
+            ..ProjectConfiguration::default()
+        };
+        assert_eq!(
+            apply_preset(&config, &other).unwrap().markers,
+            other.markers
+        );
+    }
+
+    #[test]
     fn applying_keeps_the_current_timeline_clips_and_layer_order() {
         let current = ProjectConfiguration {
             timeline: Some(cap_project::TimelineConfiguration {
@@ -246,6 +280,7 @@ mod tests {
                 camera3d_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
             }),
             overlay_order: vec![cap_project::OverlayTrack {
                 kind: cap_project::OverlayTrackKind::Image,
@@ -364,6 +399,40 @@ mod tests {
     }
 
     #[test]
+    fn presets_neither_save_nor_replace_the_transcript_language() {
+        let mut english = ProjectConfiguration::default();
+        english.captions = Some(cap_project::CaptionsData {
+            settings: cap_project::CaptionSettings {
+                filler_language: Some("en".into()),
+                size: 40,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let preset = preset_config(&english);
+        assert!(
+            preset["captions"]["settings"]
+                .get("fillerLanguage")
+                .is_none()
+        );
+
+        let mut german = english.clone();
+        german.captions.as_mut().unwrap().settings.filler_language = None;
+        let mut stale = preset.clone();
+        stale["captions"]["settings"]["fillerLanguage"] = json!("en");
+        let applied = apply_preset(&stale, &german).unwrap();
+        assert_eq!(applied.captions.unwrap().settings.filler_language, None);
+
+        let applied = apply_preset(&preset, &english).unwrap();
+        let settings = applied.captions.unwrap().settings;
+        assert_eq!(settings.filler_language.as_deref(), Some("en"));
+        assert_eq!(settings.size, 40);
+
+        let fresh = apply_preset(&stale, &ProjectConfiguration::default()).unwrap();
+        assert_eq!(fresh.captions.unwrap().settings.filler_language, None);
+    }
+
+    #[test]
     fn applying_a_preset_keeps_source_captions_and_timeline_overrides() {
         let preset = serde_json::to_value(captioned_project("Other recording", false)).unwrap();
         for source_timed in [false, true] {
@@ -429,6 +498,36 @@ mod tests {
         let preset = preset_config(&current);
         assert!(apply_preset(&preset, &current).unwrap().captions.is_none());
         assert!(default_project_config(&current).captions.is_none());
+    }
+
+    #[test]
+    fn presets_never_carry_or_drop_a_camera_picture() {
+        let source = ProjectConfiguration {
+            camera_picture: Some("content/images/other.jpg".into()),
+            ..Default::default()
+        };
+        let preset = preset_config(&source);
+        assert!(preset.get("cameraPicture").is_none());
+        let current = ProjectConfiguration {
+            camera_picture: Some("content/images/mine.jpg".into()),
+            ..Default::default()
+        };
+        let legacy = serde_json::to_value(&source).unwrap();
+        for preset in [preset, legacy] {
+            assert_eq!(
+                apply_preset(&preset, &current)
+                    .unwrap()
+                    .camera_picture
+                    .as_deref(),
+                Some("content/images/mine.jpg")
+            );
+        }
+        assert_eq!(
+            apply_preset(&preset_config(&current), &ProjectConfiguration::default())
+                .unwrap()
+                .camera_picture,
+            None
+        );
     }
 
     #[test]

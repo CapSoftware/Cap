@@ -20,7 +20,7 @@ export type UpdateVideoCallToActionResult =
 
 export async function updateVideoCallToAction(
 	videoId: Video.VideoId,
-	input: CallToActionInput | null,
+	input: CallToActionInput | "off" | null,
 ): Promise<UpdateVideoCallToActionResult> {
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
@@ -37,6 +37,16 @@ export async function updateVideoCallToAction(
 	}
 	if (!userIsPro(user)) {
 		return { success: false, errors: {}, upgradeRequired: true };
+	}
+
+	if (input === "off") {
+		await db()
+			.update(videos)
+			.set({
+				settings: sql`JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST('{"callToAction":false}' AS JSON))`,
+			})
+			.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+		return { success: true, callToAction: null };
 	}
 
 	if (input === null) {

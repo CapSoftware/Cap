@@ -24,6 +24,7 @@ import {
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";
+import type { SpaceUpNext } from "@/lib/space-up-next";
 import {
 	VideoStatusNotFoundError,
 	videoStatusQueryOptions,
@@ -32,6 +33,7 @@ import { CaptionProvider } from "./_components/CaptionContext";
 import { DashboardBackLink } from "./_components/DashboardBackLink";
 import { seekLength } from "./_components/early-length";
 import { PlaybackProvider } from "./_components/playback/PlaybackContext";
+import { RelativeTime } from "./_components/RelativeTime";
 import { ShareVideo } from "./_components/ShareVideo";
 import { type ShareView, ShareViewToggle } from "./_components/ShareViewToggle";
 import { Sidebar } from "./_components/Sidebar";
@@ -185,8 +187,10 @@ type TranscriptionStatus =
 
 interface ShareProps {
 	data: VideoData;
+	upNext?: Promise<SpaceUpNext | null> | null;
 	initialPlaybackUrl?: Promise<string | null>;
 	serverPlaybackUrl?: string | null;
+	posterUrl?: string | null;
 	comments: MaybePromise<CommentWithAuthor[]>;
 	views: MaybePromise<number>;
 	screenshotImageUrl?: string | null;
@@ -323,6 +327,7 @@ export const Share = ({
 	data,
 	initialPlaybackUrl,
 	serverPlaybackUrl = null,
+	posterUrl = null,
 	comments,
 	views,
 	screenshotImageUrl,
@@ -341,6 +346,7 @@ export const Share = ({
 	viewerSignedIn = false,
 	header,
 	dashboardDestination = null,
+	upNext = null,
 }: ShareProps) => {
 	const isScreenshot = data.isScreenshot === true;
 	// Memoized: a fresh Date each render would defeat the memoized `data`
@@ -821,7 +827,10 @@ export const Share = ({
 												<p className="truncate text-xs leading-tight text-gray-10">
 													{data.owner.name ?? "Someone"}
 													{" · "}
-													{formatTimeAgo(effectiveDate)}
+													<RelativeTime
+														date={effectiveDate}
+														format={formatTimeAgo}
+													/>
 												</p>
 											</div>
 										</div>
@@ -965,6 +974,7 @@ export const Share = ({
 													<ShareVideo
 														initialPlaybackUrl={initialPlaybackUrl}
 														serverPlaybackUrl={serverPlaybackUrl}
+														posterUrl={posterUrl}
 														data={shareVideoData}
 														comments={comments}
 														areChaptersDisabled={areChaptersDisabled}
@@ -1003,6 +1013,7 @@ export const Share = ({
 														defaultPlaybackSpeed={defaultPlaybackSpeed}
 														viewerIsOwner={viewerId === data.owner.id}
 														callToAction={data.callToAction}
+														upNext={upNext}
 														ref={playerRef}
 													/>
 												)}

@@ -78,11 +78,11 @@ const CHIRP_CENTRE_SECS: f64 = 0.010;
 /// incoming clip at progress `p`.
 fn blend_gain(kind: ClipTransitionType, p: f64, incoming: bool) -> f64 {
     let p = p.clamp(0.0, 1.0);
-    match (kind, incoming) {
-        (ClipTransitionType::CrossFade, false) => (p * std::f64::consts::FRAC_PI_2).cos(),
-        (ClipTransitionType::CrossFade, true) => (p * std::f64::consts::FRAC_PI_2).sin(),
-        (ClipTransitionType::FadeThroughBlack, false) => (1.0 - 2.0 * p).max(0.0),
-        (ClipTransitionType::FadeThroughBlack, true) => (2.0 * p - 1.0).max(0.0),
+    match (kind.dips(), incoming) {
+        (false, false) => (p * std::f64::consts::FRAC_PI_2).cos(),
+        (false, true) => (p * std::f64::consts::FRAC_PI_2).sin(),
+        (true, false) => (1.0 - 2.0 * p).max(0.0),
+        (true, true) => (2.0 * p - 1.0).max(0.0),
     }
 }
 

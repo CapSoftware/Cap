@@ -1,0 +1,172 @@
+import clsx from "clsx";
+import {
+	describeLedgerRow,
+	formatLedgerTime,
+	type LedgerRow,
+} from "@/lib/infra-ledger";
+import { formatCharge, formatCredits } from "@/lib/infra-usage";
+import { Empty, MONO, TD, TH, TR } from "./ui";
+
+const DETAIL = "text-[12.5px] leading-[1.45] text-[rgba(232,236,244,0.46)]";
+
+function amountText(microCredits: number) {
+	const sign = microCredits === 0 ? "" : microCredits > 0 ? "+" : "-";
+	return `${sign}${formatCharge(microCredits)}`;
+}
+
+export const NO_REFERENCE = "–";
+
+export const LEDGER_TYPE_CELL = "w-full min-w-[140px] !whitespace-normal";
+
+export const LEDGER_REFERENCE_CELL =
+	"block max-w-[124px] xl:inline-block xl:max-w-[220px] xl:truncate xl:align-bottom";
+
+function Note({ row }: { row: LedgerRow }) {
+	const { note } = describeLedgerRow(row);
+	if (!note) return null;
+	return (
+		<span className={clsx(DETAIL, "block whitespace-normal text-pretty")}>
+			{note}
+		</span>
+	);
+}
+
+export function Reference({
+	row,
+	className,
+	stacked = false,
+}: {
+	row: LedgerRow;
+	className?: string;
+	stacked?: boolean;
+}) {
+	const { reference } = describeLedgerRow(row);
+	if (!reference) return <>{NO_REFERENCE}</>;
+	return (
+		<span title={`${reference.kind} ${reference.value}`} className={className}>
+			<span className={clsx(stacked && "block truncate xl:inline")}>
+				{reference.kind}
+			</span>{" "}
+			<span
+				className={clsx(
+					MONO,
+					"text-[12px]",
+					stacked && "block truncate xl:inline",
+				)}
+			>
+				{reference.value}
+			</span>
+		</span>
+	);
+}
+
+export function CreditTransactionTable({
+	transactions,
+}: {
+	transactions: LedgerRow[];
+}) {
+	if (transactions.length === 0) {
+		return <Empty>No transactions yet.</Empty>;
+	}
+
+	return (
+		<>
+			<table className="hidden w-full border-collapse md:table">
+				<thead>
+					<tr className={TR}>
+						<th className={TH}>Time (UTC)</th>
+						<th className={clsx(TH, "w-full")}>Type</th>
+						<th className={TH}>Reference</th>
+						<th className={clsx(TH, "text-right")}>Amount</th>
+						<th className={clsx(TH, "text-right")}>Balance</th>
+					</tr>
+				</thead>
+				<tbody>
+					{transactions.map((tx) => (
+						<tr key={tx.id} className={clsx(TR, "align-top")}>
+							<td className={clsx(TD, "tabular-nums")}>
+								<time dateTime={new Date(tx.createdAt).toISOString()}>
+									{formatLedgerTime(tx.createdAt)}
+								</time>
+							</td>
+							<td className={clsx(TD, LEDGER_TYPE_CELL, "text-[#E8ECF4]")}>
+								{describeLedgerRow(tx).label}
+								<Note row={tx} />
+							</td>
+							<td className={clsx(TD, "text-[12.5px]")}>
+								<Reference row={tx} className={LEDGER_REFERENCE_CELL} stacked />
+							</td>
+							<td
+								className={clsx(
+									TD,
+									MONO,
+									"text-right text-[13px] tabular-nums",
+									tx.amountMicroCredits > 0
+										? "text-white"
+										: "text-[rgba(232,236,244,0.72)]",
+								)}
+							>
+								{amountText(tx.amountMicroCredits)}
+							</td>
+							<td
+								className={clsx(
+									TD,
+									MONO,
+									"text-right text-[13px] tabular-nums",
+								)}
+							>
+								{formatCredits(tx.balanceAfterMicroCredits)}
+							</td>
+						</tr>
+					))}
+				</tbody>
+			</table>
+
+			<ul className="m-0 list-none p-0 md:hidden">
+				{transactions.map((tx) => (
+					<li key={tx.id} className={clsx(TR, "py-3.5")}>
+						<div className="flex items-baseline justify-between gap-4">
+							<span className="min-w-0 text-[13.5px] text-[#E8ECF4]">
+								{describeLedgerRow(tx).label}
+							</span>
+							<span
+								className={clsx(
+									MONO,
+									"shrink-0 text-[13px] tabular-nums",
+									tx.amountMicroCredits > 0
+										? "text-white"
+										: "text-[rgba(232,236,244,0.72)]",
+								)}
+							>
+								{amountText(tx.amountMicroCredits)}
+							</span>
+						</div>
+						<div className="mt-1 flex items-baseline justify-between gap-4">
+							<time
+								dateTime={new Date(tx.createdAt).toISOString()}
+								className="min-w-0 text-[12.5px] tabular-nums text-[rgba(232,236,244,0.58)]"
+							>
+								{formatLedgerTime(tx.createdAt)} UTC
+							</time>
+							<span
+								className={clsx(
+									MONO,
+									"shrink-0 text-[13px] tabular-nums text-[rgba(232,236,244,0.72)]",
+								)}
+							>
+								<span className="sr-only">Balance </span>
+								{formatCredits(tx.balanceAfterMicroCredits)}
+							</span>
+						</div>
+						<div className="mt-1 min-w-0">
+							<span className={clsx(DETAIL, "block truncate")}>
+								Reference <Reference row={tx} />
+							</span>
+							<Note row={tx} />
+						</div>
+					</li>
+				))}
+			</ul>
+		</>
+	);
+}

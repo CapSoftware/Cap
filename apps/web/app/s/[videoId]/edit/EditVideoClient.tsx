@@ -38,6 +38,7 @@ import {
 	restoreVideoToOriginal,
 	saveVideoEdits,
 } from "@/actions/videos/save-edits";
+import { formatClock, formatClockWithHundredths } from "@/lib/player-time";
 import {
 	clearTimelineDraft,
 	getTimelineDraftKey,
@@ -77,6 +78,7 @@ import {
 } from "@/lib/video-edits";
 import { navigateWithTransition } from "@/utils/view-transition";
 import { CapVideoPlayer } from "../_components/CapVideoPlayer";
+import { isMediaTimeHeld } from "../_components/media-source-refresh";
 import { VideoDownloadMenu } from "../_components/VideoDownloadMenu";
 import { captureVideoFrameDataUrl } from "../_components/video-frame-thumbnail";
 import { TranscriptSidebar } from "./TranscriptSidebar";
@@ -111,21 +113,6 @@ type TimelineThumbnailRequest = {
 	key: string;
 	time: number;
 };
-
-function formatTime(seconds: number) {
-	const safeSeconds = Math.max(0, Math.floor(seconds));
-	const minutes = Math.floor(safeSeconds / 60);
-	const remainingSeconds = safeSeconds % 60;
-	return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
-}
-
-function formatTimeDetailed(seconds: number) {
-	const safe = Math.max(0, seconds);
-	const minutes = Math.floor(safe / 60);
-	const remainingSeconds = safe - minutes * 60;
-	const padded = remainingSeconds.toFixed(2).padStart(5, "0");
-	return `${String(minutes).padStart(2, "0")}:${padded}`;
-}
 
 function getTimePercent(time: number, duration: number) {
 	if (duration <= 0) return 0;
@@ -1282,6 +1269,7 @@ export function EditVideoClient({
 				videoElement.muted = false;
 			};
 			const syncPlayhead = (updatePlayhead: boolean) => {
+				if (isMediaTimeHeld(videoElement)) return;
 				if (previewWithoutPlayheadRef.current) {
 					// Trimming a clip edge: scrub the preview but keep the cursor put.
 					return;
@@ -1903,7 +1891,7 @@ export function EditVideoClient({
 								}}
 							>
 								<div className="absolute left-1/2 top-0 -translate-x-1/2 whitespace-nowrap rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums text-black shadow-[0_2px_8px_rgba(0,0,0,0.45)]">
-									{formatTimeDetailed(outputPlayhead)}
+									{formatClockWithHundredths(outputPlayhead)}
 								</div>
 
 								<div className="absolute left-1/2 top-6 size-2.5 -translate-x-1/2 rounded-full bg-white shadow-[0_0_0_1.5px_rgba(0,0,0,0.55),0_2px_4px_rgba(0,0,0,0.45)]" />
@@ -1927,7 +1915,7 @@ export function EditVideoClient({
 					<div className="flex items-center gap-3">
 						<div className="inline-flex items-baseline gap-1.5 font-mono text-[12px] tabular-nums">
 							<span className="font-semibold text-gray-12">
-								{formatTime(outputPlayhead)}
+								{formatClock(outputPlayhead)}
 							</span>
 							<span className="text-gray-9">/</span>
 							<span
@@ -1937,7 +1925,7 @@ export function EditVideoClient({
 										: "text-gray-10"
 								}
 							>
-								{formatTime(outputDuration)}
+								{formatClock(outputDuration)}
 							</span>
 						</div>
 

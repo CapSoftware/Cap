@@ -288,6 +288,115 @@ describe("developer OpenAPI spec", () => {
 		}
 	});
 
+	it("types the upload 402 with the billing fields it carries", () => {
+		const paths = spec.paths as Record<
+			string,
+			{ post?: { responses: Record<string, { $ref?: string }> } }
+		>;
+		for (const path of [
+			"/api/developer/v1/uploads",
+			"/api/developer/sdk/v1/upload/multipart/complete",
+		]) {
+			expect(paths[path]?.post?.responses["402"]).toEqual({
+				$ref: "#/components/responses/UploadPaymentRequired",
+			});
+		}
+		expect(
+			spec.components.responses.UploadPaymentRequired.content[
+				"application/json"
+			].schema,
+		).toEqual({ $ref: "#/components/schemas/UploadPaymentRequired" });
+
+		const schema = spec.components.schemas.UploadPaymentRequired;
+		expect(Object.keys(schema.properties).sort()).toEqual(
+			[
+				"error",
+				"code",
+				"message",
+				"hint",
+				"docs",
+				"standing",
+				"pausesAt",
+				"balanceMicroCredits",
+				"requiredMicroCredits",
+				"shortfallMicroCredits",
+				"fileRemoved",
+			].sort(),
+		);
+		expect(schema.required).not.toContain("fileRemoved");
+	});
+
+	it("matches the 402 schema to the body the upload routes send", async () => {
+		const { uploadAdmissionError } = await import("@/lib/infra-standing");
+		const body = uploadAdmissionError(
+			{
+				allowed: false,
+				reason: "insufficient_credits",
+				standing: {
+					state: "grace",
+					pausesAt: new Date("2026-11-19T00:00:00Z"),
+				},
+				balanceMicroCredits: 10,
+				requiredMicroCredits: 30,
+				shortfallMicroCredits: 20,
+				message: "Add credit.",
+			},
+			"app_1",
+		);
+		const schema = spec.components.schemas.UploadPaymentRequired;
+
+		expect(Object.keys(body).sort()).toEqual([...schema.required].sort());
+		expect(schema.properties.code.enum).toContain(body.code);
+		expect(schema.properties.standing.enum).toContain(body.standing);
+	});
+
+	it("does not describe a storage key anywhere", () => {
+		expect(JSON.stringify(spec)).not.toMatch(/s3Key/i);
+		expect(spec.components.schemas.Upload.required).toEqual([
+			"id",
+			"videoId",
+			"token",
+			"expiresAt",
+			"corsOrigin",
+			"maxBytes",
+			"status",
+			"uploadUrl",
+			"playbackId",
+			"shareUrl",
+			"embedUrl",
+		]);
+	});
+
+	it("requires a code on every error and documents the rate limit headers", () => {
+		expect(spec.components.schemas.Error.required).toEqual(["error", "code"]);
+		const responses = Object.values(spec.components.responses) as {
+			headers?: Record<string, unknown>;
+		}[];
+		for (const response of responses) {
+			expect(Object.keys(response.headers ?? {})).toEqual(
+				expect.arrayContaining([
+					"X-RateLimit-Limit",
+					"X-RateLimit-Remaining",
+					"X-RateLimit-Reset",
+				]),
+			);
+		}
+		expect(
+			Object.keys(spec.components.responses.RateLimited.headers),
+		).toContain("Retry-After");
+	});
+
+	it("exempts the completion race from the advice not to repeat a 4xx", () => {
+		const advice = spec.info.description
+			.split("\n")
+			.find((line) => line.includes("will not succeed"));
+
+		expect(advice).toContain("two exceptions");
+		expect(advice).toContain("429, and 409");
+		expect(advice).toContain("completion_in_progress");
+		expect(advice).not.toContain("408");
+	});
+
 	it("documents exactly the routes the developer API handlers serve", () => {
 		const apiRoot = resolve(__dirname, "../../app/api/developer");
 		const routeDirs = [
@@ -296,7 +405,7 @@ describe("developer OpenAPI spec", () => {
 		] as const;
 		const implemented = new Set<string>();
 		for (const [dir, base] of routeDirs) {
-			const source = readFileSync(join(apiRoot, dir, "route.ts"), "utf8");
+			const source = readFileSync(join(apiRoot, dir, "app.ts"), "utf8");
 			const modules = new Map(
 				[...source.matchAll(/import \* as (\w+) from "\.\/([^"]+)"/g)].map(
 					([, name, file]) => [name, file],
@@ -340,6 +449,30 @@ describe("proxy content negotiation", () => {
 			expect(response.headers.get("content-type")).toBeNull();
 		},
 	);
+
+	it.each([
+		["/infra", "text/markdown"],
+		["/infra/", "text/markdown, text/html;q=0.5"],
+		["/infra.md", "text/html,*/*;q=0.8"],
+	])(
+		"rewrites %s with Accept %s to the Infra Markdown",
+		async (path, accept) => {
+			const response = await send(path, accept);
+			expect(response.headers.get("x-middleware-rewrite")).toBe(
+				"https://cap.so/infra-markdown",
+			);
+		},
+	);
+
+	it.each([
+		["/infra", "text/html,*/*;q=0.8"],
+		["/infra", "text/html, text/markdown;q=0.5"],
+		["/infra/pricing", "text/markdown"],
+		["/infrastructure", "text/markdown"],
+	])("leaves %s with Accept %s alone", async (path, accept) => {
+		const response = await send(path, accept);
+		expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+	});
 
 	it("serves the homepage as Markdown", async () => {
 		const fetch = vi

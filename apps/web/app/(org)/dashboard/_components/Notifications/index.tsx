@@ -1,13 +1,13 @@
 "use client";
 
-import { faBellSlash } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faBellSlash } from "@fortawesome/free-solid-svg-icons/faBellSlash";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { type MotionProps, motion } from "framer-motion";
 import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useApiClient } from "@/utils/web-api";
 import {
 	FilterLabels,
@@ -35,7 +35,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
 			queryKey: ["notifications", activeOrganization?.organization.id],
 			queryFn: async () => {
 				const resp = await api.notifications.get();
-				if (resp.status !== 200) {
+				if (!resp.ok) {
 					toast.error("Failed to fetch notifications");
 					return { notifications: [], count: {} };
 				}
@@ -88,7 +88,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
 				transition={{ ease: "easeOut", duration: 0.2 }}
 				onClick={(e) => e.stopPropagation()}
 				className={clsx(
-					"flex absolute right-0 top-12 flex-col rounded-xl origin-top-right cursor-default w-[400px] h-[450px] bg-gray-1",
+					"flex overflow-hidden absolute right-0 top-11 flex-col rounded-xl border origin-top-right cursor-default w-[400px] h-[450px] bg-gray-1 border-gray-3 shadow-[0_16px_40px_-12px_rgba(0,0,0,0.2)]",
 					className,
 				)}
 				{...rest}
@@ -102,7 +102,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
 				/>
 				<div
 					ref={scrollRef}
-					className="flex isolate flex-col flex-1 h-full divide-y custom-scroll border-x border-gray-3 divide-gray-3"
+					className="flex isolate flex-col flex-1 h-full divide-y custom-scroll divide-gray-3"
 				>
 					{notifications.isPending ? (
 						<NotificationsSkeleton />

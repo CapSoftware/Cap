@@ -1,0 +1,14 @@
+[
+	[
+		{ "text": "I", "start": 0.0, "end": 0.14 },
+		{ "text": "wanted", "start": 0.74, "end": 0.97 },
+		{ "text": "to", "start": 0.97, "end": 1.09 },
+		{ "text": "show", "start": 1.5, "end": 1.81 },
+		{ "text": "you", "start": 1.81, "end": 2.17 },
+		{ "text": "how", "start": 2.32, "end": 2.61 },
+		{ "text": "the,", "start": 2.68, "end": 3.34 },
+		{ "text": "um,", "start": 3.34, "end": 3.84 },
+		{ "text": "export", "start": 3.91, "end": 4.26 },
+		{ "text": "works.", "start": 4.85, "end": 5.77 }
+	]
+]

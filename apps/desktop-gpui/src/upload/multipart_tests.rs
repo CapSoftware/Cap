@@ -327,6 +327,249 @@ async fn replacement_upload_checks_reads_in_order_and_seals() {
     assert!(changed.started_parts().is_empty());
 }
 
+#[derive(Default)]
+struct PrefetchParts {
+    inner: FakeParts,
+    prefetched: Mutex<Vec<u32>>,
+    release_first_put: tokio::sync::Notify,
+    hold_first_put: bool,
+    fail_prefetch: AtomicBool,
+    hang_prefetch: bool,
+    prefetch_dropped: AtomicBool,
+    drive: bool,
+    md5: bool,
+}
+
+struct PrefetchDrop<'a>(&'a AtomicBool);
+
+impl Drop for PrefetchDrop<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+impl PartTransport for PrefetchParts {
+    async fn presign(
+        &self,
+        chunk: &PartChunk,
+        cancel: &AtomicBool,
+    ) -> Result<PresignedPart, AuthApiError> {
+        let mut part = self.inner.presign(chunk, cancel).await?;
+        if self.drive {
+            part.url = "https://www.googleapis.com/upload/drive/v3/files/test".into();
+        }
+        if self.md5 {
+            part.md5 = Some(md5_base64(&chunk.bytes));
+        }
+        Ok(part)
+    }
+
+    async fn prefetch_presign(
+        &self,
+        part_number: u32,
+        _cancel: &AtomicBool,
+    ) -> Option<Result<PresignedPart, AuthApiError>> {
+        self.prefetched.lock().unwrap().push(part_number);
+        self.release_first_put.notify_one();
+        if self.hang_prefetch {
+            let _guard = PrefetchDrop(&self.prefetch_dropped);
+            std::future::pending::<()>().await;
+        }
+        if self.fail_prefetch.swap(false, Ordering::AcqRel) {
+            return Some(Err(AuthApiError::Other("prefetch/first-error".into())));
+        }
+        Some(Ok(PresignedPart {
+            url: format!("{S3_URL}{part_number}"),
+            md5: None,
+        }))
+    }
+
+    async fn put(
+        &self,
+        presigned: &PresignedPart,
+        chunk: &PartChunk,
+        total_size: u64,
+        cancel: &AtomicBool,
+    ) -> Result<UploadedPart, AuthApiError> {
+        if self.hold_first_put && chunk.part_number == 1 {
+            self.release_first_put.notified().await;
+        }
+        self.inner.put(presigned, chunk, total_size, cancel).await
+    }
+}
+
+#[tokio::test]
+async fn next_url_is_prefetched_while_puts_remain_ordered_and_byte_exact() {
+    let bytes = export_bytes(18);
+    let export = TempExport::new(&bytes);
+    let transport = PrefetchParts {
+        hold_first_put: true,
+        ..Default::default()
+    };
+    let (result, progress) = tokio::time::timeout(
+        Duration::from_secs(1),
+        run(&transport, &export, 4, &AtomicBool::new(false), None),
+    )
+    .await
+    .unwrap();
+    assert_parts(&result.unwrap(), &[4, 4, 4, 4, 2]);
+    assert_eq!(*transport.prefetched.lock().unwrap(), [2, 3, 4, 5]);
+    assert_eq!(transport.inner.started_parts(), [1, 2, 3, 4, 5]);
+    assert_eq!(transport.inner.max_in_flight.load(Ordering::Acquire), 1);
+    assert_eq!(
+        progress,
+        [4.0 / 18.0, 8.0 / 18.0, 12.0 / 18.0, 16.0 / 18.0, 0.99]
+    );
+    for (_, offset, chunk) in transport.inner.started.lock().unwrap().iter() {
+        let start = *offset as usize;
+        assert_eq!(
+            chunk.as_slice(),
+            &bytes[start..(start + 4).min(bytes.len())]
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_prefetch_uses_the_existing_deferred_retry_and_preserves_first_error() {
+    for fail_retry in [false, true] {
+        let export = TempExport::new(&export_bytes(16));
+        let transport = PrefetchParts {
+            fail_prefetch: AtomicBool::new(true),
+            inner: FakeParts {
+                fail_always: if fail_retry {
+                    HashSet::from([2])
+                } else {
+                    HashSet::new()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (result, _) = run(&transport, &export, 4, &AtomicBool::new(false), None).await;
+        if fail_retry {
+            assert_eq!(result.unwrap_err().to_string(), "prefetch/first-error");
+        } else {
+            assert_parts(&result.unwrap(), &[4; 4]);
+        }
+        assert_eq!(transport.inner.started_parts(), [1, 3, 4, 2]);
+        assert!(
+            transport
+                .inner
+                .events
+                .lock()
+                .unwrap()
+                .contains(&("presign", 2))
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_put_keeps_the_next_url_and_retries_the_failed_part_with_a_fresh_url() {
+    let export = TempExport::new(&export_bytes(16));
+    let transport = PrefetchParts {
+        inner: FakeParts {
+            fail_once: Mutex::new(HashSet::from([1])),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let (result, progress) = run(&transport, &export, 4, &AtomicBool::new(false), None).await;
+    assert_parts(&result.unwrap(), &[4; 4]);
+    assert_eq!(transport.inner.started_parts(), [1, 2, 3, 4, 1]);
+    assert_eq!(progress, [0.25, 0.5, 0.75, 0.99]);
+    assert_eq!(
+        transport
+            .inner
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| **event == ("presign", 1))
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn completed_put_reports_progress_and_cancels_a_pending_presign() {
+    let export = TempExport::new(&export_bytes(16));
+    let transport = PrefetchParts {
+        hang_prefetch: true,
+        ..Default::default()
+    };
+    let cancel = AtomicBool::new(false);
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        upload_file_parts(
+            &transport,
+            &export.0,
+            16,
+            4,
+            &|_| cancel.store(true, Ordering::Release),
+            &cancel,
+            None,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.unwrap_err().to_string(), "Export cancelled");
+    assert!(transport.prefetch_dropped.load(Ordering::Acquire));
+    assert_eq!(transport.inner.started_parts(), [1]);
+}
+
+#[tokio::test]
+async fn drive_urls_and_content_md5_keep_presigning_serial() {
+    for (drive, md5) in [(true, false), (false, true), (true, true)] {
+        let export = TempExport::new(&export_bytes(16));
+        let transport = PrefetchParts {
+            drive,
+            md5,
+            ..Default::default()
+        };
+        let (result, _) = run(&transport, &export, 4, &AtomicBool::new(false), None).await;
+        assert_parts(&result.unwrap(), &[4; 4]);
+        assert!(transport.prefetched.lock().unwrap().is_empty());
+        assert_eq!(
+            *transport.inner.events.lock().unwrap(),
+            (1..=4)
+                .flat_map(|part| [("presign", part), ("put", part)])
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[tokio::test]
+async fn prefetched_url_cannot_bypass_replacement_chunk_verification() {
+    let export = TempExport::new(&export_bytes(16));
+    let mut source = ReplacementUploadSource::new(&export.0).unwrap();
+    let (parts, _) = run(
+        &FakeParts::default(),
+        &export,
+        4,
+        &AtomicBool::new(false),
+        Some(&mut source),
+    )
+    .await;
+    source.seal_parts(&parts.unwrap()).unwrap();
+    let transport = PrefetchParts::default();
+    let result = upload_file_parts(
+        &transport,
+        &export.0,
+        16,
+        4,
+        &|_| std::fs::write(&export.0, [255; 16]).unwrap(),
+        &AtomicBool::new(false),
+        Some(&mut source),
+    )
+    .await;
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Rendered video changed during replacement upload"
+    );
+    assert_eq!(*transport.prefetched.lock().unwrap(), [2]);
+    assert_eq!(transport.inner.started_parts(), [1]);
+}
+
 /// A loopback HTTP/1.1 server that serves presign and part PUT requests over
 /// real sockets while modelling a WAN link: handshake round trips on every new
 /// connection, per-connection slow start capped by a send window, one round
@@ -535,14 +778,11 @@ struct MockPartTransport {
     addr: std::net::SocketAddr,
     shared: Option<(reqwest::Client, reqwest::Client)>,
     drive_urls: bool,
+    prefetch: bool,
 }
 
-impl PartTransport for MockPartTransport {
-    async fn presign(
-        &self,
-        chunk: &PartChunk,
-        _cancel: &AtomicBool,
-    ) -> Result<PresignedPart, AuthApiError> {
+impl MockPartTransport {
+    async fn presign_part_number(&self, part_number: u32) -> Result<PresignedPart, AuthApiError> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Presigned {
@@ -553,7 +793,7 @@ impl PartTransport for MockPartTransport {
                 url: format!(
                     "http://www.googleapis.com:{}/upload/drive/v3/files/part/{}?upload_id=cap-test",
                     self.addr.port(),
-                    chunk.part_number
+                    part_number
                 ),
                 md5: None,
             });
@@ -567,11 +807,8 @@ impl PartTransport for MockPartTransport {
             }
         };
         let url = client
-            .post(format!(
-                "http://{}/presign/{}",
-                self.addr, chunk.part_number
-            ))
-            .json(&json!({ "partNumber": chunk.part_number }))
+            .post(format!("http://{}/presign/{}", self.addr, part_number))
+            .json(&json!({ "partNumber": part_number }))
             .send()
             .await
             .map_err(|error| AuthApiError::Other(error.to_string()))?
@@ -580,6 +817,28 @@ impl PartTransport for MockPartTransport {
             .map_err(|error| AuthApiError::Other(error.to_string()))?
             .presigned_url;
         Ok(PresignedPart { url, md5: None })
+    }
+}
+
+impl PartTransport for MockPartTransport {
+    async fn presign(
+        &self,
+        chunk: &PartChunk,
+        _cancel: &AtomicBool,
+    ) -> Result<PresignedPart, AuthApiError> {
+        self.presign_part_number(chunk.part_number).await
+    }
+
+    async fn prefetch_presign(
+        &self,
+        part_number: u32,
+        _cancel: &AtomicBool,
+    ) -> Option<Result<PresignedPart, AuthApiError>> {
+        if self.prefetch && !self.drive_urls {
+            Some(self.presign_part_number(part_number).await)
+        } else {
+            None
+        }
     }
 
     async fn put(
@@ -637,6 +896,7 @@ async fn drive_urls_without_a_drive_initiate_are_put_in_order_with_content_range
                 .unwrap(),
         )),
         drive_urls: true,
+        prefetch: false,
     };
     let (result, progress) = run(
         &transport,
@@ -674,6 +934,7 @@ async fn s3_urls_reuse_one_connection_per_client_one_part_at_a_time() {
         addr: server.addr,
         shared: Some((local_client(), local_client())),
         drive_urls: false,
+        prefetch: false,
     };
     let (result, _) = run(&transport, &export, 1000, &AtomicBool::new(false), None).await;
     assert_parts(&result.unwrap(), &[1000; 8]);
@@ -685,6 +946,41 @@ async fn s3_urls_reuse_one_connection_per_client_one_part_at_a_time() {
     assert!(puts.iter().all(|(_, range)| range.is_none()));
     assert_eq!(server.recorded.max_active_puts.load(Ordering::Acquire), 1);
     assert_eq!(server.connections.load(Ordering::Acquire), 2);
+}
+
+#[tokio::test]
+async fn s3_prefetch_preserves_ordered_puts_and_verified_completion() {
+    let export = TempExport::new(&export_bytes(8000));
+    let server = mock_network::start(fast_local_profile());
+    let transport = MockPartTransport {
+        addr: server.addr,
+        shared: Some((local_client(), local_client())),
+        drive_urls: false,
+        prefetch: true,
+    };
+    let (result, progress) = run(&transport, &export, 1000, &AtomicBool::new(false), None).await;
+    assert_parts(&result.unwrap(), &[1000; 8]);
+    assert_eq!(server.recorded.max_active_puts.load(Ordering::Acquire), 1);
+    assert_eq!(
+        *server.recorded.puts.lock().unwrap(),
+        (1..=8).map(|number| (number, None)).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        server
+            .recorded
+            .received
+            .lock()
+            .unwrap()
+            .values()
+            .sum::<usize>(),
+        8000
+    );
+    assert_eq!(
+        progress,
+        (1..=8)
+            .map(|number| (number as f64 / 8.0).min(0.99))
+            .collect::<Vec<_>>()
+    );
 }
 
 /// `cargo test --bin cap-gpui multipart_mock_network_benchmark -- --ignored --nocapture`
@@ -718,8 +1014,8 @@ async fn multipart_mock_network_benchmark() {
         "{megabytes} MB export, {part_count} parts of {} MB; window 2 MiB, TCP+TLS handshake 2 RTT, presign server 20 ms",
         chunk_size / 1_000_000
     );
-    println!("| RTT | link | fresh clients (before) | shared clients (after) | speedup |");
-    println!("|---|---|---|---|---|");
+    println!("| RTT | link | fresh clients | shared serial | shared prefetch | prefetch speedup |");
+    println!("|---|---|---|---|---|---|");
     for (rtt_ms, mbps) in [(50u64, 100.0f64), (150, 100.0), (50, 500.0), (150, 20.0)] {
         let profile = mock_network::Profile {
             rtt: Duration::from_millis(rtt_ms),
@@ -729,12 +1025,13 @@ async fn multipart_mock_network_benchmark() {
             presign_server_time: Duration::from_millis(20),
         };
         let mut times = Vec::new();
-        for shared in [false, true] {
+        for (shared, prefetch) in [(false, false), (true, false), (true, true)] {
             let server = mock_network::start(profile);
             let transport = MockPartTransport {
                 addr: server.addr,
                 shared: shared.then(|| (local_client(), local_client())),
                 drive_urls: false,
+                prefetch,
             };
             let progress = Mutex::new(Vec::new());
             let started = Instant::now();
@@ -773,16 +1070,17 @@ async fn multipart_mock_network_benchmark() {
             assert!(progress.windows(2).all(|pair| pair[0] <= pair[1]));
             assert_eq!(progress.last().copied(), Some(0.99));
             eprintln!(
-                "rtt {rtt_ms} ms, {mbps} Mbps, shared {shared}: {elapsed:.1?}, {} connections",
+                "rtt {rtt_ms} ms, {mbps} Mbps, shared {shared}, prefetch {prefetch}: {elapsed:.1?}, {} connections",
                 server.connections.load(Ordering::Acquire)
             );
             times.push(elapsed.as_secs_f64());
         }
         println!(
-            "| {rtt_ms} ms | {mbps} Mbps | {:.1} s | {:.1} s | {:.2}x |",
+            "| {rtt_ms} ms | {mbps} Mbps | {:.1} s | {:.1} s | {:.1} s | {:.2}x |",
             times[0],
             times[1],
-            times[0] / times[1]
+            times[2],
+            times[1] / times[2]
         );
     }
 }

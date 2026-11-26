@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, mkdtemp, rm } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { spawn } from "bun";
 import { z } from "zod";
 import {
 	type AudioQualityMeasurements,
@@ -10,6 +9,7 @@ import {
 	planAudioQuality,
 	validateAudioQualityMeasurements,
 } from "./audio-quality-policy";
+import { spawn } from "./media-spawn";
 import { proveRecordingPackets } from "./recording-packet-proof";
 import { registerSubprocess, unregisterSubprocess } from "./subprocess";
 import { ensureTempDir, getTempDir } from "./temp-files";

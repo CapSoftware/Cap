@@ -1,9 +1,10 @@
 import { db } from "@cap/database";
 import { decodeSessionToken } from "@cap/database/auth/auth-options";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { authApiKeys } from "@cap/database/schema";
+import { authApiKeys, users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { zValidator } from "@hono/zod-validator";
+import type { User } from "@cap/web-domain";
+import { and, count, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import {
@@ -11,6 +12,9 @@ import {
 	createDesktopRedirectPage,
 	desktopSessionRequestQuerySchema,
 } from "@/lib/desktop-session";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { shouldRefuseTorExit } from "@/lib/tor-exit-gate";
+import { zValidator } from "@/utils/zod-validator";
 
 export const app = new Hono();
 
@@ -31,6 +35,12 @@ app.get(
 			"next",
 			new URL(`${redirectOrigin}${url.pathname}${url.search}`).toString(),
 		);
+
+		if (await shouldRefuseTorExit("desktop-session", c.req.raw.headers)) {
+			const blockedUrl = new URL(`${redirectOrigin}/login`);
+			blockedUrl.searchParams.set("error", "SignupBlocked");
+			return c.redirect(blockedUrl);
+		}
 
 		const user = await getCurrentUser();
 		if (!user) return c.redirect(loginRedirectUrl);
@@ -53,12 +63,22 @@ app.get(
 				expires: String(decodedToken.exp),
 			};
 		} else {
-			const id = crypto.randomUUID();
-			await db()
-				.insert(authApiKeys)
-				.values({ id, userId: user.id, source: "desktop" });
-
-			data = { type: "api_key", api_key: id };
+			const apiKey = (await isRateLimited(RATE_LIMIT_IDS.DESKTOP_KEY_MINT, {
+				key: `desktop-key-mint:${user.id}`,
+				headers: c.req.raw.headers,
+			}))
+				? null
+				: await createDesktopApiKey(user.id);
+			if (!apiKey) {
+				return c.text(
+					"Too many sign-ins in the last hour. Try again later.",
+					429,
+					{
+						"Retry-After": String(DESKTOP_API_KEY_WINDOW_MS / 1000),
+					},
+				);
+			}
+			data = { type: "api_key", api_key: apiKey };
 		}
 
 		const params = new URLSearchParams({ ...data, user_id: user.id });
@@ -86,6 +106,62 @@ app.get(
 		return Response.redirect(deepLinkUrl);
 	},
 );
+
+const MAX_DESKTOP_API_KEYS_PER_USER = 20;
+const DESKTOP_API_KEYS_PER_HOUR = 20;
+const DESKTOP_API_KEY_WINDOW_MS = 60 * 60 * 1000;
+const STALE_DESKTOP_API_KEY_BATCH = 1000;
+
+async function createDesktopApiKey(userId: User.UserId) {
+	const id = crypto.randomUUID();
+	const minted = await db().transaction(async (tx) => {
+		await tx
+			.select({ id: users.id })
+			.from(users)
+			.where(eq(users.id, userId))
+			.for("update");
+		const [recent] = await tx
+			.select({ total: count() })
+			.from(authApiKeys)
+			.where(
+				and(
+					eq(authApiKeys.userId, userId),
+					eq(authApiKeys.source, "desktop"),
+					gt(
+						authApiKeys.createdAt,
+						new Date(Date.now() - DESKTOP_API_KEY_WINDOW_MS),
+					),
+				),
+			);
+		if (Number(recent?.total ?? 0) >= DESKTOP_API_KEYS_PER_HOUR) return false;
+		await tx.insert(authApiKeys).values({ id, userId, source: "desktop" });
+		for (;;) {
+			const staleKeys = await tx
+				.select({ id: authApiKeys.id })
+				.from(authApiKeys)
+				.where(
+					and(
+						eq(authApiKeys.userId, userId),
+						eq(authApiKeys.source, "desktop"),
+						ne(authApiKeys.id, id),
+					),
+				)
+				.orderBy(desc(authApiKeys.createdAt), desc(authApiKeys.id))
+				.limit(STALE_DESKTOP_API_KEY_BATCH)
+				.offset(MAX_DESKTOP_API_KEYS_PER_USER - 1);
+			if (staleKeys.length === 0) break;
+			await tx.delete(authApiKeys).where(
+				inArray(
+					authApiKeys.id,
+					staleKeys.map((key) => key.id),
+				),
+			);
+			if (staleKeys.length < STALE_DESKTOP_API_KEY_BATCH) break;
+		}
+		return true;
+	});
+	return minted ? id : null;
+}
 
 function getDeploymentOrigin() {
 	const webUrl = serverEnv().WEB_URL;

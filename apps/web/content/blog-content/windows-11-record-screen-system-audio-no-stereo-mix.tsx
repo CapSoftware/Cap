@@ -3,6 +3,9 @@ export const recordScreenWindowsContent = {
 	title: "Record Screen + System Audio on Windows 11 (No Stereo Mix)",
 	description:
 		"Learn how to record your screen with crisp internal audio on Windows 11—without Stereo Mix. Capture mic + system sound together using Cap. Step-by-step setup, fixes, and FAQs.",
+	seoTitle: "How to record screen and system audio on Windows 11 | Cap",
+	seoDescription:
+		"Record your Windows 11 screen with internal system audio and your microphone in Cap, the open source screen recorder with a free plan.",
 	publishedAt: "2025-09-17",
 	category: "Tutorials",
 	author: "Cap Team",

@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { parseTranscriptVTT } from "@/app/s/[videoId]/_components/utils/parse-transcript-vtt";
-import { parseVTT } from "@/app/s/[videoId]/_components/utils/transcript-utils";
 import { updateVttEntryText } from "@/lib/transcript-vtt";
 
-describe.each([
-	{ name: "share transcript", parse: parseTranscriptVTT },
-	{ name: "embed transcript", parse: parseVTT },
-])("$name arrow text", ({ parse }) => {
+describe("share transcript arrow text", () => {
+	const parse = parseTranscriptVTT;
+
 	it.each([
 		"Read A --> B",
 		"a-->b",

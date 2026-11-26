@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createFAQSchema } from "@/utils/web-schema";
 
@@ -103,11 +105,6 @@ describe("createFAQSchema", () => {
 					"Yes, Cap offers a powerful free version, making it one of the best free screen recorders available.",
 			},
 			{
-				question: "How does Cap compare to OBS?",
-				answer:
-					"Cap is designed to be highly user-friendly while delivering high recording quality.",
-			},
-			{
 				question: "Can I download Cap on multiple devices?",
 				answer:
 					"Yes, Cap is cross-platform and can be downloaded on macOS and Windows.",
@@ -126,9 +123,17 @@ describe("createFAQSchema", () => {
 		const schema = createFAQSchema(screenRecorderFaqs);
 
 		expect(schema["@type"]).toBe("FAQPage");
-		expect(schema.mainEntity).toHaveLength(5);
-		expect(schema.mainEntity[3]?.acceptedAnswer.text).not.toContain("<a");
-		expect(schema.mainEntity[3]?.acceptedAnswer.text).toContain("macOS");
+		expect(schema.mainEntity).toHaveLength(4);
+		expect(schema.mainEntity[2]?.acceptedAnswer.text).not.toContain("<a");
+		expect(schema.mainEntity[2]?.acceptedAnswer.text).toContain("macOS");
+		expect(JSON.stringify(schema)).not.toMatch(/\bOBS\b/);
+
+		const pageSource = readFileSync(
+			join(process.cwd(), "components/pages/seo/ScreenRecorderPage.tsx"),
+			"utf-8",
+		);
+		expect(pageSource).not.toMatch(/\bOBS\b/);
+		expect(pageSource).not.toContain("How does Cap compare to");
 	});
 
 	it("applies FAQPage schema to free-screen-recorder page FAQs", () => {

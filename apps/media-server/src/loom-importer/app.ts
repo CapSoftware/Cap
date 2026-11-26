@@ -119,6 +119,28 @@ export function createLoomImporter(
 		return undefined;
 	};
 
+	const recordUnexpectedFailure = (
+		jobId: string,
+		controller: AbortController,
+		error: unknown,
+	) => {
+		console.error(`[loom-importer] ${jobId} import ended unexpectedly`, error);
+		const job = getJob(jobId);
+		if (!job || !isActive(job)) return;
+		const cancelled = controller.signal.aborted;
+		const failed = updateJob(jobId, {
+			phase: cancelled ? "cancelled" : "error",
+			progress: 0,
+			error: cancelled
+				? undefined
+				: error instanceof Error
+					? error.message
+					: String(error),
+			message: cancelled ? "Server shutting down" : "Loom import failed",
+		});
+		if (failed) void sendWebhook(failed);
+	};
+
 	const pump = () => {
 		for (let next = nextImport(); next; next = nextImport()) {
 			const customer = laneOf(next.request) === "customer";
@@ -138,12 +160,14 @@ export function createLoomImporter(
 				config.settings,
 				new Semaphore(config.settings.jobConnections),
 				controller.signal,
-			).finally(() => {
-				clearInterval(heartbeat);
-				if (customer) runningCustomer--;
-				running.delete(job.jobId);
-				pump();
-			});
+			)
+				.catch((error) => recordUnexpectedFailure(job.jobId, controller, error))
+				.finally(() => {
+					clearInterval(heartbeat);
+					if (customer) runningCustomer--;
+					running.delete(job.jobId);
+					pump();
+				});
 		}
 	};
 

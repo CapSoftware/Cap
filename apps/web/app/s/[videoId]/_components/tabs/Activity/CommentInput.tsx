@@ -1,9 +1,16 @@
 import { Button } from "@cap/ui";
 import type React from "react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useEffect,
+	useRef,
+	useState,
+	useTransition,
+} from "react";
+import { toast } from "sonner";
 
 interface CommentInputProps {
-	onSubmit?: (content: string) => void;
+	onSubmit?: (content: string) => void | Promise<void>;
 	onCancel?: () => void;
 	placeholder?: string;
 	showCancelButton?: boolean;
@@ -36,6 +43,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
 }) => {
 	const [content, setContent] = useState("");
 	const [focused, setFocused] = useState(false);
+	const [isSubmitting, startTransition] = useTransition();
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 
 	useEffect(() => {
@@ -46,12 +54,16 @@ const CommentInput: React.FC<CommentInputProps> = ({
 
 	const expanded = !collapsible || focused || content.length > 0;
 
-	const handleSubmit = (e?: React.FormEvent) => {
-		e?.preventDefault();
-		if (content.trim()) {
-			onSubmit?.(content);
-			setContent("");
-		}
+	const handleSubmit = () => {
+		if (!content.trim() || disabled || isSubmitting || !onSubmit) return;
+		startTransition(async () => {
+			try {
+				await onSubmit(content);
+				setContent("");
+			} catch {
+				toast.error("Couldn't post your comment. Please try again.");
+			}
+		});
 	};
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -73,7 +85,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
 						<textarea
 							ref={inputRef}
 							value={content}
-							disabled={disabled}
+							disabled={disabled || isSubmitting}
 							rows={expanded ? 3 : 2}
 							onChange={(e) => setContent(e.target.value)}
 							onKeyDown={handleKeyDown}
@@ -88,12 +100,17 @@ const CommentInput: React.FC<CommentInputProps> = ({
 									size="xs"
 									variant="primary"
 									onClick={() => handleSubmit()}
-									disabled={!content}
+									disabled={!content.trim() || disabled || isSubmitting}
 								>
 									{buttonLabel}
 								</Button>
 								{showCancelButton && onCancel && (
-									<Button size="xs" variant="outline" onClick={onCancel}>
+									<Button
+										size="xs"
+										variant="outline"
+										onClick={onCancel}
+										disabled={isSubmitting}
+									>
 										Cancel
 									</Button>
 								)}

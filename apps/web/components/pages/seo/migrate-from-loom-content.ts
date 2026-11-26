@@ -9,7 +9,7 @@ export const migrateFromLoomSeo = {
 	url: "https://cap.so/migrate-from-loom",
 	title: "Import Loom Videos to Cap | Migrate from Loom in Minutes",
 	description:
-		"Paste a Loom link or upload a CSV and Cap imports your Loom videos with titles, transcripts and chapters. Open source, half the price of Loom, and 20% off Cap Pro with code MIGRATE20.",
+		"Paste a Loom link or upload a CSV and Cap imports your Loom videos with titles, transcripts and chapters. Open source, lower priced than Loom Business, and 20% off Cap Pro with code MIGRATE20.",
 	keywords: [
 		"import loom videos",
 		"loom import",
@@ -100,10 +100,10 @@ export const comparisonRows: ComparisonRow[] = [
 	{
 		feature: "Pricing",
 		cap: {
-			text: `From $${PRICING.pro.annualPerMonth} per user per month`,
+			text: `Cap Pro: $${PRICING.pro.yearlyTotal} per user per year`,
 			status: "positive",
 		},
-		loom: { text: "$18 per user per month", status: "warning" },
+		loom: { text: "Business: $180 per user per year", status: "warning" },
 	},
 	{
 		feature: "Open source",
@@ -155,7 +155,7 @@ export const migrateFaqs = [
 	},
 	{
 		question: "Do I need Cap Pro to import from Loom?",
-		answer: `Creating a Cap account is free and takes a minute. The Loom importer is part of Cap Pro, which starts at $${PRICING.pro.annualPerMonth} per user per month billed annually, less than half the price of Loom's paid plan. Enter ${MIGRATE_PROMO_CODE} at checkout for 20% off, and the discount applies to every renewal.`,
+		answer: `Creating a Cap account is free and takes a minute. The Loom importer is part of Cap Pro, which is $${PRICING.pro.annualPerMonth} per user per month billed annually ($${PRICING.pro.yearlyTotal} a year), compared with $180 per user per year for Loom Business. Billed monthly, Cap Pro is $${PRICING.pro.monthly} per user per month and Loom Business is $18. Enter ${MIGRATE_PROMO_CODE} at checkout for 20% off, and the discount applies to every renewal.`,
 	},
 	{
 		question: "How do I bulk import my whole Loom library?",

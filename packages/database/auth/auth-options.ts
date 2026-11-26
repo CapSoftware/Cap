@@ -14,13 +14,26 @@ import type { Provider } from "next-auth/providers/index";
 import WorkOSProvider from "next-auth/providers/workos";
 import { getEmailDeliveryStatus, sendEmail } from "../emails/config.ts";
 import { db } from "../index.ts";
+import {
+	DUB_CLICK_ID_COOKIE,
+	DUB_PARTNER_DATA_COOKIE,
+	dubCookieDomain,
+	parseDubClickId,
+	trackReferralLead,
+} from "../referrals.ts";
 import { users } from "../schema.ts";
+import { isDisposableEmailSignup } from "./disposable-signup.ts";
 import {
 	isBlockedAccountEmail,
 	isEmailAllowedForSignup,
 	isEmailBlockedFromSignup,
+	normalizeEmailAddress,
+	normalizeSignInEmail,
 } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
+import { signInTimestamp } from "./fresh-sign-in.ts";
+import { GoogleOneTapProvider } from "./google-one-tap.ts";
+import { verifyPasskeySignIn } from "./passkeys.ts";
 import {
 	provisionSsoMembership,
 	type SsoAuthContext,
@@ -50,12 +63,15 @@ export async function decodeSessionToken(
 	if (!userId) return token;
 
 	const [user] = await db()
-		.select({ authSessionVersion: users.authSessionVersion })
+		.select({
+			authSessionVersion: users.authSessionVersion,
+			email: users.email,
+		})
 		.from(users)
 		.where(eq(users.id, User.UserId.make(userId)))
 		.limit(1);
 
-	if (!user) return null;
+	if (!user || isBlockedAccountEmail(user.email)) return null;
 
 	const sessionVersion =
 		typeof token.sessionVersion === "number" ? token.sessionVersion : 0;
@@ -63,6 +79,47 @@ export async function decodeSessionToken(
 	if (sessionVersion !== user.authSessionVersion) return null;
 
 	return token;
+}
+
+// Credits a new account to the partner link it came from. Runs inside the
+// NextAuth callback, so it must never throw: a Dub outage cannot block sign-up.
+async function trackReferralSignup(user: {
+	id: string;
+	email?: string | null;
+	name?: string | null;
+	image?: string | null;
+}) {
+	try {
+		const { cookies, headers } = await import("next/headers");
+		const cookieStore = await cookies();
+		const clickId = parseDubClickId(
+			cookieStore.get(DUB_CLICK_ID_COOKIE)?.value,
+		);
+		if (!clickId) return;
+
+		const tracked = await trackReferralLead({
+			clickId,
+			user: {
+				id: user.id,
+				email: user.email,
+				name: user.name,
+				image: user.image,
+			},
+		});
+		if (!tracked) return;
+
+		// The click now belongs to this user; clear it so another account
+		// created in the same browser is not credited to the same partner.
+		const domain = dubCookieDomain((await headers()).get("host") ?? "");
+		for (const name of [DUB_CLICK_ID_COOKIE, DUB_PARTNER_DATA_COOKIE]) {
+			cookieStore.set(name, "", { domain, path: "/", maxAge: 0 });
+		}
+	} catch (error) {
+		console.error("[referrals] Failed to track referral sign-up", {
+			userId: user.id,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 }
 
 const OIDC_PROVIDER_ID = "oidc";
@@ -76,7 +133,12 @@ type OidcClaims = {
 	picture?: string;
 };
 
-export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
+export type AuthHooks = { onUserCreated?: () => void };
+
+export const authOptions = (
+	ssoContext?: SsoAuthContext,
+	hooks?: AuthHooks,
+): NextAuthOptions => {
 	let _adapter: Adapter | undefined;
 	let _providers: Provider[] | undefined;
 	let validatedSsoIdentity: ValidatedSsoIdentity | null = null;
@@ -86,6 +148,7 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 			if (_adapter) return _adapter;
 			_adapter = DrizzleAdapter(db(), {
 				getSsoIdentity: () => validatedSsoIdentity,
+				onUserCreated: hooks?.onUserCreated,
 			});
 			return _adapter;
 		},
@@ -173,6 +236,9 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 						},
 					},
 				}),
+				...(serverEnv().GOOGLE_CLIENT_ID && serverEnv().GOOGLE_CLIENT_SECRET
+					? [GoogleOneTapProvider()]
+					: []),
 				...(serverEnv().WORKOS_CLIENT_ID && serverEnv().WORKOS_API_KEY
 					? [
 							WorkOSProvider({
@@ -249,12 +315,39 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 							}),
 						]
 					: []),
+				CredentialsProvider({
+					id: "passkey",
+					name: "Passkey",
+					credentials: {},
+					async authorize(credentials) {
+						const user = await verifyPasskeySignIn(
+							(credentials as Record<string, unknown> | undefined)?.response,
+						).catch((error: unknown) => {
+							console.error("[passkeys] Sign-in verification failed", {
+								error: error instanceof Error ? error.message : String(error),
+							});
+							return null;
+						});
+						if (!user) return null;
+						return {
+							id: user.id,
+							email: user.email,
+							name: user.name,
+							image: user.image,
+						};
+					},
+				}),
 				EmailProvider({
 					// next-auth defaults to 24h, but the code is 6 digits and the
 					// verify path has no attempt limiting, so a day-long window is a
 					// practical brute-force target. The OTP email and the dev console
 					// have always told users 10 minutes; this makes that true.
 					maxAge: OTP_CODE_MAX_AGE_SECONDS,
+					normalizeIdentifier(identifier) {
+						const email = normalizeSignInEmail(identifier);
+						if (!email) throw new Error("Invalid email address format.");
+						return email;
+					},
 					async generateVerificationToken() {
 						return crypto.randomInt(100000, 1000000).toString();
 					},
@@ -366,7 +459,7 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 							? credentials.email
 							: null);
 				if (!rawEmail || typeof rawEmail !== "string") return true;
-				const userEmail = rawEmail.toLowerCase();
+				const userEmail = normalizeEmailAddress(rawEmail);
 
 				if (
 					isEmailBlockedFromSignup(
@@ -376,6 +469,15 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 				) {
 					console.warn(`Sign-in blocked for email: ${userEmail}`);
 					return "/login?error=SignupBlocked";
+				}
+
+				if (
+					account?.provider !== "workos" &&
+					account?.provider !== OIDC_PROVIDER_ID &&
+					(await isDisposableEmailSignup(userEmail))
+				) {
+					console.warn(`Sign-up refused for disposable email: ${userEmail}`);
+					return "/login?error=DisposableEmail";
 				}
 
 				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
@@ -406,6 +508,12 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 					session.user.name = token.name ?? null;
 					session.user.email = token.email ?? null;
 					session.user.image = token.picture ?? null;
+				}
+				if (typeof token?.authTime === "number") {
+					(session as { authTime?: number }).authTime = token.authTime;
+				}
+				if (typeof token?.authMethod === "string") {
+					(session as { authMethod?: string }).authMethod = token.authMethod;
 				}
 
 				return session;
@@ -441,6 +549,8 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 					if (!dbUser) {
 						if (user) {
 							token.id = user?.id;
+							token.authTime = signInTimestamp();
+							token.authMethod = account?.provider;
 						}
 						return token;
 					}
@@ -452,10 +562,29 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 						email: dbUser.email,
 						picture: dbUser.image,
 						sessionVersion: dbUser.authSessionVersion,
+						...(user
+							? {
+									authTime: signInTimestamp(),
+									authMethod: account?.provider,
+								}
+							: typeof token.authTime === "number"
+								? {
+										authTime: token.authTime,
+										authMethod:
+											typeof token.authMethod === "string"
+												? token.authMethod
+												: undefined,
+									}
+								: {}),
 					};
 				}
 
 				return token;
+			},
+		},
+		events: {
+			async signIn({ user, isNewUser }) {
+				if (isNewUser && user?.id) await trackReferralSignup(user);
 			},
 		},
 	};

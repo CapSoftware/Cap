@@ -7,15 +7,32 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY package.json bun.lock ./
+COPY patches ./patches
 RUN bun install --frozen-lockfile --production
+# The build stops here if the parser limits in patches/ were not applied.
+RUN grep -q MAX_DECLARED_SAMPLES node_modules/mediabunny/dist/modules/src/isobmff/isobmff-demuxer.js \
+	&& grep -q PCM_CHUNK_SPAN_LIMIT node_modules/mediabunny/dist/modules/src/isobmff/isobmff-demuxer.js
 
+COPY bunfig.toml ./bunfig.toml
 COPY src ./src
 COPY capcodec.md ./capcodec.md
+# Files whose tables claim far more than they hold must probe at once, or the image is not built.
+RUN bun test src/__tests__/lib/media-probe-sample-counts.test.ts
+RUN bun test src/__tests__/lib/legacy-codecs.integration.test.ts src/__tests__/lib/audio-only-source.integration.test.ts
+RUN bun test src/__tests__/lib/infra-poster.integration.test.ts
 
 ENV PORT=3456
+# Self-hosted storage usually sits on a private network next to this container.
+ENV MEDIA_SERVER_INTERNAL_MEDIA_HOSTS=*
 EXPOSE 3456
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 	CMD ["bun", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 3456}/health`).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
 
+# The container starts as root only to hand its temp and GPU cache volumes
+# and the GPU devices to the bun user; the entrypoint then runs the server,
+# and every FFmpeg it starts, as that user. See docker-entrypoint.sh.
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod 755 ./docker-entrypoint.sh
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["bun", "run", "src/index.ts"]

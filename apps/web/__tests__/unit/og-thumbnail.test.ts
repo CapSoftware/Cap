@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { coverRect, imageSize, loadOgThumbnail } from "../../lib/og/thumbnail";
 
+vi.mock("@/lib/storage-fetch", () => ({
+	fetchStorageUrl: (url: string, init?: RequestInit) => fetch(url, init),
+}));
+
 const png = (width: number, height: number) => {
 	const buf = Buffer.alloc(33);
 	buf.writeUInt32BE(0x89504e47, 0);

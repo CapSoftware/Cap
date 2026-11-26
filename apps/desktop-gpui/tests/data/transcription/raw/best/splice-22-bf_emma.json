@@ -1,0 +1,15 @@
+[
+	[
+		{ "text": "Right,", "start": 0.4, "end": 0.72 },
+		{ "text": "so", "start": 0.88, "end": 1.12 },
+		{ "text": "the", "start": 1.28, "end": 1.52 },
+		{ "text": "the", "start": 1.92, "end": 2.1599998 },
+		{ "text": "audio", "start": 2.4, "end": 2.96 },
+		{ "text": "and", "start": 2.96, "end": 3.2 },
+		{ "text": "the", "start": 3.52, "end": 3.76 },
+		{ "text": "video", "start": 3.92, "end": 4.16 },
+		{ "text": "stay", "start": 4.32, "end": 4.64 },
+		{ "text": "in", "start": 4.64, "end": 4.8799996 },
+		{ "text": "single.", "start": 4.96, "end": 5.4399996 }
+	]
+]

@@ -376,7 +376,7 @@ pub(crate) fn validate_input(input: &PreparingPreviewInput) -> Result<f64, Prepa
         || project.keyboard.is_some()
         || !project.annotations.is_empty()
         || !project.hidden_text_segments.is_empty()
-        || !project.overlay_order.is_empty()
+        || project.has_overlay_order()
         || !timeline.transitions.is_empty()
         || !timeline.scene_segments.is_empty()
         || !timeline.mask_segments.is_empty()
@@ -386,6 +386,7 @@ pub(crate) fn validate_input(input: &PreparingPreviewInput) -> Result<f64, Prepa
         || !timeline.audio_segments.is_empty()
         || !timeline.style_segments.is_empty()
         || !timeline.image_segments.is_empty()
+        || !timeline.shape_segments.is_empty()
         || !timeline.camera3d_segments.is_empty()
     {
         return Err(invalid("Presentation requires ordinary project loading"));
@@ -642,8 +643,12 @@ async fn run_preview(
             if !is_current(&requests, request) {
                 continue 'requests;
             }
-            let cursor_timeline =
-                cursor_cache.get(timeline_segment.recording_clip, &cursor, &project);
+            let cursor_timeline = cursor_cache.get(
+                timeline_segment.recording_clip,
+                &cursor,
+                &cap_rendering::HoverChanges::default(),
+                &project,
+            );
             control.check()?;
             let zoom = cached_zoom(
                 &mut zoom_cache,
@@ -685,7 +690,7 @@ async fn run_preview(
                     cursor_cache.event_order(&cursor),
                 )
             };
-            let layout = uniforms.frame_layout();
+            let mut layout = uniforms.frame_layout();
             let output = match options.frame_format {
                 EditorFrameFormat::Rgba => renderer
                     .render_immediate(frames, uniforms, &cursor, true, &mut layers)
@@ -697,6 +702,7 @@ async fn run_preview(
                     .await
                     .map(EditorFrameOutput::Surface),
             };
+            layout.caption = layers.caption_frame_box();
             check_cursor_error(&constants)?;
             control.check()?;
             decoders.check()?;

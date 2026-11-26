@@ -5,11 +5,19 @@ const MIN_PART_BYTES = 1024 * 1024;
 // bigger is a bad Content-Range header, not a real object.
 export const MAX_RANGED_TOTAL_BYTES = 1024 ** 4;
 
+export class DownloadTooLargeError extends Error {
+	constructor(maxBytes: number) {
+		super(`Download is larger than the ${maxBytes} byte limit`);
+		this.name = "DownloadTooLargeError";
+	}
+}
+
 export interface ParallelDownloadOptions {
 	concurrency: number;
 	partBytes: number;
 	signal?: AbortSignal;
 	fetchImpl?: typeof fetch;
+	maxBytes?: number;
 }
 
 export interface ParallelDownloadResult {
@@ -111,8 +119,15 @@ export async function downloadUrlToPathParallel(
 ): Promise<ParallelDownloadResult> {
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const partBytes = Math.max(MIN_PART_BYTES, options.partBytes);
+	const maxBytes = Math.min(
+		options.maxBytes ?? MAX_RANGED_TOTAL_BYTES,
+		MAX_RANGED_TOTAL_BYTES,
+	);
 	const handle = await open(path, "w");
+	let received = 0;
 	const write = async (chunk: Uint8Array, offset: number) => {
+		received += chunk.byteLength;
+		if (received > maxBytes) throw new DownloadTooLargeError(maxBytes);
 		let written = 0;
 		while (written < chunk.byteLength) {
 			const { bytesWritten } = await handle.write(
@@ -160,6 +175,10 @@ export async function downloadUrlToPathParallel(
 		if (total > MAX_RANGED_TOTAL_BYTES) {
 			await first.body?.cancel().catch(() => {});
 			throw new Error(`Ranged download reported an invalid size: ${total}`);
+		}
+		if (total > maxBytes) {
+			await first.body?.cancel().catch(() => {});
+			throw new DownloadTooLargeError(maxBytes);
 		}
 		const firstBytes = range.end + 1;
 		const etag = first.headers.get("etag");

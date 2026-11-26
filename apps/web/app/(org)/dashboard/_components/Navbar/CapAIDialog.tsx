@@ -5,11 +5,9 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@cap/ui";
-import {
-	faInfoCircle,
-	faWandMagicSparkles,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faInfoCircle } from "@fortawesome/free-solid-svg-icons/faInfoCircle";
+import { faWandMagicSparkles } from "@fortawesome/free-solid-svg-icons/faWandMagicSparkles";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { Fit, Layout, useRive } from "@/lib/rive";
 import { useDashboardContext, useTheme } from "../../Contexts";
 

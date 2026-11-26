@@ -37,6 +37,7 @@ use crate::{
 /// camelCase store keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotkeyAction {
+    StartRecording,
     StartStudioRecording,
     StartInstantRecording,
     StopRecording,
@@ -50,9 +51,19 @@ pub enum HotkeyAction {
     ScreenshotDisplay,
     ScreenshotWindow,
     ScreenshotArea,
+    AddRecordingMarker,
+    ToggleDrawing,
+    ToggleMeetingNotes,
+    OpenMeetingNotes,
+    NewNote,
 }
 
-const ACTION_KEYS: [(&str, HotkeyAction); 13] = [
+pub const MEETING_TOGGLE_HOTKEY: &str = "toggleMeetingNotes";
+pub const MEETING_OPEN_HOTKEY: &str = "openMeetingNotes";
+pub const NEW_NOTE_HOTKEY: &str = "newNote";
+
+const ACTION_KEYS: [(&str, HotkeyAction); 19] = [
+    ("startRecording", HotkeyAction::StartRecording),
     ("startStudioRecording", HotkeyAction::StartStudioRecording),
     ("startInstantRecording", HotkeyAction::StartInstantRecording),
     ("stopRecording", HotkeyAction::StopRecording),
@@ -75,6 +86,14 @@ const ACTION_KEYS: [(&str, HotkeyAction); 13] = [
     ("screenshotDisplay", HotkeyAction::ScreenshotDisplay),
     ("screenshotWindow", HotkeyAction::ScreenshotWindow),
     ("screenshotArea", HotkeyAction::ScreenshotArea),
+    (
+        store::RECORDING_MARKER_HOTKEY,
+        HotkeyAction::AddRecordingMarker,
+    ),
+    (store::DRAW_HOTKEY, HotkeyAction::ToggleDrawing),
+    (MEETING_TOGGLE_HOTKEY, HotkeyAction::ToggleMeetingNotes),
+    (MEETING_OPEN_HOTKEY, HotkeyAction::OpenMeetingNotes),
+    (NEW_NOTE_HOTKEY, HotkeyAction::NewNote),
 ];
 
 impl HotkeyAction {
@@ -94,6 +113,66 @@ impl HotkeyAction {
             .map(|(key, _)| *key)
             .unwrap_or_default()
     }
+
+    /// The marker shortcut registers only while a Studio recording runs, and
+    /// the drawing one only while a recording that can be drawn on runs, so
+    /// their combos are never taken from other apps the rest of the time.
+    fn recording_scoped(self) -> bool {
+        matches!(self, Self::AddRecordingMarker | Self::ToggleDrawing)
+    }
+}
+
+/// What a shortcut does with the recording mode. Only the cycle shortcut
+/// changes the mode selected in the main window; every other shortcut that
+/// captures does so in its own mode, or the selected one, for that capture
+/// only (#3597).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ModePlan {
+    Start(Mode),
+    Picker(TargetType, Mode),
+    Capture,
+    Select(Mode),
+    Unrelated,
+}
+
+pub(crate) fn mode_plan(action: HotkeyAction, selected: Mode) -> ModePlan {
+    match action {
+        HotkeyAction::StartRecording => ModePlan::Start(selected),
+        HotkeyAction::StartStudioRecording => ModePlan::Start(Mode::Studio),
+        HotkeyAction::StartInstantRecording => ModePlan::Start(Mode::Instant),
+        HotkeyAction::OpenRecordingPickerDisplay => {
+            ModePlan::Picker(TargetType::Display, selected.for_recording())
+        }
+        HotkeyAction::OpenRecordingPickerWindow => {
+            ModePlan::Picker(TargetType::Window, selected.for_recording())
+        }
+        HotkeyAction::OpenRecordingPickerArea => {
+            ModePlan::Picker(TargetType::Area, selected.for_recording())
+        }
+        HotkeyAction::ScreenshotArea => ModePlan::Picker(TargetType::Area, Mode::Screenshot),
+        HotkeyAction::ScreenshotDisplay | HotkeyAction::ScreenshotWindow => ModePlan::Capture,
+        HotkeyAction::CycleRecordingMode => ModePlan::Select(match selected {
+            Mode::Studio => Mode::Instant,
+            Mode::Instant => Mode::Screenshot,
+            Mode::Screenshot => Mode::Studio,
+        }),
+        HotkeyAction::StopRecording
+        | HotkeyAction::RestartRecording
+        | HotkeyAction::TogglePauseRecording
+        | HotkeyAction::OpenRecordingPicker
+        | HotkeyAction::AddRecordingMarker
+        | HotkeyAction::ToggleDrawing
+        | HotkeyAction::ToggleMeetingNotes
+        | HotkeyAction::OpenMeetingNotes
+        | HotkeyAction::NewNote => ModePlan::Unrelated,
+    }
+}
+
+/// Which recording-scoped shortcuts the live recording can use.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RecordingScopes {
+    pub markers: bool,
+    pub drawing: bool,
 }
 
 struct Hotkeys {
@@ -108,6 +187,9 @@ struct Hotkeys {
     /// Set while the Shortcuts page records a new combo: a registered combo
     /// would otherwise fire its action instead of reaching the page.
     paused: bool,
+    /// The [`HotkeyAction::recording_scoped`] bindings the live recording
+    /// has registered.
+    recording_scopes: RecordingScopes,
     #[cfg(target_os = "linux")]
     capture_stop: Option<HotKey>,
 }
@@ -149,17 +231,22 @@ pub fn init(cx: &mut App) {
         bindings: Vec::new(),
         unavailable: Vec::new(),
         paused: false,
+        recording_scopes: RecordingScopes::default(),
         #[cfg(target_os = "linux")]
         capture_stop: None,
     });
+    store::seed_recording_marker_hotkey();
+    store::seed_draw_hotkey();
     register_from_store(cx);
 
-    let (tx, rx) = flume::unbounded::<GlobalHotKeyEvent>();
+    // The press instant is taken on the OS callback, before the hop to the
+    // main thread, so a recording marker lands where the key went down.
+    let (tx, rx) = flume::unbounded::<(GlobalHotKeyEvent, std::time::Instant)>();
     GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
-        let _ = tx.send(event);
+        let _ = tx.send((event, std::time::Instant::now()));
     }));
     cx.spawn(async move |cx| {
-        while let Ok(event) = rx.recv_async().await {
+        while let Ok((event, pressed_at)) = rx.recv_async().await {
             #[cfg(target_os = "linux")]
             if cx.update(|cx| {
                 if cx
@@ -177,11 +264,27 @@ pub fn init(cx: &mut App) {
             }
             // Pressed only, like the Tauri handler (`hotkeys.rs:183-185`).
             if event.state == HotKeyState::Pressed {
-                cx.update(|cx| dispatch_id(event.id(), cx));
+                cx.update(|cx| dispatch_id(event.id(), pressed_at, cx));
             }
         }
     })
     .detach();
+}
+
+/// Registers the recording-scoped bindings the live recording can use and
+/// releases the rest. Leaves every other registration alone, so a press of
+/// another shortcut at that moment still lands.
+pub fn set_recording_scopes(scopes: RecordingScopes, cx: &mut App) {
+    if !cx.has_global::<Hotkeys>() || cx.global::<Hotkeys>().recording_scopes == scopes {
+        return;
+    }
+    cx.global_mut::<Hotkeys>().recording_scopes = scopes;
+    if cx.global::<Hotkeys>().paused {
+        return;
+    }
+    unregister_scoped(cx);
+    register_scoped_from_store(cx);
+    crate::tray::refresh_menu(cx);
 }
 
 /// Re-read the store and swap every OS registration -- the settings page's
@@ -682,7 +785,12 @@ pub fn reserve_clean_capture_stop(
         anyhow::bail!("A recording shortcut is already reserved.");
     }
     let key = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::F9);
-    let actions = actions_for(&hotkeys.bindings, key.id());
+    let mut actions = actions_for(&hotkeys.bindings, key.id());
+    actions.extend(unregistered_scoped_actions(
+        &store::hotkeys_raw(),
+        &hotkeys.bindings,
+        key.id(),
+    ));
     if clean_capture_shortcut_conflicts(&actions) {
         anyhow::bail!(tr::dialog::capture::shortcut_conflict());
     }
@@ -753,62 +861,163 @@ pub fn complete_clean_capture_stop(generation: u64, cx: &mut App) {
     }
 }
 
+fn stored_binding(key: &str, value: &serde_json::Value) -> Option<(HotkeyAction, HotKey)> {
+    let Some(action) = HotkeyAction::from_store_key(key) else {
+        tracing::debug!(key, "hotkey action unknown to this build; skipped");
+        return None;
+    };
+    let Some(binding) = store::hotkey_from_value(value) else {
+        tracing::warn!(key, "unparseable hotkey binding in the store");
+        return None;
+    };
+    let Ok(code) = Code::from_str(&binding.code) else {
+        tracing::warn!(key, code = %binding.code, "unknown hotkey code");
+        return None;
+    };
+    let mut mods = Modifiers::empty();
+    if binding.meta {
+        mods |= Modifiers::META;
+    }
+    if binding.ctrl {
+        mods |= Modifiers::CONTROL;
+    }
+    if binding.alt {
+        mods |= Modifiers::ALT;
+    }
+    if binding.shift {
+        mods |= Modifiers::SHIFT;
+    }
+    Some((action, HotKey::new(Some(mods), code)))
+}
+
+fn register_binding(hotkeys: &mut Hotkeys, action: HotkeyAction, hotkey: HotKey) {
+    // The same combo bound to a second action keeps the one OS
+    // registration; the dispatch fires every action on it, the way the
+    // Tauri handler loops the whole map per press (`hotkeys.rs:201-205`
+    // over there).
+    if hotkeys
+        .bindings
+        .iter()
+        .any(|(existing, _)| existing.id() == hotkey.id())
+    {
+        hotkeys.bindings.push((hotkey, action));
+        return;
+    }
+    let registered = hotkeys
+        .manager()
+        .and_then(|manager| manager.register(hotkey).map_err(|error| error.to_string()));
+    match registered {
+        Ok(()) => {
+            hotkeys
+                .unavailable
+                .retain(|unavailable| *unavailable != action);
+            hotkeys.bindings.push((hotkey, action));
+        }
+        Err(error) => {
+            tracing::warn!(?action, "registering global hotkey failed: {error}");
+            if !hotkeys.unavailable.contains(&action) {
+                hotkeys.unavailable.push(action);
+            }
+        }
+    }
+}
+
+/// Recording-scoped actions bound to `id` in the store but not registered
+/// yet. The temporary Stop shortcut is reserved before a recording starts,
+/// when the marker shortcut is still unregistered, so its conflict check has
+/// to read the store.
+#[cfg(any(target_os = "linux", test))]
+fn unregistered_scoped_actions(
+    stored: &serde_json::Map<String, serde_json::Value>,
+    bindings: &[(HotKey, HotkeyAction)],
+    id: u32,
+) -> Vec<HotkeyAction> {
+    stored
+        .iter()
+        .filter_map(|(key, value)| stored_binding(key, value))
+        .filter(|(action, hotkey)| {
+            action.recording_scoped()
+                && hotkey.id() == id
+                && !bindings.iter().any(|(_, bound)| bound == action)
+        })
+        .map(|(action, _)| action)
+        .collect()
+}
+
+fn registers_now(action: HotkeyAction, scopes: RecordingScopes) -> bool {
+    match action {
+        HotkeyAction::AddRecordingMarker => scopes.markers,
+        HotkeyAction::ToggleDrawing => scopes.drawing,
+        _ => true,
+    }
+}
+
 fn register_from_store(cx: &mut App) {
     let stored = store::hotkeys_raw();
     let hotkeys = cx.global_mut::<Hotkeys>();
+    let scope = hotkeys.recording_scopes;
     for (key, value) in &stored {
-        let Some(action) = HotkeyAction::from_store_key(key) else {
-            tracing::debug!(key, "hotkey action unknown to this build; skipped");
+        let Some((action, hotkey)) = stored_binding(key, value) else {
             continue;
         };
-        let Some(binding) = store::hotkey_from_value(value) else {
-            tracing::warn!(key, "unparseable hotkey binding in the store");
+        if !registers_now(action, scope) {
+            continue;
+        }
+        register_binding(hotkeys, action, hotkey);
+    }
+    hotkeys.release_idle_manager();
+    tracing::info!(count = hotkeys.bindings.len(), "global hotkeys registered");
+    crate::tray::refresh_menu(cx);
+}
+
+fn register_scoped_from_store(cx: &mut App) {
+    let stored = store::hotkeys_raw();
+    let hotkeys = cx.global_mut::<Hotkeys>();
+    let scopes = hotkeys.recording_scopes;
+    for (key, value) in &stored {
+        let Some((action, hotkey)) = stored_binding(key, value) else {
             continue;
         };
-        let Ok(code) = Code::from_str(&binding.code) else {
-            tracing::warn!(key, code = %binding.code, "unknown hotkey code");
+        if action.recording_scoped()
+            && registers_now(action, scopes)
+            && !hotkeys.bindings.iter().any(|(_, bound)| *bound == action)
+        {
+            register_binding(hotkeys, action, hotkey);
+        }
+    }
+    hotkeys.release_idle_manager();
+}
+
+fn unregister_scoped(cx: &mut App) {
+    let hotkeys = cx.global_mut::<Hotkeys>();
+    let scopes = hotkeys.recording_scopes;
+    let (scoped, kept): (Vec<_>, Vec<_>) = hotkeys
+        .bindings
+        .drain(..)
+        .partition(|(_, action)| action.recording_scoped() && !registers_now(*action, scopes));
+    hotkeys.bindings = kept;
+    for (hotkey, _) in scoped {
+        #[cfg(target_os = "linux")]
+        if hotkeys
+            .capture_stop
+            .is_some_and(|stop| stop.id() == hotkey.id())
+        {
             continue;
-        };
-        let mut mods = Modifiers::empty();
-        if binding.meta {
-            mods |= Modifiers::META;
         }
-        if binding.ctrl {
-            mods |= Modifiers::CONTROL;
-        }
-        if binding.alt {
-            mods |= Modifiers::ALT;
-        }
-        if binding.shift {
-            mods |= Modifiers::SHIFT;
-        }
-        let hotkey = HotKey::new(Some(mods), code);
-        // The same combo bound to a second action keeps the one OS
-        // registration; the dispatch fires every action on it, the way the
-        // Tauri handler loops the whole map per press (`hotkeys.rs:201-205`
-        // over there).
         if hotkeys
             .bindings
             .iter()
             .any(|(existing, _)| existing.id() == hotkey.id())
         {
-            hotkeys.bindings.push((hotkey, action));
             continue;
         }
-        let registered = hotkeys
-            .manager()
-            .and_then(|manager| manager.register(hotkey).map_err(|error| error.to_string()));
-        match registered {
-            Ok(()) => hotkeys.bindings.push((hotkey, action)),
-            Err(error) => {
-                tracing::warn!(?action, code = %binding.code, "registering global hotkey failed: {error}");
-                hotkeys.unavailable.push(action);
-            }
+        if let Some(manager) = &hotkeys.manager
+            && let Err(error) = manager.unregister(hotkey)
+        {
+            tracing::warn!("unregistering a recording hotkey failed: {error}");
         }
     }
     hotkeys.release_idle_manager();
-    tracing::info!(count = hotkeys.bindings.len(), "global hotkeys registered");
-    crate::tray::refresh_menu(cx);
 }
 
 /// `CAP_GPUI_AUTO_HOTKEY=<store key>`: run an action's dispatch arm without
@@ -816,7 +1025,12 @@ fn register_from_store(cx: &mut App) {
 /// reason every other `CAP_GPUI_AUTO_*` hook exists).
 pub fn dispatch_for_harness(key: &str, cx: &mut App) {
     match HotkeyAction::from_store_key(key) {
-        Some(action) => dispatch(action, cx),
+        Some(action) => {
+            let main = cx.global::<app_windows::AppWindows>().main;
+            let selected = main.read(cx).map(|view| view.mode()).ok();
+            tracing::info!(key, ?selected, "CAP_GPUI_AUTO_HOTKEY");
+            dispatch(action, std::time::Instant::now(), cx);
+        }
         None => tracing::error!(key, "CAP_GPUI_AUTO_HOTKEY: unknown action"),
     }
 }
@@ -828,10 +1042,10 @@ pub fn dispatch_for_harness(key: &str, cx: &mut App) {
 // shortcut the handler ever sees carries META. Not reproduced -- the audit
 // keeps the *observed* behaviour, which is that a Comma binding runs its
 // action and nothing else.
-fn dispatch_id(id: u32, cx: &mut App) {
+fn dispatch_id(id: u32, pressed_at: std::time::Instant, cx: &mut App) {
     let actions = actions_for(&cx.global::<Hotkeys>().bindings, id);
     for action in actions {
-        dispatch(action, cx);
+        dispatch(action, pressed_at, cx);
     }
 }
 
@@ -849,11 +1063,42 @@ fn actions_for(bindings: &[(HotKey, HotkeyAction)], id: u32) -> Vec<HotkeyAction
 /// `handle_hotkey` (`hotkeys.rs:228-337` over there), against this app's
 /// counterparts. Session methods are no-ops in the wrong phase, matching the
 /// Tauri commands' own early returns.
-fn dispatch(action: HotkeyAction, cx: &mut App) {
+fn dispatch(action: HotkeyAction, pressed_at: std::time::Instant, cx: &mut App) {
     tracing::info!(?action, "global hotkey");
+    match mode_plan(action, selected_mode(action, cx)) {
+        ModePlan::Start(mode) => start_from_hotkey(mode, cx),
+        ModePlan::Picker(kind, mode) => app_windows::arm_picker(kind, mode, cx),
+        ModePlan::Select(mode) => app_windows::set_recording_mode(mode, cx),
+        ModePlan::Capture | ModePlan::Unrelated => dispatch_without_mode(action, pressed_at, cx),
+    }
+}
+
+/// The mode a shortcut reads: the one the user selected. The cycle shortcut
+/// steps from the mode on screen instead, since a picker a shortcut opened
+/// shows that shortcut's mode, not the selected one. An editor's armed
+/// "Record new" flow only records in Studio, so the selected-mode start
+/// does too.
+fn selected_mode(action: HotkeyAction, cx: &mut App) -> Mode {
+    let editor_flow = RecordingSession::global(cx)
+        .read(cx)
+        .editor_recording_target()
+        .is_some();
+    let main = cx.global::<app_windows::AppWindows>().main;
+    main.update(cx, |view, _window, cx| match action {
+        HotkeyAction::CycleRecordingMode => view.effective_mode(cx),
+        HotkeyAction::StartRecording if editor_flow => Mode::Studio,
+        _ => view.mode(),
+    })
+    .unwrap_or_else(|_| Mode::from_store())
+}
+
+fn dispatch_without_mode(action: HotkeyAction, pressed_at: std::time::Instant, cx: &mut App) {
     match action {
-        HotkeyAction::StartStudioRecording => start_from_hotkey(Mode::Studio, cx),
-        HotkeyAction::StartInstantRecording => start_from_hotkey(Mode::Instant, cx),
+        HotkeyAction::AddRecordingMarker => {
+            RecordingSession::global(cx)
+                .update(cx, |session, cx| session.add_marker(pressed_at, cx));
+        }
+        HotkeyAction::ToggleDrawing => crate::live_draw::toggle(cx),
         HotkeyAction::StopRecording => {
             RecordingSession::global(cx).update(cx, |session, cx| session.stop(cx));
         }
@@ -863,26 +1108,10 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
         HotkeyAction::TogglePauseRecording => {
             RecordingSession::global(cx).update(cx, |session, cx| session.toggle_pause(cx));
         }
-        HotkeyAction::CycleRecordingMode => {
-            // `Studio -> Instant -> Screenshot -> Studio` (`hotkeys.rs:262`).
-            let next = match Mode::from_store() {
-                Mode::Studio => Mode::Instant,
-                Mode::Instant => Mode::Screenshot,
-                Mode::Screenshot => Mode::Studio,
-            };
-            app_windows::set_recording_mode(next, cx);
-        }
         HotkeyAction::OpenRecordingPicker => {
             app_windows::show_main_window(cx);
             cx.activate(true);
         }
-        HotkeyAction::OpenRecordingPickerDisplay => {
-            app_windows::arm_target_mode(TargetType::Display, cx)
-        }
-        HotkeyAction::OpenRecordingPickerWindow => {
-            app_windows::arm_target_mode(TargetType::Window, cx)
-        }
-        HotkeyAction::OpenRecordingPickerArea => app_windows::arm_target_mode(TargetType::Area, cx),
         HotkeyAction::ScreenshotDisplay => {
             let display = scap_targets::Display::get_containing_cursor()
                 .unwrap_or_else(scap_targets::Display::primary);
@@ -902,11 +1131,26 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
                 None => tracing::warn!("no window under the cursor to screenshot"),
             }
         }
-        HotkeyAction::ScreenshotArea => {
-            // `set_mode(Screenshot)` + the area picker (`hotkeys.rs:311-323`):
-            // the grab happens when the drawn area is released.
-            app_windows::set_recording_mode(Mode::Screenshot, cx);
-            app_windows::arm_target_mode(TargetType::Area, cx);
+        HotkeyAction::StartRecording
+        | HotkeyAction::StartStudioRecording
+        | HotkeyAction::StartInstantRecording
+        | HotkeyAction::CycleRecordingMode
+        | HotkeyAction::OpenRecordingPickerDisplay
+        | HotkeyAction::OpenRecordingPickerWindow
+        | HotkeyAction::OpenRecordingPickerArea
+        | HotkeyAction::ScreenshotArea => {
+            tracing::error!(?action, "mode shortcut reached the modeless dispatch");
+        }
+        HotkeyAction::ToggleMeetingNotes => crate::meetings_ui::live::toggle(cx),
+        // Asked for from another app: the notes come forward, not only
+        // their window (macOS keeps the app that was in front otherwise).
+        HotkeyAction::OpenMeetingNotes => {
+            crate::meetings_ui::live::open_document(None, cx);
+            cx.activate(true);
+        }
+        HotkeyAction::NewNote => {
+            crate::meetings_ui::documents::new_note(cx);
+            cx.activate(true);
         }
     }
 }
@@ -918,6 +1162,11 @@ fn microphone_available(name: &str) -> bool {
         MicrophoneFeed::list_names()
             .iter()
             .any(|device| device == name)
+    } else if cfg!(target_os = "linux") {
+        // Listing opens every ALSA device as the recording starts, which takes
+        // a bare-card default from the sound server; it also misses a card
+        // the open microphone already holds.
+        MicrophoneFeed::is_connected(name)
     } else {
         MicrophoneFeed::list().contains_key(name)
     }
@@ -928,16 +1177,24 @@ fn microphone_available(name: &str) -> bool {
 /// without a working microphone, then record. Mic/camera come off the main
 /// window's current selections through its ordinary start path.
 ///
-/// The mode is set through [`app_windows::set_recording_mode`] first, so the
-/// pill, the tray tick and the shared store all follow the hotkey; the Tauri
-/// listener hands the mode straight to the engine and leaves the setting
-/// where it was. Deliberate: this app's start path reads the window's mode,
-/// and a recording visibly in Studio mode with the pill saying Instant is the
-/// worse mismatch.
+/// The mode goes to this one start and the selected mode stays as it is, the
+/// way the Tauri listener hands it straight to the engine. Setting it here
+/// once left a Start Studio press switching the main window to Studio for
+/// good (#3597). In Screenshot mode the same target is captured instead.
 fn start_from_hotkey(mode: Mode, cx: &mut App) {
-    app_windows::set_recording_mode(mode, cx);
     let main = cx.global::<app_windows::AppWindows>().main;
-    let armed = main.read(cx).ok().and_then(|view| view.armed_target());
+    let screenshot = mode == Mode::Screenshot;
+    let armed = main
+        .read(cx)
+        .ok()
+        .and_then(|view| view.armed_target())
+        .filter(|target| {
+            !(screenshot
+                && matches!(
+                    target,
+                    ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+                ))
+        });
     let stored = stored_target();
 
     // `is_recording_active_or_pending` (`hotkeys.rs:162-170` over there): an
@@ -945,7 +1202,7 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
     // `start_recording_with_target`'s phase check here and `start_recording`'s
     // over there.
     let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    let confirm = idle && store::GeneralSettings::load().confirm_without_microphone;
+    let confirm = !screenshot && idle && store::GeneralSettings::load().confirm_without_microphone;
     let mic_name = main.read(cx).ok().and_then(|view| {
         view.microphone_selection()
             .map(|microphone| microphone.name.clone())
@@ -1024,13 +1281,20 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
 /// unplugged display used to fail the start with "target_display_crop:
 /// Display not found". A stored camera-only target is skipped: without a
 /// camera selected it cannot start, so only an explicit choice records it.
+/// A stored audio-only target is skipped too: a shortcut that records the
+/// screen should not quietly record sound alone because the last one did.
 fn pick_hotkey_target(
     armed: Option<ScreenCaptureTarget>,
     stored: Option<ScreenCaptureTarget>,
     is_live: impl Fn(&ScreenCaptureTarget) -> bool,
     fallback_display: impl FnOnce() -> scap_targets::DisplayId,
 ) -> ScreenCaptureTarget {
-    let stored = stored.filter(|target| !matches!(target, ScreenCaptureTarget::CameraOnly));
+    let stored = stored.filter(|target| {
+        !matches!(
+            target,
+            ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+        )
+    });
     [armed, stored]
         .into_iter()
         .flatten()
@@ -1049,7 +1313,7 @@ fn target_is_live(target: &ScreenCaptureTarget) -> bool {
         ScreenCaptureTarget::Area { screen, .. } => {
             scap_targets::Display::from_id(screen).is_some()
         }
-        ScreenCaptureTarget::CameraOnly => true,
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => true,
     }
 }
 
@@ -1059,14 +1323,12 @@ fn start_now(
     target: ScreenCaptureTarget,
     cx: &mut App,
 ) {
-    // The start waited on the target lookup (and maybe the microphone
-    // prompt); another Start or Cycle shortcut can change the mode meanwhile,
-    // and the start path reads the window's mode.
-    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
-        app_windows::set_recording_mode(mode, cx);
+    if mode == Mode::Screenshot {
+        crate::screenshot::take_screenshot(target, cx);
+        return;
     }
     main.update(cx, |view, window, cx| {
-        view.start_recording_with_target(target, Vec::new(), window, cx)
+        view.start_recording_in_mode(target, mode, window, cx)
     })
     .ok();
 }
@@ -1090,6 +1352,7 @@ mod tests {
             bindings: Vec::new(),
             unavailable: Vec::new(),
             paused: false,
+            recording_scopes: super::RecordingScopes::default(),
             #[cfg(target_os = "linux")]
             capture_stop: None,
         };
@@ -1109,6 +1372,95 @@ mod tests {
             hotkeys.capture_stop = None;
         }
         assert!(hotkeys.idle());
+    }
+
+    /// The marker shortcut only takes its combo while a Studio recording
+    /// runs and the drawing one while a drawable recording runs; every other
+    /// shortcut stays registered the whole time.
+    #[test]
+    fn only_the_marker_and_drawing_shortcuts_wait_for_a_recording() {
+        use super::{ACTION_KEYS, HotkeyAction, RecordingScopes, registers_now};
+
+        let both = RecordingScopes {
+            markers: true,
+            drawing: true,
+        };
+        let markers = RecordingScopes {
+            markers: true,
+            drawing: false,
+        };
+        let drawing = RecordingScopes {
+            markers: false,
+            drawing: true,
+        };
+        for (_, action) in ACTION_KEYS {
+            assert!(registers_now(action, both));
+            assert_eq!(
+                registers_now(action, RecordingScopes::default()),
+                !matches!(
+                    action,
+                    HotkeyAction::AddRecordingMarker | HotkeyAction::ToggleDrawing
+                ),
+                "{action:?}"
+            );
+            assert_eq!(
+                registers_now(action, markers),
+                action != HotkeyAction::ToggleDrawing,
+                "{action:?}"
+            );
+            assert_eq!(
+                registers_now(action, drawing),
+                action != HotkeyAction::AddRecordingMarker,
+                "{action:?}"
+            );
+        }
+    }
+
+    /// Linux reserves Ctrl+Shift+F9 as a temporary Stop before a recording
+    /// starts, while the marker shortcut is not registered yet, so a marker
+    /// bound to that combo has to count as a conflict from the store.
+    #[test]
+    fn a_marker_on_the_temporary_stop_combo_is_a_conflict_before_it_registers() {
+        use super::{Code, HotKey, HotkeyAction, Modifiers, unregistered_scoped_actions};
+
+        let stop = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::F9);
+        let binding = |code: &str| serde_json::json!({ "code": code, "meta": false, "ctrl": true, "alt": false, "shift": true });
+        let mut stored = serde_json::Map::new();
+        stored.insert("addRecordingMarker".into(), binding("F9"));
+        stored.insert("stopRecording".into(), binding("F9"));
+        assert_eq!(
+            unregistered_scoped_actions(&stored, &[], stop.id()),
+            vec![HotkeyAction::AddRecordingMarker]
+        );
+        assert!(
+            unregistered_scoped_actions(
+                &stored,
+                &[(stop, HotkeyAction::AddRecordingMarker)],
+                stop.id()
+            )
+            .is_empty()
+        );
+        stored.insert("addRecordingMarker".into(), binding("F8"));
+        assert!(unregistered_scoped_actions(&stored, &[], stop.id()).is_empty());
+        #[cfg(target_os = "linux")]
+        assert!(super::clean_capture_shortcut_conflicts(&[
+            HotkeyAction::AddRecordingMarker
+        ]));
+    }
+
+    #[test]
+    fn the_default_marker_binding_parses_into_a_registration() {
+        use super::{Code, HotKey, HotkeyAction, Modifiers, stored_binding};
+
+        let value = serde_json::to_value(crate::store::default_recording_marker_hotkey()).unwrap();
+        let (action, hotkey) = stored_binding("addRecordingMarker", &value).unwrap();
+        assert_eq!(action, HotkeyAction::AddRecordingMarker);
+        let expected = if cfg!(target_os = "macos") {
+            HotKey::new(Some(Modifiers::META | Modifiers::CONTROL), Code::KeyM)
+        } else {
+            HotKey::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::KeyM)
+        };
+        assert_eq!(hotkey.id(), expected.id());
     }
 
     #[cfg(target_os = "linux")]
@@ -1162,11 +1514,97 @@ mod tests {
         ]));
     }
 
+    const MODES: [Mode; 3] = [Mode::Studio, Mode::Instant, Mode::Screenshot];
+
+    /// Every action against every selected mode (#3597): a shortcut tied to
+    /// a mode runs in that mode, the generic ones follow the selected mode,
+    /// and only the cycle shortcut changes it.
+    #[test]
+    fn every_shortcut_respects_the_selected_mode() {
+        for selected in MODES {
+            let recording = if selected == Mode::Instant {
+                Mode::Instant
+            } else {
+                Mode::Studio
+            };
+            for (key, action) in ACTION_KEYS {
+                let expected = match action {
+                    HotkeyAction::StartRecording => ModePlan::Start(selected),
+                    HotkeyAction::StartStudioRecording => ModePlan::Start(Mode::Studio),
+                    HotkeyAction::StartInstantRecording => ModePlan::Start(Mode::Instant),
+                    HotkeyAction::OpenRecordingPickerArea => {
+                        ModePlan::Picker(TargetType::Area, recording)
+                    }
+                    HotkeyAction::OpenRecordingPickerWindow => {
+                        ModePlan::Picker(TargetType::Window, recording)
+                    }
+                    HotkeyAction::OpenRecordingPickerDisplay => {
+                        ModePlan::Picker(TargetType::Display, recording)
+                    }
+                    HotkeyAction::ScreenshotArea => {
+                        ModePlan::Picker(TargetType::Area, Mode::Screenshot)
+                    }
+                    HotkeyAction::ScreenshotWindow | HotkeyAction::ScreenshotDisplay => {
+                        ModePlan::Capture
+                    }
+                    HotkeyAction::CycleRecordingMode => ModePlan::Select(match selected {
+                        Mode::Studio => Mode::Instant,
+                        Mode::Instant => Mode::Screenshot,
+                        Mode::Screenshot => Mode::Studio,
+                    }),
+                    HotkeyAction::StopRecording
+                    | HotkeyAction::RestartRecording
+                    | HotkeyAction::TogglePauseRecording
+                    | HotkeyAction::OpenRecordingPicker
+                    | HotkeyAction::AddRecordingMarker
+                    | HotkeyAction::ToggleDrawing
+                    | HotkeyAction::ToggleMeetingNotes
+                    | HotkeyAction::OpenMeetingNotes
+                    | HotkeyAction::NewNote => ModePlan::Unrelated,
+                };
+                assert_eq!(
+                    mode_plan(action, selected),
+                    expected,
+                    "{key} in {selected:?}"
+                );
+                assert_eq!(
+                    matches!(mode_plan(action, selected), ModePlan::Select(_)),
+                    action == HotkeyAction::CycleRecordingMode,
+                    "{key} in {selected:?}"
+                );
+            }
+        }
+    }
+
+    /// The report's steps: Studio selected, "Screenshot an area", then
+    /// "Record an area". The selected mode never moves, so the second
+    /// shortcut still records.
+    #[test]
+    fn a_screenshot_shortcut_leaves_the_next_record_shortcut_recording() {
+        let mut selected = Mode::Studio;
+        for action in [
+            HotkeyAction::ScreenshotArea,
+            HotkeyAction::StartStudioRecording,
+            HotkeyAction::StartInstantRecording,
+            HotkeyAction::StartRecording,
+        ] {
+            if let ModePlan::Select(mode) = mode_plan(action, selected) {
+                selected = mode;
+            }
+        }
+        assert_eq!(selected, Mode::Studio);
+        assert_eq!(
+            mode_plan(HotkeyAction::OpenRecordingPickerArea, selected),
+            ModePlan::Picker(TargetType::Area, Mode::Studio)
+        );
+    }
+
     /// Every store key the Tauri `HotkeyAction`'s camelCase serde produces
     /// maps to a variant here, and an unknown key registers nothing.
     #[test]
     fn action_keys_match_the_tauri_serde_names() {
         for key in [
+            "startRecording",
             "startStudioRecording",
             "startInstantRecording",
             "stopRecording",
@@ -1187,6 +1625,18 @@ mod tests {
             );
         }
         assert_eq!(HotkeyAction::from_store_key("someFutureAction"), None);
+        assert_eq!(
+            HotkeyAction::from_store_key("addRecordingMarker"),
+            Some(HotkeyAction::AddRecordingMarker)
+        );
+        assert_eq!(
+            HotkeyAction::from_store_key("toggleMeetingNotes"),
+            Some(HotkeyAction::ToggleMeetingNotes)
+        );
+        assert_eq!(
+            HotkeyAction::from_store_key("openMeetingNotes"),
+            Some(HotkeyAction::OpenMeetingNotes)
+        );
         for (key, action) in ACTION_KEYS {
             assert_eq!(action.store_key(), key);
         }
@@ -1259,6 +1709,24 @@ mod tests {
             || display_id("3"),
         );
         assert!(matches!(picked, ScreenCaptureTarget::CameraOnly));
+    }
+
+    #[test]
+    fn a_stored_audio_only_target_never_starts_a_shortcut_recording() {
+        let picked = pick_hotkey_target(
+            None,
+            Some(ScreenCaptureTarget::AudioOnly),
+            |_| true,
+            || display_id("3"),
+        );
+        assert!(same(&picked, &display("3")));
+        let picked = pick_hotkey_target(
+            Some(ScreenCaptureTarget::AudioOnly),
+            None,
+            |_| true,
+            || display_id("3"),
+        );
+        assert!(matches!(picked, ScreenCaptureTarget::AudioOnly));
     }
 
     /// What the main window writes on every start is what the shortcut reads

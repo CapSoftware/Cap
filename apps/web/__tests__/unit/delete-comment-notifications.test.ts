@@ -58,14 +58,21 @@ describe("deleted comment notifications", () => {
 				["comment", "reaction", commentId],
 				"execute",
 			);
-			expect(mocks.query).toHaveBeenCalledWith(
-				expect.stringContaining("'$.comment.parentCommentId'"),
-				["reply", commentId],
-				"execute",
-			);
 			expect(mocks.revalidatePath).toHaveBeenCalledWith(`/s/${videoId}`);
 		},
 	);
+
+	it("removes reply notifications for replies to a deleted root", async () => {
+		await deleteComment({ commentId, videoId, parentId: null });
+
+		expect(mocks.query).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"where (`notifications`.`type` = ? and JSON_EXTRACT(`notifications`.`data`, '$.parentCommentId') = ?)",
+			),
+			["reply", commentId],
+			"execute",
+		);
+	});
 
 	it("still removes only the reply notification when deleting a reply", async () => {
 		await deleteComment({

@@ -25,6 +25,7 @@ mod stage;
 mod welcome_script;
 
 pub use stage::Paper;
+pub(crate) use stage::{close_dot, pager, paper_button, paper_card, paper_heading, primary_pill};
 
 pub const ONBOARDING_WIDTH: f32 = 860.;
 pub const ONBOARDING_HEIGHT: f32 = 690.;
@@ -121,8 +122,11 @@ enum Step {
     Faq,
 }
 
+/// Opening Settings for this row also floats the + / drag guide: the
+/// required rows, and Input Monitoring, which macOS 27.3 only lists via +.
 fn guided_permission(permission: OSPermission) -> bool {
-    permission.required() && crate::permission_guide::eligible(permission)
+    (permission.required() || permission == OSPermission::InputMonitoring)
+        && crate::permission_guide::eligible(permission)
 }
 
 impl Step {
@@ -943,41 +947,17 @@ impl OnboardingWindow {
     }
 
     fn paper_card(&self) -> Div {
-        let paper = stage::Paper::new(&self.theme);
-        div()
-            .rounded(px(20.))
-            .border(px(1.5))
-            .border_color(paper.track)
-            .bg(paper.card)
+        stage::paper_card(&stage::Paper::new(&self.theme))
     }
 
     fn heading(&self, title: &'static str, subtitle: &'static str) -> Div {
-        let paper = stage::Paper::new(&self.theme);
-        div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .max_w(px(500.))
-            .text_center()
-            .child(
-                copy(title, 28., paper.ink)
-                    .font_weight(FontWeight::MEDIUM)
-                    .line_height(px(34.)),
-            )
-            .child(div().mt(px(4.)).child(crate::doodle::doodle(
-                &crate::onboarding_doodles::UNDERLINE,
-                paper.palette(),
-                self.step_at,
-                !self.animated,
-                132.,
-                12.,
-            )))
-            .child(
-                copy(subtitle, 15., paper.soft)
-                    .mt(px(10.))
-                    .font_weight(FontWeight::NORMAL)
-                    .line_height(px(22.)),
-            )
+        stage::paper_heading(
+            &stage::Paper::new(&self.theme),
+            title,
+            Some(subtitle.into()),
+            self.step_at,
+            !self.animated,
+        )
     }
 
     fn tick_welcome(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2945,9 +2925,10 @@ mod tests {
     fn denied_optional_devices_do_not_block_the_tour_but_either_required_permission_does() {
         for (screen, accessibility) in [(false, false), (false, true), (true, false), (true, true)]
         {
-            let state = PermissionsState::from_raw(Some(RawPermissions {
+            let state = PermissionsState::from_raw_for_test(Some(RawPermissions {
                 screen_granted: screen,
                 accessibility_granted: accessibility,
+                input_monitoring: MediaAuthorization::NotDetermined,
                 microphone: MediaAuthorization::Denied,
                 camera: MediaAuthorization::Restricted,
             }));
@@ -2964,10 +2945,11 @@ mod tests {
         let mut raw = RawPermissions {
             screen_granted: true,
             accessibility_granted: true,
+            input_monitoring: MediaAuthorization::NotDetermined,
             microphone: MediaAuthorization::Authorized,
             camera: MediaAuthorization::Authorized,
         };
-        let mut state = PermissionsState::from_raw(Some(raw));
+        let mut state = PermissionsState::from_raw_for_test(Some(raw));
         assert_eq!(
             Step::Permissions.next(false, state.necessary_granted()),
             Some(Step::Overview)

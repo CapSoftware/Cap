@@ -1,0 +1,177 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+	user: null as null | { id: string; email: string },
+	touched: [] as string[],
+}));
+
+vi.mock("@cap/database", () => {
+	const touch = (name: string) => () => {
+		mocks.touched.push(name);
+		throw new Error(`database ${name} reached`);
+	};
+	return {
+		db: () => ({
+			select: touch("select"),
+			insert: touch("insert"),
+			update: touch("update"),
+			delete: touch("delete"),
+			transaction: touch("transaction"),
+		}),
+	};
+});
+vi.mock("@cap/database/auth/session", () => ({
+	getCurrentUser: async () => mocks.user,
+}));
+vi.mock("@cap/env", () => ({
+	buildEnv: {
+		NEXT_PUBLIC_IS_CAP: "true",
+		NEXT_PUBLIC_WEB_URL: "https://cap.so",
+	},
+	serverEnv: () => ({ WEB_URL: "https://cap.so" }),
+}));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("@cap/database/crypto", () => ({
+	encrypt: async (value: string) => `encrypted:${value}`,
+}));
+vi.mock("@/lib/developer-key-hash", () => ({
+	hashKey: async (value: string) => `hash:${value}`,
+}));
+
+const actions: [string, () => Promise<unknown>][] = [
+	[
+		"create an app",
+		async () =>
+			(await import("@/actions/developers/create-app")).createDeveloperApp({
+				name: "App",
+				environment: "development",
+			}),
+	],
+	[
+		"update an app",
+		async () =>
+			(await import("@/actions/developers/update-app")).updateDeveloperApp({
+				appId: "app-1",
+				name: "Renamed",
+			}),
+	],
+	[
+		"delete an app",
+		async () =>
+			(await import("@/actions/developers/delete-app")).deleteDeveloperApp(
+				"app-1",
+			),
+	],
+	[
+		"regenerate keys",
+		async () =>
+			(
+				await import("@/actions/developers/regenerate-keys")
+			).regenerateDeveloperKeys("app-1"),
+	],
+	[
+		"add a domain",
+		async () =>
+			(await import("@/actions/developers/add-domain")).addDeveloperDomain(
+				"app-1",
+				"https://example.com",
+			),
+	],
+	[
+		"remove a domain",
+		async () =>
+			(
+				await import("@/actions/developers/remove-domain")
+			).removeDeveloperDomain("app-1", "domain-1"),
+	],
+	[
+		"rename a video",
+		async () =>
+			(await import("@/actions/developers/rename-video")).renameDeveloperVideo(
+				"app-1",
+				"video-1",
+				"Renamed",
+			),
+	],
+	[
+		"delete a video",
+		async () =>
+			(await import("@/actions/developers/delete-video")).deleteDeveloperVideo(
+				"app-1",
+				"video-1",
+			),
+	],
+	[
+		"add a webhook endpoint",
+		async () =>
+			(await import("@/actions/developers/webhooks")).createInfraWebhook(
+				"app-1",
+				{ url: "https://example.com/hook", events: ["video.ready"] },
+			),
+	],
+	[
+		"turn a webhook endpoint off",
+		async () =>
+			(await import("@/actions/developers/webhooks")).setInfraWebhookEnabled(
+				"app-1",
+				"hook-1",
+				false,
+			),
+	],
+	[
+		"rotate a webhook secret",
+		async () =>
+			(await import("@/actions/developers/webhooks")).rotateInfraWebhookSecret(
+				"app-1",
+				"hook-1",
+			),
+	],
+	[
+		"send a webhook test",
+		async () =>
+			(await import("@/actions/developers/webhooks")).sendInfraWebhookTest(
+				"app-1",
+				"hook-1",
+			),
+	],
+	[
+		"delete a webhook endpoint",
+		async () =>
+			(await import("@/actions/developers/webhooks")).deleteInfraWebhook(
+				"app-1",
+				"hook-1",
+			),
+	],
+];
+
+describe("Cap Infra console actions and sign-in", () => {
+	beforeEach(() => {
+		mocks.touched = [];
+	});
+
+	it.each(actions)(
+		"does not let a signed-out visitor %s",
+		async (_name, run) => {
+			mocks.user = null;
+
+			await expect(run()).rejects.toThrow("Unauthorized");
+			expect(mocks.touched).toEqual([]);
+		},
+	);
+
+	it.each(actions)(
+		"lets any signed-in account through to %s",
+		async (_name, run) => {
+			mocks.user = { id: "user-1", email: "someone@example.com" };
+
+			const outcome = await run().then(
+				() => "returned",
+				(error: unknown) =>
+					error instanceof Error ? error.message : String(error),
+			);
+
+			expect(outcome).not.toBe("Unauthorized");
+			expect(mocks.touched.length).toBeGreaterThan(0);
+		},
+	);
+});

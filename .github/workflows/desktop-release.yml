@@ -209,8 +209,10 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
             arch: x86_64
+          # Ubuntu 22.04 (glibc 2.35) so Cap runs on Debian 12, Ubuntu 22.04
+          # and the distributions built on them, not just glibc 2.39 and later.
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-24.04
+            runner: ubuntu-22.04
             arch: x86_64
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
@@ -267,10 +269,12 @@ jobs:
       # both the root workspace and the standalone GPUI workspace). Save it
       # even when the job fails later, because the Windows job most often dies
       # at SignPath approval, long after the compile it would have cached.
+      # The Linux key names its build image: objects built against a newer
+      # glibc must never be restored into the older image's build.
       - uses: ./.github/actions/setup-rust-cache
         with:
           target: ${{ matrix.settings.target }}
-          prefix-key: v1-rust-release
+          prefix-key: ${{ runner.os == 'Linux' && format('v1-rust-release-{0}', matrix.settings.runner) || 'v1-rust-release' }}
           save-cache: true
           cache-on-failure: true
           workspaces: |
@@ -333,6 +337,17 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
           APPLE_KEYCHAIN: ${{ runner.os == 'macOS' && format('{0}/build.keychain', runner.temp) || '' }}
 
+      # Ubuntu 22.04's PipeWire headers are too old for the Rust bindings, so
+      # Cap compiles against Ubuntu 24.04's (the ones it has always built
+      # with) and links the build image's own libpipewire.
+      - name: Stage PipeWire headers (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$(bash scripts/stage-pipewire-headers.sh "$RUNNER_TEMP/pipewire-headers")"
+          echo "PKG_CONFIG_PATH=$dir${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+
       # The sidecars ship inside Cap, which is itself stripped, and nothing
       # symbolicates them, so their symbol tables are dead weight in every
       # download.
@@ -374,6 +389,33 @@ jobs:
           minimum-size: 16GB
           maximum-size: 24GB
           disk-root: "D:"
+
+      # The AppImage's fallback libva (for hosts without one) is Ubuntu's 2.23
+      # rebuilt on Ubuntu 22.04, so it needs no newer glibc than Cap. It builds
+      # in a container so its build dependencies never reach Cap's build.
+      - name: Build fallback libva (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/fallback-libva"
+          mkdir -p "$out"
+          docker run --rm \
+            --volume "${{ github.workspace }}/scripts:/scripts:ro" \
+            --volume "$out:/out" \
+            ubuntu:22.04@sha256:b682e31336cc8e0a73ed91ab32b7a95e32591c5ff09994490a20accf9b3600f9 \
+            bash -c 'set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get -o Acquire::Retries=4 update -qq
+              apt-get -o Acquire::Retries=4 install -y -qq --no-install-recommends \
+                build-essential ca-certificates curl dpkg-dev debhelper meson ninja-build pkg-config \
+                libdrm-dev libgl-dev libwayland-dev libx11-dev libx11-xcb-dev libxcb-dri3-dev \
+                libxcb1-dev libxext-dev libxfixes-dev > /dev/null
+              dir="$(bash /scripts/build-fallback-libva.sh /tmp/libva | tail -n1)"
+              cp -a "$dir"/libva.so.2* "$dir"/libva-drm.so.2* /out/'
+          test -e "$out/libva.so.2"
+          test -e "$out/libva-drm.so.2"
+          echo "CAP_APPIMAGE_LIBVA_DIR=$out" >> "$GITHUB_ENV"
 
       # The Tauri bundler is only the packager here: it lays the prebuilt GPUI
       # binary out in the same app bundle, installer and package formats the
@@ -722,6 +764,23 @@ jobs:
             test ! -e "$root/usr/bin/cap-gpui"
           }
           verify_root "$APPROOT" Cap cap-muxer cap-cli
+          # Every ELF in the AppImage and the rpm, bundled libraries included,
+          # must load on the glibc the deb declares, or Cap cannot start there.
+          GLIBC_FLOOR="$(dpkg-deb -f "$BUNDLE"/deb/*.deb Depends | grep -oP 'libc6 \(>= \K[0-9.]+')"
+          test -n "$GLIBC_FLOOR"
+          verify_glibc_floor() {
+            local root="$1" file needed over=0
+            while IFS= read -r -d '' file; do
+              [[ "$(head -c4 "$file" | od -An -tx1 | tr -d ' ')" == 7f454c46 ]] || continue
+              needed="$(readelf --wide --version-info "$file" | sed -n '/Version needs section/,$p' | { grep -oP 'Name: GLIBC_\K[0-9.]+' || true; } | sort -V | tail -n1)"
+              if [[ -n "$needed" && "$(printf '%s\n%s\n' "$needed" "$GLIBC_FLOOR" | sort -V | tail -n1)" != "$GLIBC_FLOOR" ]]; then
+                echo "::error::${file#"$root"/} needs GLIBC_$needed, above the declared libc6 (>= $GLIBC_FLOOR)"
+                over=1
+              fi
+            done < <(find "$root" -type f -print0)
+            return "$over"
+          }
+          verify_glibc_floor "$APPROOT"
           if [[ -n "$(find "$APPROOT" \( -name 'libwebkit2gtk-*' -o -name 'libgtk-3.so*' -o -name 'WebKitWebProcess' \) -print -quit)" || -e "$APPROOT/apprun-hooks" ]]; then
             echo "::error::The Cap AppImage still bundles the Tauri webview runtime"
             exit 1
@@ -736,12 +795,20 @@ jobs:
             fi
             bsdtar -xf "$RPM" -C "$WORK/rpm"
             test "$(cat "$WORK/rpm/usr/lib/cap/package-format")" = rpm
+            test -s "$WORK/rpm/usr/lib/cap/alsa-lib/libasound_module_pcm_pulse.so"
+            grep -qx "<confdir:alsa.conf>" "$WORK/rpm/usr/lib/cap/alsa-pulse.conf"
+            if rpm -qpR "$RPM" | grep -q 'alsa-plugins'; then
+              echo "::error::The Cap RPM must carry its ALSA pulse plugin instead of requiring one that conflicts with pipewire-alsa."
+              exit 1
+            fi
             verify_root "$WORK/rpm" Cap cap-muxer cap-cli
+            verify_glibc_floor "$WORK/rpm"
           fi
           test "$(cat "$APPROOT/usr/lib/cap/package-format")" = appimage
           test -x "$APPROOT/usr/bin/pactl"
           test -s "$APPROOT/usr/lib/alsa-lib/libasound_module_pcm_pulse.so"
           test -s "$APPROOT/usr/lib/cap/alsa-pulse.conf"
+          grep -qx "<confdir:alsa.conf>" "$APPROOT/usr/lib/cap/alsa-pulse-appimage.conf"
           if [[ -n "$(find "$APPROOT" -name 'libwayland-client.so*' -print -quit)" ]]; then
             echo "::error::The Cap AppImage bundles a Wayland client that can conflict with host Mesa drivers"
             exit 1
@@ -794,7 +861,8 @@ jobs:
             "Cap.exe", "cap-muxer.exe", "cap-cli.exe",
             "avcodec-61.dll", "avdevice-61.dll", "avfilter-10.dll", "avformat-61.dll",
             "avutil-59.dll", "postproc-58.dll", "swresample-5.dll", "swscale-8.dll",
-            "dxcompiler.dll", "dxil.dll", "onnxruntime.dll", "onnxruntime_providers_shared.dll"
+            "dxcompiler.dll", "dxil.dll", "onnxruntime.dll", "onnxruntime_providers_shared.dll",
+            "msvcp140.dll", "msvcp140_1.dll", "vcruntime140.dll", "vcruntime140_1.dll"
           )
           $forbiddenFiles = @("cap-gpui.exe", "cap-exporter.exe")
           foreach ($installer in $installers) {

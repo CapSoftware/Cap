@@ -1,9 +1,9 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faLink } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
 import { toast } from "sonner";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 export function CollectionCopyLinkButton() {
 	return (

@@ -1,16 +1,22 @@
 mod animated_gradient;
+mod audio_visuals;
+pub mod auto_zoom;
 mod caption_timing;
 pub mod caption_words;
 #[cfg(test)]
 mod config_write_tests;
 mod configuration;
 pub mod cursor;
+pub mod disfluency;
 pub mod keyboard;
+mod late_audio;
 mod meta;
+mod shapes;
 
 pub use animated_gradient::*;
+pub use audio_visuals::*;
 pub use caption_timing::{
-    derive_caption_track_segments, source_caption_id, synchronize_captions,
+    derive_caption_track_segments, held_tail_clip, source_caption_id, synchronize_captions,
     transcription_ranges_cover, transcription_source_ranges,
 };
 pub use caption_words::{
@@ -21,7 +27,9 @@ pub use caption_words::{
 pub use configuration::*;
 pub use cursor::*;
 pub use keyboard::*;
+pub use late_audio::{late_audio_trim_limits, migrate_late_audio_alignment};
 pub use meta::*;
+pub use shapes::*;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;

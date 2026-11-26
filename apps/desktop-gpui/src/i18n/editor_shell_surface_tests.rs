@@ -5,10 +5,13 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
         "editor.canvas.",
         "editor.clips.",
         "editor.export.",
+        "editor.markers.",
         "editor.modal.",
         "editor.preparing.",
+        "editor.side_panel.",
         "editor.tabs.",
         "editor.timeline.",
+        "editor.transcript.",
         "editor.window.",
         "ui.",
     ]
@@ -17,9 +20,25 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
 }
 
 const FORMATTED: &[&str] = &[
+    "editor.transcript.captions_save_failed",
+    "editor.transcript.fillers.remove_all",
+    "editor.transcript.pauses.summary",
+    "editor.transcript.restore_hint",
+    "editor.transcript.search_count",
+    "editor.transcript.seconds",
+    "editor.transcript.selection",
+    "editor.transcript.selection_cut",
+    "editor.transcript.skipped_hold",
+    "editor.transcript.skipped_transition",
+    "editor.transcript.words",
     "editor.window.clip_menu.transition_seconds",
+    "editor.markers.button",
+    "editor.markers.default_name",
+    "editor.markers.hidden",
+    "editor.markers.stack",
     "editor.clips.append_error",
     "editor.clips.clip",
+    "editor.clips.count",
     "editor.clips.error.cannot_decode",
     "editor.clips.error.in_use",
     "editor.clips.error.missing_video",
@@ -27,6 +46,7 @@ const FORMATTED: &[&str] = &[
     "editor.clips.error.unsupported_video",
     "editor.clips.import_error",
     "editor.clips.prepare_controls_failed",
+    "editor.clips.removed_media",
     "editor.clips.save_before_recording_failed",
     "editor.clips.split",
     "editor.export.estimate.gigabytes",
@@ -42,6 +62,8 @@ const FORMATTED: &[&str] = &[
     "editor.export.fps",
     "editor.export.frames",
     "editor.export.stats.output_value",
+    "editor.export.tracks.file_count",
+    "editor.export.tracks.video_detail",
     "editor.tabs.captions.download",
     "editor.tabs.captions.downloading",
     "editor.tabs.captions.generate_failed",
@@ -71,6 +93,7 @@ const FORMATTED: &[&str] = &[
     "ui.selection.image",
     "ui.selection.keyboard",
     "ui.selection.mask",
+    "ui.selection.shape",
     "ui.selection.scene",
     "ui.selection.segments",
     "ui.selection.style",
@@ -89,6 +112,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::canvas::camera_follows_zoom(),
             "Camera size follows the zoom — drag to move",
         ),
+        (tr::editor::canvas::captions(), "Captions"),
         (tr::editor::canvas::edit_zoom(), "Edit zoom"),
         (tr::editor::canvas::image(), "Image"),
         (tr::editor::canvas::mask(), "Mask"),
@@ -99,8 +123,6 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::canvas::text_item(), "Text"),
         (tr::editor::clips::append_error_title(), "Recording Error"),
-        (tr::editor::clips::back(), "Back to editor"),
-        (tr::editor::clips::cap_filter(), "Cap Recording"),
         (
             tr::editor::clips::empty_description(),
             "Record or import a clip and it will show up here.",
@@ -118,6 +140,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::clips::error::into_itself(),
             "Cannot import a recording into itself",
+        ),
+        (
+            tr::editor::clips::error::audio_only_mix(),
+            "Audio only recordings and video clips cannot be combined in one project",
         ),
         (
             tr::editor::clips::error::no_duration(),
@@ -149,7 +175,9 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::clips::import_mp4(), "MP4 Video…"),
         (tr::editor::clips::importing(), "Importing…"),
         (tr::editor::clips::mp4_filter(), "MP4 Video"),
+        (tr::editor::clips::record(), "Record"),
         (tr::editor::clips::record_new(), "Record a new clip"),
+        (tr::editor::side_panel::style(), "Style"),
         (tr::editor::clips::title(), "Clips"),
         (
             tr::editor::export::advanced::bits_per_pixel(),
@@ -238,6 +266,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Re-encodes with software for much smaller files (slower)",
         ),
         (tr::editor::export::optimize::title(), "Optimize file size"),
+        (
+            tr::editor::export::enhance::description(),
+            "Sharpens text and fine detail when your recording is zoomed in or scaled down. Exports can take longer.",
+        ),
+        (tr::editor::export::enhance::title(), "Enhance quality"),
         (tr::editor::export::organization(), "Organization"),
         (
             tr::editor::export::phase::clipboard_failed(),
@@ -288,6 +321,9 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::export::preview_unavailable(),
             "Preview unavailable",
         ),
+        (tr::editor::export::quality::gif_high(), "High"),
+        (tr::editor::export::quality::gif_low(), "Low"),
+        (tr::editor::export::quality::gif_medium(), "Medium"),
         (tr::editor::export::quality::larger(), "Larger file"),
         (tr::editor::export::quality::maximum(), "Maximum"),
         (tr::editor::export::quality::potato(), "Potato"),
@@ -399,6 +435,18 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::camera::blur::heavy(), "Heavy Blur"),
         (tr::editor::tabs::camera::blur::light(), "Light Blur"),
         (tr::editor::tabs::camera::blur::off(), "Off"),
+        (tr::editor::tabs::camera::picture::title(), "Picture"),
+        (
+            tr::editor::tabs::camera::picture::empty(),
+            "Add a picture to show where your camera would be.",
+        ),
+        (
+            tr::editor::tabs::camera::picture::shown(),
+            "Shown where your camera would be.",
+        ),
+        (tr::editor::tabs::camera::picture::add(), "Add picture"),
+        (tr::editor::tabs::camera::picture::replace(), "Replace"),
+        (tr::editor::tabs::camera::picture::remove(), "Remove"),
         (
             tr::editor::tabs::camera::blur::remove(),
             "Remove Background",
@@ -549,6 +597,15 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Smallest download",
         ),
         (tr::editor::tabs::captions::model_label(), "Model"),
+        (tr::editor::tabs::captions::new_caption(), "New caption"),
+        (
+            tr::editor::tabs::captions::model_updated(),
+            "Recommended model updated",
+        ),
+        (
+            tr::editor::tabs::captions::model_updated_description(),
+            "We recommend the new version. It is more accurate and catches short recordings the old one missed.",
+        ),
         (tr::editor::tabs::captions::position(), "Position"),
         (tr::editor::tabs::captions::preset::classic(), "Classic"),
         (
@@ -576,8 +633,20 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Playful caps that pop in with a vibrant accent.",
         ),
         (
+            tr::editor::tabs::captions::refining_word_timings(),
+            "Refining word timings…",
+        ),
+        (
             tr::editor::tabs::captions::regenerate(),
             "Regenerate Captions",
+        ),
+        (
+            tr::editor::tabs::captions::reset_position(),
+            "Reset Position",
+        ),
+        (
+            tr::editor::tabs::captions::show_filler_words(),
+            "Show Filler Words",
         ),
         (tr::editor::tabs::captions::size_label(), "Size"),
         (tr::editor::tabs::captions::style(), "Style"),
@@ -590,6 +659,12 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::tabs::corner::rounded(), "Rounded"),
         (tr::editor::tabs::corner::squircle(), "Squircle"),
+        (tr::editor::tabs::padding::even(), "Even"),
+        (tr::editor::tabs::padding::proportional(), "Proportional"),
+        (
+            tr::editor::tabs::cursor::follow_hover(),
+            "Follow Hover Highlights",
+        ),
         (tr::editor::tabs::cursor::friction(), "Friction"),
         (tr::editor::tabs::cursor::hide_when_idle(), "Hide When Idle"),
         (
@@ -684,6 +759,18 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::tabs::keyboard::no_presses(),
             "No recorded keyboard presses were found.",
+        ),
+        (
+            tr::editor::tabs::keyboard::permission_action(),
+            "Show me how",
+        ),
+        (
+            tr::editor::tabs::keyboard::permission_body(),
+            "Give Cap your OK so your next recordings include the keys you press.",
+        ),
+        (
+            tr::editor::tabs::keyboard::permission_title(),
+            "Keystrokes aren't being recorded",
         ),
         (tr::editor::tabs::keyboard::position(), "Position"),
         (
@@ -1015,7 +1102,6 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::frame::windows_description(),
             "Title bar with window controls",
         ),
-        (tr::editor::window::header::captions(), "Captions"),
         (
             tr::editor::window::header::delete_recording(),
             "Delete recording",
@@ -1026,6 +1112,119 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Open recording bundle",
         ),
         (tr::editor::window::header::presets(), "Presets"),
+        (
+            tr::editor::transcript::add_caption(),
+            "Add caption at playhead",
+        ),
+        (tr::editor::transcript::captions_saved(), "Captions saved"),
+        (tr::editor::transcript::cleanup(), "Clean up"),
+        (
+            tr::editor::transcript::cleanup_tooltip(),
+            "Remove filler words and shorten pauses",
+        ),
+        (tr::editor::transcript::delete_matches(), "Delete all"),
+        (
+            tr::editor::transcript::download_captions(),
+            "Download captions",
+        ),
+        (tr::editor::transcript::download_srt(), "SubRip (.srt)"),
+        (tr::editor::transcript::download_vtt(), "WebVTT (.vtt)"),
+        (
+            tr::editor::transcript::delete_matches_tooltip(),
+            "Cut every match from the video",
+        ),
+        (
+            tr::editor::transcript::empty_description(),
+            "Transcribe this recording on this computer, then edit the video by editing its text.",
+        ),
+        (tr::editor::transcript::empty_title(), "No transcript yet"),
+        (
+            tr::editor::transcript::fillers::discourse(),
+            "Filler phrases",
+        ),
+        (
+            tr::editor::transcript::fillers::discourse_hint(),
+            "like, you know, so",
+        ),
+        (
+            tr::editor::transcript::fillers::false_start(),
+            "False starts",
+        ),
+        (
+            tr::editor::transcript::fillers::false_start_hint(),
+            "we should, we need",
+        ),
+        (tr::editor::transcript::fillers::hesitation(), "Hesitations"),
+        (
+            tr::editor::transcript::fillers::hesitation_hint(),
+            "um, uh, hmm",
+        ),
+        (tr::editor::transcript::fillers::keep(), "Keep this one"),
+        (tr::editor::transcript::fillers::listen(), "Listen"),
+        (
+            tr::editor::transcript::fillers::none(),
+            "No filler words left in these categories",
+        ),
+        (tr::editor::transcript::fillers::remove(), "Remove this one"),
+        (
+            tr::editor::transcript::fillers::repetition(),
+            "Repeated words",
+        ),
+        (
+            tr::editor::transcript::fillers::repetition_hint(),
+            "the the, I I",
+        ),
+        (tr::editor::transcript::fillers::title(), "Filler words"),
+        (
+            tr::editor::transcript::edit_hint(),
+            "Enter to save, Esc to cancel, Tab for the next word",
+        ),
+        (
+            tr::editor::transcript::hint(),
+            "Click a word to jump to it, double-click to fix it. Select words and press Delete to cut them from the video.",
+        ),
+        (tr::editor::transcript::next_match(), "Next match"),
+        (
+            tr::editor::transcript::no_audio(),
+            "This recording has no audio to transcribe.",
+        ),
+        (
+            tr::editor::transcript::no_speech(),
+            "No speech found in this recording",
+        ),
+        (tr::editor::transcript::pauses::apply(), "Shorten"),
+        (tr::editor::transcript::pauses::keep(), "Shorten to"),
+        (
+            tr::editor::transcript::pauses::longer_than(),
+            "Pauses longer than",
+        ),
+        (
+            tr::editor::transcript::pauses::none(),
+            "No pauses that long",
+        ),
+        (tr::editor::transcript::pauses::title(), "Pauses"),
+        (tr::editor::transcript::previous_match(), "Previous match"),
+        (
+            tr::editor::transcript::restore_blocked(),
+            "This part was cut on the timeline. Use Undo or drag the clip edge to bring it back.",
+        ),
+        (
+            tr::editor::transcript::restore_transition(),
+            "Remove the transition next to this cut to restore it.",
+        ),
+        (tr::editor::transcript::search(), "Find"),
+        (tr::editor::transcript::search_none(), "No matches"),
+        (
+            tr::editor::transcript::search_placeholder(),
+            "Find in transcript",
+        ),
+        (
+            tr::editor::transcript::skipped_last_clip(),
+            "The last clip cannot be cut away.",
+        ),
+        (tr::editor::transcript::title(), "Transcript"),
+        (tr::editor::transcript::transcribe(), "Transcribe"),
+        (tr::editor::transcript::transcribing(), "Transcribing…"),
         (
             tr::editor::window::image::changed(),
             "This image changed while choosing a replacement. Select it and try again.",
@@ -1038,6 +1237,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::window::no_room_for_3d_shot(),
             "No room for another 3D shot",
+        ),
+        (
+            tr::editor::window::no_room_for_caption(),
+            "No room for another caption here",
         ),
         (
             tr::editor::window::open::damaged(),
@@ -1116,10 +1319,33 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::transport::play_pause(),
             "Play/Pause video",
         ),
+        (tr::editor::window::transport::speed(), "Preview speed"),
         (tr::editor::window::transport::split(), "Split"),
+        (tr::editor::markers::title(), "Markers"),
+        (tr::editor::markers::add(), "Add marker"),
+        (tr::editor::markers::previous(), "Previous marker"),
+        (tr::editor::markers::next(), "Next marker"),
+        (tr::editor::markers::edit(), "Edit marker"),
+        (tr::editor::markers::delete(), "Delete marker"),
+        (tr::editor::markers::done(), "Done"),
+        (tr::editor::markers::split(), "Split clips at markers"),
+        (
+            tr::editor::markers::empty(),
+            "No markers yet. Press M to mark the playhead, or add markers while you record.",
+        ),
         (
             tr::editor::window::transport::split_tooltip(),
             "Click a segment to split. Esc to finish.",
+        ),
+        (tr::editor::window::transport::enhance(), "Enhance"),
+        (
+            tr::editor::window::transport::enhance_tooltip(),
+            "Show the paused frame enhanced",
+        ),
+        (tr::editor::window::transport::compare(), "Compare"),
+        (
+            tr::editor::window::transport::compare_tooltip(),
+            "Hold to see the original",
         ),
         (tr::editor::window::transport::zoom_in(), "Zoom in"),
         (tr::editor::window::transport::zoom_out(), "Zoom out"),
@@ -1148,11 +1374,35 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::window::clip_menu::transition(), "TRANSITION"),
         (tr::editor::window::clip_menu::transition_none(), "None"),
+        (tr::editor::window::transition::title(), "Transition"),
+        (tr::editor::window::transition::add(), "Add transition"),
+        (tr::editor::window::transition::duration(), "Duration"),
+        (tr::editor::window::transition::seconds_unit(), "s"),
         (
-            tr::editor::window::clip_menu::transition_crossfade(),
-            "Crossfade",
+            tr::editor::window::transition::remove(),
+            "Remove transition",
         ),
-        (tr::editor::window::clip_menu::transition_fade(), "Fade"),
+        (
+            tr::editor::window::transition::cross_fade(),
+            "Cross dissolve",
+        ),
+        (
+            tr::editor::window::transition::fade_through_black(),
+            "Dip to black",
+        ),
+        (
+            tr::editor::window::transition::fade_through_white(),
+            "Dip to white",
+        ),
+        (tr::editor::window::transition::push_left(), "Push left"),
+        (tr::editor::window::transition::push_right(), "Push right"),
+        (tr::editor::window::transition::push_up(), "Push up"),
+        (tr::editor::window::transition::push_down(), "Push down"),
+        (tr::editor::window::transition::wipe_left(), "Wipe left"),
+        (tr::editor::window::transition::wipe_right(), "Wipe right"),
+        (tr::editor::window::transition::wipe_up(), "Wipe up"),
+        (tr::editor::window::transition::wipe_down(), "Wipe down"),
+        (tr::editor::window::transition::zoom(), "Zoom"),
         (tr::editor::timeline::title(), "Timeline"),
         (
             tr::editor::window::clip_menu::merge_blocker::edge(),
@@ -1170,10 +1420,149 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::clip_menu::merge_blocker::speed(),
             "Match the clip speeds first",
         ),
-        (tr::editor::tabs::font::system_sans_serif(), "System Sans-Serif"),
+        (
+            tr::editor::tabs::font::system_sans_serif(),
+            "System Sans-Serif",
+        ),
         (tr::editor::tabs::font::system_serif(), "System Serif"),
-        (tr::editor::tabs::font::system_monospace(), "System Monospace"),
+        (
+            tr::editor::tabs::font::system_monospace(),
+            "System Monospace",
+        ),
         (tr::ui::selection::select_all(), "Select all"),
+        (
+            tr::editor::tabs::audio::voice_eq::apply_all(),
+            "Apply to all clips",
+        ),
+        (tr::editor::tabs::audio::voice_eq::band_high(), "High"),
+        (
+            tr::editor::tabs::audio::voice_eq::band_high_mid(),
+            "High-mid",
+        ),
+        (tr::editor::tabs::audio::voice_eq::band_low(), "Low"),
+        (tr::editor::tabs::audio::voice_eq::band_low_cut(), "Low cut"),
+        (tr::editor::tabs::audio::voice_eq::band_low_mid(), "Low-mid"),
+        (tr::editor::tabs::audio::voice_eq::declick(), "De-click"),
+        (
+            tr::editor::tabs::audio::voice_eq::declick_description(),
+            "Repairs mouth clicks and crackle and leaves the rest of your voice untouched.",
+        ),
+        (tr::editor::tabs::audio::voice_eq::declick_light(), "Light"),
+        (tr::editor::tabs::audio::voice_eq::declick_off(), "Off"),
+        (
+            tr::editor::tabs::audio::voice_eq::declick_strong(),
+            "Strong",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::description(),
+            "Shape your microphone's tone. What you hear here is what exports.",
+        ),
+        (tr::editor::tabs::audio::voice_eq::frequency(), "Frequency"),
+        (tr::editor::tabs::audio::voice_eq::gain(), "Gain"),
+        (
+            tr::editor::tabs::audio::voice_eq::graph_hint(),
+            "Drag a point to shape the sound. Scroll over a point to widen or narrow it, and double-click to reset it.",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::low_cut_description(),
+            "Removes rumble and handling noise below the cutoff.",
+        ),
+        (tr::editor::tabs::audio::voice_eq::off(), "Off"),
+        (tr::editor::tabs::audio::voice_eq::preset_bright(), "Bright"),
+        (
+            tr::editor::tabs::audio::voice_eq::preset_broadcast(),
+            "Broadcast",
+        ),
+        (tr::editor::tabs::audio::voice_eq::preset_clear(), "Clear"),
+        (tr::editor::tabs::audio::voice_eq::preset_custom(), "Custom"),
+        (
+            tr::editor::tabs::audio::voice_eq::preset_natural(),
+            "Natural",
+        ),
+        (tr::editor::tabs::audio::voice_eq::preset_warm(), "Warm"),
+        (tr::editor::tabs::audio::voice_eq::q(), "Q"),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_all(),
+            "Editing all clips",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_all_hint(),
+            "Select a clip in the timeline to tune it on its own.",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_mixed(),
+            "Clips have different settings. A change here applies to all of them.",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_selected(),
+            "Editing the selected clip",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_selected_many(),
+            "Editing the selected clips",
+        ),
+        (tr::editor::tabs::audio::voice_eq::title(), "Voice EQ"),
+        (tr::editor::timeline::segment::voice_eq(), "Voice EQ"),
+        (tr::editor::window::clip_menu::voice_eq(), "Voice EQ"),
+        (tr::editor::export::section::tracks(), "Tracks"),
+        (
+            tr::editor::export::tracks::aligned(),
+            "Tracks follow your cuts and speed, so they line up in any video editor. Video comes out clean, without background or effects.",
+        ),
+        (tr::editor::export::tracks::audio_detail(), "WAV · 48 kHz"),
+        (tr::editor::export::tracks::camera(), "Camera"),
+        (
+            tr::editor::export::tracks::choose_one(),
+            "Choose at least one track to export.",
+        ),
+        (tr::editor::export::tracks::cta(), "Export Tracks"),
+        (tr::editor::export::audio::cta(), "Export Audio"),
+        (tr::editor::export::audio::exported(), "Audio exported"),
+        (tr::editor::export::audio::exporting(), "Exporting audio"),
+        (tr::editor::export::audio::file_type(), "File type"),
+        (tr::editor::export::audio::format(), "Audio"),
+        (
+            tr::editor::export::audio::mp3_description(),
+            "Small and plays everywhere. 192 kb/s stereo.",
+        ),
+        (
+            tr::editor::export::audio::wav_description(),
+            "Lossless 16-bit, 48 kHz. Best for further editing.",
+        ),
+        (tr::editor::export::tracks::exported(), "Tracks exported"),
+        (tr::editor::export::tracks::exporting(), "Exporting tracks"),
+        (
+            tr::editor::export::tracks::file_only(),
+            "Tracks are saved as separate files in a folder.",
+        ),
+        (tr::editor::export::tracks::files(), "Files"),
+        (tr::editor::export::tracks::format(), "Tracks"),
+        (tr::editor::export::tracks::microphone(), "Microphone"),
+        (tr::editor::export::tracks::open_folder(), "Open Folder"),
+        (tr::editor::export::tracks::screen(), "Screen"),
+        (
+            tr::editor::export::tracks::studio_only(),
+            "Separate tracks are only recorded in Studio Mode.",
+        ),
+        (tr::editor::export::tracks::system_audio(), "System audio"),
+        (tr::editor::canvas::shape(), "Shape"),
+        (tr::editor::timeline::track::shape(), "Shape"),
+        (
+            tr::editor::timeline::remove::shape(),
+            "Remove the Shape track.",
+        ),
+        (
+            tr::editor::timeline::picker::shape(),
+            "Draw arrows, boxes, circles and highlights over your recording.",
+        ),
+        (
+            tr::editor::export::audio::failed_title(),
+            "Couldn't save the audio",
+        ),
+        (
+            tr::editor::export::audio::failed_message(),
+            "Try again, or save it somewhere else.",
+        ),
     ];
     for (translated, literal) in pairs {
         assert_eq!(translated, literal);
@@ -1191,6 +1580,19 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
     for key in FORMATTED {
         assert!(KEYS.contains(key), "{key}");
     }
+    assert_eq!(tr::editor::clips::count(1), "1 clip");
+    assert_eq!(tr::editor::clips::count(3), "3 clips");
+    assert_eq!(tr::editor::markers::button(1), "1 marker");
+    assert_eq!(tr::editor::markers::button(12), "12 markers");
+    assert_eq!(tr::editor::markers::default_name(3), "Marker 3");
+    assert_eq!(
+        tr::editor::markers::hidden(2),
+        "2 markers are in parts you cut out."
+    );
+    assert_eq!(
+        tr::editor::markers::stack(4),
+        "4 markers close together. Click to see them."
+    );
 }
 
 #[test]
@@ -1295,6 +1697,10 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
         format!("Could not prepare the recording controls: {error}")
     );
     assert_eq!(
+        tr::editor::clips::removed_media("Demo"),
+        "Demo (removed clips)"
+    );
+    assert_eq!(
         tr::editor::clips::save_before_recording_failed(&error),
         format!("Could not save the current project before recording: {error}")
     );
@@ -1336,6 +1742,20 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
         assert_eq!(
             tr::editor::export::stats::output_value(1920_u32, 1080_u32, fps),
             format!("{}×{} · {} fps", 1920, 1080, fps)
+        );
+    }
+    assert_eq!(
+        tr::editor::export::tracks::video_detail(2560_u32, 1440_u32),
+        "MP4 · 2560×1440"
+    );
+    for count in [1_usize, 4] {
+        assert_eq!(
+            tr::editor::export::tracks::file_count(count),
+            if count == 1 {
+                "1 file".to_string()
+            } else {
+                format!("{count} files")
+            }
         );
     }
     for total in [0_u32, 1, 2, 5] {
@@ -1421,6 +1841,10 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
     assert_eq!(
         tr::editor::window::presets::delete_confirm(&name),
         format!("Are you sure you want to delete \"{}\"?", name)
+    );
+    assert_eq!(
+        tr::editor::transcript::captions_save_failed(&error),
+        format!("Could not save the captions: {error}")
     );
     assert_eq!(
         tr::editor::window::save_failed(path.display(), &error),

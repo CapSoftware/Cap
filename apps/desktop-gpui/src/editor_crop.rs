@@ -968,6 +968,14 @@ pub struct KeyNudge {
 }
 
 impl KeyNudge {
+    /// Forget every held key. A window that loses focus never sees the
+    /// key-ups, so without this the nudge ticker keeps moving the crop.
+    pub fn release(&mut self) -> bool {
+        let held = !self.keys.is_empty();
+        *self = Self::default();
+        held
+    }
+
     /// `delta = shift ? 10 : 2` (`:965`), in **container** pixels.
     pub fn delta(&self) -> f64 {
         if self.shift { 10. } else { 2. }

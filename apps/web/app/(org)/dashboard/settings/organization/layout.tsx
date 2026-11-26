@@ -3,6 +3,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
 import { redirect } from "next/navigation";
 import { getOrganizationAccess } from "@/actions/organization/authorization";
 import { canViewOrganizationSettings } from "@/lib/permissions/roles";
+import { DoodleFilters } from "./_components/doodles";
 import { SettingsNav } from "./_components/SettingsNav";
 
 export default async function OrganizationSettingsLayout({
@@ -27,7 +28,7 @@ export default async function OrganizationSettingsLayout({
 
 	if (!access || !canViewOrganizationSettings(access.role)) {
 		return (
-			<div className="flex flex-col gap-6">
+			<div className="flex flex-col gap-6 mx-auto w-full max-w-4xl">
 				<Card>
 					<CardHeader>
 						<CardTitle>Organization settings are restricted</CardTitle>
@@ -41,7 +42,8 @@ export default async function OrganizationSettingsLayout({
 	}
 
 	return (
-		<div className="flex flex-col gap-6">
+		<div className="flex flex-col gap-8 mx-auto w-full max-w-4xl">
+			<DoodleFilters />
 			<SettingsNav />
 			{children}
 		</div>

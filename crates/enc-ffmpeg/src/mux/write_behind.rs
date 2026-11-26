@@ -25,7 +25,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread::JoinHandle,
@@ -80,15 +80,26 @@ pub(crate) trait MuxTarget: Send + 'static {
     fn packet_written(&mut self) {}
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct StorageStalled;
+/// The writer thread did not finish the output in time and may still write
+/// to it once storage recovers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("output storage stalled while finishing; recording left for recovery")]
+pub struct StorageStalled;
+
+impl StorageStalled {
+    /// Whether `error`, or the I/O error it is, reports a stalled writer.
+    pub fn is_in(error: &(dyn std::error::Error + 'static)) -> bool {
+        error.is::<Self>()
+            || error
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+                .is_some_and(|inner| inner.is::<Self>())
+    }
+}
 
 impl From<StorageStalled> for std::io::Error {
-    fn from(_: StorageStalled) -> Self {
-        std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "output storage stalled while finishing; recording left for recovery",
-        )
+    fn from(stalled: StorageStalled) -> Self {
+        std::io::Error::new(std::io::ErrorKind::TimedOut, stalled)
     }
 }
 
@@ -132,6 +143,20 @@ impl<M: MuxTarget> MuxSink<M> {
 
     pub fn is_write_behind(&self) -> bool {
         matches!(self, Self::Behind(_))
+    }
+
+    pub fn written_packets_counter(&self) -> Option<Arc<AtomicU64>> {
+        match self {
+            Self::Behind(writer) => Some(writer.shared.packets_written.clone()),
+            Self::Direct(_) | Self::Detached => None,
+        }
+    }
+
+    pub fn lost_packets_counter(&self) -> Option<Arc<AtomicU64>> {
+        match self {
+            Self::Behind(writer) => Some(writer.shared.packets_lost.clone()),
+            Self::Direct(_) | Self::Detached => None,
+        }
     }
 
     pub fn with_target<R>(&mut self, f: impl FnOnce(&mut M) -> R) -> R {
@@ -256,6 +281,8 @@ struct Shared<M> {
     changed: Condvar,
     abandoned: AtomicBool,
     finalize_cancelled: AtomicBool,
+    packets_written: Arc<AtomicU64>,
+    packets_lost: Arc<AtomicU64>,
     target: Mutex<M>,
 }
 
@@ -289,6 +316,8 @@ impl<M> Shared<M> {
             Job::Finalize(_) => true,
         });
         queue.bytes -= bytes;
+        self.packets_lost
+            .fetch_add(packets as u64, Ordering::Relaxed);
         self.changed.notify_all();
         (packets, bytes)
     }
@@ -296,6 +325,13 @@ impl<M> Shared<M> {
     fn abandon(&self, queue: &mut Queue<M>) {
         self.abandoned.store(true, Ordering::Release);
         self.finalize_cancelled.store(true, Ordering::Release);
+        let queued = queue
+            .jobs
+            .iter()
+            .filter(|job| matches!(job, Job::Packet { .. }))
+            .count();
+        self.packets_lost
+            .fetch_add(queued as u64, Ordering::Relaxed);
         queue.jobs.clear();
         queue.bytes = 0;
         self.changed.notify_all();
@@ -338,6 +374,8 @@ impl<M: MuxTarget> WriteBehind<M> {
             changed: Condvar::new(),
             abandoned: AtomicBool::new(false),
             finalize_cancelled: AtomicBool::new(false),
+            packets_written: Arc::new(AtomicU64::new(0)),
+            packets_lost: Arc::new(AtomicU64::new(0)),
             target: Mutex::new(target),
         });
         let spawned = std::thread::Builder::new()
@@ -595,7 +633,17 @@ fn run_writer<M: MuxTarget>(shared: &Shared<M>, label: &'static str) {
             queue.bytes = queue.bytes.saturating_sub(size);
             queue.in_flight = false;
             queue.last_write_completed = Some(Instant::now());
+            match &result {
+                Some(Ok(())) => {
+                    shared.packets_written.fetch_add(1, Ordering::Relaxed);
+                }
+                None => {
+                    shared.packets_lost.fetch_add(1, Ordering::Relaxed);
+                }
+                Some(Err(_)) => {}
+            }
             if let Some(Err(error)) = &result {
+                shared.packets_lost.fetch_add(1, Ordering::Relaxed);
                 queue.write_errors += 1;
                 if end_of_stream && queue.end_of_stream_error.is_none() {
                     queue.end_of_stream_error = Some(*error);
@@ -900,6 +948,143 @@ mod tests {
         );
     }
 
+    fn written_packets(sink: &MuxSink<NutTarget>) -> u64 {
+        sink.written_packets_counter()
+            .expect("write-behind enabled")
+            .load(Ordering::Relaxed)
+    }
+
+    fn lost_packets(sink: &MuxSink<NutTarget>) -> u64 {
+        sink.lost_packets_counter()
+            .expect("write-behind enabled")
+            .load(Ordering::Relaxed)
+    }
+
+    #[test]
+    fn written_count_excludes_the_tail_discarded_at_finish() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("out.nut");
+        let mut target = nut_target(&path);
+        target.write_delay = Duration::from_millis(60);
+        let limits = FinishLimits {
+            drain: Duration::from_millis(300),
+            total: Duration::from_secs(2),
+        };
+        let mut sink = behind(target, 1 << 20, limits);
+        for pts in 0..40 {
+            sink.write_packet(packet(pts * 1024, 64)).unwrap();
+        }
+        let result = sink
+            .finish(
+                |_| Ok(()),
+                |target, result| {
+                    target.write_delay = Duration::ZERO;
+                    target.output.write_trailer().unwrap();
+                    result
+                },
+            )
+            .unwrap();
+        assert_eq!(result, Ok(()));
+        let in_file = written_pts(&path).len() as u64;
+        assert!(in_file < 40, "the tail was discarded");
+        assert_eq!(written_packets(&sink), in_file);
+        assert_eq!(lost_packets(&sink), 40 - in_file);
+    }
+
+    #[test]
+    fn written_count_excludes_packets_that_failed_after_being_queued() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("out.nut");
+        let mut sink = MuxSink::Direct(nut_target(&path));
+        sink.enable_write_behind("test", 1 << 20).unwrap();
+        sink.write_packet(packet(0, 64)).unwrap();
+        sink.write_packet(invalid_packet(1024)).unwrap();
+        sink.write_packet(packet(2048, 64)).unwrap();
+        finish_with_trailer(&mut sink).unwrap();
+        assert_eq!(written_pts(&path).len(), 2);
+        assert_eq!(written_packets(&sink), 2);
+        assert_eq!(lost_packets(&sink), 1);
+    }
+
+    #[test]
+    fn written_count_after_a_stalled_finish_is_only_what_reached_storage() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("out.nut");
+        let limits = FinishLimits {
+            drain: Duration::from_millis(100),
+            total: Duration::from_millis(300),
+        };
+        let mut sink = behind(nut_target(&path), 1 << 20, limits);
+        let shared = shared(&sink);
+        let stalled = lock(&shared.target);
+        for pts in 0..8 {
+            sink.write_packet(packet(pts * 1024, 64)).unwrap();
+        }
+        assert_eq!(sink.finish(|_| Ok(()), |_, _| ()), Err(StorageStalled));
+        assert_eq!(written_packets(&sink), 0);
+        assert_eq!(
+            lost_packets(&sink),
+            0,
+            "packets still queued are not lost yet"
+        );
+        drop(stalled);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while written_packets(&sink) < 8 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            written_packets(&sink),
+            8,
+            "packets written once storage recovers are counted then"
+        );
+    }
+
+    #[test]
+    fn failed_writes_are_counted_while_recording() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut sink = MuxSink::Direct(nut_target(&directory.path().join("out.nut")));
+        sink.enable_write_behind("test", 1 << 20).unwrap();
+        sink.write_packet(packet(0, 64)).unwrap();
+        sink.write_packet(invalid_packet(1024)).unwrap();
+        sink.write_packet(invalid_packet(2048)).unwrap();
+        sink.drain();
+        assert_eq!(lost_packets(&sink), 2, "known before finish");
+        assert_eq!(written_packets(&sink), 1);
+        finish_with_trailer(&mut sink).unwrap();
+        assert_eq!(lost_packets(&sink), 2);
+    }
+
+    #[test]
+    fn dropping_an_unfinished_writer_counts_its_queue_as_lost() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut sink = MuxSink::Direct(nut_target(&directory.path().join("out.nut")));
+        sink.enable_write_behind("test", 1 << 20).unwrap();
+        let lost = sink.lost_packets_counter().unwrap();
+        let written = sink.written_packets_counter().unwrap();
+        let held = shared(&sink);
+        let stalled = lock(&held.target);
+        for pts in 0..5 {
+            sink.write_packet(packet(pts * 1024, 64)).unwrap();
+        }
+        let dropper = std::thread::spawn(move || drop(sink));
+        std::thread::sleep(Duration::from_millis(100));
+        drop(stalled);
+        dropper.join().unwrap();
+        assert_eq!(
+            lost.load(Ordering::Relaxed) + written.load(Ordering::Relaxed),
+            5,
+            "every queued packet is either written or lost"
+        );
+    }
+
+    #[test]
+    fn inline_sinks_have_no_writer_count() {
+        let directory = tempfile::tempdir().unwrap();
+        let sink = MuxSink::Direct(nut_target(&directory.path().join("out.nut")));
+        assert!(sink.written_packets_counter().is_none());
+        assert!(sink.lost_packets_counter().is_none());
+    }
+
     #[test]
     fn slow_finalization_counts_against_the_finish_limit() {
         let directory = tempfile::tempdir().unwrap();
@@ -965,6 +1150,16 @@ mod tests {
         let shared = shared(&sink);
         drop(sink);
         assert_eq!(Arc::strong_count(&shared), 1);
+    }
+
+    #[test]
+    fn a_stall_stays_recognisable_through_io_errors() {
+        assert!(StorageStalled::is_in(&StorageStalled));
+        assert!(StorageStalled::is_in(&std::io::Error::from(StorageStalled)));
+        assert!(!StorageStalled::is_in(&std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "slow disk"
+        )));
     }
 
     #[test]

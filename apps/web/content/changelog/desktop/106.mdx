@@ -1,0 +1,96 @@
+---
+title: Edit by Transcript, Voice EQ & Shapes
+app: Cap Desktop
+publishedAt: "2026-11-11"
+version: 0.6.3
+image:
+---
+
+Cap 0.6.3 lets you edit a Studio recording by editing its transcript, adds Voice EQ to shape how your microphone sounds, and brings a Shape track for arrows, boxes and step badges. You can also mark moments while you record, and the editor gains more transitions, style presets and a preview speed control. The release includes more than 100 fixes and performance improvements.
+
+## Features
+
+- **Edit by transcript** - Open the Transcript tab in the editor and edit a Studio recording by editing its words. Select words and press Delete to cut them out of the video. Cut words stay in place, struck through, and one click brings them back. Click a word to jump to it, or find words and phrases and delete every match. It all runs on your computer.
+- **Clean up filler words and pauses** - Clean up finds hesitations, repeated words, false starts and filler phrases. Listen to each one, keep or remove it, or remove them all in one step. Pauses shortens every silence longer than a threshold to the length you choose.
+- **Verbatim transcription** - Local transcription now keeps "um", "uh", repeated words and cut-off words, and refines word timings against the audio so a cut lands cleanly between words. English captions hide filler words by default, with a Show Filler Words toggle in the Captions tab. The word aligner is a one-time 95 MB download.
+- **Voice EQ** - Shape your microphone's tone clip by clip, from the Audio tab or a clip's menu. Start from Natural, Clear, Warm, Bright or Broadcast, then drag the points on a five-band curve. De-click repairs mouth clicks and crackle. What you hear while editing is what exports, and turning Voice EQ off keeps your settings so you can compare.
+- **Shape track** - Add arrows, lines, rectangles, ellipses, highlights and numbered step badges, drawn straight on the preview. Shapes snap to the frame and to other layers, and have stroke, fill, shadow, opacity and in and out animations.
+- **Recording markers** - Mark a moment during a Studio recording with ⌃⌘M on macOS, Alt+Shift+M on Windows and Linux, or the flag button in the recording bar. Markers show as flags on the editor timeline. Click one to jump to it, drag it to move it, rename or recolour it, or split your clips at every marker. Press M to add one at the playhead.
+- **More transitions** - Twelve transition kinds, including dip to white, push, wipe and zoom. Hover a cut and click + to add one, or drag one clip onto another. Click a transition to pick its kind with live previews, and drag its edges to change its length.
+- **Style presets** - Save the look of text, masks, captions, style segments and shapes as presets that work in every project. Make one the default for new items, or apply it to every item of that kind in one step.
+- **Preview speed** - Play the editor preview from 0.5x to 3x with the audio pitch preserved. Step through speeds with < and >. Exports are not affected.
+- **Smaller GIFs** - GIF export has a Quality control with Low, Medium and High, a 5 FPS frame rate and a 480p size. The preview shows the frame at the quality you picked.
+- **One side panel** - Style, Transcript and Clips now share one panel on the right of the editor, with a switcher at the top. Clicking a clip card selects that clip on the timeline.
+- **Waveforms on imported audio** - Music, ambience and voiceover clips draw a waveform on the timeline.
+- **Keep Cap out of the way** - Two new choices in Settings → Shortcuts. Cap can stay hidden after you close the screenshot or video editor, and on macOS and Windows it can stay hidden when you cancel a picker opened from a shortcut or the tray.
+
+## Recording fixes
+
+- **Sleep** - On macOS, Cap keeps the Mac awake while recording. If the Mac is put to sleep anyway, Studio recordings pause cleanly and Instant recordings stop and save.
+- **Lost capture source** - A recording whose display or window goes away now ends cleanly. Stop and Quit no longer get stuck after a recording fails, on macOS and Windows.
+- **Pause and resume** - Pausing right after resuming no longer leaves Cap unable to stop or quit. Quit finishes a stop even when an earlier pause error is still showing.
+- **Recovery** - Studio recordings interrupted by a crash, a force quit or a power cut open again and keep everything up to the interruption. Recovered camera tracks keep their frame rate.
+- **Long recordings** - Studio recordings longer than about 33 minutes no longer freeze in the editor partway through.
+- **Project names** - Studio recordings use your Default project name in the library, the editor title and the suggested export file name. A name format that can't be rendered no longer stops recordings from starting.
+- **Cursor** - Cursors that look the same but click at different points are drawn in the right place.
+- **Instant recordings** - If your sign-in expires during an Instant recording, Cap asks you to sign in again instead of retrying the upload.
+- **Library** - The recording in progress can no longer be deleted from the library.
+
+## Editing and export fixes
+
+- **Transcription** - The Recommended model no longer comes back empty on some short recordings. If you downloaded it before, Cap asks you to download the updated version. A recording with no speech now says so instead of showing an error.
+- **Transcript** - Removing a filler word right after transcribing cuts the whole word once its timing is refined. Selecting a shape, text or zoom while the panel is on Transcript or Clips brings its settings forward.
+- **Manual captions** - Manually placed captions can be dragged on the preview, nudged with the arrow keys or placed by typing X and Y. The keyboard overlay moves clear of them.
+- **Captions** - Arabic and Persian captions stay inside their background.
+- **Zooms** - Zooms you draw and zooms you generate both start at the Default zoom amount shown in Settings.
+- **Default preset** - A preset marked as default is applied to new Studio recordings.
+- **Clip speed** - Changing a clip's speed after a fullscreen title keeps zooms, text, captions and masks aligned.
+- **Undo and redo** - Undo while holding a timeline drag no longer leaves the drag live. Caption and keyboard rows come back when you undo removing them.
+- **Keyboard overlays** - Trimming the start of a keyboard overlay keeps every keypress at its original time.
+- **Text** - Enter and exit animations fit inside short text segments, so the text always settles.
+- **Cursor** - A cursor hidden while idle fades in before it moves instead of flashing.
+- **Backgrounds** - Gradient angles match the colour picker on wide and vertical canvases.
+- **Imports** - iPhone portrait videos and anamorphic videos import in the right shape. An import that fails no longer stays stuck in the library.
+- **Clips** - Deleting a clip while renaming another keeps the new name on the right clip. The audio library closes when you select something else.
+- **Crop** - A held arrow key stops nudging the crop when the editor loses focus.
+- **Timing** - Times just under a minute no longer read ":60.0".
+- **Exports** - On macOS, MP4 and GIF exports to exFAT drives such as external SSDs and SD cards finish instead of failing at the end. Export progress no longer jumps backwards when Turbo export falls back, and progress rings sweep smoothly.
+- **Sharing** - A Studio upload stays on the account and server it started with if you switch either while it runs.
+- **Screenshots** - Undo and redo finish the edit in progress first, edits survive a failed save, and middle-button panning works.
+
+## App fixes
+
+- **Deleting recordings** - Deleting a recording that is open in the editor closes the editor and removes the whole recording, on every platform. Deleting a screenshot from the library closes its editor too. Deleting twice in a row no longer shows an error for a delete that worked.
+- **Onboarding** - An empty settings file left by an update no longer blocks onboarding.
+- **Updates** - Restart to update asks once, however many times you pick it during a recording.
+- **Main window** - Minimise when recording starts now minimises the window. The After deleting a recording setting is respected. A main window you closed stays closed after Settings or the editor closes.
+- **Shortcuts** - On macOS, ⌘⇧ shortcuts with digits and symbols can be recorded.
+- **Custom servers** - Changing the server URL signs you out first. Help → Dashboard opens your configured server.
+
+## Platform fixes
+
+- **macOS** - Cap no longer closes right after launch on some Macs. The Record Window and Screenshot Window rows in the menu bar menu have their icon on macOS 26.
+- **Windows** - When a GPU encoder fails mid-recording, Cap switches to software encoding and keeps recording. A hardware encoder that crashes Cap is skipped afterwards instead of crashing every recording. Window recordings that reach the screen edge no longer stall at 0:00. The area outline stays on screen while recording. Recording into and saving from folders with long paths works. Import → Existing recording can pick a recording. Exports check for free space when saving over an existing file. The editor opens on machines where the bundled shader compiler can't load. Long recordings play on low-memory machines. Updates install while an AI assistant has Cap's MCP server running.
+- **Linux** - Cap recovers from a lost GPU device on NVIDIA with Wayland instead of crashing. Area screenshots on Wayland no longer include the selection frame. On X11, screenshots keep their exact size, picker overlays sit on the right display with mixed-resolution monitors, and the camera preview opens on screen at 2x scaling. Import → Existing recording can pick a recording. Arch nightly packages no longer sort above the matching stable release.
+
+## CLI
+
+- **Record** - `cap record stop` stops the live recording after an earlier session was interrupted. A wrong microphone or camera name no longer leaves an empty project behind that blocks the next try.
+- **Automations** - Upload rules send recordings to the selected team, Studio duration conditions are honoured, and Reveal in File Manager shows the file in its folder. File names built from long non-Latin window titles save correctly.
+- **Exports** - MP4 exports report the path they wrote. Saving or exporting onto the source file no longer empties it.
+- **Validation** - Invalid fps or resolution in `--settings-json`, invalid stop timeouts and invalid wait timeouts are rejected before anything runs.
+
+## Performance
+
+- **Smoother interface** - Every window does less CPU work per frame on macOS, Windows and Linux.
+- **NVIDIA exports** - MP4 exports on NVIDIA GPUs encode about 1.65x faster at the same quality and file size.
+- **4K to 1080p encoding** - Converting an exact 2x downscale is about 5x faster on x86 CPUs.
+- **Playback** - Software-decoded frames are shared with the renderer instead of copied, and Windows playback reuses its frame buffers.
+- **Linux capture** - X11 screen capture skips a copy per frame, and Instant recordings downscale 4K screens up to 27x faster. The Instant camera bubble decodes and scales in a fraction of the time.
+- **Captioned projects** - Heavily edited captioned projects open up to 4.3x faster, and captions follow reordered clips 3x faster.
+- **Previews** - Editor preview frames convert about 1.7x faster on x86 CPUs, and still export previews skip audio decoding.
+- **CLI** - MP4 exports from the CLI stream their audio instead of decoding whole tracks first.
+
+## Thanks
+
+A huge thank you to everyone who contributed to this release: @yashranaway, @patrickballard, @vedanth-jadhav, @kyzer1023, @AksharP5, @OptimistOtaku, @Aqua-123, @himanshu748, @abzy128, @TyrionV8, @HlaKarki, @Ectropy and @Addin.

@@ -16,6 +16,8 @@ import {
 } from "@/app/s/[videoId]/_components/timeline/TimelineProvider";
 
 vi.mock("@/actions/videos/new-comment", () => ({ newComment: vi.fn() }));
+const showError = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({ toast: { error: showError } }));
 vi.mock("@/app/Layout/AuthContext", () => ({
 	useCurrentUser: () => ({ id: "viewer", name: "Viewer", imageUrl: null }),
 }));
@@ -108,7 +110,7 @@ function TimelineHarness() {
 		null,
 		createElement(
 			"button",
-			{ onClick: () => actions.openComposer(12) },
+			{ type: "button", onClick: () => actions.openComposer(12) },
 			"Open composer",
 		),
 		createElement(TimelineComposer, {
@@ -127,14 +129,13 @@ async function renderComposer(
 	const submit = vi.fn();
 	await act(async () => {
 		if (kind === "timeline") {
-			root.render(
-				createElement(TimelineProvider, {
-					duration: 60,
-					compact: false,
-					hasHover: true,
-					children: createElement(TimelineHarness),
-				}),
-			);
+			const props = {
+				duration: 60,
+				compact: false,
+				hasHover: true,
+				children: createElement(TimelineHarness),
+			};
+			root.render(createElement(TimelineProvider, props));
 			return;
 		}
 		if (kind === "toolbar") {
@@ -263,4 +264,224 @@ it("leaves Shift+Enter available for multiline replies", async () => {
 	expect(newline.defaultPrevented).toBe(false);
 	expect(submit).not.toHaveBeenCalled();
 	expect(input.value).toBe("First line");
+});
+
+it.each(["success", "failure"])(
+	"keeps a new toolbar draft when an earlier reaction finishes with %s",
+	async (outcome) => {
+		const respond = vi.mocked(newComment).getMockImplementation();
+		if (!respond) throw new Error("Missing comment response");
+		const reactionSave = Promise.withResolvers<void>();
+		vi.mocked(newComment).mockImplementationOnce(async (data) => {
+			await reactionSave.promise;
+			return respond(data);
+		});
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		const success = vi.fn();
+		await act(async () => {
+			root.render(
+				createElement(Toolbar, { data: video, onCommentSuccess: success }),
+			);
+		});
+		const reaction = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="up"]',
+		);
+		if (!reaction) throw new Error("Missing reaction button");
+		await act(async () => reaction.click());
+		expect(newComment).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({ content: "👍", type: "emoji" }),
+		);
+		const open = Array.from(container.querySelectorAll("button")).find(
+			(button) => button.textContent?.includes("Comment"),
+		);
+		if (!open) throw new Error("Missing comment button");
+		await act(async () => open.click());
+		const input = container.querySelector("input");
+		if (!input) throw new Error("Missing comment field");
+		await change(input, "A new draft after reacting");
+		await act(async () => {
+			if (outcome === "success") reactionSave.resolve();
+			else reactionSave.reject(new Error("Offline"));
+		});
+		expect(input.value).toBe("A new draft after reacting");
+		expect(container.querySelector("input")).toBe(input);
+		expect(success).toHaveBeenCalledTimes(outcome === "success" ? 1 : 0);
+	},
+);
+
+it("keeps the toolbar draft open and says so when the comment fails to post", async () => {
+	vi.mocked(newComment).mockRejectedValueOnce(
+		new Error("Feedback is disabled on this video"),
+	);
+	vi.spyOn(console, "error").mockImplementation(() => {});
+	showError.mockReset();
+	const success = vi.fn();
+	await act(async () => {
+		root.render(
+			createElement(Toolbar, {
+				data: video,
+				disableReactions: true,
+				onCommentSuccess: success,
+			}),
+		);
+	});
+	const open = container.querySelector("button");
+	if (!open) throw new Error("Missing comment button");
+	await act(async () => open.click());
+	const input = container.querySelector("input");
+	if (!input) throw new Error("Missing comment field");
+	await change(input, "Worth keeping");
+	await act(async () => {
+		input.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "Enter",
+				bubbles: true,
+				cancelable: true,
+			}),
+		);
+	});
+
+	expect(newComment).toHaveBeenCalledOnce();
+	expect(success).not.toHaveBeenCalled();
+	expect(showError).toHaveBeenCalledExactlyOnceWith(
+		"Couldn't post your comment. Please try again.",
+	);
+	expect(container.querySelector("input")).toBe(input);
+	expect(input.value).toBe("Worth keeping");
+});
+
+it("brings the timeline draft back and says so when the comment fails to post", async () => {
+	vi.mocked(newComment).mockRejectedValueOnce(
+		new Error("Feedback is disabled on this video"),
+	);
+	vi.spyOn(console, "error").mockImplementation(() => {});
+	showError.mockReset();
+	const { input } = await renderComposer("timeline");
+	await change(input, "Worth keeping");
+	await act(async () => {
+		input.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "Enter",
+				bubbles: true,
+				cancelable: true,
+			}),
+		);
+	});
+
+	expect(newComment).toHaveBeenCalledOnce();
+	expect(showError).toHaveBeenCalledExactlyOnceWith(
+		"Couldn't post your comment. Please try again.",
+	);
+	const restored = container.querySelector("input");
+	expect(restored?.value).toBe("Worth keeping");
+	expect(restored?.getAttribute("aria-label")).toBe(
+		input.getAttribute("aria-label"),
+	);
+});
+
+it("leaves a newer timeline draft alone when an earlier comment fails", async () => {
+	const save = Promise.withResolvers<Awaited<ReturnType<typeof newComment>>>();
+	vi.mocked(newComment).mockImplementationOnce(() => save.promise);
+	vi.spyOn(console, "error").mockImplementation(() => {});
+	showError.mockReset();
+	const { input } = await renderComposer("timeline");
+	await change(input, "First draft");
+	await act(async () => {
+		input.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "Enter",
+				bubbles: true,
+				cancelable: true,
+			}),
+		);
+	});
+	const open = container.querySelector("button");
+	if (!open) throw new Error("Composer trigger is missing");
+	await act(async () => open.click());
+	const newer = container.querySelector("input");
+	if (!newer) throw new Error("Missing comment field");
+	await change(newer, "Newer draft");
+	await act(async () => {
+		save.reject(new Error("Offline"));
+	});
+
+	expect(showError).toHaveBeenCalledExactlyOnceWith(
+		"Couldn't post your comment. Please try again.",
+	);
+	expect(container.querySelector("input")).toBe(newer);
+	expect(newer.value).toBe("Newer draft");
+});
+
+it.each(["success", "failure"])(
+	"posts a toolbar comment once while the first save is still in flight, then allows a new one after %s",
+	async (outcome) => {
+		const respond = vi.mocked(newComment).getMockImplementation();
+		if (!respond) throw new Error("Missing comment response");
+		const save = Promise.withResolvers<void>();
+		vi.mocked(newComment).mockImplementationOnce(async (data) => {
+			await save.promise;
+			if (outcome === "failure") throw new Error("Offline");
+			return respond(data);
+		});
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		await act(async () => {
+			root.render(
+				createElement(Toolbar, { data: video, disableReactions: true }),
+			);
+		});
+		const open = container.querySelector("button");
+		if (!open) throw new Error("Missing comment button");
+		await act(async () => open.click());
+		const input = container.querySelector("input");
+		if (!input) throw new Error("Missing comment field");
+		await change(input, "Only once");
+		const pressEnter = () =>
+			act(async () => {
+				input.dispatchEvent(
+					new KeyboardEvent("keydown", {
+						key: "Enter",
+						bubbles: true,
+						cancelable: true,
+					}),
+				);
+			});
+		await pressEnter();
+		await pressEnter();
+		const submitButton = Array.from(container.querySelectorAll("button")).find(
+			(button) => button.textContent === "Comment",
+		);
+		if (!submitButton) throw new Error("Missing submit button");
+		expect(submitButton.disabled).toBe(true);
+		await act(async () => submitButton.click());
+		expect(newComment).toHaveBeenCalledOnce();
+
+		await act(async () => save.resolve());
+
+		if (outcome === "failure") {
+			expect(input.value).toBe("Only once");
+			await pressEnter();
+			expect(newComment).toHaveBeenCalledTimes(2);
+		} else {
+			expect(container.querySelector("input")).toBeNull();
+		}
+	},
+);
+
+it("says so when a toolbar reaction fails to post", async () => {
+	vi.mocked(newComment).mockRejectedValueOnce(new Error("Offline"));
+	vi.spyOn(console, "error").mockImplementation(() => {});
+	showError.mockReset();
+	await act(async () => {
+		root.render(createElement(Toolbar, { data: video }));
+	});
+	const reaction = container.querySelector<HTMLButtonElement>(
+		'button[aria-label="up"]',
+	);
+	if (!reaction) throw new Error("Missing reaction button");
+	await act(async () => reaction.click());
+
+	expect(newComment).toHaveBeenCalledOnce();
+	expect(showError).toHaveBeenCalledExactlyOnceWith(
+		"Couldn't add your reaction. Please try again.",
+	);
 });
