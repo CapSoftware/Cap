@@ -1650,8 +1650,10 @@ impl Worker {
     fn on_cloud(&mut self, msg: CloudMsg) {
         let (clip, result, probe) = match msg {
             CloudMsg::Retrying(issue) => {
-                self.status.issue = Some(issue);
-                self.publish_status();
+                if !self.used_up() {
+                    self.status.issue = Some(issue);
+                    self.publish_status();
+                }
                 return;
             }
             CloudMsg::Done {
@@ -1751,6 +1753,14 @@ impl Worker {
         }
     }
 
+    /// The day's cloud audio is used up and its reset has not come yet.
+    fn used_up(&self) -> bool {
+        self.bridge
+            .as_ref()
+            .and_then(|bridge| bridge.daily_until)
+            .is_some_and(|until| Instant::now() < until)
+    }
+
     /// The cloud is not answering: local words stand in where there are
     /// any, the rest of the audio waits in the ledger, and a probe every
     /// minute or so (doubling to ten) finds out when the cloud is back.
@@ -1762,15 +1772,10 @@ impl Worker {
             }
             _ => None,
         };
-        let now = Instant::now();
-        let used_up = self
-            .bridge
-            .as_ref()
-            .and_then(|bridge| bridge.daily_until)
-            .is_some_and(|until| now < until);
-        if used_up && daily.is_none() && !sign_in {
+        if self.used_up() && daily.is_none() && !sign_in {
             return;
         }
+        let now = Instant::now();
         match self.bridge.as_mut() {
             Some(bridge) => {
                 bridge.daily_until = None;
