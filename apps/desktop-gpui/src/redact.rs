@@ -18,6 +18,9 @@ use std::{
 use cap_project::redaction::{REDACTIONS_FILE, Redactions};
 use sha2::Digest;
 
+#[cfg(target_os = "macos")]
+pub(crate) mod live;
+
 /// The model the analyser runs, by version, with each file's checksum.
 pub const MODEL_VERSION: &str = "redact-v1.1";
 const MODEL_BASE_URL: &str =
@@ -103,7 +106,9 @@ static MODEL_DOWNLOAD: Mutex<()> = Mutex::new(());
 /// and returns its folder. A scan that waited on another scan's download
 /// uses that copy.
 fn download_model(cancel: &AtomicBool) -> anyhow::Result<PathBuf> {
-    let _download = MODEL_DOWNLOAD.lock().unwrap_or_else(PoisonError::into_inner);
+    let _download = MODEL_DOWNLOAD
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     if let Some(dir) = installed_model_dir() {
         return Ok(dir);
     }
@@ -425,8 +430,25 @@ fn publish(scan: &Scan, snapshot: Redactions, progress: f32) {
     shared.snapshot_generation += 1;
 }
 
+/// A running scan's progress. While a head start is on show the scan's
+/// partial results stay unseen: the head start covers the whole recording,
+/// and a partial result would take masks away until the scan finished.
+fn report(scan: &Scan, partial: &Redactions, progress: f32, head_start: bool) {
+    if head_start {
+        scan.lock().progress = progress;
+    } else {
+        publish(scan, partial.clone(), progress);
+    }
+}
+
 fn run(scan: &Scan) -> anyhow::Result<()> {
     let project = scan.project.as_path();
+    // A recording analysed while it was recorded has a head start, shown
+    // until the scan of its files below replaces it.
+    #[cfg(target_os = "macos")]
+    let head_start = live::take(project);
+    #[cfg(not(target_os = "macos"))]
+    let head_start: Option<Redactions> = None;
     let cancel = &scan.cancel;
     let sources = cap_redact::segment_sources(project)?;
     let previous = Redactions::load(project);
@@ -444,6 +466,17 @@ fn run(scan: &Scan) -> anyhow::Result<()> {
         publish(scan, previous, 1.0);
         return Ok(());
     }
+    let head_start = match head_start {
+        Some(live) => {
+            tracing::info!(
+                regions = live.regions.len(),
+                "Auto redact shows the live result until the scan finishes"
+            );
+            publish(scan, live, 0.0);
+            true
+        }
+        None => false,
+    };
     let model_dir = match installed {
         Some(dir) => dir,
         None => download_model(cancel)?,
@@ -462,7 +495,7 @@ fn run(scan: &Scan) -> anyhow::Result<()> {
                 let total: f64 = durations.iter().sum::<f64>().max(1e-3);
                 ((before + progress.source_time) / total).clamp(0.0, 1.0) as f32
             });
-            publish(scan, progress.snapshot.clone(), fraction);
+            report(scan, progress.snapshot, fraction, head_start);
         },
         &mut stats,
     );
@@ -610,5 +643,24 @@ mod tests {
             "m1",
             cap_redact::SCAN_REVISION
         ));
+    }
+
+    #[test]
+    fn a_head_start_stays_on_show_until_the_scan_finishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let scan = test_scan(dir.path(), true);
+        let partial = Redactions::default();
+        report(&scan, &partial, 0.4, true);
+        {
+            let shared = scan.lock();
+            assert_eq!(shared.snapshot_generation, 0);
+            assert!(shared.snapshot.is_none());
+            assert!((shared.progress - 0.4).abs() < 1e-6);
+        }
+        report(&scan, &partial, 0.6, false);
+        let shared = scan.lock();
+        assert_eq!(shared.snapshot_generation, 1);
+        assert!(shared.snapshot.is_some());
+        assert!((shared.progress - 0.6).abs() < 1e-6);
     }
 }

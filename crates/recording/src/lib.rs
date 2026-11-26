@@ -15,6 +15,7 @@ pub mod output_validation;
 pub mod recovery;
 mod resolution_limits;
 pub mod screenshot;
+pub mod segment_observer;
 pub mod sources;
 pub mod studio_recording;
 pub mod sync_calibration;

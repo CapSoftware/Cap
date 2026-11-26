@@ -567,6 +567,9 @@ async fn finalize_studio(
     let project_path = completed.project_path.clone();
     if auto_redact {
         crate::redact::start_background(project_path.clone());
+    } else {
+        #[cfg(target_os = "macos")]
+        crate::redact::live::discard(&project_path);
     }
     let pending = PendingStudioThumbnail::new();
     tokio::task::spawn_blocking(move || {
@@ -1325,6 +1328,8 @@ impl ActiveRecording {
         let _operation = self.instant_operation.lock().await;
         let result = match &self.handle {
             Handle::Studio(handle) => {
+                #[cfg(target_os = "macos")]
+                crate::redact::live::discard(&self.project_dir);
                 #[cfg(any(target_os = "macos", windows))]
                 {
                     let report = handle
@@ -2951,6 +2956,10 @@ async fn start_attempt_with_upload(
             }
             if let Some(lock) = mic_lock.clone() {
                 builder = builder.with_mic_feed(lock);
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(observer) = crate::redact::live::start(&project_dir) {
+                builder = builder.with_segment_observer(observer);
             }
             Handle::Studio(
                 builder

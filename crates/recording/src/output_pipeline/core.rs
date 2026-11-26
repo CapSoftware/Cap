@@ -2383,6 +2383,7 @@ pub struct OutputPipelineBuilder<TVideo> {
 pub struct NoVideo;
 pub struct HasVideo<TVideo: VideoSource> {
     config: TVideo::Config,
+    tap: Option<VideoTap<TVideo::Frame>>,
 }
 
 impl<THasVideo> OutputPipelineBuilder<THasVideo> {
@@ -2437,7 +2438,7 @@ impl OutputPipelineBuilder<NoVideo> {
         config: TVideo::Config,
     ) -> OutputPipelineBuilder<HasVideo<TVideo>> {
         OutputPipelineBuilder::<HasVideo<TVideo>> {
-            video: HasVideo { config },
+            video: HasVideo { config, tap: None },
             path: self.path,
             audio_sources: self.audio_sources,
             timestamps: self.timestamps,
@@ -2965,6 +2966,12 @@ pub(crate) async fn finish_pipeline_startup<T>(
 }
 
 impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
+    /// Hands every muxed video frame to `tap` as well; see [`VideoTap`].
+    pub fn with_video_tap(mut self, tap: Option<VideoTap<TVideo::Frame>>) -> Self {
+        self.video.tap = tap;
+        self
+    }
+
     pub async fn build<TMuxer: VideoMuxer<VideoFrame = TVideo::Frame> + AudioMuxer>(
         self,
         muxer_config: TMuxer::Config,
@@ -3006,6 +3013,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
 
         let (video_source, video_rx) =
             setup_video_source::<TVideo>(video.config, &mut setup_ctx).await?;
+        let video_tap = video.tap;
 
         let video_info = video_source.video_info();
         let mut video_source = PreparedVideoSource::new(video_source);
@@ -3052,6 +3060,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             video_info,
             video_start_gate.clone(),
             start_gate.clone(),
+            video_tap,
         );
 
         let audio_gap_summary = Arc::new(OnceLock::new());
@@ -3564,6 +3573,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     video_info: VideoInfo,
     video_start_gate: Option<VideoStartGate>,
     start_gate: Option<RecordingStartGate>,
+    video_tap: Option<VideoTap<TVideo::Frame>>,
 ) -> Option<oneshot::Receiver<Result<(), String>>> {
     let frame_duration_ns = estimate_video_frame_duration_ns(&video_info);
     let (start_tx, started) =
@@ -3860,6 +3870,9 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     }
 
                     let duplicate = frame.duplicate();
+                    if let Some(tap) = &video_tap {
+                        tap(&frame, duration);
+                    }
                     if let Err(e) = muxer.lock().await.send_video_frame(frame, duration) {
                         return Err(video_mux_send_error(frame_count, e));
                     }
@@ -3988,6 +4001,9 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         timestamp_span.record(duration);
 
                         let duplicate = frame.duplicate();
+                        if let Some(tap) = &video_tap {
+                            tap(&frame, duration);
+                        }
                         match muxer.lock().await.send_video_frame(frame, duration) {
                             Ok(()) => last_frame = duplicate,
                             Err(e) => {
@@ -4039,6 +4055,9 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             if penultimate_timestamp > last_timestamp
                 && let Some(final_frame) = frame.duplicate()
             {
+                if let Some(tap) = &video_tap {
+                    tap(&frame, penultimate_timestamp);
+                }
                 muxer
                     .lock()
                     .await
@@ -4047,6 +4066,9 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                 timestamp_span.record(penultimate_timestamp);
                 frame_count += 1;
                 frame = final_frame;
+            }
+            if let Some(tap) = &video_tap {
+                tap(&frame, final_timestamp);
             }
             muxer
                 .lock()
@@ -5436,6 +5458,10 @@ impl Deref for AudioFrame {
         &self.inner
     }
 }
+
+/// Sees every video frame the muxer is handed, with the timestamp it is muxed
+/// at, just before the muxer gets it.
+pub type VideoTap<F> = Arc<dyn Fn(&F, Duration) + Send + Sync>;
 
 pub trait VideoSource: Send + 'static {
     type Config;
@@ -9154,6 +9180,64 @@ mod tests {
 
             let timestamps = sent.lock().unwrap().clone();
             (timestamps, capture_duration)
+        }
+
+        #[tokio::test]
+        async fn video_tap_sees_what_the_muxer_gets_and_nothing_before_the_start_gate() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let gate = RecordingStartGate::new();
+            let (sender, receiver) = flume::bounded(8);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let tapped = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let tap: VideoTap<StaticFrame> = {
+                let tapped = tapped.clone();
+                Arc::new(move |_frame: &StaticFrame, timestamp: Duration| {
+                    tapped.lock().unwrap().push(timestamp);
+                })
+            };
+            let pipeline = OutputPipeline::builder(temp_dir.path().join("tapped.mp4"))
+                .with_video::<ChannelVideoSource<StaticFrame>>(ChannelVideoSourceConfig::new(
+                    VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30),
+                    receiver,
+                ))
+                .with_timestamps(Timestamps::now())
+                .with_start_gate(Some(gate.clone()))
+                .with_video_tap(Some(tap))
+                .build::<ObservedMuxer>(sent.clone())
+                .await
+                .unwrap();
+
+            for _ in 0..2 {
+                sender
+                    .send_async(StaticFrame {
+                        timestamp: Timestamp::Instant(Instant::now()),
+                    })
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            assert!(tapped.lock().unwrap().is_empty());
+
+            assert!(gate.arm());
+            let first_admitted = Instant::now();
+            for frame in 0..4u32 {
+                sender
+                    .send_async(StaticFrame {
+                        timestamp: Timestamp::Instant(
+                            first_admitted + Duration::from_millis(33 * u64::from(frame)),
+                        ),
+                    })
+                    .await
+                    .unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            pipeline.stop().await.unwrap();
+
+            let sent = sent.lock().unwrap().clone();
+            let tapped = tapped.lock().unwrap().clone();
+            assert!(sent.len() >= 4, "muxer got {} frames", sent.len());
+            assert_eq!(tapped, sent);
         }
 
         #[tokio::test]

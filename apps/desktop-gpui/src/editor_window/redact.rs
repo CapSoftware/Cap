@@ -1067,6 +1067,18 @@ impl EditorWindow {
             self.redact.finished_at = Some(now);
         }
         if let Some(snapshot) = update.snapshot {
+            if !snapshot.regions.is_empty()
+                && self
+                    .redact
+                    .redactions
+                    .as_ref()
+                    .is_none_or(|redactions| redactions.regions.is_empty())
+            {
+                tracing::info!(
+                    regions = snapshot.regions.len(),
+                    "Auto redact masks are in the editor"
+                );
+            }
             self.redact.redactions = Some(snapshot.clone());
             if let Some(instance) = &self.instance {
                 instance.render_constants.redactions.set(Some(snapshot));

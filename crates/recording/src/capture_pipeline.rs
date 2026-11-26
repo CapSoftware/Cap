@@ -66,6 +66,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
+        screen_tap: Option<crate::output_pipeline::VideoTap<crate::segment_observer::ScreenFrame>>,
         #[cfg(windows)] encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline>
     where
@@ -97,6 +98,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
+        screen_tap: Option<crate::output_pipeline::VideoTap<crate::segment_observer::ScreenFrame>>,
     ) -> anyhow::Result<OutputPipeline> {
         let ultra = quality == StudioQuality::Ultra;
         let compatibility = quality == StudioQuality::Compatibility;
@@ -161,6 +163,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
 
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
+                    .with_video_tap(screen_tap.clone())
                     .with_timestamps(start_time)
                     .with_start_gate(start_gate.clone())
                     .build::<OutOfProcessFragmentedM4SMuxer>(OutOfProcessFragmentedM4SMuxerConfig {
@@ -174,6 +177,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             } else {
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
+                    .with_video_tap(screen_tap.clone())
                     .with_timestamps(start_time)
                     .with_start_gate(start_gate.clone())
                     .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
@@ -194,6 +198,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
 
             OutputPipeline::builder(output_path.clone())
                 .with_video::<screen_capture::VideoSource>(screen_capture)
+                .with_video_tap(screen_tap.clone())
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<AVFoundationMp4Muxer>(AVFoundationMp4MuxerConfig {
@@ -242,6 +247,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
+        screen_tap: Option<crate::output_pipeline::VideoTap<crate::segment_observer::ScreenFrame>>,
         encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline> {
         let ultra = quality == StudioQuality::Ultra;
@@ -293,6 +299,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
+                    .with_video_tap(screen_tap.clone())
                     .with_timestamps(start_time)
                     .with_start_gate(start_gate.clone())
                     .build::<WindowsOOPFragmentedM4SMuxer>(WindowsOOPFragmentedM4SMuxerConfig {
@@ -309,6 +316,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             } else {
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
+                    .with_video_tap(screen_tap.clone())
                     .with_timestamps(start_time)
                     .with_start_gate(start_gate.clone())
                     .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
@@ -329,6 +337,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
             OutputPipeline::builder(output_path.clone())
                 .with_video::<screen_capture::VideoSource>(screen_capture)
+                .with_video_tap(screen_tap.clone())
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<WindowsMuxer>(WindowsMuxerConfig {
@@ -386,6 +395,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
+        screen_tap: Option<crate::output_pipeline::VideoTap<crate::segment_observer::ScreenFrame>>,
     ) -> anyhow::Result<OutputPipeline> {
         let fragments_dir = output_path
             .parent()
@@ -395,6 +405,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
         let ultra = quality == StudioQuality::Ultra;
         OutputPipeline::builder(fragments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
+            .with_video_tap(screen_tap.clone())
             .with_timestamps(start_time)
             .with_start_gate(start_gate.clone())
             .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {

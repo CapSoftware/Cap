@@ -22,8 +22,7 @@ pub struct FrameSource {
     pub height: u32,
     pub track_width: u32,
     pub track_height: u32,
-    gray_scaler: Option<(Pixel, Scaler)>,
-    gray_frame: Video,
+    gray: GrayScale,
     last_pts: f64,
     /// The video stream's length from its first frame, if the file says.
     pub duration: Option<f64>,
@@ -63,18 +62,9 @@ impl FrameSource {
         anyhow::ensure!(width > 0 && height > 0, "video has no size");
         let time_base = f64::from(video.time_base());
         let start = decoder.start_time();
-        let duration = ffmpeg::format::input(path).ok().and_then(|input| {
-            let stream = input.streams().best(ffmpeg::media::Type::Video)?;
-            let base = f64::from(stream.time_base());
-            if stream.duration() > 0 && base > 0.0 {
-                return Some(stream.duration() as f64 * base);
-            }
-            (input.duration() > 0)
-                .then(|| input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE))
-        });
-        let track_width = TRACK_WIDTH.min(width);
-        let track_height =
-            ((height as f64 * track_width as f64 / width as f64).round() as u32).max(1);
+        let duration = video_duration(path);
+        let gray = GrayScale::new(width, height);
+        let (track_width, track_height) = (gray.track_width, gray.track_height);
         Ok(Self {
             decoder,
             time_base: if time_base > 0.0 {
@@ -91,8 +81,7 @@ impl FrameSource {
             height,
             track_width,
             track_height,
-            gray_scaler: None,
-            gray_frame: Video::empty(),
+            gray,
             last_pts: -1.0,
             duration,
         })
@@ -127,9 +116,42 @@ impl FrameSource {
     }
 
     pub fn gray(&mut self, frame: &Video) -> anyhow::Result<GrayImage> {
+        self.gray.gray(frame)
+    }
+}
+
+/// Scales frames to the tracking size as gray, the picture every frame is
+/// compared and tracked on.
+pub struct GrayScale {
+    track_width: u32,
+    track_height: u32,
+    scaler: Option<(Pixel, Scaler)>,
+    frame: Video,
+}
+
+impl GrayScale {
+    /// For frames of `width` x `height`: at most [`TRACK_WIDTH`] wide, same
+    /// aspect.
+    pub fn new(width: u32, height: u32) -> Self {
+        let track_width = TRACK_WIDTH.min(width);
+        let track_height =
+            ((height as f64 * track_width as f64 / width as f64).round() as u32).max(1);
+        Self {
+            track_width,
+            track_height,
+            scaler: None,
+            frame: Video::empty(),
+        }
+    }
+
+    pub fn track_width(&self) -> u32 {
+        self.track_width
+    }
+
+    pub fn gray(&mut self, frame: &Video) -> anyhow::Result<GrayImage> {
         let format = frame.format();
         if self
-            .gray_scaler
+            .scaler
             .as_ref()
             .is_none_or(|(cached, _)| *cached != format)
         {
@@ -143,15 +165,13 @@ impl FrameSource {
                 Flags::AREA,
             )
             .context("gray scaler")?;
-            self.gray_scaler = Some((format, scaler));
+            self.scaler = Some((format, scaler));
         }
-        let (_, scaler) = self.gray_scaler.as_mut().unwrap();
-        scaler
-            .run(frame, &mut self.gray_frame)
-            .context("gray scale")?;
+        let (_, scaler) = self.scaler.as_mut().unwrap();
+        scaler.run(frame, &mut self.frame).context("gray scale")?;
         let (w, h) = (self.track_width as usize, self.track_height as usize);
-        let stride = self.gray_frame.stride(0);
-        let data = self.gray_frame.data(0);
+        let stride = self.frame.stride(0);
+        let data = self.frame.data(0);
         let mut out = GrayImage::new(self.track_width, self.track_height);
         for y in 0..h {
             out.data[y * w..(y + 1) * w].copy_from_slice(&data[y * stride..y * stride + w]);
@@ -366,6 +386,37 @@ fn yuv_to_rgb(y: u8, u: u8, v: u8) -> [u8; 3] {
         clamp(c - 100 * d - 208 * e),
         clamp(c + 516 * d),
     ]
+}
+
+/// The video stream's length as the file reports it (the stream's own
+/// duration, else the container's).
+pub fn video_duration(path: &Path) -> Option<f64> {
+    ffmpeg::init().ok();
+    let input = ffmpeg::format::input(path).ok()?;
+    let stream = input.streams().best(ffmpeg::media::Type::Video)?;
+    let base = f64::from(stream.time_base());
+    if stream.duration() > 0 && base > 0.0 {
+        return Some(stream.duration() as f64 * base);
+    }
+    (input.duration() > 0).then(|| input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE))
+}
+
+/// How many frames the video stream holds: the stream's own count, else its
+/// packets counted without decoding.
+pub fn video_frame_count(path: &Path) -> Option<u64> {
+    ffmpeg::init().ok();
+    let mut input = ffmpeg::format::input(path).ok()?;
+    let stream = input.streams().best(ffmpeg::media::Type::Video)?;
+    if stream.frames() > 0 {
+        return u64::try_from(stream.frames()).ok();
+    }
+    let index = stream.index();
+    Some(
+        input
+            .packets()
+            .filter(|(stream, _)| stream.index() == index)
+            .count() as u64,
+    )
 }
 
 /// `size-mtime-hash` of the display video: file size (all fragments for a
