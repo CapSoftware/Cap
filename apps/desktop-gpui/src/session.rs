@@ -11,7 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorageMonitor};
+use cap_utils::disk_space::{
+    DiskSpaceStatus, FinalizationKind, RecordingStorage, RecordingStorageMonitor,
+};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 use crate::app_sounds::AppSound;
@@ -416,6 +418,15 @@ async fn run_clean_control(
                 .then(|| "Capture did not acknowledge the requested pause state".into())
         });
     CleanControlOutcome { paused, error }
+}
+
+fn log_storage(storage: RecordingStorage, event: &'static str) {
+    tracing::warn!(
+        available_bytes = storage.available_bytes,
+        recording_bytes = storage.recording_bytes,
+        finalization_bytes = storage.finalization_bytes(),
+        "{event}"
+    );
 }
 
 pub struct RecordingSession {
@@ -1161,9 +1172,14 @@ impl RecordingSession {
 
     fn monitor_storage(&mut self, project_dir: std::path::PathBuf, cx: &mut Context<Self>) {
         self.storage_monitor = None;
+        let kind = if self.mode() == Some(recording::RecordingMode::Studio) {
+            FinalizationKind::Studio
+        } else {
+            FinalizationKind::Instant
+        };
         let task = cx.spawn(async move |this, cx| {
             let mut check_failed = false;
-            let mut storage_monitor = RecordingStorageMonitor::default();
+            let mut storage_monitor = RecordingStorageMonitor::new(kind);
             loop {
                 cx.background_executor().timer(Duration::from_secs(2)).await;
                 let is_current = |session: &Self| {
@@ -1205,6 +1221,10 @@ impl RecordingSession {
                         }
                         match storage.status() {
                             DiskSpaceStatus::Exhausted => {
+                                log_storage(
+                                    storage,
+                                    "Recording storage is low; stopping to save the recording",
+                                );
                                 this.storage_warning = true;
                                 this.stopped_for_low_storage = true;
                                 this.storage_notice = Some(tr::dialog::storage::stopping().into());
@@ -1214,6 +1234,14 @@ impl RecordingSession {
                             status => {
                                 let warning = status == DiskSpaceStatus::Low;
                                 if warning != this.storage_warning {
+                                    log_storage(
+                                        storage,
+                                        if warning {
+                                            "Recording storage is low; stopping soon to save the recording"
+                                        } else {
+                                            "Recording storage warning cleared"
+                                        },
+                                    );
                                     this.storage_warning = warning;
                                     cx.notify();
                                 }
