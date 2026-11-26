@@ -282,14 +282,11 @@ impl SegmentedControl {
         self
     }
 
-    /// Records the bounds of the whole segment holding the trailing element.
     pub fn trailing_bounds(mut self, bounds: Rc<Cell<Option<Bounds<Pixels>>>>) -> Self {
         self.trailing_bounds = Some(bounds);
         self
     }
 
-    /// Squares off the trailing segment's bottom (`Some(true)`) or top edge
-    /// where an attached menu meets it.
     pub fn trailing_attached(mut self, below: Option<bool>) -> Self {
         self.trailing_attached_below = below;
         self
