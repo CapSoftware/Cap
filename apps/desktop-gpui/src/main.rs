@@ -371,12 +371,27 @@ fn main() {
     }
 
     single_instance::acquire();
+    #[cfg(target_os = "linux")]
+    {
+        app_sounds::prepare_output();
+        cap_editor::set_linux_output(cap_recording::sources::screen_capture::sound_server_output);
+    }
     let previous_session = crash_capture::begin_session(&diagnostics::logs_dir());
     encoder_recovery::configure(previous_session.as_ref());
     blur_recovery::configure(previous_session.as_ref());
 
     #[cfg(target_os = "macos")]
     platform::install_appkit_exception_guards();
+    #[cfg(target_os = "macos")]
+    let dock_icon = {
+        let (loaded, dock_icon) = flume::bounded(1);
+        std::thread::spawn(move || {
+            let _ = loaded.send(platform::load_dock_icon(include_bytes!(
+                "../assets/dock-icon.png"
+            )));
+        });
+        dock_icon
+    };
     platform::install_url_scheme_handler();
     for argument in std::env::args().skip(1) {
         if argument.contains("token") || argument.contains("api_key") {
@@ -408,7 +423,18 @@ fn main() {
         gpui_tokio::Tokio::spawn(cx, cap_utils::operation_diagnostics::run_checkpoints()).detach();
         // The dock icon: an unbundled dev binary shows the generic terminal
         // document without it. The bytes are the shipping app's icon.png.
-        platform::set_dock_icon(include_bytes!("../assets/dock-icon.png"));
+        #[cfg(target_os = "macos")]
+        match dock_icon.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(Some(icon)) => platform::set_dock_icon(icon),
+            Err(flume::RecvTimeoutError::Timeout) => cx
+                .spawn(async move |_| {
+                    if let Ok(Some(icon)) = dock_icon.recv_async().await {
+                        platform::set_dock_icon(icon);
+                    }
+                })
+                .detach(),
+            _ => {}
+        }
 
         if let Err(error) = Assets.load_fonts(cx) {
             tracing::error!("failed to load embedded fonts: {error:#}");

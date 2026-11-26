@@ -77,7 +77,7 @@ export function parseTorExitList(text: string): ReadonlySet<string> | null {
 
 // The framework cache keeps serving its last good response when revalidation
 // fails, so the list's age comes from the upstream headers, not the fetch time.
-function upstreamListedAt(headers: Headers, now: number): number {
+export function upstreamListedAt(headers: Headers, now: number): number {
 	const stamp = Date.parse(
 		headers.get("last-modified") ?? headers.get("date") ?? "",
 	);
@@ -124,7 +124,10 @@ function startListLoad(): Promise<LoadedList | null> {
 	return pendingLoad;
 }
 
-function waitAtMost<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+export function waitAtMost<T>(
+	promise: Promise<T>,
+	ms: number,
+): Promise<T | null> {
 	return new Promise((resolve) => {
 		const timer = setTimeout(() => resolve(null), ms);
 		promise.then(

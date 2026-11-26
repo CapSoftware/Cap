@@ -79,7 +79,9 @@ pub fn read_labels(labels: &[String]) -> (Vec<String>, Option<String>) {
     let mut me = None;
     for label in labels {
         let label = label.trim();
-        let lower = label.to_lowercase();
+        // ASCII lowercasing keeps every byte offset, so a marker found in
+        // `lower` can slice `label`; full lowercasing can grow a letter ("İ").
+        let lower = label.to_ascii_lowercase();
         for marker in ["(you)", "(me)"] {
             if let Some(at) = lower.find(marker)
                 && let Some(name) = clean_name(&label[..at])
@@ -475,6 +477,23 @@ mod tests {
         let (speaking, me) = read_labels(&labels);
         assert_eq!(me.as_deref(), Some("Dana Lee"));
         assert_eq!(speaking, vec!["Ana Ruiz", "Ben Okafor", "Kwame"]);
+    }
+
+    #[test]
+    fn labels_with_letters_that_grow_when_lowercased_keep_their_names() {
+        // "İ" is two bytes and lowercases to three, so a marker found in the
+        // lowercased label sits at a different byte offset in the label.
+        let labels: Vec<String> = [
+            "İrem İnce is speaking",
+            "İSMAİL İLKİN GİRİŞ (You)",
+            "Ayşe İpek, speaking",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let (speaking, me) = read_labels(&labels);
+        assert_eq!(me.as_deref(), Some("İSMAİL İLKİN GİRİŞ"));
+        assert_eq!(speaking, vec!["İrem İnce", "Ayşe İpek"]);
     }
 
     #[test]

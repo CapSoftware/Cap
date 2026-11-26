@@ -15,6 +15,26 @@ export const MEETING_KEYWORD_MAX_CHARS = 50;
 export const MEETING_KEYWORDS_HEADER = "x-cap-keywords";
 export const MEETING_KEYWORDS_HEADER_MAX_CHARS = 8_000;
 
+// The desktop clips these fields by Unicode characters, so the limits count
+// characters too: `z.string().max` counts UTF-16 units, two per emoji.
+function withinCharacters(value: string, max: number) {
+	if (value.length <= max) return true;
+	let count = 0;
+	for (const _ of value) {
+		count += 1;
+		if (count > max) return false;
+	}
+	return true;
+}
+
+const text = (max: number) =>
+	z
+		.string()
+		.refine(
+			(value) => withinCharacters(value, max),
+			`must be at most ${max} characters`,
+		);
+
 const isTimeZone = (value: string) => {
 	try {
 		new Intl.DateTimeFormat("en-US", { timeZone: value });
@@ -37,47 +57,57 @@ export const meetingNotesRequestSchema = z
 			.max(64)
 			.regex(/^[A-Za-z0-9_-]+$/)
 			.optional(),
-		title: z.string().max(300).default(""),
+		title: text(300).default(""),
 		startedAt: z.iso.datetime({ offset: true }).optional(),
 		timezone: z
 			.string()
 			.max(64)
+			// Linux reports the /etc/localtime link target, which can sit in
+			// zoneinfo/posix or zoneinfo/right; both hold the same zones.
+			.transform((zone) => zone.replace(/^(?:posix|right)\//, ""))
 			.refine(isTimeZone, "must be an IANA time zone")
 			.optional(),
 		participants: z
 			.array(
 				z.object({
-					name: z.string().max(200).optional(),
-					email: z.string().max(320).optional(),
+					name: text(200).optional(),
+					email: text(320).optional(),
 					isSelf: z.boolean().optional(),
 				}),
 			)
 			.max(100)
 			.default([]),
-		rawNotesMarkdown: z.string().max(50_000).default(""),
-		transcript: z.string().max(MEETING_NOTES_TRANSCRIPT_MAX_CHARS).default(""),
+		rawNotesMarkdown: text(50_000).default(""),
+		transcript: text(MEETING_NOTES_TRANSCRIPT_MAX_CHARS).default(""),
 		transcriptTruncated: z.boolean().default(false),
 		template: z
 			.object({
-				name: z.string().max(100),
-				description: z.string().max(500).default(""),
+				name: text(100),
+				description: text(500).default(""),
 				sections: z
 					.array(
 						z.object({
-							heading: z.string().trim().min(1).max(120),
-							instruction: z.string().max(500).default(""),
+							heading: z
+								.string()
+								.trim()
+								.min(1)
+								.refine(
+									(value) => withinCharacters(value, 120),
+									"must be at most 120 characters",
+								),
+							instruction: text(500).default(""),
 						}),
 					)
 					.min(1)
 					.max(12),
 			})
 			.optional(),
-		vocabulary: z.array(z.string().max(100)).max(200).default([]),
+		vocabulary: z.array(text(100)).max(200).default([]),
 		summaryLanguage: summaryLanguage.default(AI_GENERATION_LANGUAGE_AUTO),
 		previous: z
 			.object({
-				markdown: z.string().max(100_000),
-				instruction: z.string().max(2_000),
+				markdown: text(100_000),
+				instruction: text(2_000),
 			})
 			.optional(),
 		headingCount: z.number().int().min(3).max(10).optional(),
@@ -99,19 +129,19 @@ export const meetingAskRequestSchema = z
 			.max(64)
 			.regex(/^[A-Za-z0-9_-]+$/)
 			.optional(),
-		question: z
-			.string()
-			.max(4_000)
-			.refine((value) => value.trim().length > 0, "must not be empty"),
-		transcript: z.string().max(MEETING_TRANSCRIPT_MAX_CHARS).default(""),
-		notesMarkdown: z.string().max(100_000).default(""),
-		title: z.string().max(300).optional(),
-		vocabulary: z.array(z.string().max(100)).max(200).default([]),
+		question: text(4_000).refine(
+			(value) => value.trim().length > 0,
+			"must not be empty",
+		),
+		transcript: text(MEETING_TRANSCRIPT_MAX_CHARS).default(""),
+		notesMarkdown: text(100_000).default(""),
+		title: text(300).optional(),
+		vocabulary: z.array(text(100)).max(200).default([]),
 		history: z
 			.array(
 				z.object({
 					role: z.enum(["user", "assistant"]),
-					content: z.string().max(8_000),
+					content: text(8_000),
 				}),
 			)
 			.max(20)
@@ -202,7 +232,9 @@ export function parseTranscribeQuery(input: {
 			ok: false,
 			detail: `keywords: at most ${MEETING_KEYWORDS_MAX} terms`,
 		};
-	if (keywords.some((term) => term.length > MEETING_KEYWORD_MAX_CHARS))
+	if (
+		keywords.some((term) => !withinCharacters(term, MEETING_KEYWORD_MAX_CHARS))
+	)
 		return {
 			ok: false,
 			detail: `keywords: each term must be at most ${MEETING_KEYWORD_MAX_CHARS} characters`,
