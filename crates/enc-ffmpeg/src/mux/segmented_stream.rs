@@ -1166,6 +1166,9 @@ impl SegmentLedger {
             // it is declared complete or a power loss leaves a torn file the
             // manifest still vouches for.
             sync_file(&segment_path);
+            if self.is_cancelled() {
+                return;
+            }
 
             self.completed_segments.push(VideoSegmentInfo {
                 path: segment_path.clone(),
