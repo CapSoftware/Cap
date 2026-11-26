@@ -60,15 +60,19 @@ pub(crate) fn start(project: &Path) -> Option<Arc<dyn SegmentObserver>> {
         model: Mutex::new(ModelSlot::Loading),
         segments: Mutex::new(Segments::default()),
         segments_changed: Condvar::new(),
+        attempts: AtomicU64::new(0),
     });
-    {
+    let earlier = {
         let mut live = lock(&LIVE);
-        // A new recording means earlier ones are done recording: none of
-        // them needs a model loaded ahead any more.
-        for earlier in live.values() {
-            earlier.release_model();
-        }
+        // A new recording means earlier ones are over: one whose scan has not
+        // taken its result by now (discarded, or stopped without a scan)
+        // never will.
+        let earlier = std::mem::take(&mut *live);
         live.insert(super::scan_key(project), scan.clone());
+        earlier
+    };
+    for earlier in earlier.into_values() {
+        earlier.release_model();
     }
     let loader = scan.clone();
     let spawned = std::thread::Builder::new()
@@ -98,6 +102,14 @@ pub(crate) fn start(project: &Path) -> Option<Arc<dyn SegmentObserver>> {
     Some(Arc::new(Observer(scan)))
 }
 
+/// Drops the live analysis of the recording at `project` (discarded, or
+/// stopped without a scan).
+pub(crate) fn discard(project: &Path) {
+    if let Some(scan) = lock(&LIVE).remove(&super::scan_key(project)) {
+        scan.release_model();
+    }
+}
+
 /// Ends live analysis of the recording at `project` once its files are
 /// final: waits a little for the segments still finishing and returns the
 /// live result when every segment of the recording was analysed live without
@@ -121,8 +133,11 @@ enum ModelSlot {
 #[derive(Default)]
 struct Segments {
     running: usize,
-    /// Each segment's analysis, waiting for its finished video's length.
-    outcomes: Vec<(u32, Option<DrainedSegment>)>,
+    /// Each segment attempt's analysis (segment, attempt), waiting for its
+    /// finished video's length. A segment whose pipeline failed to build is
+    /// tried again under the same index; its latest attempt is the one
+    /// recorded.
+    outcomes: Vec<(u32, u64, Option<DrainedSegment>)>,
 }
 
 struct LiveScan {
@@ -130,6 +145,7 @@ struct LiveScan {
     model: Mutex<ModelSlot>,
     segments: Mutex<Segments>,
     segments_changed: Condvar,
+    attempts: AtomicU64,
 }
 
 impl LiveScan {
@@ -168,10 +184,10 @@ impl LiveScan {
         }
     }
 
-    fn record(&self, index: u32, outcome: Option<DrainedSegment>) {
+    fn record(&self, index: u32, attempt: u64, outcome: Option<DrainedSegment>) {
         let mut segments = lock(&self.segments);
         segments.running -= 1;
-        segments.outcomes.push((index, outcome));
+        segments.outcomes.push((index, attempt, outcome));
         self.segments_changed.notify_all();
     }
 
@@ -201,10 +217,13 @@ impl LiveScan {
             regions: Vec::new(),
         };
         for source in &sources {
-            let drained = outcomes
+            let latest = outcomes
                 .iter()
-                .position(|(index, _)| *index == source.index)
-                .and_then(|at| outcomes.swap_remove(at).1);
+                .enumerate()
+                .filter(|(_, (index, _, _))| *index == source.index)
+                .max_by_key(|(_, (_, attempt, _))| *attempt)
+                .map(|(at, _)| at);
+            let drained = latest.and_then(|at| outcomes.swap_remove(at).2);
             let Some(drained) = drained else {
                 tracing::info!(
                     segment = source.index,
@@ -216,6 +235,19 @@ impl LiveScan {
             // would, so the last frame's masks end with the video.
             let duration = cap_redact::frames::video_duration(&source.path);
             match drained.close(String::new(), duration).0 {
+                // The muxer can still drop a frame after handing it over (its
+                // encoder queue full): the result only stands when it saw the
+                // frames the video holds.
+                Ok((segment, _))
+                    if cap_redact::frames::video_frame_count(&source.path)
+                        != Some(segment.source_frames) =>
+                {
+                    tracing::info!(
+                        segment = source.index,
+                        "Live auto redact saw frames the video does not hold"
+                    );
+                    return None;
+                }
                 Ok((segment, regions)) => {
                     redactions.segments.push(segment);
                     redactions.regions.extend(regions);
@@ -249,6 +281,7 @@ impl SegmentObserver for Observer {
         });
         lock(&self.0.segments).running += 1;
         let index = start.index;
+        let attempt = self.0.attempts.fetch_add(1, Ordering::Relaxed);
         // Started here, at the recording thread's priority: a thread inherits
         // the priority of the thread that creates it, and the analysis thread
         // lowers its own.
@@ -256,7 +289,7 @@ impl SegmentObserver for Observer {
             Ok(copy) => copy,
             Err(error) => {
                 tracing::warn!(%error, "Live auto redact could not start its copy");
-                self.0.record(index, None);
+                self.0.record(index, attempt, None);
                 *lock(&frames.tx) = None;
                 return Box::new(Observation(frames));
             }
@@ -268,11 +301,11 @@ impl SegmentObserver for Observer {
             .spawn(move || {
                 crate::transcription::refine::lower_thread_priority();
                 let outcome = analyse_segment(&scan, index, copy, &worker_frames);
-                scan.record(index, outcome);
+                scan.record(index, attempt, outcome);
             });
         if let Err(error) = spawned {
             tracing::warn!(%error, "Live auto redact could not start a segment");
-            self.0.record(index, None);
+            self.0.record(index, attempt, None);
             *lock(&frames.tx) = None;
         }
         Box::new(Observation(frames))
