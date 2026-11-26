@@ -465,7 +465,7 @@ fn flush_resampler(
     Ok(())
 }
 
-fn resample_capacity(resampler: &resampling::Context, input_samples: usize) -> usize {
+pub fn resample_capacity(resampler: &resampling::Context, input_samples: usize) -> usize {
     let src_rate = resampler.input().rate.max(1) as u64;
     let dst_rate = resampler.output().rate.max(1) as u64;
     let pending_output_samples = resampler
