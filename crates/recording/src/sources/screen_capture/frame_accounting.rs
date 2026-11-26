@@ -47,9 +47,7 @@ const REFRESH_CHECKS_PER_SECOND: u32 = 100;
 /// - The slot follows the display's refresh rate. It is re-read when a gap
 ///   would be counted or frames arrive early (rate drops and rises), and once
 ///   a second; a changed rate re-derives the slot, forgets the recent steps
-///   and does not count that gap. A change the display mode does not report
-///   leaves every recent step on a common multiple, which never counts as
-///   continuous change, so it can cost at most one window of steps.
+///   and does not count that gap.
 #[derive(Debug)]
 pub struct CaptureGapCounter {
     slot_ns: u64,
@@ -169,9 +167,8 @@ impl CaptureGapCounter {
         };
         let slots = ((display_ns - previous + self.slot_ns / 2) / self.slot_ns).max(1);
         self.push_step(slots, idles);
-        let continuous = self.step_count >= CADENCE_WINDOW
-            && self.step_idles.iter().all(|idles| *idles == 0)
-            && self.steps.iter().copied().fold(0, gcd) == 1;
+        let continuous =
+            self.step_count >= CADENCE_WINDOW && self.step_idles.iter().all(|idles| *idles == 0);
         let lost = if continuous {
             slots - 1
         } else if self.step_count < CADENCE_MIN_STEPS || self.steady_run < STEADY_STEPS {
@@ -207,10 +204,6 @@ impl CaptureGapCounter {
             .max()
             .map_or(1, |(_, step)| step);
     }
-}
-
-fn gcd(a: u64, b: u64) -> u64 {
-    if b == 0 { a } else { gcd(b, a % b) }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -722,17 +715,11 @@ mod tests {
     }
 
     #[test]
-    fn a_refresh_change_the_display_mode_hides_costs_at_most_one_window() {
+    fn capture_starved_to_every_other_refresh_still_counts() {
         let mut feed = RateFeed::new(120, 120.0);
         assert_eq!(feed.frames(REFRESH_120_MS, 240), 0);
-        let during = feed.frames(REFRESH_60_MS, CADENCE_WINDOW);
-        assert!(during < CADENCE_WINDOW as u64, "{during}");
-        assert_eq!(feed.frames(REFRESH_60_MS, 240), 0);
-        assert_eq!(
-            feed.frames(4.0 * REFRESH_120_MS, 1),
-            1,
-            "real skips count on the content's own grid"
-        );
+        assert_eq!(feed.frames(2.0 * REFRESH_120_MS, 240), 240);
+        assert_eq!(feed.frames(REFRESH_120_MS, 60), 0);
     }
 
     #[test]

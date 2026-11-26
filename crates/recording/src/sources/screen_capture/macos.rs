@@ -1,6 +1,4 @@
-use super::frame_accounting::{
-    CaptureGapCounter, FrameLossCarry, ScreenFrameAccounting, capture_slot_ns,
-};
+use super::frame_accounting::{CaptureGapCounter, FrameLossCarry, ScreenFrameAccounting};
 use super::*;
 use crate::{
     ChannelAudioSourceConfig,
@@ -321,16 +319,18 @@ impl output_pipeline::VideoFrame for VideoFrame {
 
 struct CaptureLossTracker {
     gaps: CaptureGapCounter,
+    display: Display,
     accounting: Arc<ScreenFrameAccounting>,
     tick_numer: u64,
     tick_denom: u64,
 }
 
 impl CaptureLossTracker {
-    fn new(slot_ns: u64, accounting: Arc<ScreenFrameAccounting>) -> Self {
+    fn new(fps: u32, display: Display, accounting: Arc<ScreenFrameAccounting>) -> Self {
         let timebase = cidre::mach::TimeBaseInfo::new();
         Self {
-            gaps: CaptureGapCounter::new(slot_ns),
+            gaps: CaptureGapCounter::for_display(fps, display.raw_handle().refresh_rate()),
+            display,
             accounting,
             tick_numer: u64::from(timebase.numer.max(1)),
             tick_denom: u64::from(timebase.denom.max(1)),
@@ -356,7 +356,10 @@ impl CaptureLossTracker {
         match (info.status, info.display_time) {
             (Some(sc::FrameStatus::Complete), Some(ticks)) if has_image => {
                 let display_time_ns = ticks.saturating_mul(self.tick_numer) / self.tick_denom;
-                let skipped = self.gaps.complete(display_time_ns);
+                let display = self.display;
+                let skipped = self
+                    .gaps
+                    .complete_on_display(display_time_ns, || display.raw_handle().refresh_rate());
                 if skipped > 0 {
                     debug!(
                         display_time_ns,
@@ -379,10 +382,6 @@ impl CaptureLossTracker {
     fn dropped(&self, carry: FrameLossCarry) {
         self.accounting.record_callback_dropped(carry);
     }
-}
-
-fn capture_slot_for(config: &Config, display: &Display) -> u64 {
-    capture_slot_ns(config.fps, display.raw_handle().refresh_rate())
 }
 
 impl ScreenCaptureConfig<CMSampleBufferCapture> {
@@ -482,7 +481,6 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         let (stall_health_tx, stall_health_rx) =
             tokio::sync::mpsc::channel::<output_pipeline::PipelineHealthEvent>(32);
-        let capture_slot_ns = capture_slot_for(&self.config, &display);
         let frame_accounting = Arc::new(ScreenFrameAccounting::default());
 
         let rebuild_params = Arc::new(CapturerRebuildParams {
@@ -502,7 +500,6 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             scaling_logged: scaling_logged.clone(),
             scaled_frame_count: scaled_frame_count.clone(),
             stall_health_tx: stall_health_tx.clone(),
-            capture_slot_ns,
             frame_accounting: frame_accounting.clone(),
         });
 
@@ -514,7 +511,8 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 let sys_audio_drop_counter = system_audio_drop_counter.clone();
                 let sys_audio_frame_counter = system_audio_frame_counter.clone();
                 let stall_health_tx = stall_health_tx.clone();
-                let mut loss = CaptureLossTracker::new(capture_slot_ns, frame_accounting.clone());
+                let mut loss =
+                    CaptureLossTracker::new(self.config.fps, display, frame_accounting.clone());
                 move |frame| {
                     let sample_buffer = frame.sample_buf();
 
@@ -1246,7 +1244,6 @@ struct CapturerRebuildParams {
     scaling_logged: Arc<AtomicBool>,
     scaled_frame_count: Arc<AtomicU64>,
     stall_health_tx: output_pipeline::HealthSender,
-    capture_slot_ns: u64,
     frame_accounting: Arc<ScreenFrameAccounting>,
 }
 
@@ -1330,7 +1327,7 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
             let sys_audio_frame_counter = params.system_audio_frame_counter.clone();
             let stall_health_tx = params.stall_health_tx.clone();
             let mut loss =
-                CaptureLossTracker::new(params.capture_slot_ns, params.frame_accounting.clone());
+                CaptureLossTracker::new(params.config.fps, display, params.frame_accounting.clone());
             move |frame| {
                 let sample_buffer = frame.sample_buf();
 
