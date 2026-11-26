@@ -317,6 +317,7 @@ pub struct WindowsFragmentedM4SMuxer {
         Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
     health_tx: SharedHealthSender,
     finish_wait: Option<EncoderFinishWait>,
+    stop_cut: Option<super::core::StopCut>,
 }
 
 pub struct WindowsFragmentedM4SMuxerConfig {
@@ -398,6 +399,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             segment_tx: config.segment_tx,
             health_tx: SharedHealthSender::new(),
             finish_wait: config.finish_wait,
+            stop_cut: super::core::StopCut::current(),
         };
 
         muxer.start_encoder()?;
@@ -475,6 +477,7 @@ impl WindowsFragmentedM4SMuxer {
         let health_tx = self.health_tx.clone();
         let base_path = self.base_path.clone();
         let pause_flag = self.pause.flag();
+        let stop_cut = self.stop_cut.clone();
         let encoder_handle = std::thread::Builder::new()
             .name("win-m4s-segment-encoder".to_string())
             .spawn(move || {
@@ -484,7 +487,7 @@ impl WindowsFragmentedM4SMuxer {
                     return Err(anyhow!("Failed to send ready signal - receiver dropped"));
                 }
 
-                let mut pacer = FramePacer::new(video_config.fps());
+                let mut pacer = FramePacer::new(video_config.fps()).stopping_at(stop_cut);
                 let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
                 let mut first_timestamp: Option<Duration> = None;
 
@@ -758,6 +761,7 @@ pub struct WindowsFragmentedM4SCameraMuxer {
     disk_space_callback: Option<DiskSpaceCallback>,
     health_tx: SharedHealthSender,
     finish_wait: Option<EncoderFinishWait>,
+    stop_cut: Option<super::core::StopCut>,
 }
 
 pub struct WindowsFragmentedM4SCameraMuxerConfig {
@@ -826,6 +830,7 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
             disk_space_callback: config.disk_space_callback,
             health_tx: SharedHealthSender::new(),
             finish_wait: config.finish_wait,
+            stop_cut: super::core::StopCut::current(),
         };
 
         muxer.start_encoder()?;
@@ -942,6 +947,7 @@ impl WindowsFragmentedM4SCameraMuxer {
         let health_tx = self.health_tx.clone();
         let base_path = self.base_path.clone();
         let pause_flag = self.pause.flag();
+        let stop_cut = self.stop_cut.clone();
         let encoder_handle = std::thread::Builder::new()
             .name("win-m4s-camera-segment-encoder".to_string())
             .spawn(move || {
@@ -953,7 +959,7 @@ impl WindowsFragmentedM4SCameraMuxer {
                     ));
                 }
 
-                let mut pacer = FramePacer::new(video_config.fps());
+                let mut pacer = FramePacer::new(video_config.fps()).stopping_at(stop_cut);
                 let mut last_frame: Option<NativeCameraFrame> = None;
                 let mut first_timestamp: Option<Duration> = None;
 
