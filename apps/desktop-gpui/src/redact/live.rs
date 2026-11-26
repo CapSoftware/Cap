@@ -22,12 +22,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cap_project::redaction::{REDACTIONS_VERSION, RedactionRegion, RedactionSegment, Redactions};
+use cap_project::redaction::{REDACTIONS_VERSION, Redactions};
 use cap_recording::segment_observer::{
     ScreenFrame, ScreenFrames, SegmentObservation, SegmentObserver, SegmentStart,
     screen_frame_video,
 };
-use cap_redact::analyze::LiveSegment;
+use cap_redact::analyze::{Drained, DrainedSegment, LiveSegment};
 
 /// Frames between the muxer and the copy; each holds a capture buffer. The
 /// muxer hands over the frames that queued while its encoder started in one
@@ -118,16 +118,11 @@ enum ModelSlot {
     Failed,
 }
 
-/// A segment analysed live: its record and regions.
-type SegmentResult = (RedactionSegment, Vec<RedactionRegion>);
-
 #[derive(Default)]
 struct Segments {
     running: usize,
-    outcomes: Vec<(u32, Option<SegmentResult>)>,
-    /// Each display video's duration once the recording's files are final:
-    /// published by `result`, waited for by the analysis threads.
-    durations: Option<HashMap<u32, Option<f64>>>,
+    /// Each segment's analysis, waiting for its finished video's length.
+    outcomes: Vec<(u32, Option<DrainedSegment>)>,
 }
 
 struct LiveScan {
@@ -173,49 +168,17 @@ impl LiveScan {
         }
     }
 
-    fn record(&self, index: u32, outcome: Option<SegmentResult>) {
+    fn record(&self, index: u32, outcome: Option<DrainedSegment>) {
         let mut segments = lock(&self.segments);
         segments.running -= 1;
         segments.outcomes.push((index, outcome));
         self.segments_changed.notify_all();
     }
 
-    /// The finished display video's duration for a segment, once `result` has
-    /// it; `None` if it does not come in time or the file does not say.
-    fn wait_for_duration(&self, index: u32) -> Option<f64> {
-        let deadline = Instant::now() + FINISH_WAIT;
-        let mut segments = lock(&self.segments);
-        loop {
-            if let Some(durations) = &segments.durations {
-                return durations.get(&index).copied().flatten();
-            }
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return None;
-            }
-            segments = self
-                .segments_changed
-                .wait_timeout(segments, left)
-                .unwrap_or_else(PoisonError::into_inner)
-                .0;
-        }
-    }
-
     fn result(&self, project: &Path) -> Option<Redactions> {
         let sources = cap_redact::segment_sources(project).ok()?;
-        let durations = sources
-            .iter()
-            .map(|source| {
-                (
-                    source.index,
-                    cap_redact::frames::video_duration(&source.path),
-                )
-            })
-            .collect();
         let deadline = Instant::now() + FINISH_WAIT;
         let mut segments = lock(&self.segments);
-        segments.durations = Some(durations);
-        self.segments_changed.notify_all();
         while segments.running > 0 {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -228,6 +191,8 @@ impl LiveScan {
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }
+        let mut outcomes = std::mem::take(&mut segments.outcomes);
+        drop(segments);
         let mut redactions = Redactions {
             version: REDACTIONS_VERSION,
             model: super::model_version(Some(&self.model_dir)),
@@ -236,22 +201,30 @@ impl LiveScan {
             regions: Vec::new(),
         };
         for source in &sources {
-            let Some((_, Some((segment, regions)))) = segments
-                .outcomes
+            let drained = outcomes
                 .iter()
-                .find(|(index, _)| *index == source.index)
-            else {
+                .position(|(index, _)| *index == source.index)
+                .and_then(|at| outcomes.swap_remove(at).1);
+            let Some(drained) = drained else {
                 tracing::info!(
                     segment = source.index,
                     "Live auto redact has no complete result for a segment"
                 );
                 return None;
             };
-            let fingerprint = super::first_frame_fingerprint(&source.path).ok()?;
-            let mut segment = segment.clone();
-            segment.fingerprint = fingerprint;
-            redactions.segments.push(segment);
-            redactions.regions.extend(regions.iter().cloned());
+            // Closed with the finished video's length, as a scan of the file
+            // would, so the last frame's masks end with the video.
+            let duration = cap_redact::frames::video_duration(&source.path);
+            match drained.close(String::new(), duration).0 {
+                Ok((segment, regions)) => {
+                    redactions.segments.push(segment);
+                    redactions.regions.extend(regions);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Live auto redact failed on a segment");
+                    return None;
+                }
+            }
         }
         tracing::info!(
             segments = redactions.segments.len(),
@@ -341,8 +314,9 @@ impl ScreenFrames for Frames {
 struct Observation(Arc<Frames>);
 
 impl SegmentObservation for Observation {
-    /// Closes the hand-off; the analysis thread finishes on its own and the
-    /// end of the recording waits for it, so stopping is never held up.
+    /// Closes the hand-off and returns at once, so stopping is never held up;
+    /// the analysis thread finishes on its own and `take` waits for it once
+    /// the recording's files are final.
     fn stop(self: Box<Self>) {
         *lock(&self.0.tx) = None;
     }
@@ -410,14 +384,14 @@ impl Copier {
     }
 }
 
-/// Analyses one segment's frames as they arrive; `None` when the segment
-/// has to be scanned from its file instead.
+/// Analyses one segment's frames as they arrive; `None` when the recording
+/// gets no head start because of this segment.
 fn analyse_segment(
     scan: &LiveScan,
     index: u32,
     copy: Copier,
     frames: &Frames,
-) -> Option<SegmentResult> {
+) -> Option<DrainedSegment> {
     let Copier {
         rx: copied_rx,
         give_up,
@@ -499,44 +473,46 @@ fn analyse_segment(
         );
         return None;
     };
-    let result = if lost {
+    let drained = if lost {
         live.cancel()
+            .map(|result| (result.model, None, result.dropped))
     } else {
-        live.finish(String::new(), scan.wait_for_duration(index))
+        live.drain().map(
+            |Drained {
+                 model,
+                 segment,
+                 dropped,
+             }| (model, Some(segment), dropped),
+        )
     };
-    let result = match result {
-        Ok(result) => result,
+    let (model, segment, dropped) = match drained {
+        Ok(drained) => drained,
         Err(error) => {
             tracing::warn!(%error, "Live auto redact stopped unexpectedly");
             return None;
         }
     };
-    scan.give_back(result.model);
-    if lost || result.dropped > 0 {
+    scan.give_back(model);
+    let segment = segment.filter(|_| dropped == 0);
+    let Some(segment) = segment else {
         tracing::info!(
             segment = index,
             copy_drops,
             first_drop_ms = ?first_drop_ms,
             backlog_drops,
             missed,
-            analysis_drops = result.dropped,
+            analysis_drops = dropped,
             model_wait,
             model_failed,
             read_failed,
             "Live auto redact fell behind; no head start for the recording"
         );
         return None;
-    }
+    };
     tracing::info!(
         segment = index,
-        frames = result.stats.frames,
+        frames = segment.stats().frames,
         "Live auto redact analysed the segment as it was recorded"
     );
-    match result.segment {
-        Ok(segment) => Some(segment),
-        Err(error) => {
-            tracing::warn!(%error, "Live auto redact failed on a segment");
-            None
-        }
-    }
+    Some(segment)
 }
