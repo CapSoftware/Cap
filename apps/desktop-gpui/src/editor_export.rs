@@ -3263,7 +3263,7 @@ impl EditorWindow {
                     ui::keyboard_nav::ring(
                         div()
                             .id("export-clipboard-trigger")
-                            .w(px(20.))
+                            .w(px(22.))
                             .h_full()
                             .flex_shrink_0()
                             .flex()
@@ -3272,7 +3272,22 @@ impl EditorWindow {
                             .rounded(px(4.))
                             .cursor_pointer()
                             .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
-                            .child(svg().path("icons/chevron-down.svg").size(px(11.))),
+                            .child(
+                                div()
+                                    .w_full()
+                                    .h(px(16.))
+                                    .border_l_1()
+                                    .border_color(Hsla::from(editor.line))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        svg()
+                                            .path("icons/chevron-down.svg")
+                                            .size(px(16.))
+                                            .text_color(Hsla::from(editor.text_1)),
+                                    ),
+                            ),
                     ),
                     cx.listener(|this, bounds: &gpui::Bounds<gpui::Pixels>, _, cx| {
                         cx.stop_propagation();

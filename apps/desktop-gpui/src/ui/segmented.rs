@@ -326,6 +326,8 @@ impl RenderOnce for SegmentedControl {
                     None
                 };
 
+                let has_trailing = trailing.is_some();
+
                 div()
                     .id(SharedString::from(format!("{prefix}-{index}")))
                     .flex()
@@ -334,7 +336,7 @@ impl RenderOnce for SegmentedControl {
                     .justify_center()
                     .gap(item_gap)
                     .px(item_padding_x)
-                    .when(trailing.is_some(), |this| this.px(px(4.)).gap(px(4.)))
+                    .when(has_trailing, |this| this.px(px(4.)).gap(px(4.)))
                     .when(f32::from(item_padding_y) > 0., |this| {
                         this.py(item_padding_y)
                     })
@@ -379,7 +381,12 @@ impl RenderOnce for SegmentedControl {
                     }))
                     .children(option.label.map(|label| {
                         if stretch {
-                            div().min_w_0().truncate().child(label).into_any_element()
+                            div()
+                                .min_w_0()
+                                .when(has_trailing, |this| this.flex_1().text_center())
+                                .truncate()
+                                .child(label)
+                                .into_any_element()
                         } else {
                             label.into_any_element()
                         }
