@@ -2870,7 +2870,13 @@ impl<T> SystemAudioStaging<T> {
     }
 }
 
-pub(crate) const SYSTEM_AUDIO_ROUTE_POLL: Duration = Duration::from_millis(40);
+pub(crate) const SYSTEM_AUDIO_ROUTE_POLL: Duration = Duration::from_millis(20);
+// Running `pactl` for every proof cost about a core between Cap and the sound
+// server. A quiet `pactl subscribe` is the proof instead: any route change
+// arrives there as an event, so audio older than this margin before a quiet
+// tick is released, and only events (plus a slow recheck) run `pactl list`.
+const SYSTEM_AUDIO_EVENT_MARGIN: Duration = Duration::from_millis(50);
+const SYSTEM_AUDIO_ROUTE_RECHECK: Duration = Duration::from_secs(2);
 const SYSTEM_AUDIO_SUBSCRIBE_RESTART: Duration = Duration::from_millis(200);
 const SYSTEM_AUDIO_SUBSCRIBE_BACKOFF_MAX: Duration = Duration::from_secs(2);
 
@@ -2896,6 +2902,41 @@ pub(crate) enum SystemAudioWatch {
     Reattached {
         at: Instant,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RouteWatchStep {
+    Inspect,
+    QuietProof,
+    Wait,
+}
+
+pub(crate) fn route_watch_step(
+    event_pending: bool,
+    since_inspection: Option<Duration>,
+    announced: Option<SystemAudioRoutePlan>,
+) -> RouteWatchStep {
+    if event_pending || since_inspection.is_none_or(|since| since >= SYSTEM_AUDIO_ROUTE_RECHECK) {
+        RouteWatchStep::Inspect
+    } else if announced == Some(SystemAudioRoutePlan::Keep) {
+        RouteWatchStep::QuietProof
+    } else {
+        RouteWatchStep::Wait
+    }
+}
+
+/// Whether a `pactl subscribe` line can mean the system-audio capture moved:
+/// a capture stream, source, sink, card or default changed. Other apps'
+/// playback streams and clients change constantly and are ignored.
+pub(crate) fn route_event_is_relevant(line: &str) -> bool {
+    let Some((_, target)) = line.split_once(" on ") else {
+        return !line.trim().is_empty();
+    };
+    let kind = target.split(" #").next().unwrap_or(target).trim();
+    matches!(
+        kind,
+        "source-output" | "source" | "sink" | "card" | "server"
+    )
 }
 
 fn wait_for_route_poll(cancel: &CancellationToken, wait: Duration) {
@@ -2929,7 +2970,7 @@ fn spawn_route_subscribe() -> (std::sync::mpsc::Receiver<()>, Option<std::proces
                     match reader.read_line(&mut line) {
                         Ok(0) | Err(_) => break,
                         Ok(_) => {
-                            if wake_tx.send(()).is_err() {
+                            if route_event_is_relevant(&line) && wake_tx.send(()).is_err() {
                                 break;
                             }
                         }
@@ -2955,12 +2996,37 @@ pub(crate) fn watch_system_audio_route(
     let (mut wake_rx, mut subscribe) = spawn_route_subscribe();
     let mut announced = None;
     let mut backoff = SYSTEM_AUDIO_SUBSCRIBE_RESTART;
+    let mut event_pending = true;
+    let mut last_inspection: Option<Instant> = None;
     while !cancel.is_cancelled() {
         let current = route.lock().unwrap().as_ref().copied();
+        if current.is_some() && !event_pending && wake_rx.try_recv().is_ok() {
+            event_pending = true;
+        }
+        let step = route_watch_step(
+            event_pending,
+            last_inspection.map(|at| at.elapsed()),
+            announced,
+        );
         if let Some(current) = current
+            && step == RouteWatchStep::QuietProof
+        {
+            if let Some(check_started) = Instant::now().checked_sub(SYSTEM_AUDIO_EVENT_MARGIN) {
+                on_watch(
+                    current.stream_id,
+                    SystemAudioWatch::Checked {
+                        plan: SystemAudioRoutePlan::Keep,
+                        check_started,
+                    },
+                );
+            }
+        } else if let Some(current) = current
+            && step == RouteWatchStep::Inspect
             && !cancel.is_cancelled()
         {
+            event_pending = false;
             let check_started = Instant::now();
+            last_inspection = Some(check_started);
             let (plan, monitor) = inspect_system_audio_source_output(current.source_output);
             let resolved = match plan {
                 SystemAudioRoutePlan::Reattach => {
@@ -3046,10 +3112,17 @@ pub(crate) fn watch_system_audio_route(
             break;
         }
         match wake_rx.recv_timeout(SYSTEM_AUDIO_ROUTE_POLL) {
-            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            Ok(()) => {
+                event_pending = true;
+                backoff = SYSTEM_AUDIO_SUBSCRIBE_RESTART;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 backoff = SYSTEM_AUDIO_SUBSCRIBE_RESTART;
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                // Without a subscription nothing proves the route between
+                // checks, so every pass after a restart inspects.
+                event_pending = true;
                 let (wait, next) = route_watch_after_disconnect(backoff);
                 backoff = next;
                 stop_route_subscribe(&mut subscribe);
@@ -4022,15 +4095,15 @@ fn x11_source_pixel(
 #[cfg(test)]
 mod system_audio_tests {
     use super::{
-        OwnedSystemAudioFeed, PactlSourceOutput, PulseInputRole, SystemAudioRouteCheck,
-        SystemAudioRoutePlan, SystemAudioStaging, SystemAudioStartupAttach,
+        OwnedSystemAudioFeed, PactlSourceOutput, PulseInputRole, RouteWatchStep,
+        SystemAudioRouteCheck, SystemAudioRoutePlan, SystemAudioStaging, SystemAudioStartupAttach,
         newly_created_source_output, pactl_monitor_preference, pactl_source_index,
         plan_system_audio_route, preferred_system_audio_device, previous_source_destination,
         process_source_output_ids, pulse_input_route_destination, retry_system_audio_connection,
-        route_watch_after_disconnect, routes_default_microphone_through_server,
-        source_output_needs_move, source_output_route_matches, started_input_source_output,
-        system_audio_startup_attach, uses_default_pulse_input, wait_for_audio_after_route,
-        wait_for_started_source_output,
+        route_event_is_relevant, route_watch_after_disconnect, route_watch_step,
+        routes_default_microphone_through_server, source_output_needs_move,
+        source_output_route_matches, started_input_source_output, system_audio_startup_attach,
+        uses_default_pulse_input, wait_for_audio_after_route, wait_for_started_source_output,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -4272,6 +4345,57 @@ mod system_audio_tests {
         });
         assert!(released.is_empty());
         assert_eq!(staging.pending_len(), 0);
+    }
+
+    #[test]
+    fn only_capture_route_events_wake_the_system_audio_check() {
+        for line in [
+            "Event 'change' on source-output #42",
+            "Event 'remove' on sink #7",
+            "Event 'new' on source #9",
+            "Event 'change' on server #4294967295",
+            "Event 'change' on card #3",
+        ] {
+            assert!(route_event_is_relevant(line), "{line}");
+        }
+        for line in [
+            "Event 'change' on sink-input #12",
+            "Event 'new' on client #88",
+            "Event 'remove' on module #5",
+        ] {
+            assert!(!route_event_is_relevant(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_quiet_subscription_proves_the_route_without_running_pactl() {
+        let keep = Some(SystemAudioRoutePlan::Keep);
+        let recent = Some(Duration::from_millis(100));
+        assert_eq!(
+            route_watch_step(false, recent, keep),
+            RouteWatchStep::QuietProof
+        );
+        assert_eq!(
+            route_watch_step(true, recent, keep),
+            RouteWatchStep::Inspect
+        );
+        assert_eq!(route_watch_step(false, None, keep), RouteWatchStep::Inspect);
+        assert_eq!(
+            route_watch_step(false, Some(Duration::from_secs(2)), keep),
+            RouteWatchStep::Inspect
+        );
+        for unproven in [
+            None,
+            Some(SystemAudioRoutePlan::Lost),
+            Some(SystemAudioRoutePlan::Reattach),
+            Some(SystemAudioRoutePlan::Ignore),
+        ] {
+            assert_eq!(
+                route_watch_step(false, recent, unproven),
+                RouteWatchStep::Wait,
+                "{unproven:?}"
+            );
+        }
     }
 
     #[test]
