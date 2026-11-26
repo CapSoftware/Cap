@@ -55,7 +55,7 @@ use crate::i18n::tr;
 use crate::{editor_timeline::clip_timeline_offsets, store};
 
 mod align;
-mod refine;
+pub(crate) mod refine;
 mod verbatim;
 
 pub use refine::{

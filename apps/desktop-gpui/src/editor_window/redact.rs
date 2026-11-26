@@ -2,17 +2,27 @@
 //! Enhance, and a card that holds what to hide, how, and how the scan is
 //! going. The card stays open while the pointer is on the chip or the card.
 //! Analysis runs in the background (see `crate::redact`); its results reach
-//! the renderer as they arrive.
+//! the renderer and the redact lane as they arrive.
+//!
+//! While a scan runs, the chip's icon becomes a progress ring and the redact
+//! lane dims the part of the timeline not read yet, with a soft edge where
+//! the scan is reading. Both step with each progress update and repaint only
+//! the chip and the timeline overlay, never the whole editor.
 
 use super::*;
 use crate::redact::{JobPhase, RedactJob};
 use cap_project::{AutoRedactConfiguration, RedactCategory, RedactStyle, redaction::Redactions};
-use gpui::{AnyElement, relative};
+use gpui::{AnyElement, PathBuilder, relative};
+use std::f32::consts::{FRAC_PI_2, TAU};
 
 const CARD_DELAY: Duration = Duration::from_millis(350);
 const CARD_CLOSE_GRACE: Duration = Duration::from_millis(220);
 const CARD_WIDTH: f32 = 304.;
-const POLL: Duration = Duration::from_millis(300);
+const POLL: Duration = Duration::from_millis(250);
+const FINISH_HOLD: Duration = Duration::from_millis(1600);
+const FINISH_FADE: Duration = Duration::from_millis(500);
+const RING: f32 = 14.;
+const SPIN_SECONDS: f32 = 1.1;
 
 #[derive(Default)]
 pub(crate) struct RedactUi {
@@ -28,6 +38,12 @@ pub(crate) struct RedactUi {
     pub(crate) redactions: Option<Arc<Redactions>>,
     loaded_for: Option<PathBuf>,
     highlighted: Vec<String>,
+    finished_at: Option<Instant>,
+    preparing_since: Option<Instant>,
+    hover_ids: Option<Vec<String>>,
+    /// Set while the editor checks a saved scan that is probably still
+    /// current: nothing shows unless it turns out to need a real scan.
+    quiet: bool,
 }
 
 pub(crate) fn category_label(category: RedactCategory) -> &'static str {
@@ -107,10 +123,159 @@ fn redact_switch(theme: &Theme, on: bool) -> impl IntoElement {
         )
 }
 
+fn progress_ring(fraction: f32, spin: Option<f32>, arc: Hsla, track: Hsla) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            const STROKE: f32 = 1.75;
+            let size = f32::from(bounds.size.width.min(bounds.size.height));
+            let radius = size / 2. - STROKE / 2. - 0.5;
+            let center = bounds.center();
+            paint_arc(window, center, radius, 0., TAU, STROKE, track);
+            let (start, sweep) = match spin {
+                Some(turn) => (turn * TAU, 0.28 * TAU),
+                None => (0., fraction.clamp(0., 1.) * TAU),
+            };
+            if sweep > 0.02 {
+                paint_arc(
+                    window,
+                    center,
+                    radius,
+                    start - FRAC_PI_2,
+                    sweep,
+                    STROKE,
+                    arc,
+                );
+            }
+        },
+    )
+    .size(px(RING))
+    .flex_none()
+}
+
+fn arc_point(center: gpui::Point<Pixels>, radius: f32, angle: f32) -> gpui::Point<Pixels> {
+    gpui::point(
+        center.x + px(radius * angle.cos()),
+        center.y + px(radius * angle.sin()),
+    )
+}
+
+fn paint_arc(
+    window: &mut Window,
+    center: gpui::Point<Pixels>,
+    radius: f32,
+    start: f32,
+    sweep: f32,
+    width: f32,
+    color: Hsla,
+) {
+    let steps = ((sweep / TAU) * 64.).ceil().max(2.) as usize;
+    let mut builder = PathBuilder::stroke(px(width));
+    for step in 0..=steps {
+        let point = arc_point(center, radius, start + sweep * step as f32 / steps as f32);
+        if step == 0 {
+            builder.move_to(point);
+        } else {
+            builder.line_to(point);
+        }
+    }
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
+    }
+    if sweep < TAU - 0.01 {
+        for angle in [start, start + sweep] {
+            paint_dot(window, arc_point(center, radius, angle), width / 2., color);
+        }
+    }
+}
+
+fn paint_dot(window: &mut Window, center: gpui::Point<Pixels>, radius: f32, color: Hsla) {
+    let mut builder = PathBuilder::fill();
+    let steps = 12;
+    for step in 0..=steps {
+        let point = arc_point(center, radius, TAU * step as f32 / steps as f32);
+        if step == 0 {
+            builder.move_to(point);
+        } else {
+            builder.line_to(point);
+        }
+    }
+    builder.close();
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
+    }
+}
+
 impl EditorWindow {
+    fn redact_scan_shown(&self) -> bool {
+        self.project.auto_redact.enabled
+            && !self.redact.quiet
+            && matches!(
+                self.redact.phase,
+                Some(JobPhase::Preparing | JobPhase::Scanning)
+            )
+    }
+
+    fn redact_chip_glyph(&self, ink: Hsla, window: &mut Window, cx: &gpui::App) -> AnyElement {
+        let editor = self.theme.editor;
+        let now = Instant::now();
+        let still = cx.reduce_motion();
+        if self.redact_scan_shown() {
+            let shown = self.redact.progress;
+            let spin = match (&self.redact.phase, self.redact.preparing_since) {
+                (Some(JobPhase::Preparing), Some(since)) if !still => Some(
+                    (now.saturating_duration_since(since).as_secs_f32() / SPIN_SECONDS).fract(),
+                ),
+                (Some(JobPhase::Preparing), _) => Some(0.),
+                _ => None,
+            };
+            if !still && spin.is_some() {
+                window.request_animation_frame();
+            }
+            return progress_ring(
+                shown,
+                spin,
+                Hsla::from(editor.accent_ink),
+                Hsla::from(editor.accent).opacity(0.24),
+            )
+            .into_any_element();
+        }
+        if let Some(at) = self.redact.finished_at {
+            let age = now.saturating_duration_since(at);
+            if age < FINISH_HOLD {
+                if !still {
+                    window.request_animation_frame();
+                }
+                let fade_in = (age.as_secs_f32() / 0.18).min(1.);
+                let fade_out = ((FINISH_HOLD.saturating_sub(age)).as_secs_f32() / 0.25).min(1.);
+                return svg()
+                    .path("icons/check.svg")
+                    .size(px(RING))
+                    .flex_none()
+                    .text_color(Hsla::from(editor.accent_ink))
+                    .opacity(if still { 1. } else { fade_in.min(fade_out) })
+                    .into_any_element();
+            }
+        }
+        let ready = self.project_ready();
+        let on = self.project.auto_redact.enabled;
+        svg()
+            .path("icons/eye-off.svg")
+            .size(px(RING))
+            .flex_none()
+            .text_color(ink)
+            .when(ready && !on, |this| {
+                this.group_hover("transport-redact", |style| {
+                    style.text_color(Hsla::from(editor.text_1))
+                })
+            })
+            .into_any_element()
+    }
+
     pub(super) fn render_preview_redact(
         &self,
         labels: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
@@ -120,6 +285,7 @@ impl EditorWindow {
         let wash = Hsla::from(editor.accent);
         let ink = Hsla::from(if on { editor.accent_ink } else { editor.text_2 });
         let bounds = self.redact.chip_bounds.clone();
+        let glyph = self.redact_chip_glyph(ink, window, cx);
         div()
             .id("transport-redact")
             .group("transport-redact")
@@ -165,18 +331,7 @@ impl EditorWindow {
                 this.redact.chip_hovered = *hovered;
                 this.redact_hover_changed(cx);
             }))
-            .child(
-                svg()
-                    .path("icons/eye-off.svg")
-                    .size(px(14.))
-                    .flex_none()
-                    .text_color(ink)
-                    .when(ready && !on, |this| {
-                        this.group_hover("transport-redact", |style| {
-                            style.text_color(Hsla::from(editor.text_1))
-                        })
-                    }),
-            )
+            .child(glyph)
             .when(labels, |this| this.child(tr::editor::redact::chip()))
             .child(redact_switch(&theme, on))
             .child(
@@ -184,6 +339,199 @@ impl EditorWindow {
                     .absolute()
                     .size_full(),
             )
+    }
+
+    pub(super) fn render_redact_scan_veil(
+        &self,
+        viewport_width: f32,
+        window: &mut Window,
+    ) -> Option<AnyElement> {
+        if !self.project_ready() || !self.project.auto_redact.enabled {
+            return None;
+        }
+        let row = self
+            .timeline
+            .rows
+            .iter()
+            .position(|row| row.kind == TrackKind::Redact)?;
+        let now = Instant::now();
+        let scanning = self.redact_scan_shown();
+        let fading = self
+            .redact
+            .finished_at
+            .map(|at| now.saturating_duration_since(at))
+            .filter(|age| *age < FINISH_FADE);
+        if !scanning && fading.is_none() {
+            return None;
+        }
+        let shown = if scanning { self.redact.progress } else { 1. };
+        if fading.is_some() {
+            window.request_animation_frame();
+        }
+        let instance = self.instance.as_ref()?;
+        let durations = instance
+            .recordings
+            .segments
+            .iter()
+            .map(|segment| segment.display.duration)
+            .collect::<Vec<_>>();
+        let total: f64 = durations.iter().sum();
+        let mut read = f64::from(shown) * total;
+        let scanned = durations
+            .iter()
+            .map(|duration| {
+                let here = read.clamp(0., *duration);
+                read -= here;
+                here
+            })
+            .collect::<Vec<_>>();
+        let pending = timeline::redact_pending_spans(
+            &self.project,
+            &scanned,
+            &durations,
+            &self.redact_video_offsets(),
+        );
+        let theme = self.theme;
+        let editor = theme.editor;
+        let content = timeline::content_width(viewport_width);
+        let secs_per_pixel = self.view.transform.secs_per_pixel(content);
+        let position = self.view.transform.position;
+        let x_at = |time: f64| ((time - position) / secs_per_pixel) as f32;
+        let top = timeline::PLAYHEAD_TOP_OFFSET
+            + timeline::TIMELINE_HEADER_GAP
+            + row as f32 * (timeline::TRACK_HEIGHT + TRACK_ROW_GAP)
+            + f32::from(self.timeline_scroll.offset().y);
+        if top < timeline::PLAYHEAD_TOP_OFFSET - 0.5 {
+            return None;
+        }
+        let edge_alpha =
+            fading.map_or(1., |age| 1. - age.as_secs_f32() / FINISH_FADE.as_secs_f32());
+        let accent = Hsla::from(editor.accent);
+        let mut layer = div()
+            .absolute()
+            .left(px(TIMELINE_PADDING + TRACK_GUTTER))
+            .top(px(top))
+            .w(px(content))
+            .h(px(timeline::TRACK_HEIGHT))
+            .overflow_hidden();
+        let mut frontier = pending
+            .iter()
+            .filter(|(_, _, at)| *at)
+            .map(|(start, _, _)| x_at(*start))
+            .collect::<Vec<_>>();
+        if !scanning {
+            frontier = vec![x_at(self.total_duration())];
+        }
+        for (start, end, _) in &pending {
+            let left = x_at(*start).max(-1.);
+            let right = x_at(*end).min(content + 1.);
+            if right <= left {
+                continue;
+            }
+            layer = layer.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left(px(left))
+                    .w(px(right - left))
+                    .h_full()
+                    .rounded(px(timeline::TRACK_BAND_RADIUS))
+                    .bg(Hsla::from(editor.ctl).opacity(0.7)),
+            );
+        }
+        const TAIL: f32 = 56.;
+        for x in frontier {
+            if !(-TAIL..=content + 2.).contains(&x) {
+                continue;
+            }
+            layer = layer
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(4.))
+                        .bottom(px(4.))
+                        .left(px(x - TAIL))
+                        .w(px(TAIL))
+                        .bg(gpui::linear_gradient(
+                            90.,
+                            gpui::linear_color_stop(accent.opacity(0.), 0.),
+                            gpui::linear_color_stop(accent.opacity(0.16 * edge_alpha), 1.),
+                        )),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(6.))
+                        .bottom(px(6.))
+                        .left(px(x - 1.))
+                        .w(px(2.))
+                        .rounded_full()
+                        .bg(accent.opacity(edge_alpha))
+                        .shadow(vec![gpui::BoxShadow {
+                            color: accent.opacity(0.55 * edge_alpha),
+                            offset: gpui::point(px(0.), px(0.)),
+                            blur_radius: px(8.),
+                            spread_radius: px(0.),
+                            inset: false,
+                        }]),
+                );
+        }
+        Some(layer.into_any_element())
+    }
+
+    #[cfg(feature = "redact-bench")]
+    pub(crate) fn redact_running(&self) -> bool {
+        matches!(
+            self.redact.phase,
+            Some(JobPhase::Preparing | JobPhase::Scanning)
+        )
+    }
+
+    #[cfg(feature = "redact-bench")]
+    pub(crate) fn redact_scanning(&self) -> bool {
+        matches!(self.redact.phase, Some(JobPhase::Scanning))
+    }
+
+    /// "Scan again": drops the saved scan and scans the recording from the
+    /// start, for a recording scanned before a scanner change or by mistake.
+    pub(super) fn rescan_redact(&mut self, cx: &mut Context<Self>) {
+        if self.redact.job.is_some() {
+            return;
+        }
+        if let Err(error) = std::fs::remove_file(Redactions::path_for(&self.project_path))
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%error, "Could not remove the saved auto redact scan");
+            return;
+        }
+        self.redact.redactions = None;
+        self.redact.phase = None;
+        self.redact.quiet = false;
+        if let Some(instance) = &self.instance {
+            instance.render_constants.redactions.set(None);
+        }
+        self.sync_redact(cx);
+        cx.notify();
+    }
+
+    #[cfg(feature = "redact-bench")]
+    pub(crate) fn forget_redact_scan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_redact_enabled(false, window, cx);
+        if let Err(error) = std::fs::remove_file(Redactions::path_for(&self.project_path))
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%error, "Could not remove the saved auto redact scan");
+        }
+        self.redact.redactions = None;
+        self.redact.phase = None;
+        if let Some(instance) = &self.instance {
+            instance.render_constants.redactions.set(None);
+        }
+    }
+
+    fn invalidate_redact_progress(&mut self, cx: &mut Context<Self>) {
+        self.redact_chip_view.update(cx, |_, cx| cx.notify());
+        self.invalidate_playhead_layer(cx);
     }
 
     /// Opens the card after the pointer rests on the chip; closes it a moment
@@ -226,7 +574,16 @@ impl EditorWindow {
         }));
     }
 
-    fn open_redact_card(&mut self, cx: &mut Context<Self>) {
+    #[cfg(feature = "redact-bench")]
+    pub(super) fn close_redact_card(&mut self, cx: &mut Context<Self>) {
+        self.redact.card_task = None;
+        if self.redact.card_open {
+            self.redact.card_open = false;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn open_redact_card(&mut self, cx: &mut Context<Self>) {
         self.redact.card_task = None;
         if !self.redact.card_open {
             self.redact.card_open = true;
@@ -263,28 +620,63 @@ impl EditorWindow {
                         .child(tr::editor::window::transport::enhance_off())
                 }
             });
+        let scanning = self.redact_scan_shown();
+        let can_rescan = on && self.redact.job.is_none();
+        let shown = self.redact.progress;
         let status: Option<AnyElement> = on.then(|| {
             let (text, fraction): (SharedString, Option<f32>) = match &self.redact.phase {
-                Some(JobPhase::Preparing) => (tr::editor::redact::preparing().into(), None),
-                Some(JobPhase::Scanning) => (
-                    tr::editor::redact::scanning((self.redact.progress * 100.).floor() as u32)
-                        .into(),
-                    Some(self.redact.progress),
+                Some(JobPhase::Preparing) if scanning => {
+                    (tr::editor::redact::preparing().into(), None)
+                }
+                Some(JobPhase::Scanning) if scanning => (
+                    tr::editor::redact::scanning((shown * 100.).floor() as u32).into(),
+                    Some(shown),
                 ),
                 Some(JobPhase::Failed(_)) => (tr::editor::redact::failed().into(), None),
                 _ if hidden == 0 => (tr::editor::redact::nothing().into(), None),
                 _ => (tr::editor::redact::hidden(hidden).into(), None),
             };
+            let found = (scanning && hidden > 0).then(|| tr::editor::redact::found(hidden));
             div()
                 .flex()
                 .flex_col()
                 .gap(px(6.))
                 .child(
                     div()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(editor.text_1))
-                        .child(text),
+                        .flex()
+                        .flex_row()
+                        .items_baseline()
+                        .justify_between()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(Hsla::from(editor.text_1))
+                                .child(text),
+                        )
+                        .children(found.map(|found| {
+                            div()
+                                .text_size(px(11.))
+                                .text_color(Hsla::from(editor.text_2))
+                                .child(found)
+                        }))
+                        .children(can_rescan.then(|| {
+                            div()
+                                .id("redact-rescan")
+                                .flex_none()
+                                .h(px(22.))
+                                .px(px(7.))
+                                .flex()
+                                .items_center()
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .text_size(px(11.))
+                                .text_color(Hsla::from(editor.text_2))
+                                .hover(|style| style.bg(Hsla::from(editor.ctl_hover)))
+                                .on_click(cx.listener(|this, _, _, cx| this.rescan_redact(cx)))
+                                .child(tr::editor::redact::scan_again())
+                        })),
                 )
                 .children(fraction.map(|fraction| {
                     div()
@@ -350,14 +742,17 @@ impl EditorWindow {
                         .text_color(Hsla::from(editor.text_1))
                         .child(category_label(category)),
                 )
-                .when(count > 0, |this| {
-                    this.child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(Hsla::from(editor.text_2))
-                            .child(count.to_string()),
-                    )
-                })
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(Hsla::from(if count > 0 {
+                            editor.text_2
+                        } else {
+                            editor.text_3
+                        }))
+                        .child(count.to_string()),
+                )
         };
         let rows = RedactCategory::ALL
             .into_iter()
@@ -534,27 +929,29 @@ impl EditorWindow {
         );
     }
 
-    /// Keeps one detection visible (or hides it again).
     pub(crate) fn set_redact_kept(
         &mut self,
-        id: &str,
+        ids: &[String],
         kept: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let id = id.to_string();
+        let ids = ids.to_vec();
         self.edit_redact(
             move |config| {
-                let present = config.is_excluded(&id);
-                if kept == present {
-                    return false;
+                let mut changed = false;
+                for id in ids {
+                    if config.is_excluded(&id) == kept {
+                        continue;
+                    }
+                    changed = true;
+                    if kept {
+                        config.excluded.push(id);
+                    } else {
+                        config.excluded.retain(|other| *other != id);
+                    }
                 }
-                if kept {
-                    config.excluded.push(id);
-                } else {
-                    config.excluded.retain(|other| *other != id);
-                }
-                true
+                changed
             },
             window,
             cx,
@@ -594,12 +991,14 @@ impl EditorWindow {
                 job.cancel();
             }
             self.redact.poll_task = None;
+            self.redact.quiet = false;
             if matches!(
                 self.redact.phase,
                 Some(JobPhase::Scanning | JobPhase::Preparing)
             ) {
                 self.redact.phase = None;
             }
+            self.invalidate_redact_progress(cx);
             return;
         }
         let complete = self
@@ -617,21 +1016,31 @@ impl EditorWindow {
             .iter()
             .map(|segment| segment.display.duration)
             .collect::<Vec<_>>();
-        self.redact.job = Some(RedactJob::start(project_path, durations));
+        self.redact.quiet = self
+            .redact
+            .redactions
+            .as_ref()
+            .is_some_and(|redactions| redactions.is_complete());
+        self.redact.job = Some(RedactJob::attach_or_start(project_path, durations));
         self.redact.phase = Some(JobPhase::Preparing);
+        self.redact.preparing_since = Some(Instant::now());
         self.redact.progress = 0.0;
-        self.redact.poll_task = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(POLL).await;
-                let running = this
-                    .update(cx, |this, cx| this.poll_redact(cx))
-                    .unwrap_or(false);
-                if !running {
-                    break;
+        self.redact.finished_at = None;
+        self.poll_redact(cx);
+        if self.redact.job.is_some() {
+            self.redact.poll_task = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(POLL).await;
+                    let running = this
+                        .update(cx, |this, cx| this.poll_redact(cx))
+                        .unwrap_or(false);
+                    if !running {
+                        break;
+                    }
                 }
-            }
-        }));
-        cx.notify();
+            }));
+        }
+        self.invalidate_redact_progress(cx);
     }
 
     /// Reads the scan's progress; returns whether it is still running.
@@ -641,30 +1050,64 @@ impl EditorWindow {
         };
         let update = job.poll();
         let running = matches!(update.phase, JobPhase::Preparing | JobPhase::Scanning);
-        let changed = self.redact.phase.as_ref() != Some(&update.phase)
-            || (self.redact.progress - update.progress).abs() > 0.004
-            || update.snapshot.is_some();
-        self.redact.phase = Some(update.phase);
+        let was_shown = self.redact_scan_shown();
+        if self.redact.quiet && update.phase == JobPhase::Scanning {
+            self.redact.quiet = false;
+        }
+        let phase_changed = self.redact.phase.as_ref() != Some(&update.phase);
+        let progressed = (self.redact.progress - update.progress).abs() > 1e-4;
+        let now = Instant::now();
+        if phase_changed && update.phase == JobPhase::Scanning {
+            self.redact.preparing_since = None;
+        }
+        self.redact.phase = Some(update.phase.clone());
         self.redact.progress = update.progress;
+        if update.phase == JobPhase::Done && was_shown {
+            self.redact.progress = 1.;
+            self.redact.finished_at = Some(now);
+        }
         if let Some(snapshot) = update.snapshot {
             self.redact.redactions = Some(snapshot.clone());
             if let Some(instance) = &self.instance {
                 instance.render_constants.redactions.set(Some(snapshot));
+                if !self.playing {
+                    let time = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
+                    request_frame(
+                        instance,
+                        (time * EDITOR_PREVIEW_FPS as f64).floor() as u32,
+                        self.preview_resolution(),
+                    );
+                }
             }
+            let before = std::mem::take(&mut self.timeline.redact);
             let video_offsets = self.redact_video_offsets();
             self.timeline.set_redact(
                 &self.project,
                 self.redact.redactions.as_deref(),
                 &video_offsets,
             );
-            self.publish_project();
+            if !same_redact_lane(&before, &self.timeline.redact) {
+                self.timeline_view.update(cx, |_, cx| cx.notify());
+                if self
+                    .selection
+                    .as_ref()
+                    .is_some_and(|selection| selection.track == TrackKind::Redact)
+                {
+                    self.refresh_redact_highlight();
+                    self.sidebar_view.update(cx, |_, cx| cx.notify());
+                }
+            }
         }
         if !running {
             self.redact.job = None;
             self.redact.poll_task = None;
+            self.redact.quiet = false;
         }
-        if changed {
+        if phase_changed {
             cx.notify();
+        }
+        if phase_changed || progressed || !running {
+            self.invalidate_redact_progress(cx);
         }
         running
     }
@@ -723,6 +1166,31 @@ impl EditorWindow {
         }
         found
     }
+
+    fn redact_occurrences_in(
+        &self,
+        spans: &[(f64, f64)],
+    ) -> Vec<(f64, f64, cap_project::redaction::RedactionRegion)> {
+        let Some(redactions) = self.redact.redactions.as_deref() else {
+            return Vec::new();
+        };
+        let config = &self.project.auto_redact;
+        let video_offsets = self.redact_video_offsets();
+        let mut found: Vec<(f64, f64, cap_project::redaction::RedactionRegion)> = Vec::new();
+        for (start, end, region) in
+            crate::editor_timeline::redact_region_spans(&self.project, redactions, &video_offsets)
+        {
+            if spans.iter().any(|(from, to)| end > *from && start < *to)
+                && config.has_category(region.category)
+                && !found
+                    .iter()
+                    .any(|(at, _, other)| *at == start && other.id == region.id)
+            {
+                found.push((start, end, region.clone()));
+            }
+        }
+        found
+    }
 }
 
 impl EditorWindow {
@@ -747,12 +1215,15 @@ impl EditorWindow {
         let Some(instance) = self.instance.as_ref() else {
             return;
         };
-        let ids = self
-            .selected_redact_spans()
-            .into_iter()
-            .flat_map(|(start, end)| self.redact_regions_between(start, end))
-            .map(|region| region.id)
-            .collect::<Vec<_>>();
+        let ids = match &self.redact.hover_ids {
+            Some(ids) => ids.clone(),
+            None => self
+                .selected_redact_spans()
+                .into_iter()
+                .flat_map(|(start, end)| self.redact_regions_between(start, end))
+                .map(|region| region.id)
+                .collect::<Vec<_>>(),
+        };
         if ids == self.redact.highlighted {
             return;
         }
@@ -764,8 +1235,17 @@ impl EditorWindow {
         self.publish_project();
     }
 
+    fn set_redact_hover(&mut self, ids: Option<Vec<String>>, cx: &mut Context<Self>) {
+        if self.redact.hover_ids == ids {
+            return;
+        }
+        self.redact.hover_ids = ids;
+        self.refresh_redact_highlight();
+        cx.notify();
+    }
+
     /// The sidebar for selected redact spans: what is hidden there, by
-    /// category, each with a switch to keep it visible.
+    /// category.
     pub(crate) fn render_redact_panel(
         &self,
         selection: &Selection,
@@ -780,27 +1260,15 @@ impl EditorWindow {
             SharedString::from(tr::editor::redact::panel_title()),
         )
         .on_done(cx.listener(|this, _, _window, cx| this.set_selection(None, cx)));
-        let mut regions = Vec::new();
-        for index in &selection.indices {
-            let Some(segment) = self.timeline.redact.get(*index) else {
-                continue;
-            };
-            for region in self.redact_regions_between(segment.start, segment.end) {
-                if !regions
-                    .iter()
-                    .any(|r: &cap_project::redaction::RedactionRegion| r.id == region.id)
-                {
-                    regions.push(region);
-                }
-            }
-        }
-        regions.sort_by(|a, b| {
-            a.category
-                .cmp(&b.category)
-                .then(a.start.total_cmp(&b.start))
-        });
+        let spans = selection
+            .indices
+            .iter()
+            .filter_map(|index| self.timeline.redact.get(*index))
+            .map(|segment| (segment.start, segment.end))
+            .collect::<Vec<_>>();
+        let groups = redact_panel_groups(&self.redact_occurrences_in(&spans));
         let mut body = div().flex().flex_col().gap(px(14.)).child(header);
-        if regions.is_empty() {
+        if groups.is_empty() {
             return body
                 .child(
                     div()
@@ -810,11 +1278,16 @@ impl EditorWindow {
                 )
                 .into_any_element();
         }
-        let mut categories = regions.iter().map(|r| r.category).collect::<Vec<_>>();
+        let mut categories = groups.iter().map(|g| g.category).collect::<Vec<_>>();
         categories.dedup();
         for category in categories {
             let enabled = config.has_category(category);
-            let mut group = div().flex().flex_col().gap(px(2.)).child(
+            let count: usize = groups
+                .iter()
+                .filter(|g| g.category == category)
+                .map(|g| g.ids.len())
+                .sum();
+            let mut group_el = div().flex().flex_col().gap(px(2.)).child(
                 div()
                     .id(SharedString::from(format!(
                         "redact-panel-category-{}",
@@ -836,47 +1309,57 @@ impl EditorWindow {
                             .text_color(Hsla::from(editor.text_1))
                             .child(category_label(category)),
                     )
-                    .child(redact_switch(&theme, enabled)),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(Hsla::from(editor.text_2))
+                                    .child(count.to_string()),
+                            )
+                            .child(redact_switch(&theme, enabled)),
+                    ),
             );
-            for region in regions.iter().filter(|r| r.category == category) {
-                let kept = config.is_excluded(&region.id);
-                let id = region.id.clone();
+            for (row, group) in groups
+                .iter()
+                .enumerate()
+                .filter(|(_, g)| g.category == category)
+            {
+                let kept = group.ids.iter().all(|id| config.is_excluded(id));
+                let ids = group.ids.clone();
+                let hover_ids = group.ids.clone();
+                let seek = group.start;
                 let span = format!(
                     "{}\u{2013}{}",
-                    format_redact_time(region.start),
-                    format_redact_time(region.end)
+                    format_redact_time(group.start),
+                    format_redact_time(group.end)
                 );
-                group = group.child(
+                let row_id = SharedString::from(format!("redact-row-{row}"));
+                group_el = group_el.child(
                     div()
-                        .id(SharedString::from(format!("redact-region-{}", region.id)))
+                        .id(row_id)
                         .flex()
                         .flex_row()
                         .items_center()
                         .gap(px(8.))
-                        .h(px(26.))
+                        .h(px(30.))
                         .px(px(6.))
                         .rounded(px(7.))
                         .cursor_pointer()
                         .hover(|style| style.bg(Hsla::from(editor.ctl_hover)))
                         .when(!enabled, |this| this.opacity(0.5))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.set_redact_kept(&id, !kept, window, cx);
+                        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                            let ids = hovered.then(|| hover_ids.clone());
+                            this.set_redact_hover(ids, cx);
                         }))
-                        .child(
-                            svg()
-                                .path(if kept {
-                                    "icons/eye.svg"
-                                } else {
-                                    "icons/eye-off.svg"
-                                })
-                                .size(px(13.))
-                                .flex_none()
-                                .text_color(Hsla::from(if kept {
-                                    editor.text_2
-                                } else {
-                                    editor.accent_ink
-                                })),
-                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.seek_to_time(seek, cx);
+                        }))
+                        .child(redact_place_map(&theme, group.rect))
                         .child(
                             div()
                                 .flex_1()
@@ -885,26 +1368,265 @@ impl EditorWindow {
                                 .text_color(Hsla::from(editor.text_1))
                                 .child(span),
                         )
+                        .when(group.ids.len() > 1, |this| {
+                            this.child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(Hsla::from(editor.text_2))
+                                    .child(format!("\u{00d7}{}", group.ids.len())),
+                            )
+                        })
                         .child(
                             div()
-                                .text_size(px(11.))
-                                .text_color(Hsla::from(editor.text_2))
-                                .child(if kept {
-                                    tr::editor::redact::kept()
-                                } else {
-                                    tr::editor::redact::keep()
-                                }),
+                                .id(SharedString::from(format!("redact-keep-{row}")))
+                                .flex()
+                                .items_center()
+                                .gap(px(5.))
+                                .h(px(22.))
+                                .px(px(6.))
+                                .rounded(px(6.))
+                                .hover(|style| style.bg(Hsla::from(editor.ctl_active)))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.set_redact_kept(&ids, !kept, window, cx);
+                                }))
+                                .child(
+                                    svg()
+                                        .path(if kept {
+                                            "icons/eye.svg"
+                                        } else {
+                                            "icons/eye-off.svg"
+                                        })
+                                        .size(px(13.))
+                                        .flex_none()
+                                        .text_color(Hsla::from(if kept {
+                                            editor.text_2
+                                        } else {
+                                            editor.accent_ink
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(Hsla::from(editor.text_2))
+                                        .child(if kept {
+                                            tr::editor::redact::kept()
+                                        } else {
+                                            tr::editor::redact::keep()
+                                        }),
+                                ),
                         ),
                 );
             }
-            body = body.child(group);
+            body = body.child(group_el);
         }
         body.into_any_element()
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RedactPanelGroup {
+    pub category: RedactCategory,
+    pub start: f64,
+    pub end: f64,
+    pub rect: cap_project::redaction::RedactRect,
+    pub ids: Vec<String>,
+}
+
+/// Groups detections by category and timeline range (to the tenth of a
+/// second, as the row shows it), ordered by category, then top to bottom and
+/// left to right on screen.
+pub(crate) fn redact_panel_groups(
+    occurrences: &[(f64, f64, cap_project::redaction::RedactionRegion)],
+) -> Vec<RedactPanelGroup> {
+    let tenth = |t: f64| (t * 10.).round() as i64;
+    let mut groups: Vec<RedactPanelGroup> = Vec::new();
+    for (start, end, region) in occurrences {
+        let Some(rect) = region.rect_at(region.start) else {
+            continue;
+        };
+        if let Some(group) = groups.iter_mut().find(|g| {
+            g.category == region.category
+                && tenth(g.start) == tenth(*start)
+                && tenth(g.end) == tenth(*end)
+        }) {
+            if !group.ids.contains(&region.id) {
+                group.ids.push(region.id.clone());
+            }
+            continue;
+        }
+        groups.push(RedactPanelGroup {
+            category: region.category,
+            start: *start,
+            end: *end,
+            rect,
+            ids: vec![region.id.clone()],
+        });
+    }
+    let row = |rect: &cap_project::redaction::RedactRect| (rect.y * 40.).floor() as i64;
+    groups.sort_by(|a, b| {
+        a.category
+            .cmp(&b.category)
+            .then(row(&a.rect).cmp(&row(&b.rect)))
+            .then(a.rect.x.total_cmp(&b.rect.x))
+            .then(a.start.total_cmp(&b.start))
+    });
+    groups
+}
+
+fn redact_place_map(theme: &Theme, rect: cap_project::redaction::RedactRect) -> impl IntoElement {
+    const W: f32 = 44.;
+    const H: f32 = 27.;
+    let editor = theme.editor;
+    let (left, top, mark_w, mark_h) = place_mark(rect, W, H);
+    div()
+        .flex_none()
+        .relative()
+        .w(px(W))
+        .h(px(H))
+        .rounded(px(4.))
+        .border_1()
+        .border_color(Hsla::from(editor.line_strong))
+        .bg(Hsla::from(editor.ctl_hover))
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .left(px(left))
+                .top(px(top))
+                .w(px(mark_w))
+                .h(px(mark_h))
+                .rounded(px(1.5))
+                .bg(Hsla::from(editor.accent_fill)),
+        )
+}
+
+fn place_mark(rect: cap_project::redaction::RedactRect, w: f32, h: f32) -> (f32, f32, f32, f32) {
+    let mark_w = (rect.w.clamp(0., 1.) * w).clamp(6., w);
+    let mark_h = (rect.h.clamp(0., 1.) * h).clamp(4., h);
+    let left = (rect.x * w).clamp(0., w - mark_w);
+    let top = (rect.y * h).clamp(0., h - mark_h);
+    (left, top, mark_w, mark_h)
+}
+
+/// Whether two builds of the redact lane draw the same spans, so a snapshot
+/// that found nothing new leaves the cached rows alone.
+fn same_redact_lane(a: &[timeline::Segment], b: &[timeline::Segment]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(a, b)| {
+            a.start == b.start
+                && a.end == b.end
+                && match (&a.detail, &b.detail) {
+                    (
+                        timeline::SegmentDetail::Redact {
+                            count: a,
+                            marks: marks_a,
+                        },
+                        timeline::SegmentDetail::Redact {
+                            count: b,
+                            marks: marks_b,
+                        },
+                    ) => a == b && marks_a == marks_b,
+                    _ => false,
+                }
+        })
 }
 
 fn format_redact_time(seconds: f64) -> String {
     let seconds = seconds.max(0.0);
     let minutes = (seconds / 60.0).floor();
     format!("{}:{:04.1}", minutes as u64, seconds - minutes * 60.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_project::redaction::{RedactionKey, RedactionRegion};
+
+    fn region(
+        id: &str,
+        category: RedactCategory,
+        start: f64,
+        end: f64,
+        x: f32,
+        y: f32,
+    ) -> (f64, f64, RedactionRegion) {
+        let region = RedactionRegion {
+            id: id.into(),
+            segment: 0,
+            category,
+            start,
+            end,
+            keys: vec![RedactionKey {
+                t: start,
+                x,
+                y,
+                w: 0.1,
+                h: 0.02,
+            }],
+        };
+        (start, end, region)
+    }
+
+    #[test]
+    fn place_mark_stays_inside_the_map_for_boxes_past_the_frame() {
+        let rect = cap_project::redaction::RedactRect {
+            x: -0.05,
+            y: 0.9,
+            w: 1.2,
+            h: 0.3,
+        };
+        let (left, top, w, h) = place_mark(rect, 44., 27.);
+        assert_eq!((left, w), (0., 44.));
+        assert!(top >= 0. && top + h <= 27.);
+    }
+
+    #[test]
+    fn hidden_here_rows_group_by_time_and_sort_by_place() {
+        let regions = vec![
+            region("low", RedactCategory::Email, 0.0, 4.0, 0.2, 0.8),
+            region("high-right", RedactCategory::Email, 0.0, 4.0, 0.7, 0.1),
+            region("high-left", RedactCategory::Email, 1.0, 2.0, 0.1, 0.1),
+            region("same-time", RedactCategory::Email, 0.02, 3.98, 0.5, 0.5),
+            region("card", RedactCategory::Card, 0.0, 4.0, 0.0, 0.0),
+        ];
+        let groups = redact_panel_groups(&regions);
+        let rows = groups
+            .iter()
+            .map(|g| (g.category, g.ids.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            vec![
+                (RedactCategory::Email, vec!["high-left".to_string()]),
+                (
+                    RedactCategory::Email,
+                    vec![
+                        "low".to_string(),
+                        "high-right".to_string(),
+                        "same-time".to_string()
+                    ]
+                ),
+                (RedactCategory::Card, vec!["card".to_string()]),
+            ]
+        );
+    }
+    #[test]
+    fn hidden_here_rows_keep_takes_at_different_timeline_times_apart() {
+        let (_, _, first) = region("first", RedactCategory::Email, 0.0, 5.0, 0.2, 0.2);
+        let (_, _, mut second) = region("second", RedactCategory::Email, 0.0, 5.0, 0.2, 0.2);
+        second.segment = 1;
+        let groups = redact_panel_groups(&[(0.0, 5.0, first), (12.0, 17.0, second)]);
+        let rows = groups
+            .iter()
+            .map(|g| (g.start, g.ids.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            vec![
+                (0.0, vec!["first".to_string()]),
+                (12.0, vec!["second".to_string()]),
+            ]
+        );
+    }
 }

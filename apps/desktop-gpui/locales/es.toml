@@ -157,6 +157,10 @@ label = "Confirmar antes de grabar sin micrófono"
 description = "Limpia el audio del micrófono automáticamente. Puedes desactivarlo en el editor para cualquier grabación."
 label = "Studio Sound en las grabaciones nuevas"
 
+[settings.general.recording.auto_redact]
+description = "Oculta datos privados como correos y claves en las grabaciones Studio nuevas, para que estén listas al abrir el editor. Se ejecuta en este ordenador, así que no se sube nada."
+label = "Ocultación automática en las grabaciones Studio nuevas"
+
 [settings.general.recording.main_window_start]
 description = "Qué ocurre con la ventana principal cuando empieza una grabación."
 label = "Ventana principal al empezar a grabar"
@@ -3545,6 +3549,7 @@ export_failed = "La ocultación automática no pudo analizar esta grabación. De
 export_screen_track = "La pista de pantalla no se puede exportar sola con la ocultación automática activada."
 export_wait = "La ocultación automática sigue analizando. Exporta cuando termine."
 failed = "No se pudo analizar esta grabación"
+found = { one = "{count} encontrado hasta ahora", many = "{count} de encontrados hasta ahora", other = "{count} encontrados hasta ahora" }
 hidden = { one = "{count} elemento oculto", many = "{count} de elementos ocultos", other = "{count} elementos ocultos" }
 hide = "Ocultar"
 keep = "Dejar visible"
@@ -3554,6 +3559,7 @@ nothing = "Nada que ocultar"
 panel_empty = "Aquí no se oculta nada."
 panel_title = "Oculto aquí"
 preparing = "Preparando"
+scan_again = "Volver a analizar"
 scanning = "Analizando {percent} %"
 style_blur = "Desenfocar"
 style_pixelate = "Pixelar"

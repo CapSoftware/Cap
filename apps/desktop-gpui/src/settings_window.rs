@@ -3791,6 +3791,23 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
+                        tr::settings::general::recording::auto_redact::label(),
+                        Some(tr::settings::general::recording::auto_redact::description()),
+                        self.toggle(
+                            "auto-redact-new-recordings",
+                            tr::settings::general::recording::auto_redact::label(),
+                            settings.auto_redact_new_recordings,
+                            cx,
+                            |this, cx| {
+                                this.settings.auto_redact_new_recordings =
+                                    !this.settings.auto_redact_new_recordings;
+                                let value = this.settings.auto_redact_new_recordings;
+                                this.write_bool(store::AUTO_REDACT_NEW_RECORDINGS_KEY, value, cx);
+                            },
+                        )
+                        .into_any_element(),
+                    ),
+                    self.setting_row(
                         tr::settings::general::recording::main_window_start::label(),
                         Some(tr::settings::general::recording::main_window_start::description()),
                         self.select(

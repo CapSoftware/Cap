@@ -1133,6 +1133,7 @@ pub struct GeneralSettings {
     pub default_zoom_amount: Option<f32>,
     pub capture_keyboard_events: bool,
     pub macbook_notch_overlay: bool,
+    pub auto_redact_new_recordings: bool,
     /// GPUI-only `recordingMarkerSound`: a short cue when a marker is added
     /// during a Studio recording. Off by default, because a microphone or
     /// system audio capture can record the cue.
@@ -1181,6 +1182,7 @@ pub const EDITOR_PREVIEW_QUALITY_CHOSEN_KEY: &str = "editorPreviewQualityChosen"
 pub const EDITOR_PREVIEW_ENHANCE_KEY: &str = "editorPreviewEnhance";
 
 pub const RECORDING_MARKER_SOUND_KEY: &str = "recordingMarkerSound";
+pub const AUTO_REDACT_NEW_RECORDINGS_KEY: &str = "autoRedactNewRecordings";
 pub const KEEP_DRAWINGS_KEY: &str = "keepDrawingsOnScreen";
 
 /// Read on every marker press, so it goes through the cached store rather
@@ -1606,6 +1608,7 @@ impl GeneralSettings {
             default_zoom_amount: opt_f32_at(general, "defaultZoomAmount"),
             capture_keyboard_events: bool_at(general, "captureKeyboardEvents", true),
             macbook_notch_overlay: bool_at(general, "macbookNotchOverlay", false),
+            auto_redact_new_recordings: bool_at(general, AUTO_REDACT_NEW_RECORDINGS_KEY, false),
             recording_marker_sound: bool_at(general, RECORDING_MARKER_SOUND_KEY, false),
             keep_drawings: bool_at(general, KEEP_DRAWINGS_KEY, false),
             max_fps: u32_at(general, "maxFps", 60),

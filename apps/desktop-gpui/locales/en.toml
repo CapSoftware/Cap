@@ -159,6 +159,10 @@ label = "Confirm before recording without a microphone"
 description = "Clean up microphone audio automatically. You can still turn it off for any recording in the editor."
 label = { text = "Studio Sound on new recordings", context = "Studio Sound is the name of Cap's microphone clean-up feature." }
 
+[settings.general.recording.auto_redact]
+description = "Hides private details like emails and keys in new Studio recordings, so they are ready when you open the editor. Runs on this computer, so nothing is uploaded."
+label = "Auto redact new Studio recordings"
+
 [settings.general.recording.main_window_start]
 description = "What happens to the main window once a recording begins."
 label = "Main window when recording starts"
@@ -3547,6 +3551,7 @@ export_failed = "Auto redact couldn't scan this recording. Turn it off or try ag
 export_screen_track = "The screen track can't be exported on its own while Auto redact is on."
 export_wait = "Auto redact is still scanning. Export when it finishes."
 failed = "Couldn't scan this recording"
+found = { one = "{count} found so far", other = "{count} found so far" }
 hidden = { one = "{count} item hidden", other = "{count} items hidden" }
 hide = "Hide"
 keep = "Keep visible"
@@ -3556,6 +3561,7 @@ nothing = "Nothing to hide"
 panel_empty = "Nothing is hidden here."
 panel_title = "Hidden here"
 preparing = "Getting ready"
+scan_again = "Scan again"
 scanning = { text = "Scanning {percent}%", context = "{percent} is a whole number from 0 to 100." }
 style_blur = "Blur"
 style_pixelate = "Pixelate"

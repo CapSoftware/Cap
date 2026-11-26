@@ -157,6 +157,10 @@ label = "Confirmer avant d'enregistrer sans micro"
 description = "Nettoie automatiquement l'audio du micro. Vous pouvez toujours le désactiver pour n'importe quel enregistrement dans l'éditeur."
 label = "Studio Sound sur les nouveaux enregistrements"
 
+[settings.general.recording.auto_redact]
+description = "Masque les informations privées comme les e-mails et les clés dans les nouveaux enregistrements Studio, pour qu'ils soient prêts à l'ouverture de l'éditeur. Tout se fait sur cet ordinateur, rien n'est envoyé."
+label = "Masquage automatique des nouveaux enregistrements Studio"
+
 [settings.general.recording.main_window_start]
 description = "Ce que devient la fenêtre principale lorsqu'un enregistrement commence."
 label = "Fenêtre principale au début de l'enregistrement"
@@ -3545,6 +3549,7 @@ export_failed = "Le masquage automatique n'a pas pu analyser cet enregistrement.
 export_screen_track = "La piste d'écran ne peut pas être exportée seule quand le masquage automatique est activé."
 export_wait = "Le masquage automatique analyse encore. Exportez une fois terminé."
 failed = "Impossible d'analyser cet enregistrement"
+found = { one = "{count} trouvé pour l'instant", many = "{count} de trouvés pour l'instant", other = "{count} trouvés pour l'instant" }
 hidden = { one = "{count} élément masqué", many = "{count} d'éléments masqués", other = "{count} éléments masqués" }
 hide = "Masquer"
 keep = "Laisser visible"
@@ -3554,6 +3559,7 @@ nothing = "Rien à masquer"
 panel_empty = "Rien n'est masqué ici."
 panel_title = "Masqué ici"
 preparing = "Préparation"
+scan_again = "Analyser à nouveau"
 scanning = "Analyse {percent} %"
 style_blur = "Flou"
 style_pixelate = "Pixeliser"

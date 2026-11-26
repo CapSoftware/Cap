@@ -208,8 +208,8 @@ async fn pixelation_covers_the_region_and_nothing_else() {
         1.0,
     )
     .await;
-    let (x0, y0, x1, y1) = (80, 45, 240, 81);
-    let block = crate::redaction::block_size(36.0, 0.5, RedactStyle::Pixelate);
+    let (x0, y0, x1, y1) = (79, 41, 241, 85);
+    let block = crate::redaction::block_size((y1 - y0) as f32, 0.5, RedactStyle::Pixelate);
     let mut changed_outside = 0;
     let mut changed_inside = 0;
     for y in 0..size.y {
@@ -245,6 +245,51 @@ async fn pixelation_covers_the_region_and_nothing_else() {
         }
     }
     assert!(distinct.len() > 1, "every block came out the same");
+}
+
+#[tokio::test]
+async fn blocks_cut_short_by_the_region_edge_hide_the_stripes_under_them() {
+    let size = XY::new(320, 180);
+    let fixture = fixture(size).await;
+    let mut data = Vec::with_capacity((size.x * size.y * 4) as usize);
+    for _ in 0..size.y {
+        for x in 0..size.x {
+            let v = if x % 4 < 2 { 255 } else { 0 };
+            data.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    let frame = DecodedFrame::new(data, size.x, size.y);
+    let regions = (0..5)
+        .map(|i| {
+            region(
+                &format!("r{i}"),
+                0.1,
+                0.1 + i as f32 * 0.15,
+                (100 + i) as f32 / size.x as f32,
+                0.04,
+            )
+        })
+        .collect();
+    fixture.constants.redactions.set(Some(redactions(regions)));
+    let mut layers = RendererLayers::new(&fixture.constants.device, &fixture.constants.queue);
+    let hidden = render(
+        &fixture,
+        &mut layers,
+        &project(on(RedactStyle::Pixelate)),
+        &frame,
+        1.0,
+    )
+    .await;
+    for i in 0..5u32 {
+        let y = ((0.12 + i as f32 * 0.15) * size.y as f32) as u32;
+        for x in 31..=132 + i {
+            let [r, ..] = px(&hidden, size.x, x, y);
+            assert!(
+                (40..=215).contains(&r),
+                "region {i} shows a stripe at {x},{y} ({r})"
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -293,6 +338,70 @@ async fn a_reused_frame_follows_changed_regions() {
         off == plain,
         "turning auto redact off left marks on a reused frame"
     );
+}
+
+#[tokio::test]
+async fn every_region_is_hidden_on_a_crowded_frame() {
+    let size = XY::new(640, 360);
+    let fixture = fixture(size).await;
+    let frame = DecodedFrame::new(pattern(size.x, size.y), size.x, size.y);
+    let mut layers = RendererLayers::new(&fixture.constants.device, &fixture.constants.queue);
+    let plain = render(
+        &fixture,
+        &mut layers,
+        &project(AutoRedactConfiguration::default()),
+        &frame,
+        1.0,
+    )
+    .await;
+    let (columns, rows) = (30u32, 40u32);
+    let mut regions = Vec::new();
+    for row in 0..rows {
+        for column in 0..columns {
+            regions.push(region(
+                &format!("r{row}-{column}"),
+                column as f32 / columns as f32 + 0.004,
+                row as f32 / rows as f32 + 0.004,
+                0.024,
+                0.016,
+            ));
+        }
+    }
+    let boxes: Vec<(u32, u32, u32, u32)> = regions
+        .iter()
+        .map(|region| {
+            let key = &region.keys[0];
+            let x0 = (key.x * size.x as f32).ceil() as u32;
+            let y0 = (key.y * size.y as f32).ceil() as u32;
+            let x1 = ((key.x + key.w) * size.x as f32).floor() as u32;
+            let y1 = ((key.y + key.h) * size.y as f32).floor() as u32;
+            (x0, y0, x1, y1)
+        })
+        .collect();
+    fixture.constants.redactions.set(Some(redactions(regions)));
+    let mut layers = RendererLayers::new(&fixture.constants.device, &fixture.constants.queue);
+    let hidden = render(
+        &fixture,
+        &mut layers,
+        &project(on(RedactStyle::Pixelate)),
+        &frame,
+        1.0,
+    )
+    .await;
+    for (index, &(x0, y0, x1, y1)) in boxes.iter().enumerate() {
+        let mut changed = 0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                changed += usize::from(px(&plain, size.x, x, y) != px(&hidden, size.x, x, y));
+            }
+        }
+        let area = ((x1 - x0) * (y1 - y0)) as usize;
+        assert!(
+            changed * 10 > area * 6,
+            "region {index} of {} was not hidden ({changed} of {area} pixels changed)",
+            boxes.len()
+        );
+    }
 }
 
 #[tokio::test]
@@ -364,14 +473,15 @@ async fn redaction_gpu_cost() {
         },
     );
     let mut redactor = crate::redaction::Redactor::new(device);
-    for count in [1usize, 10, 40] {
+    for count in [1usize, 10, 40, 100, 500, 1000, 2000] {
+        // Rows of short boxes, like a dense table or log: 40 a row.
         let frame = crate::redaction::RedactionFrame {
             rects: (0..count)
                 .map(|i| crate::redaction::RedactionRect {
-                    x: 0.05 + (i % 4) as f32 * 0.22,
-                    y: 0.04 + (i / 4) as f32 * 0.09,
-                    w: 0.18,
-                    h: 0.022,
+                    x: 0.01 + (i % 40) as f32 * 0.0245,
+                    y: 0.01 + (i / 40) as f32 * 0.0195,
+                    w: 0.02,
+                    h: 0.012,
                     highlighted: false,
                 })
                 .collect(),

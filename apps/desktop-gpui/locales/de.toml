@@ -157,6 +157,10 @@ label = "Vor Aufnahmen ohne Mikrofon nachfragen"
 description = "Bereinigt das Mikrofon-Audio automatisch. Im Editor können Sie es für jede Aufnahme wieder ausschalten."
 label = "Studio Sound für neue Aufnahmen"
 
+[settings.general.recording.auto_redact]
+description = "Verbirgt private Angaben wie E-Mail-Adressen und Schlüssel in neuen Studio-Aufnahmen, damit sie bereit sind, wenn du den Editor öffnest. Läuft auf diesem Computer, es wird nichts hochgeladen."
+label = "Neue Studio-Aufnahmen automatisch schwärzen"
+
 [settings.general.recording.main_window_start]
 description = "Was mit dem Hauptfenster passiert, sobald eine Aufnahme beginnt."
 label = "Hauptfenster beim Aufnahmestart"
@@ -3545,6 +3549,7 @@ export_failed = "Automatisch schwärzen konnte diese Aufnahme nicht prüfen. Sch
 export_screen_track = "Die Bildschirmspur kann nicht einzeln exportiert werden, solange Automatisch schwärzen an ist."
 export_wait = "Automatisch schwärzen prüft noch. Exportiere, wenn es fertig ist."
 failed = "Diese Aufnahme konnte nicht geprüft werden"
+found = { one = "{count} bisher gefunden", other = "{count} bisher gefunden" }
 hidden = { one = "{count} Element verborgen", other = "{count} Elemente verborgen" }
 hide = "Verbergen"
 keep = "Sichtbar lassen"
@@ -3554,6 +3559,7 @@ nothing = "Nichts zu verbergen"
 panel_empty = "Hier ist nichts verborgen."
 panel_title = "Hier verborgen"
 preparing = "Wird vorbereitet"
+scan_again = "Erneut prüfen"
 scanning = "Prüfung {percent} %"
 style_blur = "Weichzeichnen"
 style_pixelate = "Verpixeln"

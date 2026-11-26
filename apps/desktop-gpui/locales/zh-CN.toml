@@ -157,6 +157,10 @@ label = "无麦克风录制前确认"
 description = "自动优化麦克风音频。你仍可在编辑器中为任意录制关闭此功能。"
 label = "新录制默认开启 Studio Sound"
 
+[settings.general.recording.auto_redact]
+description = "在新的 Studio 录制中隐藏邮箱、密钥等私密信息，打开编辑器时即可就绪。在本机运行，不会上传任何内容。"
+label = "新的 Studio 录制自动打码"
+
 [settings.general.recording.main_window_start]
 description = "录制开始后主窗口的处理方式。"
 label = "开始录制时的主窗口"
@@ -3545,6 +3549,7 @@ export_failed = "自动打码无法扫描此录制。请先关闭或重试，然
 export_screen_track = "开启自动打码时，无法单独导出屏幕轨道。"
 export_wait = "自动打码仍在扫描。请在完成后导出。"
 failed = "无法扫描此录制"
+found = { other = "已找到 {count} 项" }
 hidden = { other = "已隐藏 {count} 项" }
 hide = "隐藏"
 keep = "保持可见"
@@ -3554,6 +3559,7 @@ nothing = "没有需要隐藏的内容"
 panel_empty = "这里没有隐藏内容。"
 panel_title = "此处隐藏的内容"
 preparing = "正在准备"
+scan_again = "重新扫描"
 scanning = "正在扫描 {percent}%"
 style_blur = "模糊"
 style_pixelate = "像素化"

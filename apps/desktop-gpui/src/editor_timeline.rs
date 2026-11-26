@@ -1354,9 +1354,9 @@ pub enum SegmentDetail {
     Scene {
         mode: SceneMode,
     },
-    /// How many detections the span hides.
     Redact {
         count: u32,
+        marks: std::sync::Arc<[RedactMark]>,
     },
     /// A 3D shot, named by the look it is sitting on (`camera3d_shot_label`).
     ThreeD {
@@ -1946,6 +1946,37 @@ fn lane_count(segments: &[Segment]) -> u32 {
         .unwrap_or(0)
 }
 
+fn source_interval_spans(
+    timeline: &TimelineConfiguration,
+    offsets: &[f64],
+    holds: &[(f64, f64)],
+    recording_clip: u32,
+    start: f64,
+    end: f64,
+) -> Vec<(f64, f64)> {
+    let mut spans = Vec::new();
+    for (index, segment) in timeline.segments.iter().enumerate() {
+        if segment.recording_clip != recording_clip {
+            continue;
+        }
+        let scale = if segment.timescale > 0.0 {
+            segment.timescale
+        } else {
+            1.0
+        };
+        let start = start.max(segment.start);
+        let end = end.min(segment.end);
+        if end <= start {
+            continue;
+        }
+        let output_start =
+            effective_to_output(holds, offsets[index] + (start - segment.start) / scale);
+        let output_end = effective_to_output(holds, offsets[index] + (end - segment.start) / scale);
+        spans.push((output_start, output_end));
+    }
+    spans
+}
+
 /// Every detection's time on the timeline: each region's source interval is
 /// placed through every clip that shows that part of its recording, at the
 /// clip's speed and past any holds.
@@ -1953,6 +1984,40 @@ fn lane_count(segments: &[Segment]) -> u32 {
 /// `video_offsets[clip]` is how far the clip's display video timestamps run
 /// ahead of its segment time (see `cap_rendering::display_video_offset`);
 /// detections are stamped in video time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RedactMark {
+    pub start: f64,
+    pub end: f64,
+    pub row: u8,
+}
+
+pub const REDACT_MARK_ROWS: usize = 3;
+
+fn pack_redact_marks(ranges: &[(f64, f64)]) -> Vec<RedactMark> {
+    let mut row_ends = [f64::NEG_INFINITY; REDACT_MARK_ROWS];
+    ranges
+        .iter()
+        .map(|&(start, end)| {
+            let row = row_ends
+                .iter()
+                .position(|row_end| *row_end <= start)
+                .unwrap_or_else(|| {
+                    row_ends
+                        .iter()
+                        .enumerate()
+                        .min_by(|a, b| a.1.total_cmp(b.1))
+                        .map_or(0, |(row, _)| row)
+                });
+            row_ends[row] = row_ends[row].max(end);
+            RedactMark {
+                start,
+                end,
+                row: row as u8,
+            }
+        })
+        .collect()
+}
+
 pub fn redact_region_spans<'a>(
     config: &ProjectConfiguration,
     redactions: &'a cap_project::redaction::Redactions,
@@ -1964,33 +2029,65 @@ pub fn redact_region_spans<'a>(
     let offsets = clip_timeline_offsets(timeline);
     let holds = timeline.hold_windows();
     let mut spans = Vec::new();
-    for (index, segment) in timeline.segments.iter().enumerate() {
-        let scale = if segment.timescale > 0.0 {
-            segment.timescale
-        } else {
-            1.0
-        };
-        for region in redactions
-            .regions
-            .iter()
-            .filter(|region| region.segment == segment.recording_clip)
-        {
-            let offset = video_offsets
-                .get(segment.recording_clip as usize)
-                .copied()
-                .unwrap_or(0.0);
-            let start = (region.start - offset).max(segment.start);
-            let end = (region.end - offset).min(segment.end);
-            if end <= start {
-                continue;
-            }
-            let output_start =
-                effective_to_output(&holds, offsets[index] + (start - segment.start) / scale);
-            let output_end =
-                effective_to_output(&holds, offsets[index] + (end - segment.start) / scale);
-            spans.push((output_start, output_end, region));
+    for region in &redactions.regions {
+        let offset = video_offsets
+            .get(region.segment as usize)
+            .copied()
+            .unwrap_or(0.0);
+        for (start, end) in source_interval_spans(
+            timeline,
+            &offsets,
+            &holds,
+            region.segment,
+            region.start - offset,
+            region.end - offset,
+        ) {
+            spans.push((start, end, region));
         }
     }
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    spans
+}
+
+/// The parts of the timeline auto redact has not read yet, given how many
+/// seconds of each recording clip's display video it has read
+/// (`scanned[clip]`). The flag marks the part that starts where the scan is
+/// reading now.
+pub fn redact_pending_spans(
+    config: &ProjectConfiguration,
+    scanned: &[f64],
+    durations: &[f64],
+    video_offsets: &[f64],
+) -> Vec<(f64, f64, bool)> {
+    let Some(timeline) = config.timeline.as_ref() else {
+        return Vec::new();
+    };
+    let offsets = clip_timeline_offsets(timeline);
+    let holds = timeline.hold_windows();
+    let reading = scanned
+        .iter()
+        .zip(durations)
+        .position(|(read, duration)| read < duration);
+    let mut spans = Vec::new();
+    for (clip, (read, duration)) in scanned.iter().zip(durations).enumerate() {
+        if read >= duration {
+            continue;
+        }
+        let offset = video_offsets.get(clip).copied().unwrap_or(0.0);
+        let from = read - offset;
+        let frontier = if reading == Some(clip) && *read > 0.0 {
+            source_interval_spans(timeline, &offsets, &holds, clip as u32, from, from + 1e-6)
+        } else {
+            Vec::new()
+        };
+        for (start, end) in
+            source_interval_spans(timeline, &offsets, &holds, clip as u32, from, f64::INFINITY)
+        {
+            let at_frontier = frontier.iter().any(|(edge, _)| (edge - start).abs() < 1e-9);
+            spans.push((start, end, at_frontier));
+        }
+    }
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
     spans
 }
 
@@ -2020,26 +2117,43 @@ impl TimelineModel {
             .collect::<Vec<_>>();
         spans.sort_by(|a, b| a.0.total_cmp(&b.0));
         const JOIN: f64 = 0.4;
-        let mut merged: Vec<(f64, f64, Vec<&str>)> = Vec::new();
+        struct Merged<'a> {
+            start: f64,
+            end: f64,
+            ids: Vec<&'a str>,
+            ranges: Vec<(f64, f64)>,
+        }
+        let mut merged: Vec<Merged> = Vec::new();
         for (start, end, id) in spans {
             match merged.last_mut() {
-                Some(last) if start <= last.1 + JOIN => {
-                    last.1 = last.1.max(end);
-                    if !last.2.contains(&id) {
-                        last.2.push(id);
+                Some(last) if start <= last.end + JOIN => {
+                    last.end = last.end.max(end);
+                    if !last.ids.contains(&id) {
+                        last.ids.push(id);
                     }
+                    last.ranges.push((start, end));
                 }
-                _ => merged.push((start, end, vec![id])),
+                _ => merged.push(Merged {
+                    start,
+                    end,
+                    ids: vec![id],
+                    ranges: vec![(start, end)],
+                }),
             }
         }
         self.redact = merged
             .into_iter()
-            .map(|(start, end, ids)| Segment {
-                start,
-                end,
+            .map(|span| Segment {
+                start: span.start,
+                end: span.end,
                 lane: 0,
                 detail: SegmentDetail::Redact {
-                    count: ids.iter().filter(|id| !settings.is_excluded(id)).count() as u32,
+                    count: span
+                        .ids
+                        .iter()
+                        .filter(|id| !settings.is_excluded(id))
+                        .count() as u32,
+                    marks: pack_redact_marks(&span.ranges).into(),
                 },
             })
             .collect();
@@ -3415,6 +3529,10 @@ fn render_segment(
         ));
     }
 
+    if let SegmentDetail::Redact { marks, .. } = &segment.detail {
+        fill = fill.child(render_redact_marks(segment, marks, secs_per_pixel, height));
+    }
+
     if let SegmentDetail::Audio {
         path,
         trim_start,
@@ -4482,6 +4600,42 @@ fn label_glyph(theme: &Theme, color: Hsla, path: &'static str, size: f32) -> Any
 
 /// The eleven tracks' label bodies: a primary name and, where the track has
 /// one, the value that qualifies it.
+fn render_redact_marks(
+    segment: &Segment,
+    marks: &[RedactMark],
+    secs_per_pixel: f64,
+    height: f32,
+) -> AnyElement {
+    const MARK_HEIGHT: f32 = 2.;
+    const MARK_GAP: f32 = 2.;
+    const BOTTOM: f32 = 5.;
+    let mut layer = div().absolute().inset_0().overflow_hidden();
+    // Marks that would add no visible pixel to their row are skipped, so a
+    // long recording with thousands of detections stays a few hundred boxes.
+    let mut drawn_to = [f32::NEG_INFINITY; REDACT_MARK_ROWS];
+    for mark in marks {
+        let left = ((mark.start - segment.start) / secs_per_pixel) as f32;
+        let width = (((mark.end - mark.start) / secs_per_pixel) as f32).max(2.);
+        let row = usize::from(mark.row).min(REDACT_MARK_ROWS - 1);
+        if left + width <= drawn_to[row] + 1. {
+            continue;
+        }
+        drawn_to[row] = drawn_to[row].max(left + width);
+        let top = height - BOTTOM - MARK_HEIGHT - row as f32 * (MARK_HEIGHT + MARK_GAP);
+        layer = layer.child(
+            div()
+                .absolute()
+                .left(px(left))
+                .top(px(top))
+                .w(px(width))
+                .h(px(MARK_HEIGHT))
+                .rounded_full()
+                .bg(gpui::white().opacity(0.3)),
+        );
+    }
+    layer.into_any_element()
+}
+
 fn label_body(
     theme: &Theme,
     color: Hsla,
@@ -4629,11 +4783,11 @@ fn label_body(
         }
 
         // -- Redact: what the span hides --------------------------------
-        (SegmentDetail::Redact { count }, LabelTier::Full) => label_row()
+        (SegmentDetail::Redact { count, .. }, LabelTier::Full) => label_row()
             .child(label_primary(theme, color).child(tr::editor::redact::lane()))
             .child(label_secondary(theme, color).child(count.to_string()))
             .into_any_element(),
-        (SegmentDetail::Redact { count }, LabelTier::Compact) => label_row()
+        (SegmentDetail::Redact { count, .. }, LabelTier::Compact) => label_row()
             .child(label_primary(theme, color).child(count.to_string()))
             .into_any_element(),
         (SegmentDetail::Redact { .. }, LabelTier::Glyph) => {
@@ -4975,11 +5129,44 @@ mod tests {
         assert_eq!(model.redact.len(), 2);
         assert!(matches!(
             model.redact[0].detail,
-            SegmentDetail::Redact { count: 0 }
+            SegmentDetail::Redact { count: 0, .. }
         ));
         config.auto_redact.enabled = false;
         model.set_redact(&config, Some(&redactions), &[0.5]);
         assert!(model.redact.is_empty());
+    }
+
+    #[test]
+    fn redact_pending_spans_follow_clips_and_mark_the_reading_edge() {
+        let mut config = ProjectConfiguration::default();
+        config.auto_redact.enabled = true;
+        config.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                    { "recordingSegment": 0, "timescale": 2.0, "start": 2.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 2.0 }
+                ],
+                "zoomSegments": []
+            }))
+            .unwrap(),
+        );
+        let round = |spans: Vec<(f64, f64, bool)>| {
+            spans
+                .into_iter()
+                .map(|(s, e, at)| ((s * 1000.).round() / 1000., (e * 1000.).round() / 1000., at))
+                .collect::<Vec<_>>()
+        };
+        let spans = redact_pending_spans(&config, &[6.0, 0.0], &[10.0, 4.0], &[0.0, 0.0]);
+        assert_eq!(
+            round(spans),
+            vec![(0.0, 4.0, false), (6.0, 8.0, true)],
+            "clip 1 is unread; clip 0 is read to 6 s, which plays at 6 s on the 2x clip"
+        );
+        let spans = redact_pending_spans(&config, &[10.0, 1.0], &[10.0, 4.0], &[0.0, 0.5]);
+        assert_eq!(round(spans), vec![(0.5, 4.0, true)]);
+        let done = redact_pending_spans(&config, &[10.0, 4.0], &[10.0, 4.0], &[0.0, 0.0]);
+        assert!(done.is_empty());
     }
 
     #[test]
