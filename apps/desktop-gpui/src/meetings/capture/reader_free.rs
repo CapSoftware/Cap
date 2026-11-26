@@ -159,6 +159,64 @@ pub fn plan_links(dump: &serde_json::Value, output: &str, ours: &str) -> Vec<(u6
     plan
 }
 
+/// From `pw-dump`: our links (by id) from streams that no longer play to
+/// `output`, so after a follow only what plays there reaches `ours`, as a
+/// monitor read of `output` would.
+pub fn plan_unlinks(dump: &serde_json::Value, output: &str, ours: &str) -> Vec<u64> {
+    let Some(objects) = dump.as_array() else {
+        return Vec::new();
+    };
+    let is = |o: &serde_json::Value, kind: &str| {
+        o.get("type")
+            .and_then(|t| t.as_str())
+            .and_then(|t| t.rsplit(':').next())
+            == Some(kind)
+    };
+    let prop = |o: &serde_json::Value, key: &str| {
+        o.get("info")
+            .and_then(|i| i.get("props"))
+            .and_then(|p| p.get(key))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    };
+    let node = |name: &str, class: Option<&str>| {
+        objects
+            .iter()
+            .find(|o| {
+                is(o, "Node")
+                    && prop(o, "node.name").as_deref() == Some(name)
+                    && class.is_none_or(|c| prop(o, "media.class").as_deref() == Some(c))
+            })
+            .and_then(|o| o.get("id").and_then(|i| i.as_u64()))
+    };
+    let (Some(output), Some(ours)) = (node(output, Some("Audio/Sink")), node(ours, None)) else {
+        return Vec::new();
+    };
+    let ends = |o: &serde_json::Value| {
+        let info = o.get("info")?;
+        Some((
+            o.get("id")?.as_u64()?,
+            info.get("output-node-id")?.as_u64()?,
+            info.get("input-node-id")?.as_u64()?,
+        ))
+    };
+    let links: Vec<(u64, u64, u64)> = objects
+        .iter()
+        .filter(|o| is(o, "Link"))
+        .filter_map(ends)
+        .collect();
+    links
+        .iter()
+        .filter(|(_, from, to)| {
+            *to == ours
+                && !links
+                    .iter()
+                    .any(|(_, other, sink)| other == from && *sink == output)
+        })
+        .map(|(id, _, _)| *id)
+        .collect()
+}
+
 #[cfg(target_os = "linux")]
 pub use platform::ReaderFree;
 
@@ -178,7 +236,7 @@ mod platform {
     use pipewire as pw;
     use pw::{properties::properties, spa};
 
-    use super::{NODE, plan_links};
+    use super::{NODE, plan_links, plan_unlinks};
 
     /// 20 ms at the monitor's rate.
     const CHUNK: usize = super::super::MONITOR_RATE as usize / 50;
@@ -235,6 +293,16 @@ mod platform {
         let plan = plan_links(&dump()?, output, NODE);
         for (from, to) in &plan {
             run("pw-link", &[&from.to_string(), &to.to_string()])?;
+        }
+        Ok(plan.len())
+    }
+
+    /// Removes our links from streams that no longer play to `output`. The
+    /// number removed.
+    fn unlink_others(output: &str) -> Result<usize, String> {
+        let plan = plan_unlinks(&dump()?, output, NODE);
+        for id in &plan {
+            run("pw-link", &["-d", &id.to_string()])?;
         }
         Ok(plan.len())
     }
@@ -488,8 +556,14 @@ mod platform {
                     changed
                 })
                 .unwrap_or(false);
-            if changed && let Err(error) = link(output) {
+            if !changed {
+                return;
+            }
+            if let Err(error) = link(output) {
                 tracing::debug!(%error, "could not link the new output's streams to the reader-free capture");
+            }
+            if let Err(error) = unlink_others(output) {
+                tracing::debug!(%error, "could not unlink the old output's streams from the reader-free capture");
             }
         }
     }
@@ -582,6 +656,32 @@ mod tests {
         let mut g = graph();
         g.as_array_mut().unwrap().push(link(70, 60, 71, 61));
         assert_eq!(plan_links(&g, "room", NODE), vec![(72, 61), (81, 61)]);
+    }
+
+    #[test]
+    fn a_follow_unlinks_only_streams_that_left_the_output() {
+        // The call (70) moved from the room to the headset; paplay (80)
+        // stays in the room. Both were linked into our capture while the
+        // room was read.
+        let with_id = |id: u64, mut link: serde_json::Value| {
+            link["id"] = json!(id);
+            link
+        };
+        let mut g = graph();
+        let objects = g.as_array_mut().unwrap();
+        objects.retain(|o| o["id"] != json!(1071) && o["id"] != json!(1072));
+        objects.extend([
+            node(100, "Audio/Sink", "headset", ""),
+            with_id(2001, link(70, 100, 71, 101)),
+            with_id(2002, link(70, 100, 72, 102)),
+            with_id(3071, link(70, 60, 71, 61)),
+            with_id(3072, link(70, 60, 72, 61)),
+            with_id(3081, link(80, 60, 81, 61)),
+        ]);
+        assert_eq!(plan_unlinks(&g, "headset", NODE), vec![3081]);
+        assert_eq!(plan_unlinks(&g, "room", NODE), vec![3071, 3072]);
+        assert!(plan_unlinks(&g, "missing", NODE).is_empty());
+        assert!(plan_unlinks(&json!([]), "room", NODE).is_empty());
     }
 
     #[test]
