@@ -2054,6 +2054,7 @@ mod input_epoch_tests {
 mod incremental_writer_tests {
     use super::*;
     use cap_project::CursorEvents;
+    #[cfg(unix)]
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 

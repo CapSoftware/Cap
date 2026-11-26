@@ -192,6 +192,8 @@ pub struct SegmentedVideoEncoder {
     pending_fallback: Option<EncoderFallback>,
     unrecovered_codec_failure: Option<(String, ffmpeg::Error)>,
     flush_failure: Option<EncoderFlushFailure>,
+    #[cfg(windows)]
+    d3d11_status: String,
 }
 
 struct SegmentMux {
@@ -334,6 +336,8 @@ pub struct SegmentedVideoEncoderConfig {
     /// [`SegmentedVideoEncoder::queue_hw_pixel_buffer`]) before falling back
     /// to the software-frame path. Ignored on other platforms.
     pub prefer_videotoolbox_hw_input: bool,
+    /// Address of an `ID3D11Device` that must outlive the encoder. Windows only.
+    pub d3d11_device: Option<usize>,
 }
 
 impl Default for SegmentedVideoEncoderConfig {
@@ -344,8 +348,17 @@ impl Default for SegmentedVideoEncoderConfig {
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             prefer_videotoolbox_hw_input: false,
+            d3d11_device: None,
         }
     }
+}
+
+#[cfg(windows)]
+fn flush_video_encoder(
+    encoder: &mut H264Encoder,
+    mux: &mut MuxSink<SegmentMux>,
+) -> Result<(), ffmpeg::Error> {
+    encoder.flush_to(mux)
 }
 
 impl SegmentedVideoEncoder {
@@ -462,7 +475,27 @@ impl SegmentedVideoEncoder {
         } else {
             None
         };
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        let (hw_attempt, d3d11_status) = match config.d3d11_device {
+            Some(device) => {
+                let device = device as *mut std::ffi::c_void;
+                match unsafe { builder.clone().build_d3d11_hw_input(&mut output, device) } {
+                    Ok(encoder) => {
+                        let status = encoder.d3d11_sw_format_name().unwrap_or("nv12").to_string();
+                        (Some(encoder), status)
+                    }
+                    Err(error) => {
+                        tracing::info!(
+                            %error,
+                            "D3D11 texture input unavailable, using the CPU frame path"
+                        );
+                        (None, error.to_string())
+                    }
+                }
+            }
+            None => (None, String::new()),
+        };
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let hw_attempt: Option<H264Encoder> = None;
 
         let encoder = match hw_attempt {
@@ -527,6 +560,8 @@ impl SegmentedVideoEncoder {
             pending_fallback: None,
             unrecovered_codec_failure: None,
             flush_failure: None,
+            #[cfg(windows)]
+            d3d11_status,
         };
 
         if write_behind {
@@ -579,6 +614,64 @@ impl SegmentedVideoEncoder {
         timestamp: Duration,
     ) -> Result<(), QueueFrameError> {
         let frame = unsafe { self.encoder.wrap_videotoolbox_pixel_buffer(pixel_buffer) }
+            .map_err(InitError::Encoder)?;
+        self.queue_frame(frame, timestamp)
+    }
+
+    #[cfg(windows)]
+    pub fn is_d3d11_hw_input(&self) -> bool {
+        self.encoder.is_d3d11_hw_input()
+    }
+
+    #[cfg(windows)]
+    pub fn d3d11_status(&self) -> &str {
+        &self.d3d11_status
+    }
+
+    pub fn codec_name(&self) -> String {
+        self.encoder.codec_name()
+    }
+
+    #[cfg(windows)]
+    pub fn abandon_d3d11_input(&mut self) -> bool {
+        if !self.encoder.is_d3d11_hw_input() {
+            return false;
+        }
+        let encoder_name = self.encoder.codec_name();
+        if let Err(error) = flush_video_encoder(&mut self.encoder, &mut self.mux) {
+            tracing::error!(
+                encoder = %encoder_name,
+                %error,
+                "D3D11 texture input stopped before its queued frames could be written; those frames are lost"
+            );
+        }
+        match self.encoder.replace_with_software() {
+            Ok(()) => {
+                tracing::warn!(
+                    encoder = %encoder_name,
+                    "D3D11 texture input stopped; later frames use the CPU path"
+                );
+                true
+            }
+            Err(error) => {
+                tracing::error!(%error, "Could not leave the D3D11 texture path");
+                false
+            }
+        }
+    }
+
+    /// # Safety
+    /// `texture` must be an NV12 texture on the device passed at init, at the
+    /// encoder's width and height. `lifetime.free` runs once when the queued
+    /// frame is dropped.
+    #[cfg(windows)]
+    pub unsafe fn queue_d3d11_texture(
+        &mut self,
+        texture: *mut std::ffi::c_void,
+        timestamp: Duration,
+        lifetime: Option<crate::D3d11TextureLifetime>,
+    ) -> Result<(), QueueFrameError> {
+        let frame = unsafe { self.encoder.wrap_d3d11_texture(texture, lifetime) }
             .map_err(InitError::Encoder)?;
         self.queue_frame(frame, timestamp)
     }

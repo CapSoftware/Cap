@@ -281,6 +281,7 @@ pub struct WindowsFragmentedM4SMuxer {
     timed_fragments: bool,
     base_path: PathBuf,
     video_config: VideoInfo,
+    d3d_device: Option<windows::Win32::Graphics::Direct3D11::ID3D11Device>,
     segment_duration: Duration,
     preset: H264Preset,
     bpp: f32,
@@ -306,6 +307,7 @@ pub struct WindowsFragmentedM4SMuxerConfig {
     pub disk_space_callback: Option<DiskSpaceCallback>,
     pub segment_tx:
         Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
+    pub d3d_device: Option<windows::Win32::Graphics::Direct3D11::ID3D11Device>,
 }
 
 impl Default for WindowsFragmentedM4SMuxerConfig {
@@ -320,6 +322,7 @@ impl Default for WindowsFragmentedM4SMuxerConfig {
             shared_pause_state: None,
             disk_space_callback: None,
             segment_tx: None,
+            d3d_device: None,
         }
     }
 }
@@ -371,6 +374,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             disk_space_callback: config.disk_space_callback,
             segment_tx: config.segment_tx,
             health_tx: SharedHealthSender::new(),
+            d3d_device: config.d3d_device,
         };
 
         muxer.start_encoder()?;
@@ -420,12 +424,18 @@ impl WindowsFragmentedM4SMuxer {
             sync_channel::<Option<(screen_capture::ScreenFrame, Duration)>>(buffer_size);
         let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
 
+        let d3d11_device = self
+            .d3d_device
+            .as_ref()
+            .map(windows::core::Interface::as_raw)
+            .map(|ptr| ptr as usize);
         let encoder_config = SegmentedVideoEncoderConfig {
             segment_duration: self.segment_duration,
             preset: self.preset,
             bpp: self.bpp,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: false,
+            d3d11_device,
         };
 
         let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
@@ -434,6 +444,9 @@ impl WindowsFragmentedM4SMuxer {
             encoder_config,
             self.timed_fragments,
         )?;
+        if encoder.is_d3d11_hw_input() {
+            info!("Windows M4S screen encoder is taking D3D11 textures");
+        }
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
         }
@@ -447,6 +460,7 @@ impl WindowsFragmentedM4SMuxer {
         let health_tx = self.health_tx.clone();
         let base_path = self.base_path.clone();
         let pause_flag = self.pause.flag();
+        let texture_device = self.d3d_device.clone();
         let encoder_handle = std::thread::Builder::new()
             .name("win-m4s-segment-encoder".to_string())
             .spawn(move || {
@@ -459,6 +473,8 @@ impl WindowsFragmentedM4SMuxer {
                 let mut pacer = FramePacer::new(video_config.fps());
                 let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
                 let mut first_timestamp: Option<Duration> = None;
+                let mut gpu_ring =
+                    texture_device.and_then(super::d3d11_texture_ring::GpuTextureRing::new);
 
                 let mut slow_convert_count = 0u32;
                 let mut slow_encode_count = 0u32;
@@ -473,15 +489,7 @@ impl WindowsFragmentedM4SMuxer {
                     "encoder:windows-fragmented",
                 ));
 
-                let normalize_timestamp =
-                    |ts: Duration, first: &mut Option<Duration>| -> Duration {
-                        if let Some(first_ts) = *first {
-                            ts.checked_sub(first_ts).unwrap_or(Duration::ZERO)
-                        } else {
-                            *first = Some(ts);
-                            Duration::ZERO
-                        }
-                    };
+                let normalize_timestamp = super::texture_slots::offset_from_first;
 
                 let encode_frame_fn = |ffmpeg_frame: ffmpeg::frame::Video,
                                        timestamp: Duration,
@@ -530,6 +538,80 @@ impl WindowsFragmentedM4SMuxer {
                     Ok(())
                 };
 
+                let encode_texture_fn = |prepared: super::d3d11_texture_ring::PreparedTexture,
+                                         timestamp: Duration,
+                                         slow_encode_count: &mut u32,
+                                         total_frames: &mut u64,
+                                         encoder: &Arc<Mutex<SegmentedVideoEncoder>>|
+                 -> anyhow::Result<()> {
+                    let Some((texture, lifetime)) = prepared.into_submit() else {
+                        return Ok(());
+                    };
+                    let encode_start = std::time::Instant::now();
+                    let encoded = match encoder.lock() {
+                        Ok(mut enc) => {
+                            let result = unsafe {
+                                enc.queue_d3d11_texture(texture, timestamp, Some(lifetime))
+                            };
+                            report_encode_result(
+                                &mut enc,
+                                result,
+                                &encode_failures,
+                                &encode_drops,
+                                &health_tx,
+                                "screen",
+                            )
+                        }
+                        Err(_) => {
+                            return Err(anyhow!(
+                                "Encoder mutex poisoned - all subsequent frames would be lost"
+                            ));
+                        }
+                    };
+                    let encode_elapsed_ms = encode_start.elapsed().as_millis();
+                    if encode_elapsed_ms > SLOW_THRESHOLD_MS {
+                        *slow_encode_count += 1;
+                        if *slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
+                            debug!(
+                                elapsed_ms = encode_elapsed_ms,
+                                count = *slow_encode_count,
+                                "encoder.queue_d3d11_texture exceeded {}ms threshold",
+                                SLOW_THRESHOLD_MS
+                            );
+                        }
+                    }
+                    if encoded {
+                        *total_frames += 1;
+                    }
+                    Ok(())
+                };
+
+                enum ScreenSubmit {
+                    Cpu(ffmpeg::frame::Video),
+                    Gpu(super::d3d11_texture_ring::PreparedTexture),
+                }
+
+                let cpu_screen_frame = |frame: &screen_capture::ScreenFrame,
+                                        ts: Duration,
+                                        last_ffmpeg_frame: &mut Option<ffmpeg::frame::Video>,
+                                        duplicated_frames: &mut u64|
+                 -> Option<(ScreenSubmit, Duration)> {
+                    match frame.as_ffmpeg() {
+                        Ok(frame) => {
+                            *last_ffmpeg_frame = Some(reference_video_frame(&frame));
+                            Some((ScreenSubmit::Cpu(frame), ts))
+                        }
+                        Err(error) => {
+                            warn!("Failed to convert D3D11 frame: {error:?}");
+                            *duplicated_frames += 1;
+                            last_ffmpeg_frame
+                                .as_ref()
+                                .map(reference_video_frame)
+                                .map(|frame| (ScreenSubmit::Cpu(frame), ts))
+                        }
+                    }
+                };
+
                 loop {
                     if matches!(
                         disk_monitor.poll(&base_path, &health_tx),
@@ -543,25 +625,74 @@ impl WindowsFragmentedM4SMuxer {
                     }
 
                     let convert_start = std::time::Instant::now();
+                    let mut texture_ready = encoder_clone
+                        .lock()
+                        .is_ok_and(|encoder| encoder.is_d3d11_hw_input());
 
-                    let (ffmpeg_frame, timestamp) = match pacer.next(&video_rx, &pause_flag) {
-                        Paced::Frame(frame, ts) => match frame.as_ffmpeg() {
-                            Ok(f) => {
-                                last_ffmpeg_frame = Some(reference_video_frame(&f));
-                                (Some(f), ts)
+                    let submission = match pacer.next(&video_rx, &pause_flag) {
+                        Paced::Frame(frame, ts) => {
+                            if texture_ready {
+                                let prepared = gpu_ring.as_mut().and_then(|ring| {
+                                    ring.copy_from(frame.texture(), frame.width(), frame.height())
+                                });
+                                if let Some(prepared) = prepared {
+                                    Some((ScreenSubmit::Gpu(prepared), ts))
+                                } else if gpu_ring.as_ref().is_none_or(|ring| ring.is_unusable()) {
+                                    if encoder_clone
+                                        .lock()
+                                        .is_ok_and(|mut encoder| encoder.abandon_d3d11_input())
+                                    {
+                                        cpu_screen_frame(
+                                            &frame,
+                                            ts,
+                                            &mut last_ffmpeg_frame,
+                                            &mut duplicated_frames,
+                                        )
+                                    } else {
+                                        warn!("D3D11 texture path could not switch to CPU frames");
+                                        duplicated_frames += 1;
+                                        None
+                                    }
+                                } else {
+                                    warn!("D3D11 texture ring is full; dropping this screen frame");
+                                    duplicated_frames += 1;
+                                    None
+                                }
+                            } else {
+                                cpu_screen_frame(
+                                    &frame,
+                                    ts,
+                                    &mut last_ffmpeg_frame,
+                                    &mut duplicated_frames,
+                                )
                             }
-                            Err(e) => {
-                                warn!("Failed to convert D3D11 frame: {e:?}");
-                                duplicated_frames += 1;
-                                (last_ffmpeg_frame.as_ref().map(reference_video_frame), ts)
-                            }
-                        },
+                        }
                         Paced::Repeat(ts) => {
-                            let Some(f) = &last_ffmpeg_frame else {
+                            let texture_repeat = texture_ready
+                                && gpu_ring.as_ref().is_some_and(|ring| !ring.is_unusable());
+                            if texture_repeat
+                                && let Some(prepared) =
+                                    gpu_ring.as_mut().and_then(|ring| ring.repeat_last())
+                            {
+                                duplicated_frames += 1;
+                                Some((ScreenSubmit::Gpu(prepared), ts))
+                            } else if texture_repeat {
                                 continue;
-                            };
-                            duplicated_frames += 1;
-                            (Some(reference_video_frame(f)), ts)
+                            } else {
+                                if texture_ready {
+                                    let left = encoder_clone
+                                        .lock()
+                                        .is_ok_and(|mut encoder| encoder.abandon_d3d11_input());
+                                    if !left {
+                                        continue;
+                                    }
+                                }
+                                let Some(frame) = &last_ffmpeg_frame else {
+                                    continue;
+                                };
+                                duplicated_frames += 1;
+                                Some((ScreenSubmit::Cpu(reference_video_frame(frame)), ts))
+                            }
                         }
                         Paced::End => {
                             let mut drained = 0u64;
@@ -571,20 +702,58 @@ impl WindowsFragmentedM4SMuxer {
                             loop {
                                 match video_rx.recv_timeout(Duration::from_millis(10)) {
                                     Ok(Some((frame, ts))) => {
-                                        if let Ok(f) = frame.as_ffmpeg() {
-                                            let normalized_ts =
-                                                normalize_timestamp(ts, &mut first_timestamp);
-                                            if let Err(e) = encode_frame_fn(
-                                                f,
+                                        let normalized_ts =
+                                            normalize_timestamp(ts, &mut first_timestamp);
+                                        let gpu = if texture_ready {
+                                            gpu_ring.as_mut().and_then(|ring| {
+                                                ring.copy_from(
+                                                    frame.texture(),
+                                                    frame.width(),
+                                                    frame.height(),
+                                                )
+                                            })
+                                        } else {
+                                            None
+                                        };
+                                        if texture_ready
+                                            && gpu.is_none()
+                                            && gpu_ring
+                                                .as_ref()
+                                                .is_none_or(|ring| ring.is_unusable())
+                                            && encoder_clone.lock().is_ok_and(|mut encoder| {
+                                                encoder.abandon_d3d11_input()
+                                            })
+                                        {
+                                            texture_ready = false;
+                                        }
+                                        let encoded = if let Some(prepared) = gpu {
+                                            Some(encode_texture_fn(
+                                                prepared,
                                                 normalized_ts,
                                                 &mut slow_encode_count,
                                                 &mut total_frames,
                                                 &encoder_clone,
-                                            ) {
-                                                warn!("Failed to encode drained frame: {e}");
+                                            ))
+                                        } else if !texture_ready {
+                                            frame.as_ffmpeg().ok().map(|frame| {
+                                                encode_frame_fn(
+                                                    frame,
+                                                    normalized_ts,
+                                                    &mut slow_encode_count,
+                                                    &mut total_frames,
+                                                    &encoder_clone,
+                                                )
+                                            })
+                                        } else {
+                                            None
+                                        };
+                                        match encoded {
+                                            Some(Err(error)) => {
+                                                warn!("Failed to encode drained frame: {error}");
                                                 break;
                                             }
-                                            drained += 1;
+                                            Some(Ok(())) => drained += 1,
+                                            None => {}
                                         }
                                     }
                                     Ok(None) => break,
@@ -606,7 +775,7 @@ impl WindowsFragmentedM4SMuxer {
 
                     let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
-                    let Some(ffmpeg_frame) = ffmpeg_frame else {
+                    let Some((submission, timestamp)) = submission else {
                         continue;
                     };
 
@@ -623,15 +792,25 @@ impl WindowsFragmentedM4SMuxer {
                     }
 
                     let normalized_ts = normalize_timestamp(timestamp, &mut first_timestamp);
-                    if let Err(e) = encode_frame_fn(
-                        ffmpeg_frame,
-                        normalized_ts,
-                        &mut slow_encode_count,
-                        &mut total_frames,
-                        &encoder_clone,
-                    ) {
+                    let encoded = match submission {
+                        ScreenSubmit::Cpu(frame) => encode_frame_fn(
+                            frame,
+                            normalized_ts,
+                            &mut slow_encode_count,
+                            &mut total_frames,
+                            &encoder_clone,
+                        ),
+                        ScreenSubmit::Gpu(prepared) => encode_texture_fn(
+                            prepared,
+                            normalized_ts,
+                            &mut slow_encode_count,
+                            &mut total_frames,
+                            &encoder_clone,
+                        ),
+                    };
+                    if let Err(error) = encoded {
                         error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
-                        return Err(e);
+                        return Err(error);
                     }
                 }
 
@@ -891,6 +1070,7 @@ impl WindowsFragmentedM4SCameraMuxer {
             bpp: self.bpp,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: false,
+            d3d11_device: None,
         };
 
         let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
@@ -938,15 +1118,7 @@ impl WindowsFragmentedM4SCameraMuxer {
                     "encoder:windows-fragmented-camera",
                 ));
 
-                let normalize_timestamp =
-                    |ts: Duration, first: &mut Option<Duration>| -> Duration {
-                        if let Some(first_ts) = *first {
-                            ts.checked_sub(first_ts).unwrap_or(Duration::ZERO)
-                        } else {
-                            *first = Some(ts);
-                            Duration::ZERO
-                        }
-                    };
+                let normalize_timestamp = super::texture_slots::offset_from_first;
 
                 let encode_camera_frame_fn =
                     |camera_frame: &NativeCameraFrame,

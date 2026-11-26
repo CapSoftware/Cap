@@ -293,6 +293,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 false
             };
 
+            let d3d_device = screen_capture.d3d_device.clone();
             if oop_ok {
                 use crate::output_pipeline::{
                     WindowsOOPFragmentedM4SMuxer, WindowsOOPFragmentedM4SMuxerConfig,
@@ -329,6 +330,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         shared_pause_state,
                         disk_space_callback: None,
                         segment_tx: None,
+                        d3d_device: Some(d3d_device),
                     })
                     .await
             }
@@ -366,6 +368,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         start_gate: Option<RecordingStartGate>,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
+        let d3d_device = screen_capture.d3d_device.clone();
         OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
@@ -380,6 +383,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 shared_pause_state: None,
                 disk_space_callback: None,
                 segment_tx,
+                d3d_device: Some(d3d_device),
             })
             .await
     }
@@ -647,60 +651,6 @@ fn resolve_area_display_notch(
     })
 }
 
-#[cfg(test)]
-mod display_notch_tests {
-    use super::*;
-    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
-
-    const NOTCH: scap_targets::NotchGeometry = scap_targets::NotchGeometry {
-        x: 0.4,
-        width: 0.2,
-        height: 0.1,
-    };
-
-    fn display_size() -> LogicalSize {
-        LogicalSize::new(1_000.0, 800.0)
-    }
-
-    #[test]
-    fn area_containing_the_full_notch_rebases_it() {
-        let bounds = LogicalBounds::new(
-            LogicalPosition::new(300.0, 0.0),
-            LogicalSize::new(400.0, 200.0),
-        );
-
-        assert_eq!(
-            resolve_area_display_notch(NOTCH, display_size(), bounds),
-            Some(cap_project::DisplayNotch {
-                x: 0.25,
-                width: 0.5,
-                height: 0.4,
-            })
-        );
-    }
-
-    #[test]
-    fn partially_intersected_notches_are_omitted() {
-        let horizontal = LogicalBounds::new(
-            LogicalPosition::new(500.0, 0.0),
-            LogicalSize::new(200.0, 200.0),
-        );
-        let vertical = LogicalBounds::new(
-            LogicalPosition::new(300.0, 40.0),
-            LogicalSize::new(400.0, 200.0),
-        );
-
-        assert_eq!(
-            resolve_area_display_notch(NOTCH, display_size(), horizontal),
-            None
-        );
-        assert_eq!(
-            resolve_area_display_notch(NOTCH, display_size(), vertical),
-            None
-        );
-    }
-}
-
 #[cfg(windows)]
 pub fn create_d3d_device()
 -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Device> {
@@ -797,4 +747,58 @@ pub fn create_d3d_device()
     }
 
     Ok(device.unwrap())
+}
+
+#[cfg(test)]
+mod display_notch_tests {
+    use super::*;
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+    const NOTCH: scap_targets::NotchGeometry = scap_targets::NotchGeometry {
+        x: 0.4,
+        width: 0.2,
+        height: 0.1,
+    };
+
+    fn display_size() -> LogicalSize {
+        LogicalSize::new(1_000.0, 800.0)
+    }
+
+    #[test]
+    fn area_containing_the_full_notch_rebases_it() {
+        let bounds = LogicalBounds::new(
+            LogicalPosition::new(300.0, 0.0),
+            LogicalSize::new(400.0, 200.0),
+        );
+
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), bounds),
+            Some(cap_project::DisplayNotch {
+                x: 0.25,
+                width: 0.5,
+                height: 0.4,
+            })
+        );
+    }
+
+    #[test]
+    fn partially_intersected_notches_are_omitted() {
+        let horizontal = LogicalBounds::new(
+            LogicalPosition::new(500.0, 0.0),
+            LogicalSize::new(200.0, 200.0),
+        );
+        let vertical = LogicalBounds::new(
+            LogicalPosition::new(300.0, 40.0),
+            LogicalSize::new(400.0, 200.0),
+        );
+
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), horizontal),
+            None
+        );
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), vertical),
+            None
+        );
+    }
 }

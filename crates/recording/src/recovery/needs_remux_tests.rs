@@ -240,7 +240,7 @@ fn needs_remux_recordings_of_every_size_validate_and_remux_in_order() {
             indexes.windows(2).all(|pair| pair[0] < pair[1]),
             "{fragments}"
         );
-        assert_eq!(RecoveryManager::remux_if_needed(&project).unwrap(), true);
+        assert!(RecoveryManager::remux_if_needed(&project).unwrap());
         assert_eq!(remuxed_frames(&project), recorded, "{fragments}");
         assert!(original_backups(&project).is_empty());
         assert!(!project.join(RECOVERY_PUBLICATION).exists());
@@ -257,19 +257,19 @@ fn torn_missing_or_unlisted_tails_still_remux_and_mid_recording_damage_is_refuse
     let last = partial.join(DISPLAY).join("segment_1356.m4s");
     let bytes = fs::read(&last).unwrap();
     fs::write(&last, &bytes[..bytes.len() / 2]).unwrap();
-    assert_eq!(RecoveryManager::remux_if_needed(&partial).unwrap(), true);
+    assert!(RecoveryManager::remux_if_needed(&partial).unwrap());
     assert_eq!(remuxed_frames(&partial), recorded);
 
     let missing = make("missing last fragment");
     let recorded = recorded_frames(&missing, Some("segment_1356.m4s"));
     fs::remove_file(missing.join(DISPLAY).join("segment_1356.m4s")).unwrap();
-    assert_eq!(RecoveryManager::remux_if_needed(&missing).unwrap(), true);
+    assert!(RecoveryManager::remux_if_needed(&missing).unwrap());
     assert_eq!(remuxed_frames(&missing), recorded);
 
     let unlisted = make("missing manifest");
     let recorded = recorded_frames(&unlisted, None);
     fs::remove_file(unlisted.join(DISPLAY).join("manifest.json")).unwrap();
-    assert_eq!(RecoveryManager::remux_if_needed(&unlisted).unwrap(), true);
+    assert!(RecoveryManager::remux_if_needed(&unlisted).unwrap());
     assert_eq!(remuxed_frames(&unlisted), recorded);
 
     let damaged = make("damaged middle fragment");
@@ -286,7 +286,7 @@ fn torn_missing_or_unlisted_tails_still_remux_and_mid_recording_damage_is_refuse
     fs::remove_file(no_meta.join("recording-meta.json")).unwrap();
     let before = layout(&no_meta);
     assert!(RecoveryManager::inspect_recording(&no_meta).is_none());
-    assert_eq!(RecoveryManager::remux_if_needed(&no_meta).unwrap(), false);
+    assert!(!RecoveryManager::remux_if_needed(&no_meta).unwrap());
     RecoveryManager::restore_interrupted_recovery(&no_meta).unwrap();
     assert_eq!(layout(&no_meta), before);
 }
@@ -327,7 +327,7 @@ fn a_publication_killed_at_any_step_relaunches_to_the_original_layout() {
                 .len(),
             40
         );
-        assert_eq!(RecoveryManager::remux_if_needed(&project).unwrap(), true);
+        assert!(RecoveryManager::remux_if_needed(&project).unwrap());
         assert_eq!(remuxed_frames(&project), recorded);
     }
 }
@@ -413,7 +413,7 @@ fn a_rollback_that_windows_refuses_is_finished_by_the_next_open() {
         RecoveryManager::restore_interrupted_recovery(&project).unwrap();
         assert_eq!(layout(&project), before, "failure at rename {failure}");
         assert!(!project.join(RECOVERY_PUBLICATION).exists());
-        assert_eq!(RecoveryManager::remux_if_needed(&project).unwrap(), true);
+        assert!(RecoveryManager::remux_if_needed(&project).unwrap());
         assert_eq!(remuxed_frames(&project), recorded);
     }
 }
@@ -542,7 +542,7 @@ fn projects_an_older_build_stranded_are_restored_and_open_again() {
                 fs::set_permissions(entry.path(), permissions).unwrap();
             }
         }
-        assert_eq!(RecoveryManager::remux_if_needed(&project).unwrap(), true);
+        assert!(RecoveryManager::remux_if_needed(&project).unwrap());
         assert_eq!(remuxed_frames(&project), recorded, "{variant:?}");
     }
 }
