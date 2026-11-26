@@ -31,6 +31,8 @@ const MIC_RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(30);
 const SYSTEM_AUDIO_RECONNECT_GRACE: Duration = Duration::from_secs(3);
 #[cfg(target_os = "linux")]
 const SYSTEM_AUDIO_STOP_FLUSH: Duration = Duration::from_secs(2);
+#[cfg(target_os = "linux")]
+const SYSTEM_AUDIO_STOP_DRAIN: Duration = Duration::from_millis(50);
 
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
@@ -676,10 +678,16 @@ impl Microphone {
                     // switched-to one delivers its first frame.
                     let mut switched_from: Option<cap_timestamp::Timestamp> = None;
                     let mut logged_current_source: Option<(u32, u16, SampleFormat)> = None;
+                    // Set once Stop has flushed held system audio: the loop
+                    // drains what that flush sent until this deadline. A
+                    // fixed deadline, because live frames keep the receive
+                    // branch ready and would starve a fresh per-loop timer.
                     #[cfg(target_os = "linux")]
-                    let mut system_stop_flushed = false;
+                    let mut system_stop_drain_until: Option<
+                        tokio::time::Instant,
+                    > = None;
                     #[cfg(not(target_os = "linux"))]
-                    let system_stop_flushed = false;
+                    let system_stop_drain_until: Option<tokio::time::Instant> = None;
 
                     loop {
                         #[cfg(windows)]
@@ -694,13 +702,20 @@ impl Microphone {
                         {
                             break;
                         }
+                        if system_stop_drain_until
+                            .is_some_and(|until| tokio::time::Instant::now() >= until)
+                        {
+                            break;
+                        }
                         let recv_result = tokio::select! {
                             biased;
-                            _ = cancel.cancelled(), if !system_stop_flushed => {
+                            _ = cancel.cancelled(), if system_stop_drain_until.is_none() => {
                                 #[cfg(target_os = "linux")]
                                 if feed_lock.has_system_audio_hold() {
-                                    system_stop_flushed = true;
                                     feed_lock.flush_confirmed_system_audio().await;
+                                    system_stop_drain_until = Some(
+                                        tokio::time::Instant::now() + SYSTEM_AUDIO_STOP_DRAIN,
+                                    );
                                     continue;
                                 }
                                 break;
@@ -796,7 +811,9 @@ impl Microphone {
                                 continue;
                             }
                             r = tokio::time::timeout(silence_timeout, rx.recv_async()) => r,
-                            _ = tokio::time::sleep(Duration::from_millis(50)), if system_stop_flushed => break,
+                            _ = tokio::time::sleep_until(
+                                system_stop_drain_until.unwrap_or_else(tokio::time::Instant::now),
+                            ), if system_stop_drain_until.is_some() => break,
                         };
                         match recv_result {
                             Ok(Ok(frame)) => {
