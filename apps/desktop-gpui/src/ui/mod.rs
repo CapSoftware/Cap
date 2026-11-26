@@ -109,7 +109,7 @@ pub use progress::CircularProgress;
 #[allow(unused_imports)]
 pub use radio_cards::{RadioCard, RadioCards};
 #[allow(unused_imports)]
-pub use segmented::{SegmentOption, SegmentedControl, option_at};
+pub use segmented::{SegmentOption, SegmentedControl, editor_segment_surface, option_at};
 #[allow(unused_imports)]
 pub use select::Select;
 #[allow(unused_imports)]

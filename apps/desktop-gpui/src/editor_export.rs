@@ -2532,7 +2532,7 @@ impl EditorWindow {
                         self.render_export_preview_pane(ui, preview_box)
                             .into_any_element()
                     })
-                    .child(self.render_export_sidebar(ui, cx))
+                    .child(self.render_export_sidebar(ui, viewport, cx))
                     .when(ui.phase.shows_progress(), |this| {
                         this.child(self.render_export_overlay(ui, cx))
                     })
@@ -2568,8 +2568,11 @@ impl EditorWindow {
                         ui.clipboard_export.menu_items(),
                         menu,
                     )
-                    .min_width(px(120.))
                     .align_right()
+                    .attached(ui::editor_segment_surface(
+                        &theme,
+                        ui.destination == ExportDestination::Clipboard,
+                    ))
                     .on_select(cx.listener(|this, index: &usize, window, cx| {
                         this.choose_clipboard_export(*index, window, cx);
                     }))
@@ -2994,7 +2997,12 @@ impl EditorWindow {
             )
     }
 
-    fn render_export_sidebar(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_export_sidebar(
+        &self,
+        ui: &ExportUi,
+        viewport: gpui::Size<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
         let transparent = has_transparent_background(&self.project);
@@ -3024,7 +3032,7 @@ impl EditorWindow {
                     .p(px(16.))
                     .gap(px(20.))
                     .when(!audio_mode, |this| {
-                        this.child(self.export_destination_field(ui, link_disabled, cx))
+                        this.child(self.export_destination_field(ui, link_disabled, viewport, cx))
                     })
                     .child(self.export_format_field(ui, transparent, cx))
                     .when(audio_mode, |this| {
@@ -3200,6 +3208,7 @@ impl EditorWindow {
         &self,
         ui: &ExportUi,
         link_disabled: bool,
+        viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
@@ -3257,6 +3266,14 @@ impl EditorWindow {
             cx.notify();
         }));
         let control = if clipboard_available {
+            let segment_bounds = std::rc::Rc::new(std::cell::Cell::new(None));
+            let opens_below = ui
+                .clipboard_menu
+                .as_ref()
+                .and_then(|menu| menu.opens_below(viewport));
+            let control = control
+                .trailing_bounds(segment_bounds.clone())
+                .trailing_attached(opens_below);
             control.trailing(
                 1,
                 ui::Menu::trigger(
@@ -3289,14 +3306,14 @@ impl EditorWindow {
                                     ),
                             ),
                     ),
-                    cx.listener(|this, bounds: &gpui::Bounds<gpui::Pixels>, _, cx| {
+                    cx.listener(move |this, bounds: &gpui::Bounds<gpui::Pixels>, _, cx| {
                         cx.stop_propagation();
                         if let Some(ui) = this.export.as_mut() {
                             ui.clipboard_menu = if ui.clipboard_menu.is_some() {
                                 None
                             } else {
                                 Some(ui::MenuState::anchored(
-                                    *bounds,
+                                    segment_bounds.get().unwrap_or(*bounds),
                                     &ui.clipboard_export.menu_items(),
                                 ))
                             };
