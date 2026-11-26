@@ -478,6 +478,23 @@ mod tests {
     }
 
     #[test]
+    fn labels_with_letters_that_grow_when_lowercased_keep_their_names() {
+        // "İ" is two bytes and lowercases to three, so a marker found in the
+        // lowercased label sits at a different byte offset in the label.
+        let labels: Vec<String> = [
+            "İrem İnce is speaking",
+            "İSMAİL İLKİN GİRİŞ (You)",
+            "Ayşe İpek, speaking",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let (speaking, me) = read_labels(&labels);
+        assert_eq!(me.as_deref(), Some("İSMAİL İLKİN GİRİŞ"));
+        assert_eq!(speaking, vec!["İrem İnce", "Ayşe İpek"]);
+    }
+
+    #[test]
     fn an_hour_long_call_aligns_in_milliseconds() {
         let mut lit = Vec::new();
         let mut spans = Vec::new();
