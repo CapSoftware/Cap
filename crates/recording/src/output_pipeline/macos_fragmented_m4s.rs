@@ -8,7 +8,7 @@ use crate::{
     output_pipeline::NativeCameraFrame,
     screen_capture::{
         self,
-        frame_accounting::{LossWindow, ScreenFrameAccounting},
+        frame_accounting::{LossWindow, ScreenFrameAccounting, ScreenFrameTotals},
     },
 };
 use anyhow::{Context, anyhow};
@@ -160,6 +160,7 @@ fn record_encode(
 ) {
     if let Some(accounting) = accounting {
         accounting.record_encoded(repeat, encoded, Some(encoder.packets_written()));
+        accounting.record_writer_lost(encoder.packets_lost());
     }
 }
 
@@ -168,9 +169,12 @@ fn report_frame_loss(
     window: &mut LossWindow,
     health_tx: &SharedHealthSender,
 ) {
-    let Some(lost) = window.observe(std::time::Instant::now(), accounting.totals()) else {
-        return;
-    };
+    if let Some(lost) = window.observe(std::time::Instant::now(), accounting.totals()) {
+        warn_frame_loss(lost, health_tx);
+    }
+}
+
+fn warn_frame_loss(lost: ScreenFrameTotals, health_tx: &SharedHealthSender) {
     warn!(
         displayed = lost.displayed,
         lost = lost.lost(),
@@ -423,6 +427,9 @@ impl Muxer for MacOSFragmentedM4SMuxer {
                     .as_ref()
                     .map(|packets| packets.load(Ordering::Relaxed)),
             );
+            if let Some(lost) = self.loss_window.finish(accounting.totals()) {
+                warn_frame_loss(lost, &self.health_tx);
+            }
             log_frame_totals(accounting, &self.base_path);
         }
 

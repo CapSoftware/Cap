@@ -27,6 +27,8 @@ const CADENCE_MIN_STEPS: usize = 8;
 const SHORT_GAP_CADENCES: u64 = 4;
 const STEADY_STEPS: u32 = 4;
 const STREAM_STARTUP_NS: u64 = 1_000_000_000;
+const REFRESH_CHECK_NS: u64 = 1_000_000_000;
+const REFRESH_CHECKS_PER_SECOND: u32 = 100;
 
 /// Counts display frames ScreenCaptureKit skipped, from the display time on
 /// each complete frame. ScreenCaptureKit never marks a skipped frame; measured
@@ -42,9 +44,20 @@ const STREAM_STARTUP_NS: u64 = 1_000_000_000;
 ///   bound.
 /// - For about the first second of a stream it delivers a frame at every
 ///   refresh even when nothing changed, so gaps there are not counted.
+/// - The slot follows the display's refresh rate. It is re-read when a gap
+///   would be counted or frames arrive early (rate drops and rises), and once
+///   a second; a changed rate re-derives the slot, forgets the recent steps
+///   and does not count that gap. A change the display mode does not report
+///   leaves every recent step on a common multiple, which never counts as
+///   continuous change, so it can cost at most one window of steps.
 #[derive(Debug)]
 pub struct CaptureGapCounter {
     slot_ns: u64,
+    fps: u32,
+    refresh_hz: f64,
+    last_refresh_check_ns: Option<u64>,
+    refresh_check_window_ns: Option<u64>,
+    refresh_checks_in_window: u32,
     startup_ns: u64,
     first_complete_ns: Option<u64>,
     last_complete_ns: Option<u64>,
@@ -61,9 +74,21 @@ impl CaptureGapCounter {
         Self::with_startup(slot_ns, STREAM_STARTUP_NS)
     }
 
+    pub fn for_display(fps: u32, refresh_hz: f64) -> Self {
+        let mut counter = Self::new(capture_slot_ns(fps, refresh_hz.round()));
+        counter.fps = fps;
+        counter.refresh_hz = refresh_hz.round();
+        counter
+    }
+
     fn with_startup(slot_ns: u64, startup_ns: u64) -> Self {
         Self {
             slot_ns: slot_ns.max(1),
+            fps: 0,
+            refresh_hz: 0.0,
+            last_refresh_check_ns: None,
+            refresh_check_window_ns: None,
+            refresh_checks_in_window: 0,
             startup_ns,
             first_complete_ns: None,
             last_complete_ns: None,
@@ -88,6 +113,53 @@ impl CaptureGapCounter {
         self.steady_run = 0;
     }
 
+    pub fn complete_on_display(
+        &mut self,
+        display_ns: u64,
+        refresh_hz: impl FnOnce() -> f64,
+    ) -> u64 {
+        let previous = self.last_complete_ns;
+        let lost = self.complete(display_ns);
+        let early = previous.is_some_and(|previous| {
+            display_ns > previous && (display_ns - previous) * 4 < self.slot_ns * 3
+        });
+        let periodic = self
+            .last_refresh_check_ns
+            .is_none_or(|checked| display_ns.saturating_sub(checked) >= REFRESH_CHECK_NS);
+        let triggered = (lost > 0 || early) && self.refresh_check_allowed(display_ns);
+        if self.fps == 0 || !(periodic || triggered) {
+            return lost;
+        }
+        self.last_refresh_check_ns = Some(display_ns);
+        let refresh_hz = refresh_hz().round();
+        if !refresh_hz.is_finite() || refresh_hz <= 0.0 || refresh_hz == self.refresh_hz {
+            return lost;
+        }
+        self.refresh_hz = refresh_hz;
+        self.slot_ns = capture_slot_ns(self.fps, refresh_hz).max(1);
+        self.idles_since_complete = 0;
+        self.step_count = 0;
+        self.cadence = 1;
+        self.steady_run = 0;
+        0
+    }
+
+    fn refresh_check_allowed(&mut self, display_ns: u64) -> bool {
+        if self
+            .refresh_check_window_ns
+            .is_none_or(|start| display_ns.saturating_sub(start) >= REFRESH_CHECK_NS)
+        {
+            self.refresh_check_window_ns = Some(display_ns);
+            self.refresh_checks_in_window = 0;
+        }
+        if self.refresh_checks_in_window < REFRESH_CHECKS_PER_SECOND {
+            self.refresh_checks_in_window += 1;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn complete(&mut self, display_ns: u64) -> u64 {
         let first = *self.first_complete_ns.get_or_insert(display_ns);
         let previous = self.last_complete_ns.replace(display_ns);
@@ -97,8 +169,9 @@ impl CaptureGapCounter {
         };
         let slots = ((display_ns - previous + self.slot_ns / 2) / self.slot_ns).max(1);
         self.push_step(slots, idles);
-        let continuous =
-            self.step_count >= CADENCE_WINDOW && self.step_idles.iter().all(|idles| *idles == 0);
+        let continuous = self.step_count >= CADENCE_WINDOW
+            && self.step_idles.iter().all(|idles| *idles == 0)
+            && self.steps.iter().copied().fold(0, gcd) == 1;
         let lost = if continuous {
             slots - 1
         } else if self.step_count < CADENCE_MIN_STEPS || self.steady_run < STEADY_STEPS {
@@ -134,6 +207,10 @@ impl CaptureGapCounter {
             .max()
             .map_or(1, |(_, step)| step);
     }
+}
+
+fn gcd(a: u64, b: u64) -> u64 {
+    if b == 0 { a } else { gcd(b, a % b) }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -216,6 +293,7 @@ pub struct ScreenFrameAccounting {
     real_encoded: AtomicU64,
     repeats_encoded: AtomicU64,
     packets_written: AtomicU64,
+    writer_lost: AtomicU64,
     repeat_flags: Mutex<VecDeque<bool>>,
 }
 
@@ -285,6 +363,10 @@ impl ScreenFrameAccounting {
         }
     }
 
+    pub fn record_writer_lost(&self, lost: u64) {
+        self.writer_lost.store(lost, Ordering::Relaxed);
+    }
+
     pub fn record_finished(&self, packets_written: Option<u64>) {
         if let Some(packets_written) = packets_written {
             self.packets_written
@@ -313,7 +395,7 @@ impl ScreenFrameAccounting {
         let lost_in_encoder = if self.finished.load(Ordering::Relaxed) {
             handed_to_encoder.saturating_sub(written)
         } else {
-            encoder_failed
+            encoder_failed + self.writer_lost.load(Ordering::Relaxed)
         };
         ScreenFrameTotals {
             displayed: delivered + callback_dropped + lost_in_capture,
@@ -377,6 +459,15 @@ impl LossWindow {
         let window = totals.since(&self.at_start);
         self.start = Some(now);
         self.at_start = totals;
+        Self::sustained(window)
+    }
+
+    pub fn finish(&mut self, totals: ScreenFrameTotals) -> Option<ScreenFrameTotals> {
+        self.start.take()?;
+        Self::sustained(totals.since(&self.at_start))
+    }
+
+    fn sustained(window: ScreenFrameTotals) -> Option<ScreenFrameTotals> {
         (window.lost() >= LOSS_WARN_MIN_FRAMES && window.lost_pct() >= LOSS_WARN_PCT)
             .then_some(window)
     }
@@ -551,6 +642,122 @@ mod tests {
             lost += skipped;
         }
         assert_eq!(lost, 5, "one skip every 30 frames after the first second");
+    }
+
+    struct RateFeed {
+        counter: CaptureGapCounter,
+        t: f64,
+        hz: f64,
+        lost: u64,
+        checks: u32,
+    }
+
+    impl RateFeed {
+        fn new(fps: u32, hz: f64) -> Self {
+            let mut counter = CaptureGapCounter::for_display(fps, hz);
+            counter.startup_ns = 0;
+            Self {
+                counter,
+                t: 1e9,
+                hz,
+                lost: 0,
+                checks: 0,
+            }
+        }
+
+        fn frames(&mut self, step_ms: f64, count: usize) -> u64 {
+            let before = self.lost;
+            for _ in 0..count {
+                self.t += step_ms * 1e6;
+                let hz = self.hz;
+                let checks = &mut self.checks;
+                self.lost += self.counter.complete_on_display(self.t as u64, || {
+                    *checks += 1;
+                    hz
+                });
+            }
+            self.lost - before
+        }
+    }
+
+    const REFRESH_120_MS: f64 = 1000.0 / 120.0;
+    const REFRESH_60_MS: f64 = 1000.0 / 60.0;
+    const REFRESH_144_MS: f64 = 1000.0 / 144.0;
+
+    #[test]
+    fn refresh_dropping_from_120_to_60_is_not_loss() {
+        let mut feed = RateFeed::new(120, 120.0);
+        assert_eq!(feed.frames(REFRESH_120_MS, 240), 0);
+        feed.hz = 60.0;
+        assert_eq!(feed.frames(REFRESH_60_MS, 240), 0);
+        assert_eq!(
+            feed.frames(2.0 * REFRESH_60_MS, 1),
+            1,
+            "a skip on the new grid still counts"
+        );
+        assert_eq!(feed.frames(REFRESH_60_MS, 60), 0);
+    }
+
+    #[test]
+    fn refresh_rising_from_60_to_120_is_not_loss() {
+        let mut feed = RateFeed::new(120, 60.0);
+        assert_eq!(feed.frames(REFRESH_60_MS, 240), 0);
+        feed.hz = 120.0;
+        assert_eq!(feed.frames(REFRESH_120_MS, 240), 0);
+        assert_eq!(
+            feed.frames(2.0 * REFRESH_120_MS, 1),
+            1,
+            "a skip on the faster grid counts"
+        );
+    }
+
+    #[test]
+    fn refresh_rising_from_120_to_144_is_not_loss() {
+        let mut feed = RateFeed::new(120, 120.0);
+        assert_eq!(feed.frames(REFRESH_120_MS, 240), 0);
+        feed.hz = 144.0;
+        let every_second_refresh = 2.0 * REFRESH_144_MS;
+        assert_eq!(feed.frames(every_second_refresh, 240), 0);
+        assert_eq!(feed.frames(2.0 * every_second_refresh, 1), 1);
+    }
+
+    #[test]
+    fn a_refresh_change_the_display_mode_hides_costs_at_most_one_window() {
+        let mut feed = RateFeed::new(120, 120.0);
+        assert_eq!(feed.frames(REFRESH_120_MS, 240), 0);
+        let during = feed.frames(REFRESH_60_MS, CADENCE_WINDOW);
+        assert!(during < CADENCE_WINDOW as u64, "{during}");
+        assert_eq!(feed.frames(REFRESH_60_MS, 240), 0);
+        assert_eq!(
+            feed.frames(4.0 * REFRESH_120_MS, 1),
+            1,
+            "real skips count on the content's own grid"
+        );
+    }
+
+    #[test]
+    fn refresh_checks_stay_bounded_and_keep_real_loss() {
+        let fps = 480;
+        let hz = 480.0;
+        let refresh_ms = 1000.0 / hz;
+        let mut feed = RateFeed::new(fps, hz);
+        let mut plain = CaptureGapCounter::with_startup(capture_slot_ns(fps, hz), 0);
+        let mut plain_lost = 0;
+        let mut t = 1e9;
+        for i in 0..960 {
+            let step = if i % 2 == 0 { 2.0 } else { 3.0 } * refresh_ms;
+            feed.frames(step, 1);
+            t += step * 1e6;
+            plain_lost += plain.complete(t as u64);
+        }
+        assert_eq!(feed.lost, plain_lost);
+        assert!(feed.lost > 900);
+        let seconds = ((feed.t - 1e9) / 1e9).ceil() as u32;
+        assert!(
+            feed.checks <= seconds * (REFRESH_CHECKS_PER_SECOND + 1),
+            "{} checks in {seconds} s",
+            feed.checks
+        );
     }
 
     #[test]
@@ -767,6 +974,70 @@ mod tests {
         assert_eq!(totals.delivered, 4);
         assert_eq!(totals.lost_in_capture, 7);
         assert_eq!(totals.displayed, 11);
+    }
+
+    #[test]
+    fn a_writer_failing_mid_recording_trips_the_loss_window() {
+        let accounting = ScreenFrameAccounting::default();
+        let mut window = LossWindow::default();
+        let start = Instant::now();
+        let mut written = 0;
+        let mut lost = 0;
+        let mut warned = Vec::new();
+        for i in 0..1200u64 {
+            accounting.record_accepted(FrameLossCarry::default(), i == 0);
+            hand(&accounting, false);
+            let repeat = accounting.next_is_repeat();
+            if i >= 600 && i % 4 == 0 {
+                lost += 1;
+            } else {
+                written += 1;
+            }
+            accounting.record_encoded(repeat, true, Some(written));
+            accounting.record_writer_lost(lost);
+            let now = start + Duration::from_millis(i * 1000 / 60);
+            if let Some(window) = window.observe(now, accounting.totals()) {
+                warned.push((i, window));
+            }
+        }
+        assert!(
+            warned.iter().all(|(i, _)| *i >= 600),
+            "no warning before the writer fails"
+        );
+        let (_, window) = warned.first().expect("the window fires once writes fail");
+        assert!(window.lost_in_encoder > 0);
+        let during = accounting.totals();
+        assert_eq!(during.lost_in_encoder, lost);
+        accounting.record_finished(Some(written));
+        let after = accounting.totals();
+        assert_eq!(after.lost_in_encoder, during.lost_in_encoder);
+        assert_eq!(after.written, written);
+        assert_eq!(after.displayed, after.written + after.lost());
+    }
+
+    #[test]
+    fn stop_checks_the_last_partial_window() {
+        let start = Instant::now();
+        let frames = |displayed: u64, lost: u64| ScreenFrameTotals {
+            displayed,
+            written: displayed - lost,
+            lost_in_encoder: lost,
+            ..Default::default()
+        };
+        let mut window = LossWindow::default();
+        assert!(window.observe(start, frames(0, 0)).is_none());
+        assert!(
+            window
+                .observe(start + Duration::from_secs(2), frames(120, 40))
+                .is_none()
+        );
+        assert_eq!(window.finish(frames(120, 40)).map(|w| w.lost()), Some(40));
+        assert!(window.finish(frames(120, 40)).is_none(), "checked once");
+
+        let mut quiet = LossWindow::default();
+        quiet.observe(start, frames(0, 0));
+        assert!(quiet.finish(frames(120, 2)).is_none());
+        assert!(LossWindow::default().finish(frames(120, 40)).is_none());
     }
 
     #[test]
