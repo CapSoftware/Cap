@@ -6,7 +6,7 @@ mod linux_camera;
 #[cfg(target_os = "linux")]
 pub use linux_camera::{
     LINUX_CAMERA_MAX_MASK_AGE, LinuxCameraBlur, LinuxCameraEffect, LinuxCameraMaskReceipt,
-    LinuxCameraPixels, LinuxCameraPresentation, LinuxCameraPresentationError,
+    LinuxCameraPicture, LinuxCameraPixels, LinuxCameraPresentation, LinuxCameraPresentationError,
     LinuxCameraProcessing, LinuxCameraPublisher, LinuxCameraRect, LinuxCameraSampleFormat,
     LinuxCameraShape, LinuxProcessedCameraFrame, LinuxProcessedCameraSource,
 };
@@ -829,6 +829,7 @@ async fn create_pipeline(
                 timed_fragments: false,
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: cap_enc_ffmpeg::h264::H264Preset::Ultrafast,
+                video_bitrate: None,
                 output_size: Some(output_resolution),
                 shared_pause_state: None,
                 segment_tx: segment_tx_for_video,
@@ -938,6 +939,8 @@ pub struct ActorBuilder {
     #[cfg(target_os = "linux")]
     processed_camera: Option<LinuxProcessedCameraSource>,
     #[cfg(target_os = "linux")]
+    camera_picture: Option<LinuxCameraPicture>,
+    #[cfg(target_os = "linux")]
     camera_reference_size: Option<(u32, u32)>,
     max_output_size: Option<u32>,
     max_fps: u32,
@@ -963,6 +966,8 @@ impl ActorBuilder {
             camera_presentation: None,
             #[cfg(target_os = "linux")]
             processed_camera: None,
+            #[cfg(target_os = "linux")]
+            camera_picture: None,
             #[cfg(target_os = "linux")]
             camera_reference_size: None,
             max_output_size: None,
@@ -1046,6 +1051,22 @@ impl ActorBuilder {
         self
     }
 
+    /// Draws a still picture where the camera would be, for a recording with
+    /// a picture in place of a camera.
+    #[cfg(target_os = "linux")]
+    pub fn with_linux_camera_picture(
+        mut self,
+        picture: LinuxCameraPicture,
+        presentation: LinuxCameraPresentation,
+        reference_size: (u32, u32),
+    ) -> Self {
+        self.composite_camera = true;
+        self.camera_presentation = Some(presentation);
+        self.camera_picture = Some(picture);
+        self.camera_reference_size = Some(reference_size);
+        self
+    }
+
     pub fn with_max_fps(mut self, max_fps: u32) -> Self {
         self.max_fps = max_fps.clamp(1, 120);
         self
@@ -1082,6 +1103,7 @@ impl ActorBuilder {
                 composite_camera: self.composite_camera,
                 camera_presentation: self.camera_presentation,
                 processed_camera: self.processed_camera,
+                camera_picture: self.camera_picture,
                 camera_reference_size: self.camera_reference_size,
             },
             #[cfg(target_os = "linux")]
@@ -1116,6 +1138,7 @@ struct LinuxCameraConfig {
     composite_camera: bool,
     camera_presentation: Option<LinuxCameraPresentation>,
     processed_camera: Option<LinuxProcessedCameraSource>,
+    camera_picture: Option<LinuxCameraPicture>,
     camera_reference_size: Option<(u32, u32)>,
 }
 
@@ -1281,10 +1304,15 @@ async fn build_instant_recording_actor(
         composite_camera,
         camera_presentation,
         processed_camera,
+        camera_picture,
         camera_reference_size,
     } = camera;
     #[cfg(target_os = "linux")]
-    if camera_presentation.is_some() && inputs.camera_feed.is_none() {
+    if camera_picture.is_some() && (inputs.camera_feed.is_some() || processed_camera.is_some()) {
+        anyhow::bail!("A camera picture cannot be recorded together with a camera");
+    }
+    #[cfg(target_os = "linux")]
+    if camera_presentation.is_some() && inputs.camera_feed.is_none() && camera_picture.is_none() {
         return Err(LinuxCameraPresentationError::MissingCamera.into());
     }
     #[cfg(target_os = "linux")]
@@ -1477,21 +1505,31 @@ async fn build_instant_recording_actor(
             #[cfg(target_os = "linux")]
             let screen_info = screen_capture.video_info();
             #[cfg(target_os = "linux")]
-            let (prepared_camera, timestamps) = if let Some(camera_feed) =
-                inputs.camera_feed.clone().filter(|_| composite_camera)
-            {
-                let (camera, timestamps) = linux_camera::PreparedCamera::prepare(
-                    camera_feed,
-                    camera_presentation,
-                    processed_camera,
-                    camera_reference_size,
-                    screen_info,
-                )
-                .await?;
-                (Some(camera), timestamps)
-            } else {
-                (None, Timestamps::now())
-            };
+            let (prepared_camera, timestamps) =
+                if let Some(picture) = camera_picture.filter(|_| composite_camera) {
+                    let (camera, timestamps) = linux_camera::PreparedCamera::prepare_picture(
+                        picture,
+                        camera_presentation,
+                        camera_reference_size,
+                        screen_info,
+                    )
+                    .await?;
+                    (Some(camera), timestamps)
+                } else if let Some(camera_feed) =
+                    inputs.camera_feed.clone().filter(|_| composite_camera)
+                {
+                    let (camera, timestamps) = linux_camera::PreparedCamera::prepare(
+                        camera_feed,
+                        camera_presentation,
+                        processed_camera,
+                        camera_reference_size,
+                        screen_info,
+                    )
+                    .await?;
+                    (Some(camera), timestamps)
+                } else {
+                    (None, Timestamps::now())
+                };
 
             let pipeline = create_pipeline(
                 content_dir.clone(),
@@ -1695,6 +1733,23 @@ fn instant_capture_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instant_frame_rate_keeps_its_own_ceiling() {
+        let builder = |fps| {
+            ActorBuilder::new(PathBuf::from("unused.cap"), ScreenCaptureTarget::CameraOnly)
+                .with_max_fps(fps)
+                .max_fps
+        };
+        assert_eq!(
+            ActorBuilder::new(PathBuf::from("unused.cap"), ScreenCaptureTarget::CameraOnly).max_fps,
+            crate::defaults::DEFAULT_INSTANT_MODE_FPS
+        );
+        assert_eq!(builder(60), 60);
+        assert_eq!(builder(120), 120);
+        assert_eq!(builder(144), 120);
+        assert_eq!(builder(240), 120);
+    }
 
     #[cfg(any(target_os = "macos", windows))]
     #[test]

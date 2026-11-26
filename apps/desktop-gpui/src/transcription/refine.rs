@@ -445,8 +445,13 @@ pub fn refine_blocking(
                 tuning: &TUNING,
                 stop,
             };
-            Ok(refine_groups(&pass, groups, recover, aligner)
-                .map(|groups| keep_caption_identities(input, groups, &request.language, offsets)))
+            let corrector = super::caption_corrector();
+            Ok(
+                refine_groups(&pass, groups, recover, aligner).map(|mut groups| {
+                    super::spell_caption_groups(&corrector, &mut groups);
+                    keep_caption_identities(input, groups, &request.language, offsets)
+                }),
+            )
         },
     )?;
     Ok(segments

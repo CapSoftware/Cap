@@ -1,0 +1,1781 @@
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+    },
+    thread::JoinHandle,
+    time::{Duration, Instant},
+};
+
+use cap_meeting_platform::resample::{SpeechResampler, downmix_interleaved};
+use cap_meetings::{
+    segment::{Segmenter, SegmenterConfig},
+    transcript::Source,
+};
+use cap_recording::feeds::microphone::MicrophoneSamples;
+use cap_timestamp::Timestamps;
+
+use super::{
+    audio_file::OpusOggWriter,
+    timeline::{self, Aligner, Level, RATE, decode_interleaved},
+};
+
+const SOURCE_CHANNEL: usize = 256;
+/// A capture clock that jumps further than this (a sleep the app was not
+/// told about, a device that stalled) leaves a hole between two files rather
+/// than that much silence written and encoded at once.
+const MAX_PAD_SAMPLES: u64 = RATE as u64 * 30;
+const STALL_AFTER: Duration = Duration::from_secs(3);
+/// A microphone sending nothing but digital silence this long is muted or
+/// broken; a quiet room is never this quiet.
+const SILENT_AFTER: Duration = Duration::from_secs(120);
+const LEVEL_INTERVAL: Duration = Duration::from_millis(100);
+/// A caption pass hears only the audio after the words it already agreed
+/// on (engine.rs `LiveSegment`), so it costs about the same early and late
+/// in a segment and can run every second.
+const PARTIAL_EVERY_SAMPLES: u64 = RATE as u64 / 2;
+const PARTIAL_MIN_SAMPLES: usize = RATE as usize;
+const PARTIAL_GROWTH_SAMPLES: usize = RATE as usize;
+
+/// Debug builds: `CAP_GPUI_MEETING_PARTIAL=<every_ms>,<min_ms>,<growth_ms>`
+/// overrides the caption cadence (measurements).
+fn partial_cadence() -> (u64, usize, usize) {
+    static CADENCE: std::sync::OnceLock<(u64, usize, usize)> = std::sync::OnceLock::new();
+    *CADENCE.get_or_init(|| {
+        let default = (
+            PARTIAL_EVERY_SAMPLES,
+            PARTIAL_MIN_SAMPLES,
+            PARTIAL_GROWTH_SAMPLES,
+        );
+        if !cfg!(debug_assertions) {
+            return default;
+        }
+        let Ok(value) = std::env::var("CAP_GPUI_MEETING_PARTIAL") else {
+            return default;
+        };
+        let ms: Vec<u64> = value
+            .split(',')
+            .filter_map(|v| v.trim().parse().ok())
+            .collect();
+        let samples = |ms: u64| ms * u64::from(RATE) / 1000;
+        match ms.as_slice() {
+            [every, min, growth] => (
+                samples(*every),
+                samples(*min) as usize,
+                samples(*growth) as usize,
+            ),
+            _ => default,
+        }
+    })
+}
+
+/// About -80 dBFS: below any real microphone's noise floor.
+const SOUND_PEAK: f32 = 1e-4;
+/// A failed audio file is tried again as a new part this often.
+const WRITER_RETRY: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HealthIssue {
+    MissingPermission,
+    NoInputDevice,
+    TapUnsupported,
+    NoCallbacks,
+    Failed(String),
+}
+
+impl HealthIssue {
+    pub fn describe(&self) -> String {
+        match self {
+            HealthIssue::MissingPermission => {
+                "Permission to capture this audio was not granted".into()
+            }
+            HealthIssue::NoInputDevice => "No microphone is connected".into(),
+            HealthIssue::TapUnsupported => {
+                "Capturing computer audio is not supported on this system".into()
+            }
+            HealthIssue::NoCallbacks => "No audio is arriving from this source".into(),
+            HealthIssue::Failed(reason) => reason.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum SourceHealth {
+    #[default]
+    Off,
+    Starting,
+    Ok,
+    Silent,
+    Error(HealthIssue),
+}
+
+impl SourceHealth {
+    pub fn is_error(&self) -> bool {
+        matches!(self, SourceHealth::Error(_))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SegmentJob {
+    pub source: Source,
+    pub start_sample: u64,
+    pub samples: Vec<f32>,
+    pub speech_ms: u64,
+}
+
+impl SegmentJob {
+    pub fn start_ms(&self) -> u64 {
+        timeline::samples_to_ms(self.start_sample)
+    }
+
+    pub fn utterance_id(&self) -> String {
+        utterance_id(self.source, self.start_sample)
+    }
+}
+
+pub fn utterance_id(source: Source, start_sample: u64) -> String {
+    let tag = match source {
+        Source::Mic => 'm',
+        Source::System => 's',
+    };
+    format!("{tag}{start_sample}")
+}
+
+#[derive(Clone, Debug)]
+pub enum CaptureEvent {
+    Level {
+        source: Source,
+        level: f32,
+    },
+    Health {
+        source: Source,
+        health: SourceHealth,
+    },
+    Speech {
+        source: Source,
+        ms: u64,
+    },
+    /// The track's audio file could not be written (a full disk, usually).
+    AudioFailed {
+        source: Source,
+    },
+    /// After a failure, the track goes on in a new file from this point.
+    AudioPart {
+        source: Source,
+        path: PathBuf,
+        offset_samples: u64,
+    },
+}
+
+#[derive(Debug, Default)]
+pub struct SourceCounters {
+    pub batches: AtomicU64,
+    pub dropped_batches: AtomicU64,
+    pub dropped_segments: AtomicU64,
+    pub real_chunks: AtomicU64,
+    pub written_samples: AtomicU64,
+    pub padded_samples: AtomicU64,
+    pub skipped_samples: AtomicU64,
+    pub gaps: AtomicU64,
+    pub drift_corrections: AtomicU64,
+    pub offset_samples: AtomicI64,
+    pub speech_ms: AtomicU64,
+    /// When real audio last arrived, in ms since capture began plus one
+    /// (0: never). Filled-in silence does not count.
+    pub real_at_ms: AtomicU64,
+    /// When the track last carried any sound at all (same clock).
+    pub sound_at_ms: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceStats {
+    pub batches: u64,
+    pub dropped_batches: u64,
+    pub dropped_segments: u64,
+    pub written_ms: u64,
+    pub padded_ms: u64,
+    pub skipped_ms: u64,
+    pub gaps: u64,
+    pub drift_corrections: u64,
+    pub offset_ms: i64,
+    pub speech_ms: u64,
+    pub real_at_ms: u64,
+    pub sound_at_ms: u64,
+}
+
+impl SourceCounters {
+    pub fn snapshot(&self) -> SourceStats {
+        let ms = |a: &AtomicU64| timeline::samples_to_ms(a.load(Ordering::Relaxed));
+        SourceStats {
+            batches: self.batches.load(Ordering::Relaxed),
+            dropped_batches: self.dropped_batches.load(Ordering::Relaxed),
+            dropped_segments: self.dropped_segments.load(Ordering::Relaxed),
+            written_ms: ms(&self.written_samples),
+            padded_ms: ms(&self.padded_samples),
+            skipped_ms: ms(&self.skipped_samples),
+            gaps: self.gaps.load(Ordering::Relaxed),
+            drift_corrections: self.drift_corrections.load(Ordering::Relaxed),
+            offset_ms: self.offset_samples.load(Ordering::Relaxed) * 1000 / i64::from(RATE),
+            speech_ms: self.speech_ms.load(Ordering::Relaxed),
+            real_at_ms: self.real_at_ms.load(Ordering::Relaxed),
+            sound_at_ms: self.sound_at_ms.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TapCounters {
+    pub callbacks: u64,
+    pub empty_callbacks: u64,
+    pub frames: u64,
+    pub dropped: u64,
+    pub restarts: u64,
+    /// Rebuilding stopped after every attempt failed.
+    pub gave_up: bool,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureStats {
+    pub mic: Option<SourceStats>,
+    pub system: Option<SourceStats>,
+    pub tap: Option<TapCounters>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SourceSummary {
+    pub duration_ms: u64,
+    pub speech_ms: u64,
+    pub file: Option<PathBuf>,
+    pub stats: SourceStats,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CaptureSummary {
+    pub mic: Option<SourceSummary>,
+    pub system: Option<SourceSummary>,
+    pub tap: Option<TapCounters>,
+}
+
+pub struct RawBatch {
+    pub data: Vec<u8>,
+    pub format: cpal::SampleFormat,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub captured: Instant,
+}
+
+pub enum MicInput {
+    Feed(flume::Receiver<MicrophoneSamples>),
+    Raw(flume::Receiver<RawBatch>),
+}
+
+pub struct CaptureConfig {
+    pub audio_dir: Option<PathBuf>,
+    pub file_suffix: String,
+    pub timeline_offset_samples: u64,
+    pub mic: Result<MicInput, HealthIssue>,
+    pub system: bool,
+    pub live_partials: bool,
+    pub segments: flume::Sender<SegmentJob>,
+    pub partials: flume::Sender<SegmentJob>,
+    pub missed: flume::Sender<super::engine::Missed>,
+    pub engine_busy: Arc<AtomicBool>,
+    pub events: flume::Sender<CaptureEvent>,
+}
+
+pub fn audio_stem(source: Source) -> &'static str {
+    match source {
+        Source::Mic => "you",
+        Source::System => "others",
+    }
+}
+
+pub fn audio_file_name(source: Source, suffix: &str) -> String {
+    format!("{}{suffix}.ogg", audio_stem(source))
+}
+
+struct SourceThread {
+    stop: Option<flume::Sender<()>>,
+    thread: Option<JoinHandle<SourceSummary>>,
+    counters: Arc<SourceCounters>,
+}
+
+impl SourceThread {
+    fn finish(mut self) -> Option<SourceSummary> {
+        drop(self.stop.take());
+        self.thread.take().and_then(|t| t.join().ok())
+    }
+}
+
+pub struct MeetingCapture {
+    mic: Option<SourceThread>,
+    system: Option<SourceThread>,
+    platform: Option<SystemPlatform>,
+    origin_wall: chrono::DateTime<chrono::Utc>,
+}
+
+enum SystemChunk {
+    Samples {
+        samples: Vec<f32>,
+        sample_rate: u32,
+        synthetic: bool,
+        received: Instant,
+    },
+}
+
+impl MeetingCapture {
+    pub fn start(config: CaptureConfig) -> Self {
+        let origin = Timestamps::now();
+        let origin_wall = chrono::Utc::now();
+        let shared = Shared {
+            origin,
+            audio_dir: config.audio_dir.clone(),
+            suffix: config.file_suffix.clone(),
+            offset: config.timeline_offset_samples,
+            live_partials: config.live_partials,
+            segments: config.segments.clone(),
+            partials: config.partials.clone(),
+            missed: config.missed.clone(),
+            engine_busy: config.engine_busy.clone(),
+            events: config.events.clone(),
+        };
+
+        let mic = match config.mic {
+            Ok(input) => Some(spawn_source(
+                Source::Mic,
+                shared.clone(),
+                match input {
+                    MicInput::Feed(rx) => SourceInput::Mic(rx),
+                    MicInput::Raw(rx) => SourceInput::Raw(rx),
+                },
+            )),
+            Err(issue) => {
+                let _ = shared.events.send(CaptureEvent::Health {
+                    source: Source::Mic,
+                    health: SourceHealth::Error(issue),
+                });
+                None
+            }
+        };
+
+        let (system, platform) = if config.system {
+            match SystemPlatform::start() {
+                Ok((platform, chunks)) => (
+                    Some(spawn_source(
+                        Source::System,
+                        shared.clone(),
+                        SourceInput::System(chunks),
+                    )),
+                    Some(platform),
+                ),
+                Err(issue) => {
+                    let _ = shared.events.send(CaptureEvent::Health {
+                        source: Source::System,
+                        health: SourceHealth::Error(issue),
+                    });
+                    (None, None)
+                }
+            }
+        } else {
+            (None, None)
+        };
+
+        Self {
+            mic,
+            system,
+            platform,
+            origin_wall,
+        }
+    }
+
+    pub fn origin_wall(&self) -> chrono::DateTime<chrono::Utc> {
+        self.origin_wall
+    }
+
+    pub fn has_source(&self, source: Source) -> bool {
+        match source {
+            Source::Mic => self.mic.is_some(),
+            Source::System => self.system.is_some(),
+        }
+    }
+
+    /// What the capture itself knows of the outputs the computer plays
+    /// through, as a value to compare between looks. Linux: the default
+    /// and the output a call was followed to, as the sink watch last saw
+    /// them. macOS: how many times the audio system said the default output
+    /// changed (the tap listens for it). Windows: nothing, see
+    /// [`output_identity`]. Cheap: no audio system call.
+    pub fn outputs_seen(&self) -> Option<String> {
+        #[cfg(target_os = "linux")]
+        {
+            self.platform
+                .as_ref()
+                .and_then(|platform| platform.outputs.lock().ok()?.clone())
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let platform = self.platform.as_ref()?;
+            let changes = platform.tap.lock().ok()?.stats().output_changes;
+            let replaced = platform.replaced.load(Ordering::Relaxed);
+            Some(format!("{replaced}:{changes}"))
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            None
+        }
+    }
+
+    /// Starts the computer-audio capture again (it stopped delivering).
+    pub fn restart_system(&self) {
+        if let Some(platform) = self.platform.as_ref() {
+            platform.restart();
+        }
+    }
+
+    pub fn stats(&self) -> CaptureStats {
+        CaptureStats {
+            mic: self.mic.as_ref().map(|s| s.counters.snapshot()),
+            system: self.system.as_ref().map(|s| s.counters.snapshot()),
+            tap: self.platform.as_ref().and_then(SystemPlatform::counters),
+        }
+    }
+
+    pub fn stop(mut self) -> CaptureSummary {
+        let tap = self.platform.as_ref().and_then(SystemPlatform::counters);
+        drop(self.platform.take());
+        CaptureSummary {
+            mic: self.mic.take().and_then(SourceThread::finish),
+            system: self.system.take().and_then(SourceThread::finish),
+            tap,
+        }
+    }
+}
+
+impl Drop for MeetingCapture {
+    fn drop(&mut self) {
+        drop(self.platform.take());
+        if let Some(mic) = self.mic.take() {
+            mic.finish();
+        }
+        if let Some(system) = self.system.take() {
+            system.finish();
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Shared {
+    origin: Timestamps,
+    audio_dir: Option<PathBuf>,
+    suffix: String,
+    offset: u64,
+    live_partials: bool,
+    segments: flume::Sender<SegmentJob>,
+    partials: flume::Sender<SegmentJob>,
+    missed: flume::Sender<super::engine::Missed>,
+    engine_busy: Arc<AtomicBool>,
+    events: flume::Sender<CaptureEvent>,
+}
+
+enum SourceInput {
+    Mic(flume::Receiver<MicrophoneSamples>),
+    Raw(flume::Receiver<RawBatch>),
+    System(flume::Receiver<SystemChunk>),
+}
+
+enum Message {
+    Mic(MicrophoneSamples),
+    Raw(RawBatch),
+    System(SystemChunk),
+    Stop,
+}
+
+fn spawn_source(source: Source, shared: Shared, input: SourceInput) -> SourceThread {
+    let (stop_tx, stop_rx) = flume::bounded::<()>(1);
+    let counters = Arc::new(SourceCounters::default());
+    let thread = std::thread::Builder::new()
+        .name(match source {
+            Source::Mic => "cap-meeting-mic".into(),
+            Source::System => "cap-meeting-system".into(),
+        })
+        .spawn({
+            let counters = counters.clone();
+            move || {
+                crate::transcription::lower_thread_priority();
+                let mut worker = SourceWorker::new(source, shared, counters);
+                worker.run(input, stop_rx);
+                worker.finish()
+            }
+        })
+        .ok();
+    SourceThread {
+        stop: Some(stop_tx),
+        thread,
+        counters,
+    }
+}
+
+struct SourceWorker {
+    source: Source,
+    shared: Shared,
+    counters: Arc<SourceCounters>,
+    aligner: Aligner,
+    segmenter: Segmenter,
+    resampler: Option<SpeechResampler>,
+    writer: Option<OpusOggWriter>,
+    /// When the file last failed, so a new part is tried a while later.
+    writer_failed: Option<Instant>,
+    writer_parts: u32,
+    level: Level,
+    decoded: Vec<f32>,
+    mono: Vec<f32>,
+    out: Vec<f32>,
+    health: SourceHealth,
+    started: Instant,
+    last_data: Option<Instant>,
+    last_sound: Instant,
+    last_level_sent: Option<(Instant, f32)>,
+    since_partial: u64,
+    last_partial: Option<(u64, usize)>,
+    debug_segments: u64,
+}
+
+impl SourceWorker {
+    fn new(source: Source, shared: Shared, counters: Arc<SourceCounters>) -> Self {
+        let now = Instant::now();
+        Self {
+            source,
+            shared,
+            counters,
+            aligner: Aligner::default(),
+            segmenter: Segmenter::new(match source {
+                Source::Mic => SegmenterConfig::microphone(),
+                Source::System => SegmenterConfig::default(),
+            }),
+            resampler: None,
+            writer: None,
+            writer_failed: None,
+            writer_parts: 0,
+            level: Level::default(),
+            decoded: Vec::new(),
+            mono: Vec::new(),
+            out: Vec::new(),
+            health: SourceHealth::Off,
+            started: now,
+            last_data: None,
+            last_sound: now,
+            last_level_sent: None,
+            since_partial: 0,
+            last_partial: None,
+            debug_segments: 0,
+        }
+    }
+
+    fn run(&mut self, input: SourceInput, stop: flume::Receiver<()>) {
+        self.set_health(SourceHealth::Starting);
+        loop {
+            let wait = flume::Selector::new().recv(&stop, |_| Message::Stop);
+            let wait = match &input {
+                SourceInput::Mic(rx) => wait.recv(rx, |r| r.map_or(Message::Stop, Message::Mic)),
+                SourceInput::Raw(rx) => wait.recv(rx, |r| r.map_or(Message::Stop, Message::Raw)),
+                SourceInput::System(rx) => {
+                    wait.recv(rx, |r| r.map_or(Message::Stop, Message::System))
+                }
+            };
+            match wait.wait_timeout(Duration::from_secs(1)) {
+                Ok(Message::Stop) => break,
+                Ok(Message::Mic(batch)) => {
+                    let start_secs = batch
+                        .timestamp
+                        .signed_duration_since_secs(self.shared.origin);
+                    self.on_interleaved(
+                        &batch.data,
+                        batch.format,
+                        batch.channels,
+                        batch.sample_rate,
+                        start_secs,
+                    );
+                }
+                Ok(Message::Raw(batch)) => {
+                    let start_secs = match batch
+                        .captured
+                        .checked_duration_since(self.shared.origin.instant())
+                    {
+                        Some(after) => after.as_secs_f64(),
+                        None => -self
+                            .shared
+                            .origin
+                            .instant()
+                            .saturating_duration_since(batch.captured)
+                            .as_secs_f64(),
+                    };
+                    self.on_interleaved(
+                        &batch.data,
+                        batch.format,
+                        batch.channels,
+                        batch.sample_rate,
+                        start_secs,
+                    );
+                }
+                Ok(Message::System(chunk)) => self.on_system(chunk),
+                Err(_) => {}
+            }
+            self.check_health();
+        }
+    }
+
+    fn check_health(&mut self) {
+        let now = Instant::now();
+        let stalled = match self.last_data {
+            Some(at) => now.duration_since(at) > STALL_AFTER,
+            None => now.duration_since(self.started) > STALL_AFTER,
+        };
+        let next = if stalled {
+            SourceHealth::Error(HealthIssue::NoCallbacks)
+        } else if self.last_data.is_none() {
+            SourceHealth::Starting
+        } else if self.source == Source::Mic && now.duration_since(self.last_sound) > SILENT_AFTER {
+            SourceHealth::Silent
+        } else {
+            SourceHealth::Ok
+        };
+        if matches!(self.health, SourceHealth::Error(HealthIssue::Failed(_))) {
+            return;
+        }
+        self.set_health(next);
+    }
+
+    fn set_health(&mut self, health: SourceHealth) {
+        if self.health != health {
+            self.health = health.clone();
+            let _ = self.shared.events.send(CaptureEvent::Health {
+                source: self.source,
+                health,
+            });
+        }
+    }
+
+    fn on_interleaved(
+        &mut self,
+        data: &[u8],
+        format: cpal::SampleFormat,
+        channels: u16,
+        sample_rate: u32,
+        start_secs: f64,
+    ) {
+        self.counters.batches.fetch_add(1, Ordering::Relaxed);
+        self.decoded.clear();
+        if !decode_interleaved(data, format, &mut self.decoded) {
+            return;
+        }
+        self.mono.clear();
+        downmix_interleaved(&self.decoded, usize::from(channels.max(1)), &mut self.mono);
+        let frames = self.mono.len();
+        self.ingest(sample_rate.max(1), start_secs, frames);
+    }
+
+    fn on_system(&mut self, chunk: SystemChunk) {
+        let SystemChunk::Samples {
+            samples,
+            sample_rate,
+            synthetic,
+            received,
+        } = chunk;
+        self.counters.batches.fetch_add(1, Ordering::Relaxed);
+        if !synthetic {
+            self.counters.real_chunks.fetch_add(1, Ordering::Relaxed);
+        }
+        if !synthetic {
+            self.mark(&self.counters.real_at_ms);
+        }
+        let rate = sample_rate.max(1);
+        let duration = samples.len() as f64 / f64::from(rate);
+        let received_secs = received
+            .checked_duration_since(self.shared.origin.instant())
+            .map_or(0.0, |d| d.as_secs_f64());
+        self.mono = samples;
+        let frames = self.mono.len();
+        self.ingest(rate, received_secs - duration, frames);
+    }
+
+    /// Stamps a counter with the time since capture began (plus one, so 0
+    /// stays "never").
+    fn mark(&self, at: &AtomicU64) {
+        let ms = self.shared.origin.instant().elapsed().as_millis() as u64;
+        at.store(ms + 1, Ordering::Relaxed);
+    }
+
+    fn ingest(&mut self, rate: u32, start_secs: f64, frames: usize) {
+        if frames == 0 {
+            return;
+        }
+        let now = Instant::now();
+        self.last_data = Some(now);
+        if self.source == Source::Mic {
+            self.mark(&self.counters.real_at_ms);
+        }
+        if self.mono.iter().any(|x| x.abs() > SOUND_PEAK) {
+            self.last_sound = now;
+            self.mark(&self.counters.sound_at_ms);
+        }
+        if self
+            .resampler
+            .as_ref()
+            .is_none_or(|r| r.input_rate() != rate)
+        {
+            self.out.clear();
+            if let Some(mut previous) = self.resampler.take() {
+                previous.flush(&mut self.out);
+            }
+            self.resampler = Some(SpeechResampler::new(rate));
+        } else {
+            self.out.clear();
+        }
+        if let Some(resampler) = self.resampler.as_mut() {
+            resampler.process(&self.mono, &mut self.out);
+        }
+        if self.out.is_empty() {
+            return;
+        }
+        let observed = timeline::seconds_to_samples(start_secs);
+        self.place(observed);
+        self.publish_stats();
+
+        let level = self.level.push(&self.out);
+        let due = self.last_level_sent.is_none_or(|(at, value)| {
+            now.duration_since(at) >= LEVEL_INTERVAL && (value - level).abs() > 0.005
+        });
+        if due {
+            self.last_level_sent = Some((now, level));
+            let _ = self.shared.events.send(CaptureEvent::Level {
+                source: self.source,
+                level,
+            });
+        }
+    }
+
+    fn place(&mut self, observed: i64) {
+        let out = std::mem::take(&mut self.out);
+        let base = self.aligner.written();
+        let placement = self.aligner.place(observed, out.len());
+        if placement.pad > MAX_PAD_SAMPLES {
+            self.jump();
+        } else if placement.pad > 0 {
+            self.push_silence(base, placement.pad);
+        }
+        let kept = &out[placement.skip.min(out.len())..];
+        self.push_samples(base + placement.pad, kept);
+        self.out = out;
+    }
+
+    /// Ends the track's file; the next audio starts a new part where it
+    /// lands, and the segmenter closes what was open at the jump.
+    fn jump(&mut self) {
+        if let Some(mut writer) = self.writer.take() {
+            if let Err(error) = writer.finish() {
+                tracing::warn!(%error, "meeting audio did not finish cleanly");
+            }
+            self.writer_parts += 1;
+        }
+        tracing::info!(source = ?self.source, "meeting audio jumped ahead, continuing in a new file");
+    }
+
+    fn push_silence(&mut self, start: u64, samples: u64) {
+        let block = vec![0.0f32; RATE as usize];
+        let mut done = 0u64;
+        while done < samples {
+            let n = (samples - done).min(block.len() as u64) as usize;
+            self.push_samples(start + done, &block[..n]);
+            done += n as u64;
+        }
+    }
+
+    fn push_samples(&mut self, position: u64, samples: &[f32]) {
+        if samples.is_empty() {
+            return;
+        }
+        self.write_audio(position, samples);
+        for segment in self.segmenter.push(position, samples) {
+            self.emit_segment(segment);
+        }
+        self.since_partial += samples.len() as u64;
+        if self.since_partial >= partial_cadence().0 {
+            self.since_partial = 0;
+            self.offer_partial();
+        }
+    }
+
+    /// Saves the track. A failed file stops; a while later the track goes
+    /// on in a new part that starts where it stands now, so the meeting's
+    /// audio has a hole rather than an end.
+    fn write_audio(&mut self, position: u64, samples: &[f32]) {
+        if self
+            .writer_failed
+            .is_some_and(|at| at.elapsed() < WRITER_RETRY)
+        {
+            return;
+        }
+        let Some(dir) = self.shared.audio_dir.clone() else {
+            return;
+        };
+        if self.writer.is_none() {
+            let suffix = match self.writer_parts {
+                0 => self.shared.suffix.clone(),
+                n => format!("{}.r{n}", self.shared.suffix),
+            };
+            let path = dir.join(audio_file_name(self.source, &suffix));
+            match OpusOggWriter::create(&path) {
+                Ok(writer) => {
+                    if self.writer_parts > 0 {
+                        tracing::info!(path = %path.display(), "meeting audio continues in a new file");
+                        let _ = self.shared.events.send(CaptureEvent::AudioPart {
+                            source: self.source,
+                            path: path.clone(),
+                            offset_samples: self.shared.offset + position,
+                        });
+                    }
+                    self.writer_failed = None;
+                    self.writer = Some(writer);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "could not create the meeting audio file");
+                    self.audio_failed();
+                    return;
+                }
+            }
+        }
+        if let Some(writer) = self.writer.as_mut()
+            && let Err(error) = writer.write(samples)
+        {
+            tracing::warn!(%error, "meeting audio write failed");
+            // Its pages up to here stay readable; the next part starts fresh.
+            if let Some(mut broken) = self.writer.take() {
+                let _ = broken.finish();
+            }
+            self.audio_failed();
+        }
+    }
+
+    fn audio_failed(&mut self) {
+        if self.writer_failed.is_none() {
+            let _ = self.shared.events.send(CaptureEvent::AudioFailed {
+                source: self.source,
+            });
+        }
+        self.writer_failed = Some(Instant::now());
+        self.writer_parts += 1;
+    }
+
+    fn emit_segment(&mut self, segment: cap_meetings::segment::SpeechSegment) {
+        self.counters
+            .speech_ms
+            .fetch_add(segment.speech_ms, Ordering::Relaxed);
+        let _ = self.shared.events.send(CaptureEvent::Speech {
+            source: self.source,
+            ms: segment.speech_ms,
+        });
+        let job = SegmentJob {
+            source: self.source,
+            start_sample: self.shared.offset + segment.start_sample,
+            samples: segment.samples,
+            speech_ms: segment.speech_ms,
+        };
+        // Debug builds: CAP_GPUI_MEETING_DROP_EVERY=n treats every n-th
+        // segment as if the queue were full.
+        if cfg!(debug_assertions)
+            && let Some(every) = std::env::var("CAP_GPUI_MEETING_DROP_EVERY")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .filter(|n| *n > 0)
+        {
+            self.debug_segments += 1;
+            if self.debug_segments % every == 0 {
+                tracing::info!(start = job.start_sample, "debug: dropping a segment");
+                self.missed(&job);
+                return;
+            }
+        }
+        // Debug builds: CAP_GPUI_MEETING_LOSE_EVERY=n loses every n-th segment
+        // outright, as if the segmenter never saw that speech: only the
+        // after-Stop sweep can find it again.
+        if cfg!(debug_assertions)
+            && let Some(every) = std::env::var("CAP_GPUI_MEETING_LOSE_EVERY")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .filter(|n| *n > 0)
+        {
+            self.debug_segments += 1;
+            if self.debug_segments % every == 0 {
+                tracing::info!(start = job.start_sample, "debug: losing a segment");
+                return;
+            }
+        }
+        if let Err(flume::TrySendError::Full(job) | flume::TrySendError::Disconnected(job)) =
+            self.shared.segments.try_send(job)
+        {
+            self.missed(&job);
+        }
+    }
+
+    /// The transcriber is behind: the segment's audio is on disk, so it goes
+    /// in the ledger to be transcribed again rather than being lost.
+    fn missed(&self, job: &SegmentJob) {
+        self.counters
+            .dropped_segments
+            .fetch_add(1, Ordering::Relaxed);
+        let _ = self.shared.missed.send(super::engine::Missed {
+            source: job.source,
+            start_sample: job.start_sample,
+            len: job.samples.len() as u64,
+        });
+    }
+
+    fn offer_partial(&mut self) {
+        if !self.shared.live_partials
+            || self.shared.engine_busy.load(Ordering::Acquire)
+            || !self.shared.segments.is_empty()
+            || self.shared.partials.is_full()
+        {
+            return;
+        }
+        let Some((start, samples)) = self.segmenter.open_snapshot() else {
+            return;
+        };
+        let (_, min, growth) = partial_cadence();
+        if samples.len() < min {
+            return;
+        }
+        if let Some((previous_start, previous_len)) = self.last_partial
+            && previous_start == start
+            && samples.len() < previous_len + growth
+        {
+            return;
+        }
+        let len = samples.len();
+        let job = SegmentJob {
+            source: self.source,
+            start_sample: self.shared.offset + start,
+            samples: samples.to_vec(),
+            speech_ms: 0,
+        };
+        if self.shared.partials.try_send(job).is_ok() {
+            self.last_partial = Some((start, len));
+        }
+    }
+
+    fn publish_stats(&self) {
+        let stats = self.aligner.stats();
+        let c = &self.counters;
+        c.written_samples
+            .store(self.aligner.written(), Ordering::Relaxed);
+        c.padded_samples
+            .store(stats.padded_samples, Ordering::Relaxed);
+        c.skipped_samples
+            .store(stats.skipped_samples, Ordering::Relaxed);
+        c.gaps.store(stats.gaps, Ordering::Relaxed);
+        c.drift_corrections
+            .store(stats.drift_corrections, Ordering::Relaxed);
+        c.offset_samples
+            .store(stats.offset_samples, Ordering::Relaxed);
+    }
+
+    fn finish(mut self) -> SourceSummary {
+        if let Some(mut resampler) = self.resampler.take() {
+            self.out.clear();
+            resampler.flush(&mut self.out);
+            if !self.out.is_empty() {
+                let observed = self.aligner.written() as i64;
+                self.place(observed);
+            }
+        }
+        if let Some(segment) = self.segmenter.flush() {
+            let job = SegmentJob {
+                source: self.source,
+                start_sample: self.shared.offset + segment.start_sample,
+                samples: segment.samples,
+                speech_ms: segment.speech_ms,
+            };
+            self.counters
+                .speech_ms
+                .fetch_add(job.speech_ms, Ordering::Relaxed);
+            let _ = self.shared.events.send(CaptureEvent::Speech {
+                source: self.source,
+                ms: job.speech_ms,
+            });
+            // Never waits: Stop joins this thread on the UI thread, and the
+            // ledger gets the segment transcribed from disk after Stop.
+            if let Err(flume::TrySendError::Full(job) | flume::TrySendError::Disconnected(job)) =
+                self.shared.segments.try_send(job)
+            {
+                self.missed(&job);
+            }
+        }
+        self.publish_stats();
+        let file = self.writer.take().map(|mut writer| {
+            if let Err(error) = writer.finish() {
+                tracing::warn!(%error, "meeting audio did not finish cleanly");
+            }
+            writer.path().to_path_buf()
+        });
+        let _ = self.shared.events.send(CaptureEvent::Level {
+            source: self.source,
+            level: 0.0,
+        });
+        SourceSummary {
+            duration_ms: timeline::samples_to_ms(self.aligner.written()),
+            speech_ms: self.segmenter.speech_ms_total(),
+            file,
+            stats: self.counters.snapshot(),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct SystemPlatform {
+    tap: std::sync::Mutex<cap_meeting_platform::SystemAudioTap>,
+    sink: TapSink,
+    /// Whole new taps started because the old one's thread had ended.
+    replaced: AtomicU64,
+}
+
+/// What a tap's callback writes to: kept so a tap whose thread ended can be
+/// replaced by a new one feeding the same track.
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+struct TapSink {
+    tx: flume::Sender<SystemChunk>,
+    dropped: Arc<AtomicU64>,
+    /// Debug builds: a simulated dead tap that a restart brings back.
+    revived: Arc<AtomicBool>,
+    dead_after: Option<Duration>,
+    started: Instant,
+}
+
+#[cfg(target_os = "macos")]
+impl TapSink {
+    fn open(&self) -> Result<cap_meeting_platform::SystemAudioTap, cap_meeting_platform::TapError> {
+        let sink = self.clone();
+        cap_meeting_platform::SystemAudioTap::start(true, move |chunk| {
+            if sink.dead_after.is_some_and(|after| sink.started.elapsed() >= after)
+                && !sink.revived.load(Ordering::Relaxed)
+            {
+                return;
+            }
+            let message = SystemChunk::Samples {
+                samples: chunk.samples.to_vec(),
+                sample_rate: chunk.sample_rate,
+                synthetic: chunk.synthetic,
+                received: Instant::now(),
+            };
+            if sink.tx.try_send(message).is_err() {
+                sink.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl SystemPlatform {
+    fn start() -> Result<(Self, flume::Receiver<SystemChunk>), HealthIssue> {
+        use cap_meeting_platform::{AudioCapturePermission, audio_capture_permission};
+        if !cap_meeting_platform::system_tap_supported() {
+            return Err(HealthIssue::TapUnsupported);
+        }
+        if audio_capture_permission() == AudioCapturePermission::Denied {
+            return Err(HealthIssue::MissingPermission);
+        }
+        let (tx, rx) = flume::bounded::<SystemChunk>(SOURCE_CHANNEL);
+        let sink = TapSink {
+            tx,
+            dropped: Arc::new(AtomicU64::new(0)),
+            revived: Arc::new(AtomicBool::new(false)),
+            // Debug builds: CAP_GPUI_MEETING_TAP_DEAD=<s> stops all computer
+            // audio (real and filled-in) that many seconds in, until a restart.
+            dead_after: cfg!(debug_assertions)
+                .then(|| std::env::var("CAP_GPUI_MEETING_TAP_DEAD").ok())
+                .flatten()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(Duration::from_secs),
+            started: Instant::now(),
+        };
+        let tap = sink.open().map_err(|error| match error {
+            cap_meeting_platform::TapError::Unsupported => HealthIssue::TapUnsupported,
+            other => HealthIssue::Failed(format!("Computer audio capture failed: {other}")),
+        })?;
+        Ok((
+            Self {
+                tap: std::sync::Mutex::new(tap),
+                sink,
+                replaced: AtomicU64::new(0),
+            },
+            rx,
+        ))
+    }
+
+    fn counters(&self) -> Option<TapCounters> {
+        let tap = self.tap.lock().ok()?;
+        let stats = tap.stats();
+        Some(TapCounters {
+            callbacks: stats.callbacks,
+            empty_callbacks: stats.empty_callbacks,
+            frames: stats.frames,
+            dropped: stats.dropped + self.sink.dropped.load(Ordering::Relaxed),
+            restarts: stats.restarts + self.replaced.load(Ordering::Relaxed),
+            gave_up: stats.gave_up || !tap.alive(),
+        })
+    }
+
+    /// Builds the tap again; if its thread has ended (the audio service
+    /// went away under it), a whole new tap takes its place.
+    fn restart(&self) {
+        self.sink.revived.store(true, Ordering::Relaxed);
+        let Ok(mut tap) = self.tap.lock() else {
+            return;
+        };
+        if tap.alive() {
+            tap.rebuild();
+            return;
+        }
+        match self.sink.open() {
+            Ok(fresh) => {
+                tracing::warn!("computer audio capture had stopped; started a new one");
+                self.replaced.fetch_add(1, Ordering::Relaxed);
+                *tap = fresh;
+            }
+            Err(error) => tracing::warn!(%error, "computer audio capture could not start again"),
+        }
+    }
+}
+
+#[cfg(windows)]
+struct SystemPlatform {
+    stop: Option<flume::Sender<()>>,
+    thread: Option<JoinHandle<()>>,
+    dropped: Arc<AtomicU64>,
+    callbacks: Arc<AtomicU64>,
+    restarts: Arc<AtomicU64>,
+    /// Set by a stream error or a restart request: the loop opens the
+    /// loopback again.
+    failed: Arc<AtomicBool>,
+}
+
+#[cfg(windows)]
+impl SystemPlatform {
+    fn start() -> Result<(Self, flume::Receiver<SystemChunk>), HealthIssue> {
+        use cpal::traits::{DeviceTrait, HostTrait};
+
+        fn device_name() -> String {
+            cpal::default_host()
+                .default_output_device()
+                .and_then(|d| d.name().ok())
+                .unwrap_or_default()
+        }
+
+        fn capturer(
+            tx: flume::Sender<SystemChunk>,
+            dropped: Arc<AtomicU64>,
+            callbacks: Arc<AtomicU64>,
+            failed: Arc<AtomicBool>,
+        ) -> Result<scap_cpal::Capturer, scap_cpal::CapturerError> {
+            let mut decoded = Vec::new();
+            scap_cpal::create_capturer(
+                move |data, _info, config| {
+                    callbacks.fetch_add(1, Ordering::Relaxed);
+                    decoded.clear();
+                    if !decode_interleaved(data.bytes(), data.sample_format(), &mut decoded) {
+                        return;
+                    }
+                    let mut mono = Vec::with_capacity(decoded.len());
+                    downmix_interleaved(&decoded, usize::from(config.channels.max(1)), &mut mono);
+                    let message = SystemChunk::Samples {
+                        samples: mono,
+                        sample_rate: config.sample_rate.0,
+                        synthetic: false,
+                        received: Instant::now(),
+                    };
+                    if tx.try_send(message).is_err() {
+                        dropped.fetch_add(1, Ordering::Relaxed);
+                    }
+                },
+                move |error| {
+                    tracing::warn!("meeting loopback stream error: {error}");
+                    failed.store(true, Ordering::Relaxed);
+                },
+            )
+        }
+
+        let (tx, rx) = flume::bounded::<SystemChunk>(SOURCE_CHANNEL);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let callbacks = Arc::new(AtomicU64::new(0));
+        let restarts = Arc::new(AtomicU64::new(0));
+        let failed = Arc::new(AtomicBool::new(false));
+        let first = capturer(
+            tx.clone(),
+            dropped.clone(),
+            callbacks.clone(),
+            failed.clone(),
+        )
+        .map_err(|error| match error {
+            scap_cpal::CapturerError::NoDevice => HealthIssue::NoInputDevice,
+            other => HealthIssue::Failed(format!("Computer audio capture failed: {other}")),
+        })?;
+        first
+            .play()
+            .map_err(|e| HealthIssue::Failed(format!("Computer audio capture failed: {e}")))?;
+        let (stop_tx, stop_rx) = flume::bounded::<()>(1);
+        let thread = std::thread::Builder::new()
+            .name("cap-meeting-loopback".into())
+            .spawn({
+                let dropped = dropped.clone();
+                let callbacks = callbacks.clone();
+                let restarts = restarts.clone();
+                let failed = failed.clone();
+                move || {
+                    let mut current = Some(first);
+                    let mut name = device_name();
+                    loop {
+                        match stop_rx.recv_timeout(Duration::from_secs(2)) {
+                            Err(flume::RecvTimeoutError::Timeout) => {}
+                            _ => break,
+                        }
+                        let now_name = device_name();
+                        let errored = failed.swap(false, Ordering::Relaxed);
+                        if now_name == name && !errored && current.is_some() {
+                            continue;
+                        }
+                        if let Some(old) = current.take() {
+                            let _ = old.pause();
+                        }
+                        name = now_name;
+                        match capturer(
+                            tx.clone(),
+                            dropped.clone(),
+                            callbacks.clone(),
+                            failed.clone(),
+                        ) {
+                            Ok(next) => {
+                                if next.play().is_ok() {
+                                    restarts.fetch_add(1, Ordering::Relaxed);
+                                    current = Some(next);
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "meeting loopback restart failed");
+                            }
+                        }
+                    }
+                    if let Some(old) = current.take() {
+                        let _ = old.pause();
+                    }
+                }
+            })
+            .map_err(|e| HealthIssue::Failed(e.to_string()))?;
+        Ok((
+            Self {
+                stop: Some(stop_tx),
+                thread: Some(thread),
+                dropped,
+                callbacks,
+                restarts,
+                failed,
+            },
+            rx,
+        ))
+    }
+
+    fn counters(&self) -> Option<TapCounters> {
+        Some(TapCounters {
+            callbacks: self.callbacks.load(Ordering::Relaxed),
+            dropped: self.dropped.load(Ordering::Relaxed),
+            restarts: self.restarts.load(Ordering::Relaxed),
+            ..TapCounters::default()
+        })
+    }
+
+    fn restart(&self) {
+        self.failed.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(windows)]
+impl Drop for SystemPlatform {
+    fn drop(&mut self) {
+        drop(self.stop.take());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Linux: what the speakers play, read from the default output's monitor
+/// through `parec` (PulseAudio or PipeWire's Pulse server; the same tools
+/// meeting detection already uses). Mono float at 48 kHz, 20 ms reads. If
+/// the stream ends (server restart, device gone) it is opened again.
+#[cfg(target_os = "linux")]
+struct SystemPlatform {
+    stop: Arc<AtomicBool>,
+    child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
+    thread: Option<JoinHandle<()>>,
+    /// Picks the output to read (`sink.rs`) and restarts the reader on a change.
+    watch: Option<JoinHandle<()>>,
+    /// The default output and the one followed, as the watch last saw them.
+    outputs: Arc<std::sync::Mutex<Option<String>>>,
+    dropped: Arc<AtomicU64>,
+    callbacks: Arc<AtomicU64>,
+    frames: Arc<AtomicU64>,
+    restarts: Arc<AtomicU64>,
+}
+
+#[cfg(target_os = "linux")]
+const MONITOR_RATE: u32 = 48_000;
+
+#[cfg(any(target_os = "linux", test))]
+mod sink;
+
+/// The output a meeting's computer audio is read from: `None` is the default.
+#[cfg(target_os = "linux")]
+type SinkTarget = Arc<std::sync::Mutex<Option<String>>>;
+
+#[cfg(target_os = "linux")]
+const SINK_CHECK_EVERY: Duration = Duration::from_secs(2);
+
+#[cfg(target_os = "linux")]
+fn pactl(args: &[&str]) -> String {
+    std::process::Command::new("pactl")
+        .args(args)
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "linux")]
+/// One look at the sound server: the output to read (`None`: the default),
+/// whether the reader `reader` (a `parec` pid) sits on that output's
+/// monitor (`None` when pactl does not say), and the default output.
+fn look_at_outputs(reader: Option<u32>) -> (Option<String>, Option<bool>, Option<String>) {
+    let default = sink::parse_default_sink(&pactl(&["info"]));
+    let recording = sink::parse_streams(&pactl(&["list", "source-outputs"]), "Source");
+    let target = sink::choose(
+        &sink::parse_sinks(&pactl(&["list", "short", "sinks"])),
+        default.as_deref(),
+        &sink::parse_streams(&pactl(&["list", "sink-inputs"]), "Sink"),
+        &recording,
+        std::process::id(),
+    );
+    let placed = reader
+        .zip(target.clone().or(default.clone()))
+        .and_then(|(pid, output)| {
+            let sources = sink::parse_sinks(&pactl(&["list", "short", "sources"]));
+            sink::reader_on_monitor(&sources, &recording, pid, &output)
+        });
+    (target, placed, default)
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_monitor_reader(sink: Option<&str>) -> std::io::Result<std::process::Child> {
+    let device = match sink {
+        Some(sink) => format!("--device={sink}.monitor"),
+        None => "--device=@DEFAULT_MONITOR@".to_string(),
+    };
+    std::process::Command::new("parec")
+        .args([
+            device.as_str(),
+            "--raw",
+            "--format=float32le",
+            "--rate=48000",
+            "--channels=1",
+            "--latency-msec=20",
+            "--client-name=Cap",
+            "--stream-name=Cap meeting audio",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+}
+
+/// Whether [`output_identity`] has to ask the audio system (Windows), which
+/// can take a while while devices change: then it runs off the UI thread.
+pub const OUTPUT_IDENTITY_ASKS: bool = cfg!(windows);
+
+/// Which outputs the computer plays through, as a value to compare between
+/// looks: a change means the speakers may have given way to a headset.
+/// `seen` is [`MeetingCapture::outputs_seen`]. `None` when nothing says.
+pub fn output_identity(seen: Option<String>) -> Option<String> {
+    #[cfg(windows)]
+    {
+        use cpal::traits::{DeviceTrait, HostTrait};
+        let _ = seen;
+        cpal::default_host()
+            .default_output_device()
+            .and_then(|device| device.name().ok())
+    }
+    #[cfg(not(windows))]
+    {
+        seen
+    }
+}
+
+/// Whether this Linux session can give Cap what the speakers play.
+#[cfg(target_os = "linux")]
+pub fn system_audio_available() -> bool {
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        std::process::Command::new("parec")
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    })
+}
+
+#[cfg(target_os = "linux")]
+impl SystemPlatform {
+    fn start() -> Result<(Self, flume::Receiver<SystemChunk>), HealthIssue> {
+        if !system_audio_available() {
+            return Err(HealthIssue::TapUnsupported);
+        }
+        // The default at first; the watch looks at once, off this thread.
+        let target: SinkTarget = Arc::new(std::sync::Mutex::new(None));
+        let first = spawn_monitor_reader(None)
+            .map_err(|e| HealthIssue::Failed(format!("Computer audio capture failed: {e}")))?;
+        let (tx, rx) = flume::bounded::<SystemChunk>(SOURCE_CHANNEL);
+        let stop = Arc::new(AtomicBool::new(false));
+        let child = Arc::new(std::sync::Mutex::new(Some(first)));
+        let counters = MonitorCounters::default();
+        let thread = std::thread::Builder::new()
+            .name("cap-meeting-monitor".into())
+            .spawn({
+                let (stop, child, counters, target) = (
+                    stop.clone(),
+                    child.clone(),
+                    counters.clone(),
+                    target.clone(),
+                );
+                move || run_monitor(&stop, &child, &tx, &counters, &target)
+            })
+            .map_err(|e| HealthIssue::Failed(e.to_string()))?;
+        let outputs = Arc::new(std::sync::Mutex::new(None));
+        let watch = std::thread::Builder::new()
+            .name("cap-meeting-sink-watch".into())
+            .spawn({
+                let (stop, child, target) = (stop.clone(), child.clone(), target.clone());
+                let outputs = outputs.clone();
+                let monitor = thread.thread().clone();
+                move || watch_sink(&stop, &child, &target, &outputs, &monitor)
+            })
+            .ok();
+        Ok((
+            Self {
+                stop,
+                child,
+                thread: Some(thread),
+                watch,
+                outputs,
+                dropped: counters.dropped,
+                callbacks: counters.callbacks,
+                frames: counters.frames,
+                restarts: counters.restarts,
+            },
+            rx,
+        ))
+    }
+
+    fn counters(&self) -> Option<TapCounters> {
+        Some(TapCounters {
+            callbacks: self.callbacks.load(Ordering::Relaxed),
+            frames: self.frames.load(Ordering::Relaxed),
+            dropped: self.dropped.load(Ordering::Relaxed),
+            restarts: self.restarts.load(Ordering::Relaxed),
+            ..TapCounters::default()
+        })
+    }
+
+    /// Ends the reader; the monitor loop opens a new one a second later.
+    fn restart(&self) {
+        if let Ok(mut slot) = self.child.lock()
+            && let Some(child) = slot.as_mut()
+        {
+            let _ = child.kill();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Default)]
+struct MonitorCounters {
+    dropped: Arc<AtomicU64>,
+    callbacks: Arc<AtomicU64>,
+    frames: Arc<AtomicU64>,
+    restarts: Arc<AtomicU64>,
+}
+
+/// Every couple of seconds: when the call moved to another output (or
+/// started on one), the reader is ended so the monitor loop opens that one.
+#[cfg(target_os = "linux")]
+fn watch_sink(
+    stop: &AtomicBool,
+    child: &std::sync::Mutex<Option<std::process::Child>>,
+    target: &SinkTarget,
+    outputs: &std::sync::Mutex<Option<String>>,
+    monitor: &std::thread::Thread,
+) {
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        let reader = child
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|c| c.id()));
+        let (next, placed, default) = look_at_outputs(reader);
+        if let Ok(mut seen) = outputs.lock() {
+            *seen = default.map(|default| match &next {
+                Some(followed) => format!("{default} > {followed}"),
+                None => default,
+            });
+        }
+        let Ok(mut current) = target.lock() else {
+            return;
+        };
+        if *current != next {
+            tracing::info!(from = ?*current, to = ?next, "the meeting's computer audio follows the call to another output");
+            *current = next;
+        } else if placed == Some(false) {
+            // PulseAudio moves a recording off a monitor when the default
+            // input changes (a headset's microphone gone and back).
+            tracing::warn!(
+                "meeting computer audio was moved off the output's monitor; reopening it"
+            );
+        } else {
+            drop(current);
+            std::thread::park_timeout(SINK_CHECK_EVERY);
+            continue;
+        }
+        drop(current);
+        if let Ok(mut slot) = child.lock()
+            && let Some(child) = slot.as_mut()
+        {
+            let _ = child.kill();
+        }
+        // The monitor loop opens the new output now, not a second later.
+        monitor.unpark();
+        std::thread::park_timeout(SINK_CHECK_EVERY);
+    }
+}
+
+/// Reads the monitor until stopped; a stream that ends on its own is opened
+/// again a second later.
+#[cfg(target_os = "linux")]
+fn run_monitor(
+    stop: &AtomicBool,
+    child: &std::sync::Mutex<Option<std::process::Child>>,
+    tx: &flume::Sender<SystemChunk>,
+    counters: &MonitorCounters,
+    target: &SinkTarget,
+) {
+    use std::io::Read;
+    const READ: usize = (MONITOR_RATE as usize / 50) * 4;
+    let mut bytes = vec![0u8; READ];
+    for _ in 0.. {
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        let stdout = child
+            .lock()
+            .ok()
+            .and_then(|mut c| c.as_mut().and_then(|c| c.stdout.take()));
+        if let Some(mut stdout) = stdout {
+            while stdout.read_exact(&mut bytes).is_ok() {
+                counters.callbacks.fetch_add(1, Ordering::Relaxed);
+                let samples: Vec<f32> = bytes
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .collect();
+                counters
+                    .frames
+                    .fetch_add(samples.len() as u64, Ordering::Relaxed);
+                let message = SystemChunk::Samples {
+                    samples,
+                    sample_rate: MONITOR_RATE,
+                    synthetic: false,
+                    received: Instant::now(),
+                };
+                if tx.try_send(message).is_err() {
+                    counters.dropped.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+        if let Ok(mut slot) = child.lock()
+            && let Some(mut old) = slot.take()
+        {
+            let _ = old.kill();
+            let _ = old.wait();
+        }
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        std::thread::park_timeout(Duration::from_secs(1));
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        let sink = target.lock().ok().and_then(|t| t.clone());
+        match spawn_monitor_reader(sink.as_deref()) {
+            Ok(mut next) => {
+                counters.restarts.fetch_add(1, Ordering::Relaxed);
+                // Checked under the lock Drop takes, so a reader started while
+                // stopping is never left behind.
+                let Ok(mut slot) = child.lock() else { return };
+                if stop.load(Ordering::Acquire) {
+                    let _ = next.kill();
+                    let _ = next.wait();
+                    return;
+                }
+                *slot = Some(next);
+            }
+            Err(error) => tracing::warn!(%error, "meeting monitor restart failed"),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for SystemPlatform {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        // Killing the reader ends its stdout, which ends the read loop.
+        if let Ok(mut slot) = self.child.lock()
+            && let Some(mut child) = slot.take()
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
+            let _ = thread.join();
+        }
+        if let Some(watch) = self.watch.take() {
+            watch.thread().unpark();
+            let _ = watch.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shared(
+        segments: flume::Sender<SegmentJob>,
+        missed: flume::Sender<super::super::engine::Missed>,
+    ) -> Shared {
+        Shared {
+            origin: Timestamps::now(),
+            audio_dir: None,
+            suffix: String::new(),
+            offset: 0,
+            live_partials: false,
+            segments,
+            partials: flume::bounded(1).0,
+            missed,
+            engine_busy: Arc::new(AtomicBool::new(false)),
+            events: flume::unbounded().0,
+        }
+    }
+
+    /// Quiet noise, then loud noise: speech the segmenter keeps open.
+    fn open_speech() -> Vec<f32> {
+        let mut seed = 0x2545_f491_u32;
+        (0..RATE as usize * 3)
+            .map(|i| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5;
+                noise * if i < RATE as usize { 0.002 } else { 0.5 }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_clock_jump_starts_a_new_file_instead_of_writing_the_silence() {
+        let dir = tempfile::tempdir().unwrap();
+        let (events_tx, events) = flume::unbounded();
+        let mut shared = shared(flume::unbounded().0, flume::unbounded().0);
+        shared.audio_dir = Some(dir.path().to_path_buf());
+        shared.events = events_tx;
+        let mut worker =
+            SourceWorker::new(Source::System, shared, Arc::new(SourceCounters::default()));
+        let second = RATE as usize;
+        worker.out = vec![0.1; second];
+        worker.place(0);
+        worker.out = vec![0.1; second];
+        worker.place(second as i64);
+        // The clock comes back ten minutes later.
+        let back = 2 * second as i64 + 600 * RATE as i64;
+        worker.out = vec![0.1; second];
+        worker.place(back);
+        let summary = worker.finish();
+
+        let parts: Vec<_> = events
+            .try_iter()
+            .filter_map(|e| match e {
+                CaptureEvent::AudioPart {
+                    path,
+                    offset_samples,
+                    ..
+                } => Some((path, offset_samples)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(parts.len(), 1, "one new file after the jump");
+        assert_eq!(parts[0].1, back as u64);
+        let first = dir.path().join(audio_file_name(Source::System, ""));
+        let first_ms = super::super::audio_file::probe_duration_ms(&first).unwrap();
+        assert!(first_ms < 2_500, "the first file holds no padding: {first_ms} ms");
+        let second_ms = super::super::audio_file::probe_duration_ms(&parts[0].0).unwrap();
+        assert!(second_ms < 1_500, "{second_ms} ms");
+        assert_eq!(summary.duration_ms, timeline::samples_to_ms(back as u64) + 1_000);
+    }
+
+    #[test]
+    fn stop_with_a_full_queue_hands_the_last_segment_to_the_ledger_without_waiting() {
+        let (segments, queued) = flume::bounded(1);
+        segments
+            .try_send(SegmentJob {
+                source: Source::Mic,
+                start_sample: 0,
+                samples: vec![0.0; 16],
+                speech_ms: 0,
+            })
+            .unwrap();
+        let (missed_tx, missed) = flume::unbounded();
+        let mut worker = SourceWorker::new(
+            Source::Mic,
+            shared(segments, missed_tx),
+            Arc::new(SourceCounters::default()),
+        );
+        let closed = worker.segmenter.push(0, &open_speech());
+        assert!(closed.is_empty(), "the speech should still be open");
+
+        let started = Instant::now();
+        let summary = worker.finish();
+
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "finish waited {:?} for a full queue",
+            started.elapsed()
+        );
+        let ledger: Vec<_> = missed.try_iter().collect();
+        assert_eq!(ledger.len(), 1);
+        assert!(ledger[0].len > 0);
+        assert_eq!(summary.stats.dropped_segments, 1);
+        assert_eq!(queued.len(), 1);
+    }
+}

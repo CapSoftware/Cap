@@ -8,8 +8,10 @@ const mocks = vi.hoisted(() => ({
 		appId: string;
 		keyId?: string;
 		ownerId?: string;
+		ownerEmail?: string;
 		environment?: string;
 	}[],
+	blockedEmails: new Set<string>(),
 	hashKey: vi.fn(),
 	accounts: [] as { balanceMicroCredits: number }[],
 	storedVideos: [] as Record<string, unknown>[],
@@ -53,7 +55,8 @@ vi.mock("@cap/database", async () => {
 });
 vi.mock("@cap/database/auth/session", () => ({ getCurrentUser: vi.fn() }));
 vi.mock("@cap/database/auth/domain-utils", () => ({
-	isBlockedAccountEmail: () => false,
+	isBlockedAccountEmail: (email: string | null | undefined) =>
+		!!email && mocks.blockedEmails.has(email),
 }));
 vi.mock("@cap/database/auth/request-site", () => ({
 	isCrossSiteCookieWrite: () => false,
@@ -178,6 +181,7 @@ const rateLimit = (response: Response) => ({
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.blockedEmails.clear();
 	mocks.hashKey.mockImplementation(async (key: string) => `hash:${key}`);
 	mocks.keyRows = [
 		{
@@ -592,9 +596,24 @@ describe("one account's keys share a budget", () => {
 		expect(Object.keys(mocks.selected[0] ?? {}).sort()).toEqual([
 			"appId",
 			"keyId",
+			"ownerEmail",
 			"ownerId",
 		]);
 		expect(mocks.hashKey).toHaveBeenCalledTimes(1);
+	});
+
+	it("refuses every key of an account once the account is blocked", async () => {
+		mocks.keyRows = [
+			{ appId: "app-1", ownerId: "owner-held", ownerEmail: "dev@held.example" },
+		];
+		const key = freshKey("csk");
+		expect((await getUsage(key)).status).toBe(200);
+
+		mocks.blockedEmails.add("dev@held.example");
+		const refused = await getUsage(key);
+		expect(refused.status).toBe(401);
+		expect(await refused.json()).toMatchObject({ code: "invalid_secret_key" });
+		expect(mocks.billing).toHaveBeenCalledTimes(1);
 	});
 
 	it("asks the shared rule about the account by its id", async () => {

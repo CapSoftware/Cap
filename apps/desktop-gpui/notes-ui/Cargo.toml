@@ -1,0 +1,30 @@
+[package]
+name = "cap-notes-ui"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+publish = false
+
+[dependencies]
+cap-notes = { path = "../notes" }
+# Same fork and rev as the app; the workspace `[patch]` resolves it to the
+# local zed-cap checkout, so the app and this crate share one gpui build.
+gpui = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d" }
+unicode-segmentation = "1"
+
+[dev-dependencies]
+gpui = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d", features = ["test-support"] }
+gpui_platform = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d", features = [
+    "wayland",
+    "x11",
+    "font-kit",
+    "runtime_shaders",
+] }
+
+[[example]]
+name = "notes_editor"
+path = "examples/notes_editor.rs"
+
+[[example]]
+name = "notes_bench"
+path = "examples/notes_bench.rs"

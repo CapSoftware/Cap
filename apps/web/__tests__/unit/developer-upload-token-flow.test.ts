@@ -9,7 +9,8 @@ vi.mock("@cap/database/helpers", () => ({
 }));
 vi.mock("@cap/database/auth/session", () => ({ getCurrentUser: vi.fn() }));
 vi.mock("@cap/database/auth/domain-utils", () => ({
-	isBlockedAccountEmail: () => false,
+	isBlockedAccountEmail: (email: string | null | undefined) =>
+		!!email && harness.state.blockedEmails.has(email),
 }));
 vi.mock("@cap/database/auth/request-site", () => ({
 	isCrossSiteCookieWrite: () => false,
@@ -56,6 +57,7 @@ const {
 	keyIdOf,
 	revokeKey,
 	removeKey,
+	ownerEmailOf,
 	videoWrites,
 	storageCalls,
 	UPLOAD_ROUTES,
@@ -551,7 +553,7 @@ describe("uploading with the token", () => {
 
 		const [query, params] = state.query.mock.calls[0] ?? [];
 		expect(String(query)).toBe(
-			"select `developer_videos`.`duration`, `developer_videos`.`deletedAt`, `developer_api_keys`.`id`, `developer_api_keys`.`revokedAt` from `developer_videos` inner join `developer_apps` on (`developer_videos`.`appId` = `developer_apps`.`id` and `developer_apps`.`deletedAt` is null) left join `developer_api_keys` on (`developer_api_keys`.`id` = ? and `developer_api_keys`.`appId` = `developer_videos`.`appId` and `developer_api_keys`.`keyType` = ?) where (`developer_videos`.`id` = ? and `developer_videos`.`appId` = ?) limit ?",
+			"select `developer_videos`.`duration`, `developer_videos`.`deletedAt`, `developer_api_keys`.`id`, `developer_api_keys`.`revokedAt`, `users`.`email` from `developer_videos` inner join `developer_apps` on (`developer_videos`.`appId` = `developer_apps`.`id` and `developer_apps`.`deletedAt` is null) inner join `users` on `developer_apps`.`ownerId` = `users`.`id` left join `developer_api_keys` on (`developer_api_keys`.`id` = ? and `developer_api_keys`.`appId` = `developer_videos`.`appId` and `developer_api_keys`.`keyType` = ?) where (`developer_videos`.`id` = ? and `developer_videos`.`appId` = ?) limit ?",
 		);
 		expect(params).toEqual([keyIdOf(key), "secret", videoId, "app1", 1]);
 	});
@@ -576,6 +578,15 @@ describe("uploading with the token", () => {
 			expect([route, keyReads.length]).toEqual([route, 0]);
 			expect(queries()[0]).toBe(tokenChecks[0]);
 		}
+	});
+
+	it("stops working once the app owner's account is blocked", async () => {
+		const { token } = await created();
+		expect((await upload("initiate", token)).status).toBe(200);
+		state.create.mockClear();
+
+		state.blockedEmails.add(ownerEmailOf("app1"));
+		await refusedEverywhere(token, 401, "invalid_upload_token");
 	});
 
 	it("stops working once the app is deleted", async () => {

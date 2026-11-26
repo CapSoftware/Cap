@@ -1,0 +1,24 @@
+{
+	"@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users('me')/calendars(id,name)",
+	"value": [
+		{
+			"id": "AAMkAGI2CAL1=",
+			"name": "Calendar",
+			"color": "auto",
+			"hexColor": "",
+			"isDefaultCalendar": true,
+			"canEdit": true,
+			"owner": { "name": "Me Myself", "address": "me@contoso.example" }
+		},
+		{
+			"id": "AAMkAGI2CAL2=",
+			"name": "United States holidays",
+			"color": "lightGreen",
+			"hexColor": "#87d28e",
+			"isDefaultCalendar": false,
+			"canEdit": false,
+			"owner": { "name": "Me Myself", "address": "me@contoso.example" }
+		},
+		{ "name": "missing id" }
+	]
+}

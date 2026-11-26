@@ -22,6 +22,18 @@ import { bindCaptionTrackCueText } from "./caption-tracks";
 import { scheduleReadyRefresh } from "./deferred-ready-refresh";
 import { EarlyUploadOverlay } from "./EarlyUploadOverlay";
 import { useEarlyPlayback } from "./early-playback";
+import {
+	capturePlayback,
+	createSourceRefreshBudget,
+	displayedMediaTime,
+	holdDisplayedTime,
+	isMediaLoadError,
+	restorePlaybackOnLoad,
+	sourceMayHaveExpired,
+	streamRefreshDueAt,
+	trackPlaybackIntent,
+	whenSourceRefreshDue,
+} from "./media-source-refresh";
 import { waitForSegmentPlayback } from "./segment-playback-probe";
 import {
 	canRetryFailedProcessing,
@@ -426,6 +438,7 @@ export function HLSVideoPlayer({
 			const maxNetworkRetries = isLiveSegments ? 30 : 6;
 			let reloadedForFragment: string | undefined | null = null;
 			let retryTimer: ReturnType<typeof setTimeout> | null = null;
+			let releaseHeldTime: (() => void) | null = null;
 
 			hls.on(Hls.Events.ERROR, (event, data) => {
 				console.error("HLSVideoPlayer: HLS error:", event, data);
@@ -438,8 +451,10 @@ export function HLSVideoPlayer({
 
 				const isExpiredUrl =
 					data.response?.code === 403 || data.response?.code === 410;
+				// With a single rendition hls.js has nothing to switch to, so it
+				// reports the refused fragment as fatal and stops loading; the
+				// playlist reload below starts it again.
 				if (
-					!data.fatal &&
 					isExpiredUrl &&
 					(data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
 						data.details === Hls.ErrorDetails.KEY_LOAD_ERROR) &&
@@ -452,10 +467,26 @@ export function HLSVideoPlayer({
 						"HLSVideoPlayer: Presigned URL expired, reloading playlist for fresh URLs",
 					);
 					// Reloading the same URL rebuilds the MediaSource, which resets the
-					// element to 0:00, paused, at normal speed.
-					const { currentTime, paused, playbackRate } = video;
+					// element to 0:00, paused, at normal speed. hls.js only rebuilds it
+					// once media has been buffered, so with nothing buffered yet the
+					// element keeps its position and the shown time is let go at once.
+					const { paused, playbackRate } = video;
+					const currentTime = displayedMediaTime(video);
+					const previousHold = releaseHeldTime;
+					releaseHeldTime = holdDisplayedTime(video, currentTime);
+					previousHold?.();
+					let mediaReattached = false;
+					const handleMediaAttaching = () => {
+						mediaReattached = true;
+					};
+					hls.on(Hls.Events.MEDIA_ATTACHING, handleMediaAttaching);
 					hls.config.startPosition = currentTime;
 					hls.loadSource(playbackSrc);
+					hls.off(Hls.Events.MEDIA_ATTACHING, handleMediaAttaching);
+					if (!mediaReattached) {
+						releaseHeldTime();
+						releaseHeldTime = null;
+					}
 					video.playbackRate = playbackRate;
 					if (!paused) void video.play().catch(() => {});
 					return;
@@ -527,15 +558,69 @@ export function HLSVideoPlayer({
 
 			return () => {
 				if (retryTimer) clearTimeout(retryTimer);
+				releaseHeldTime?.();
 				if (hlsInstance.current) {
 					hlsInstance.current.destroy();
 					hlsInstance.current = null;
 				}
 			};
 		} else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+			// The native player keeps the signed segment URLs from the playlist it
+			// loaded, so one that expired is refused; loading the playlist again
+			// signs them afresh.
+			const refreshes = createSourceRefreshBudget();
+			const intent = trackPlaybackIntent(video);
+			let obtainedAt = Date.now();
+			let refreshCount = 0;
+			let cancelRestore: (() => void) | null = null;
+			let stopDueCheck: (() => void) | null = null;
+			const reloadPlaylist = () => {
+				const previousRestore = cancelRestore;
+				cancelRestore = restorePlaybackOnLoad(
+					video,
+					capturePlayback(video, intent.isPlaying()),
+				);
+				previousRestore?.();
+				obtainedAt = Date.now();
+				refreshCount += 1;
+				video.src = `${playbackSrc}${playbackSrc.includes("?") ? "&" : "?"}_r=${refreshCount}`;
+				armDueCheck();
+			};
+			const armDueCheck = () => {
+				stopDueCheck?.();
+				const dueAt = streamRefreshDueAt(obtainedAt);
+				stopDueCheck =
+					dueAt === null
+						? null
+						: whenSourceRefreshDue(video, dueAt, () => {
+								reloadPlaylist();
+								return true;
+							});
+			};
+			const handleNativeLoaded = () => refreshes.markLoaded();
+			const handleNativeError = () => {
+				if (
+					!isMediaLoadError(video.error) ||
+					!sourceMayHaveExpired(obtainedAt) ||
+					!refreshes.tryStart()
+				)
+					return;
+				setHlsInitFailed(false);
+				reloadPlaylist();
+			};
+			armDueCheck();
+			video.addEventListener("loadeddata", handleNativeLoaded);
+			video.addEventListener("error", handleNativeError);
 			video.src = playbackSrc;
 			video.load();
 			console.log("HLSVideoPlayer: Using native HLS support");
+			return () => {
+				cancelRestore?.();
+				stopDueCheck?.();
+				intent.stop();
+				video.removeEventListener("loadeddata", handleNativeLoaded);
+				video.removeEventListener("error", handleNativeError);
+			};
 		} else {
 			console.error("HLSVideoPlayer: HLS is not supported in this browser");
 			setHlsInitFailed(true);

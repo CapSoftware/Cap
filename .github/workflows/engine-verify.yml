@@ -89,6 +89,7 @@ jobs:
           python3 scripts/verify/plan.py test > /dev/null
           python3 scripts/verify/test_diff.py
           python3 scripts/verify/test_perf_build.py
+          python3 scripts/verify/test_mtime.py
           if grep -rn --include='expectations*.toml' '^reason = "TODO' crates; then
             echo "::error::blessed expectations still have TODO reasons: describe each failure (and link its fix) before merging"
             exit 1

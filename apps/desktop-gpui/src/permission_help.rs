@@ -39,13 +39,15 @@ pub enum Need {
     Keystrokes,
     /// Moving and resizing another app's window; `app` names it when known.
     WindowControl { app: Option<String> },
+    /// Reading who is speaking in meeting apps (speaker names in Notes).
+    MeetingApps,
 }
 
 impl Need {
     pub fn permission(&self) -> OSPermission {
         match self {
             Self::Keystrokes => permissions::keystroke_permission(),
-            Self::WindowControl { .. } => OSPermission::Accessibility,
+            Self::WindowControl { .. } | Self::MeetingApps => OSPermission::Accessibility,
         }
     }
 }
@@ -67,6 +69,16 @@ pub fn steps(need: &Need, settings_only: bool, held: bool) -> Vec<String> {
         (Need::Keystrokes, true) => {
             steps.push(tr::permission::help::step_input_monitoring().to_string());
             steps.push(tr::permission::help::step_choose_cap().to_string());
+        }
+        (Need::MeetingApps, true) if held => {
+            steps.push(tr::permission::help::window_step_info().to_string());
+            steps.push(tr::permission::help::meeting_step_add_apps().to_string());
+            steps.push(tr::permission::help::window_step_any_time().to_string());
+        }
+        (Need::MeetingApps, true) => {
+            steps.push(tr::permission::help::window_step_override().to_string());
+            steps.push(tr::permission::help::meeting_step_choose_apps().to_string());
+            steps.push(tr::permission::help::window_step_any_time().to_string());
         }
         (Need::WindowControl { app }, true) => {
             steps.push(tr::permission::help::window_step_override().to_string());
@@ -221,6 +233,7 @@ pub fn preview_from_env(cx: &mut App) {
         },
         None if spec == "window" => Need::WindowControl { app: None },
         None if spec == "keystrokes" => Need::Keystrokes,
+        None if spec == "meeting" => Need::MeetingApps,
         _ => return,
     };
     show(need, cx);
@@ -276,7 +289,7 @@ async fn come_back_after_settings(cx: &mut gpui::AsyncWindowContext) {
 /// System & App Protection Override doesn't change the global grant Cap
 /// already holds, so that case is finished by the user.
 fn watches_grant(need: &Need, held_at_open: bool) -> bool {
-    !(matches!(need, Need::WindowControl { .. }) && held_at_open)
+    !(matches!(need, Need::WindowControl { .. } | Need::MeetingApps) && held_at_open)
 }
 
 impl PermissionHelp {
@@ -408,6 +421,12 @@ impl PermissionHelp {
                 tr::permission::help::window_title(),
                 tr::permission::help::window_body(),
                 tr::permission::help::done_window(),
+            ),
+            Need::MeetingApps => (
+                &art::CURSOR,
+                tr::permission::help::meeting_title(),
+                tr::permission::help::meeting_body(),
+                tr::permission::help::done_meeting(),
             ),
         }
     }
@@ -730,6 +749,39 @@ mod tests {
         assert!(watches_grant(&window, false));
         assert!(watches_grant(&Need::Keystrokes, true));
         assert!(watches_grant(&Need::Keystrokes, false));
+    }
+
+    #[test]
+    fn meeting_apps_get_the_override_steps_from_macos_27_3() {
+        let need = Need::MeetingApps;
+        assert_eq!(
+            steps(&need, true, false),
+            vec![
+                tr::permission::help::step_open().to_string(),
+                tr::permission::help::window_step_override().to_string(),
+                tr::permission::help::meeting_step_choose_apps().to_string(),
+                tr::permission::help::window_step_any_time().to_string(),
+            ]
+        );
+        assert_eq!(
+            steps(&need, true, true),
+            vec![
+                tr::permission::help::step_open().to_string(),
+                tr::permission::help::window_step_info().to_string(),
+                tr::permission::help::meeting_step_add_apps().to_string(),
+                tr::permission::help::window_step_any_time().to_string(),
+            ]
+        );
+        assert_eq!(
+            steps(&need, false, false),
+            vec![
+                tr::permission::help::step_open().to_string(),
+                tr::permission::help::step_accessibility().to_string(),
+            ]
+        );
+        assert!(!watches_grant(&need, true));
+        assert!(watches_grant(&need, false));
+        assert_eq!(need.permission(), OSPermission::Accessibility);
     }
 
     #[test]
