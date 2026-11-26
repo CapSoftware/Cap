@@ -497,6 +497,9 @@ impl RequiredMicrophoneHealth {
     }
 
     fn stop(&self) {
+        if let Some(report) = self.source.missing_report() {
+            warn!("{report}");
+        }
         if matches!(self.loss, LinuxSourceLoss::EndThisTrack) {
             return;
         }

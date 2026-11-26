@@ -58,6 +58,16 @@ vi.mock("@cap/database/crypto", () => ({
 }));
 vi.mock("@/lib/infra-access", () => ({ canUseInfra: () => true }));
 vi.mock("@/lib/mcp-auth", () => ({
+	MCP_AUTHORIZATION_PARAMS: [
+		"client_id",
+		"redirect_uri",
+		"response_type",
+		"state",
+		"code_challenge",
+		"code_challenge_method",
+		"scope",
+		"resource",
+	],
 	validateMcpAuthorizationRequest: async () => ({
 		redirectUri: "http://127.0.0.1:4100/callback",
 		state: "state",

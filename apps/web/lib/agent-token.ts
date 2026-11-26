@@ -5,7 +5,7 @@ import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { Database } from "@cap/web-backend";
 import { Agent } from "@cap/web-domain";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, count, eq, gt, isNull } from "drizzle-orm";
 import { Effect } from "effect";
 import {
 	createAgentAccessToken,
@@ -35,6 +35,18 @@ const invalidGrant = (requestId: string) =>
 	new Agent.AgentBadRequestError({
 		...commonError(requestId, "The authorization grant is invalid"),
 		code: "INVALID_REQUEST",
+	});
+
+const AGENT_KEYS_PER_ACCOUNT_PER_DAY = 20;
+const AGENT_KEY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+const tooManyKeys = (requestId: string) =>
+	new Agent.AgentRateLimitedError({
+		message: "Too many CLI sign-ins today. Try again later",
+		code: "RATE_LIMITED",
+		retryable: true,
+		retryAfterMs: 60 * 60 * 1000,
+		requestId,
 	});
 
 const expiredGrant = (requestId: string) =>
@@ -93,6 +105,22 @@ export const exchangeAgentAuthorizationCode = Effect.fn(
 			if (!account || isBlockedAccountEmail(account.email)) {
 				return { state: "invalid" as const };
 			}
+			const [minted] = await tx
+				.select({ total: count() })
+				.from(Db.agentApiKeys)
+				.where(
+					and(
+						eq(Db.agentApiKeys.userId, grant.userId),
+						gt(
+							Db.agentApiKeys.createdAt,
+							new Date(now.getTime() - AGENT_KEY_WINDOW_MS),
+						),
+					),
+				)
+				.for("update");
+			if (Number(minted?.total ?? 0) >= AGENT_KEYS_PER_ACCOUNT_PER_DAY) {
+				return { state: "limited" as const };
+			}
 
 			const consumed = await tx
 				.update(Db.agentApiAuthorizationCodes)
@@ -128,6 +156,7 @@ export const exchangeAgentAuthorizationCode = Effect.fn(
 
 	if (result.state === "invalid") return yield* invalidGrant(requestId);
 	if (result.state === "expired") return yield* expiredGrant(requestId);
+	if (result.state === "limited") return yield* tooManyKeys(requestId);
 	return {
 		accessToken: result.accessToken,
 		tokenType: "Bearer" as const,
