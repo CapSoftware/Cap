@@ -53,7 +53,7 @@ gpui_tokio = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19be
 cap-camera = { path = "../../crates/camera" }
 scap-targets = { path = "../../crates/scap-targets" }
 # Same fork/rev as the root workspace: MicrophoneFeed enumerates through this.
-cpal = { git = "https://github.com/CapSoftware/cpal", rev = "1c199bfdc019" }
+cpal = { git = "https://github.com/CapSoftware/cpal", rev = "a8c4b41d719b" }
 
 # The actual recording engine: the studio/instant actors. Drags in the ffmpeg
 # encode stack; that is the point.
