@@ -483,7 +483,7 @@ impl UploadBackend for LiveBackend {
                     // recording itself. Sent as a replacement, the server retires the recording's
                     // processing job and every confirmation asks for another upload.
                     false,
-                    true,
+                    Some(upload.video.id.clone()),
                 )
                 .await?;
                 match result {

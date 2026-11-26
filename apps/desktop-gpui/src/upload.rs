@@ -1386,7 +1386,7 @@ pub async fn upload_exported_video(
             cancel,
             false,
             true,
-            false,
+            None,
         ))
         .await
         .map(|(result, _)| result);
@@ -1403,9 +1403,10 @@ async fn upload_exported_video_inner(
     cancel: Arc<AtomicBool>,
     defer_completion: bool,
     replace_shared_video: bool,
-    // The queue's Instant upload: the cap was created when recording started,
-    // so the server refuses to create it again if the owner deleted it.
-    require_existing_share: bool,
+    // The queue's Instant upload passes the id of the cap created when the
+    // recording started, so the server refuses to create it again if the
+    // owner deleted it. A recovered recording can have no `sharing` yet.
+    existing_video_id: Option<String>,
 ) -> Result<(UploadResult, Option<String>), String> {
     check_export_cancelled(&cancel).map_err(|error| error.to_string())?;
     if store_auth_missing() {
@@ -1468,11 +1469,7 @@ async fn upload_exported_video_inner(
         }
     };
 
-    let require_existing = require_existing_share
-        && meta
-            .sharing
-            .as_ref()
-            .is_some_and(|sharing| sharing.id == video_id);
+    let require_existing = existing_video_id.as_deref() == Some(video_id.as_str());
     let s3_config = match checked_upload_step(&cancel, || {
         create_or_get_video_with_mode(
             false,
