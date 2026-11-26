@@ -3,9 +3,9 @@ import { PRICING } from "@/data/pricing";
 
 export const homepageSeo = {
 	url: "https://cap.so/",
-	title: "Cap — Free Screen Recorder & Open Source Loom Alternative",
+	title: "Free, open source screen recorder and Loom alternative | Cap",
 	description:
-		"Cap is the free, open source screen recorder for Mac, Windows, and Linux. Record, edit, take screenshots, and share videos with a link.",
+		"Record your screen on Mac, Windows or Linux with Cap, the free, open source screen recorder. Share a link the moment you stop, or edit and export in 4K.",
 } as const;
 
 export const homepageSchema = {

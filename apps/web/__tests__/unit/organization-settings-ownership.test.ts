@@ -94,6 +94,10 @@ vi.mock(
 	() => ({ ShareableLinkIcon: () => null }),
 );
 vi.mock(
+	"@/app/(org)/dashboard/settings/organization/components/ShareableLinkBrandColor",
+	() => ({ ShareableLinkBrandColor: () => null }),
+);
+vi.mock(
 	"@/app/(org)/dashboard/settings/organization/components/AccessEmailDomain",
 	() => ({ default: () => null }),
 );

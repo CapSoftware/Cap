@@ -146,4 +146,22 @@ mod tests {
         assert_eq!(timing.screen_offset, 0.5);
         assert_eq!(timing.camera_offset, 0.25);
     }
+
+    // A microphone that delivered nothing records the stop time as its start.
+    // The screen and camera must play from their own start, not jump to the
+    // end of the segment and hold their last frame.
+    #[test]
+    fn late_mic_does_not_skip_screen_or_camera() {
+        let metadata: StudioRecordingMeta = serde_json::from_value(serde_json::json!({
+            "segments": [{
+                "display": { "path": "display", "fps": 30, "start_time": -0.05 },
+                "camera": { "path": "camera", "fps": 30, "start_time": -0.05 },
+                "mic": { "path": "mic.ogg", "start_time": 19.95 }
+            }]
+        }))
+        .unwrap();
+        let timing = segment_video_timing(&metadata, 0);
+        assert_eq!(timing.latest_start_time, Some(-0.05));
+        assert_eq!((timing.screen_offset, timing.camera_offset), (0.0, 0.0));
+    }
 }

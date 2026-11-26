@@ -78,9 +78,12 @@ fn needs_remux_project(parent: &Path, name: &str, fragments: usize) -> PathBuf {
                     cursor: None,
                     keyboard: None,
                     display_notch: None,
+                    cursor_shape_version: None,
                 }],
                 cursors: Cursors::default(),
                 status: Some(StudioRecordingStatus::NeedsRemux),
+                cursor_shape_version: 0,
+                audio_only: false,
             },
         })),
     }

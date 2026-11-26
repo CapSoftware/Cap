@@ -355,9 +355,9 @@ fn create_copy_texture(
     texture.ok_or_else(windows::core::Error::from_win32)
 }
 
-/// Textures for frames trimmed down from their surface. A frame hands its
-/// texture back when it is dropped, so a texture is only written again once
-/// no queued frame still reads it.
+/// Textures for frames cropped or trimmed down from their surface. A frame
+/// hands its texture back when it is dropped, so a texture is only written
+/// again once no queued frame still reads it.
 #[derive(Default)]
 struct TrimPool {
     free: Mutex<Vec<(ID3D11Texture2D, u32, u32)>>,
@@ -619,25 +619,18 @@ impl Capturer {
                 .map_err(NewCapturerError::Other)?;
         }
 
-        let crop_data = settings
-            .crop
-            .map(|crop| {
-                let texture = create_copy_texture(
-                    &d3d_device,
-                    crop.right - crop.left,
-                    crop.bottom - crop.top,
-                    settings.pixel_format,
-                )
-                .map_err(NewCapturerError::CropTexture)?;
-
-                Ok::<_, NewCapturerError>((texture, crop))
-            })
-            .transpose()?;
-
-        // Only used by frames whose size differs from their surface (odd-sized,
-        // or smaller than the pool's surface), so a capture that matches its
-        // surface never pays for the copy.
+        // Only used by cropped frames and by frames whose size differs from
+        // their surface (odd-sized, or smaller than the pool's surface), so a
+        // capture that matches its surface never pays for the copy.
         let trim = Arc::new(TrimPool::default());
+
+        let crop_data = settings.crop;
+        if let Some(crop) = crop_data {
+            let (width, height) = (crop.right - crop.left, crop.bottom - crop.top);
+            let texture = create_copy_texture(&d3d_device, width, height, settings.pixel_format)
+                .map_err(NewCapturerError::CropTexture)?;
+            trim.give(texture, width, height);
+        }
 
         let frame_arrived_token = frame_pool
             .FrameArrived(
@@ -737,7 +730,7 @@ impl Capturer {
                             return Ok(());
                         }
 
-                        let frame = if let Some((cropped_texture, crop)) = crop_data.clone() {
+                        let frame = if let Some(crop) = crop_data {
                             // A shrunk item leaves the crop box hanging off the
                             // edge of the source texture, which copies nothing
                             // and would vend a stale surface as if it were live.
@@ -749,6 +742,10 @@ impl Capturer {
                             {
                                 return Ok(());
                             }
+
+                            let (width, height) = (crop.right - crop.left, crop.bottom - crop.top);
+                            let cropped_texture =
+                                trim.take(&d3d_device, width, height, pixel_format)?;
 
                             unsafe {
                                 d3d_context.CopySubresourceRegion(
@@ -764,15 +761,15 @@ impl Capturer {
                             }
 
                             Frame {
-                                width: crop.right - crop.left,
-                                height: crop.bottom - crop.top,
+                                width,
+                                height,
                                 pixel_format: settings.pixel_format,
                                 inner: frame,
                                 texture: cropped_texture,
                                 d3d_context: d3d_context.clone(),
                                 d3d_device: d3d_device.clone(),
                                 staging_pool: staging_pool.clone(),
-                                recycle: None,
+                                recycle: Some(trim.clone()),
                             }
                         } else {
                             // The frame is the content bounded by its surface,
@@ -939,7 +936,8 @@ pub struct Frame {
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
     staging_pool: Arc<StagingTexturePool>,
-    /// Where a trimmed frame's texture goes back to once the frame is done.
+    /// Where a cropped or trimmed frame's texture goes back to once the frame
+    /// is done.
     recycle: Option<Arc<TrimPool>>,
 }
 

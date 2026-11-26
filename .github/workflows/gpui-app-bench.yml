@@ -1,6 +1,7 @@
 name: GPUI app benchmark
 
 on:
+  merge_group:
   pull_request:
     paths:
       - "apps/desktop-gpui/patches/**"
@@ -26,11 +27,37 @@ permissions:
   contents: read
 
 jobs:
+  # GitHub ignores paths filters in the merge queue, so the queue run applies
+  # this workflow's pull_request paths to the queued change itself.
+  scope:
+    name: Scope
+    if: github.event_name == 'merge_group'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.queue.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          filter: blob:none
+          sparse-checkout: |
+            .github/workflows
+            scripts/ci
+      - name: Merge queue scope
+        id: queue
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.merge_group.head_sha }}
+        run: python3 scripts/ci/merge_queue.py scope --workflow .github/workflows/gpui-app-bench.yml --base "$BASE" --head "$HEAD" >> "$GITHUB_OUTPUT"
+
   editor:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run != 'false' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     name: Editor draw benchmark (macOS)
     # Benchmarks build GPUI twice and run for up to two hours, so pull requests
     # from forks do not start them; maintainers can run them with workflow_dispatch.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 150
     env:
@@ -72,7 +99,7 @@ jobs:
         shell: bash
         env:
           BASE_INPUT: ${{ inputs.base }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
           set -euo pipefail
           node scripts/sync-desktop-versions.mjs

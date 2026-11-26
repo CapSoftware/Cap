@@ -1,3 +1,4 @@
+use super::frame_accounting::{CaptureGapCounter, FrameLossCarry, ScreenFrameAccounting};
 use super::*;
 use crate::{
     ChannelAudioSourceConfig,
@@ -157,24 +158,44 @@ fn excluded_shareable_windows(
     collected
 }
 
-struct FrameScaler {
+pub(crate) struct FrameScaler {
     session: arc::R<cidre::vt::PixelTransferSession>,
     pool: arc::R<cv::PixelBufPool>,
 }
 
 unsafe impl Send for FrameScaler {}
 
+/// Buffers a frame copier keeps between frames. It allocates more while the
+/// writer is behind and lets the extra ones age out afterwards.
+const FRAME_COPY_POOL_MIN_BUFFERS: usize = 4;
+
 impl FrameScaler {
     fn new(expected_width: usize, expected_height: usize) -> Option<Self> {
+        Self::with_pool(
+            expected_width,
+            expected_height,
+            get_pixel_buffer_pool_size(),
+        )
+    }
+
+    /// Copies frames at their own size into a pool this process owns.
+    pub(crate) fn copier(width: usize, height: usize) -> Option<Self> {
+        Self::with_pool(width, height, FRAME_COPY_POOL_MIN_BUFFERS)
+    }
+
+    fn with_pool(width: usize, height: usize, min_buffers: usize) -> Option<Self> {
         let mut session = cidre::vt::PixelTransferSession::new().ok()?;
         session.set_scaling_letter_box().ok()?;
         session.set_realtime(true).ok()?;
-        let pool = create_pixel_buffer_pool(expected_width, expected_height)?;
+        let pool = create_pixel_buffer_pool(width, height, min_buffers)?;
 
         Some(Self { session, pool })
     }
 
-    fn scale_frame(&self, src_sample_buf: &cm::SampleBuf) -> Option<arc::R<cm::SampleBuf>> {
+    pub(crate) fn scale_frame(
+        &self,
+        src_sample_buf: &cm::SampleBuf,
+    ) -> Option<arc::R<cm::SampleBuf>> {
         let src_image_buf = src_sample_buf.image_buf()?;
         let dst_buf = self.pool.pixel_buf().ok()?;
 
@@ -194,9 +215,11 @@ fn get_pixel_buffer_pool_size() -> usize {
         .unwrap_or(20)
 }
 
-fn create_pixel_buffer_pool(width: usize, height: usize) -> Option<arc::R<cv::PixelBufPool>> {
-    let min_count = get_pixel_buffer_pool_size();
-
+fn create_pixel_buffer_pool(
+    width: usize,
+    height: usize,
+    min_count: usize,
+) -> Option<arc::R<cv::PixelBufPool>> {
     let min_count_num = cf::Number::from_usize(min_count);
     let width_num = cf::Number::from_usize(width);
     let height_num = cf::Number::from_usize(height);
@@ -277,6 +300,7 @@ pub enum SourceError {
 pub struct VideoFrame {
     pub sample_buf: arc::R<cm::SampleBuf>,
     pub timestamp: Timestamp,
+    pub capture: Option<FrameLossCarry>,
 }
 
 impl output_pipeline::VideoFrame for VideoFrame {
@@ -288,7 +312,75 @@ impl output_pipeline::VideoFrame for VideoFrame {
         Some(Self {
             sample_buf: self.sample_buf.clone(),
             timestamp: self.timestamp,
+            capture: None,
         })
+    }
+}
+
+struct CaptureLossTracker {
+    gaps: CaptureGapCounter,
+    display: Display,
+    accounting: Arc<ScreenFrameAccounting>,
+    tick_numer: u64,
+    tick_denom: u64,
+}
+
+impl CaptureLossTracker {
+    fn new(fps: u32, display: Display, accounting: Arc<ScreenFrameAccounting>) -> Self {
+        let timebase = cidre::mach::TimeBaseInfo::new();
+        Self {
+            gaps: CaptureGapCounter::for_display(fps, display.raw_handle().refresh_rate()),
+            display,
+            accounting,
+            tick_numer: u64::from(timebase.numer.max(1)),
+            tick_denom: u64::from(timebase.denom.max(1)),
+        }
+    }
+
+    fn status(&mut self, frame: &scap_screencapturekit::VideoFrame) {
+        self.skipped_before(frame, false);
+    }
+
+    fn frame(&mut self, frame: &scap_screencapturekit::VideoFrame) -> FrameLossCarry {
+        FrameLossCarry {
+            capture_skipped: self.skipped_before(frame, true),
+        }
+    }
+
+    fn skipped_before(
+        &mut self,
+        frame: &scap_screencapturekit::VideoFrame,
+        has_image: bool,
+    ) -> u64 {
+        let info = frame.info();
+        match (info.status, info.display_time) {
+            (Some(sc::FrameStatus::Complete), Some(ticks)) if has_image => {
+                let display_time_ns = ticks.saturating_mul(self.tick_numer) / self.tick_denom;
+                let display = self.display;
+                let skipped = self
+                    .gaps
+                    .complete_on_display(display_time_ns, || display.raw_handle().refresh_rate());
+                if skipped > 0 {
+                    debug!(
+                        display_time_ns,
+                        skipped, "Screen capture skipped display frames"
+                    );
+                }
+                skipped
+            }
+            (Some(sc::FrameStatus::Idle), _) => {
+                self.gaps.idle();
+                0
+            }
+            _ => {
+                self.gaps.interrupted();
+                0
+            }
+        }
+    }
+
+    fn dropped(&self, carry: FrameLossCarry) {
+        self.accounting.record_callback_dropped(carry);
     }
 }
 
@@ -389,6 +481,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         let (stall_health_tx, stall_health_rx) =
             tokio::sync::mpsc::channel::<output_pipeline::PipelineHealthEvent>(32);
+        let frame_accounting = Arc::new(ScreenFrameAccounting::default());
 
         let rebuild_params = Arc::new(CapturerRebuildParams {
             display_id: self.config.display.clone(),
@@ -407,15 +500,19 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             scaling_logged: scaling_logged.clone(),
             scaled_frame_count: scaled_frame_count.clone(),
             stall_health_tx: stall_health_tx.clone(),
+            frame_accounting: frame_accounting.clone(),
         });
 
         let builder = scap_screencapturekit::Capturer::builder(content_filter, settings)
+            .with_screen_status_samples()
             .with_output_sample_buf_cb({
                 let video_frame_count = video_frame_counter.clone();
                 let drop_counter = drop_counter.clone();
                 let sys_audio_drop_counter = system_audio_drop_counter.clone();
                 let sys_audio_frame_counter = system_audio_frame_counter.clone();
                 let stall_health_tx = stall_health_tx.clone();
+                let mut loss =
+                    CaptureLossTracker::new(self.config.fps, display, frame_accounting.clone());
                 move |frame| {
                     let sample_buffer = frame.sample_buf();
 
@@ -426,11 +523,17 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                     );
 
                     match &frame {
+                        scap_screencapturekit::Frame::ScreenStatus(frame) => {
+                            loss.status(frame);
+                        }
                         scap_screencapturekit::Frame::Screen(frame) => {
+                            let carry = loss.frame(frame);
                             let Some(image_buf) = frame.image_buf() else {
+                                loss.dropped(carry);
                                 return;
                             };
                             if image_buf.height() == 0 || image_buf.width() == 0 {
+                                loss.dropped(carry);
                                 return;
                             }
 
@@ -442,6 +545,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 {
                                     let Ok(mut scaler_guard) = frame_scaler.lock() else {
                                         drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                        loss.dropped(carry);
                                         return;
                                     };
 
@@ -467,11 +571,13 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
                                     let Some(scaler) = scaler_guard.as_ref() else {
                                         drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                        loss.dropped(carry);
                                         return;
                                     };
 
                                     let Some(scaled) = scaler.scale_frame(sample_buffer) else {
                                         drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                        loss.dropped(carry);
                                         return;
                                     };
 
@@ -508,13 +614,17 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 VideoFrame {
                                     sample_buf: final_sample_buf,
                                     timestamp,
+                                    capture: Some(carry),
                                 },
                                 "screen-video",
                                 &stall_health_tx,
                             ) {
                                 output_pipeline::StallSendOutcome::Sent => {}
-                                output_pipeline::StallSendOutcome::StalledAndDropped { .. }
-                                | output_pipeline::StallSendOutcome::Disconnected => {
+                                output_pipeline::StallSendOutcome::StalledAndDropped { .. } => {
+                                    drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                    loss.dropped(carry);
+                                }
+                                output_pipeline::StallSendOutcome::Disconnected => {
                                     drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
                                 }
                             }
@@ -608,6 +718,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 drop_guard: cancel_token.drop_guard(),
                 rebuild_params: rebuild_params.clone(),
                 stall_health_rx: Some(stall_health_rx),
+                frame_accounting,
             },
             audio_rx.map(|rx| {
                 SystemAudioSourceConfig(
@@ -617,6 +728,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                     system_audio_frame_counter,
                     system_audio_drop_counter,
                     rebuild_params,
+                    false,
                 )
             }),
         ))
@@ -710,7 +822,15 @@ pub struct VideoSourceConfig {
     drop_counter: Arc<AtomicU64>,
     rebuild_params: Arc<CapturerRebuildParams>,
     stall_health_rx: Option<tokio::sync::mpsc::Receiver<output_pipeline::PipelineHealthEvent>>,
+    frame_accounting: Arc<ScreenFrameAccounting>,
 }
+
+impl VideoSourceConfig {
+    pub fn frame_accounting(&self) -> Arc<ScreenFrameAccounting> {
+        self.frame_accounting.clone()
+    }
+}
+
 pub struct VideoSource {
     inner: ChannelVideoSource<VideoFrame>,
     capturer: Capturer,
@@ -744,6 +864,7 @@ impl output_pipeline::VideoSource for VideoSource {
             drop_counter,
             rebuild_params,
             stall_health_rx,
+            frame_accounting: _,
         } = config;
 
         let monitor_cancel = cancel_token.clone();
@@ -1123,6 +1244,7 @@ struct CapturerRebuildParams {
     scaling_logged: Arc<AtomicBool>,
     scaled_frame_count: Arc<AtomicU64>,
     stall_health_tx: output_pipeline::HealthSender,
+    frame_accounting: Arc<ScreenFrameAccounting>,
 }
 
 unsafe impl Send for CapturerRebuildParams {}
@@ -1194,6 +1316,7 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
     let error_tx = params.error_tx.clone();
 
     let builder = scap_screencapturekit::Capturer::builder(content_filter, settings)
+        .with_screen_status_samples()
         .with_output_sample_buf_cb({
             let video_frame_count = params.video_frame_counter.clone();
             let drop_counter = params.drop_counter.clone();
@@ -1203,6 +1326,8 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
             let sys_audio_drop_counter = params.system_audio_drop_counter.clone();
             let sys_audio_frame_counter = params.system_audio_frame_counter.clone();
             let stall_health_tx = params.stall_health_tx.clone();
+            let mut loss =
+                CaptureLossTracker::new(params.config.fps, display, params.frame_accounting.clone());
             move |frame| {
                 let sample_buffer = frame.sample_buf();
 
@@ -1213,11 +1338,17 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
                 );
 
                 match &frame {
+                    scap_screencapturekit::Frame::ScreenStatus(frame) => {
+                        loss.status(frame);
+                    }
                     scap_screencapturekit::Frame::Screen(frame) => {
+                        let carry = loss.frame(frame);
                         let Some(image_buf) = frame.image_buf() else {
+                            loss.dropped(carry);
                             return;
                         };
                         if image_buf.height() == 0 || image_buf.width() == 0 {
+                            loss.dropped(carry);
                             return;
                         }
 
@@ -1228,6 +1359,7 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
                             if frame_width != expected_width || frame_height != expected_height {
                                 let Ok(mut scaler_guard) = frame_scaler.lock() else {
                                     drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                    loss.dropped(carry);
                                     return;
                                 };
 
@@ -1253,11 +1385,13 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
 
                                 let Some(scaler) = scaler_guard.as_ref() else {
                                     drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                    loss.dropped(carry);
                                     return;
                                 };
 
                                 let Some(scaled) = scaler.scale_frame(sample_buffer) else {
                                     drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                    loss.dropped(carry);
                                     return;
                                 };
 
@@ -1293,13 +1427,17 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
                             VideoFrame {
                                 sample_buf: final_sample_buf,
                                 timestamp,
+                                capture: Some(carry),
                             },
                             "screen-video",
                             &stall_health_tx,
                         ) {
                             output_pipeline::StallSendOutcome::Sent => {}
-                            output_pipeline::StallSendOutcome::StalledAndDropped { .. }
-                            | output_pipeline::StallSendOutcome::Disconnected => {
+                            output_pipeline::StallSendOutcome::StalledAndDropped { .. } => {
+                                drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                loss.dropped(carry);
+                            }
+                            output_pipeline::StallSendOutcome::Disconnected => {
                                 drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
                             }
                         }
@@ -1380,7 +1518,18 @@ pub struct SystemAudioSourceConfig(
     Arc<AtomicU64>,
     Arc<AtomicU64>,
     Arc<CapturerRebuildParams>,
+    bool,
 );
+
+impl SystemAudioSourceConfig {
+    /// The stream exists only for its audio, so no video source is there to
+    /// rebuild it after a system stop: the track ends instead of waiting for a
+    /// restart that never comes.
+    pub fn standalone(mut self) -> Self {
+        self.6 = true;
+        self
+    }
+}
 
 pub struct SystemAudioSource {
     inner: ChannelAudioSource,
@@ -1406,6 +1555,7 @@ impl output_pipeline::AudioSource for SystemAudioSource {
             frame_counter,
             drop_counter,
             _rebuild_params,
+            standalone,
         ) = config;
 
         let cancel_token = CancellationToken::new();
@@ -1437,6 +1587,13 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                                                 "Screen capture audio stream ended because its capture source disappeared"
                                             );
                                         }
+                                        stop_signal.mark_user_stopped();
+                                        pipeline_cancel.cancel();
+                                        break;
+                                    }
+                                    if is_system_stop_error(err.as_ref()) && standalone {
+                                        capturer_for_monitor.mark_stopped();
+                                        warn!("System audio stream stopped by the system; ending the audio-only recording");
                                         stop_signal.mark_user_stopped();
                                         pipeline_cancel.cancel();
                                         break;

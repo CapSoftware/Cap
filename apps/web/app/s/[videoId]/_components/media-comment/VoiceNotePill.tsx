@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { commentMediaUrl } from "@/lib/comment-media";
+import { watchExpiredMediaSource } from "../media-source-refresh";
 import { formatMediaDuration } from "./format-media-duration";
 import type { MediaComment } from "./media-comment-types";
 import {
@@ -125,6 +126,7 @@ export const VoiceNotePill = ({
 					: ""),
 		);
 		el.preload = "metadata";
+		watchExpiredMediaSource(el);
 		el.addEventListener("ended", () => {
 			stopPainting();
 			setPlaying(false);

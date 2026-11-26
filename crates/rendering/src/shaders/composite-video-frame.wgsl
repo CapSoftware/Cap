@@ -32,11 +32,18 @@ struct Uniforms {
     color_adjust_b: vec4<f32>,
     // (grain amount, grain seed, grade-active flag, full-frame vignette flag).
     grain_params: vec4<f32>,
+    // Output-pixel rect (x, y, width, height) that `enhanced_texture` covers
+    // one to one.
+    enhance_region: vec4<f32>,
+    // (upscale mix, detail downscale flag, unused, unused). Zero leaves the
+    // plain sample.
+    enhance_params: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var frame_texture: texture_2d<f32>;
 @group(0) @binding(2) var frame_sampler: sampler;
+@group(0) @binding(3) var enhanced_texture: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -327,8 +334,15 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         return shadow_color;
     }
 
+    let shrink = shrink_ring(crop_bounds_uv);
+    let detail = detail_amount(crop_bounds_uv);
     let sample_target_uv = clamp(target_uv, vec2<f32>(0.0), vec2<f32>(1.0));
-    var base_color = sample_texture(sample_target_uv, crop_bounds_uv);
+    var base_color: vec4<f32>;
+    if detail > 0.0 {
+        base_color = sample_detail(sample_target_uv, crop_bounds_uv, shrink, detail);
+    } else {
+        base_color = sample_layer(sample_target_uv, crop_bounds_uv, shrink);
+    }
     base_color.a = base_color.a * shape_coverage * uniforms.opacity;
 
     let zoom_amount = uniforms.motion_blur_params.z;
@@ -359,7 +373,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
         for (var i = 0; i <= 20; i = i + 1) {
             let sample_uv = target_uv + velocity_uv * (f32(i) / k);
-            var tap = sample_texture(sample_uv, crop_bounds_uv);
+            var tap = sample_layer(sample_uv, crop_bounds_uv, shrink);
             tap = apply_rounded_corners(tap, sample_uv);
             accum += tap.rgb * tap.a;
             alpha_sum += tap.a;
@@ -369,8 +383,16 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         if out_alpha <= 0.0001 || alpha_sum <= 0.0001 {
             return shadow_color;
         }
+        var smeared = vec4(accum / alpha_sum, out_alpha);
+        if detail > 0.0 {
+            smeared = settle_into_detail(
+                smeared,
+                base_color.rgb - sample_layer(sample_target_uv, crop_bounds_uv, shrink).rgb,
+                velocity_uv,
+            );
+        }
         return composite_source_over(
-            apply_color_grade(vec4(accum / alpha_sum, out_alpha), target_uv, p),
+            apply_color_grade(smeared, target_uv, p),
             shadow_color
         );
     }
@@ -399,7 +421,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let weight = 4.0 * (percent - percent * percent);
         let sample_uv = target_uv + scaled_dir * percent;
 
-        var tap = sample_texture(sample_uv, crop_bounds_uv);
+        var tap = sample_layer(sample_uv, crop_bounds_uv, shrink);
         tap = apply_rounded_corners(tap, sample_uv);
         accum += tap.rgb * tap.a * weight;
         alpha_sum += tap.a * weight;
@@ -413,13 +435,46 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     if out_alpha <= 0.0001 {
         return shadow_color;
     }
+    var smeared = vec4(accum / alpha_sum, out_alpha);
+    if detail > 0.0 {
+        smeared = settle_into_detail(
+            smeared,
+            base_color.rgb - sample_layer(sample_target_uv, crop_bounds_uv, shrink).rgb,
+            scaled_dir,
+        );
+    }
     return composite_source_over(
-        apply_color_grade(vec4(accum / alpha_sum, out_alpha), target_uv, p),
+        apply_color_grade(smeared, target_uv, p),
         shadow_color
     );
 }
 
 fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
+    let plain = sample_frame(uv, crop_bounds_uv);
+    let mix_amount = uniforms.enhance_params.x;
+    if mix_amount <= 0.0 {
+        return plain;
+    }
+    if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
+        return plain;
+    }
+    let region_px = uniforms.target_bounds.xy + uv * uniforms.target_size
+        - uniforms.enhance_region.xy;
+    let region_size = uniforms.enhance_region.zw;
+    if any(region_px < vec2<f32>(0.0)) || any(region_px > region_size) {
+        return plain;
+    }
+    let texel = clamp(region_px, vec2<f32>(0.5), max(region_size - vec2<f32>(0.5), vec2<f32>(0.5)));
+    let enhanced = textureSampleLevel(
+        enhanced_texture,
+        frame_sampler,
+        texel / vec2<f32>(textureDimensions(enhanced_texture)),
+        0.0
+    );
+    return vec4<f32>(mix(plain.rgb, enhanced.rgb, mix_amount), plain.a);
+}
+
+fn sample_frame(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
     if uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 {
         var sample_uv = uv;
         if uniforms.mirror_x != 0.0 {
@@ -474,38 +529,31 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
         }
 
         if is_downscaling {
-            let texel_size = 1.0 / uniforms.frame_size;
+            // Four bilinear taps a quarter of the footprint off centre cover
+            // the source texels under the output pixel, which one tap plus an
+            // unsharp mask skipped: text stops aliasing and 1 px lines stop
+            // turning into moire, for one tap fewer than that mask.
+            let reach = scale_ratio / uniforms.frame_size * 0.25;
+            let p0 = clamp(cropped_uv - reach, safe_min, safe_max);
+            let p1 = clamp(cropped_uv + reach, safe_min, safe_max);
+            let p2 = clamp(cropped_uv + vec2<f32>(reach.x, -reach.y), safe_min, safe_max);
+            let p3 = clamp(cropped_uv + vec2<f32>(-reach.x, reach.y), safe_min, safe_max);
 
-            let offset_x = vec2<f32>(texel_size.x, 0.0);
-            let offset_y = vec2<f32>(0.0, texel_size.y);
+            if uniforms.preserve_source_alpha > 0.5 {
+                // Straight-alpha sources (background removal, transparent
+                // images) keep their old colour under transparent texels. A
+                // hardware bilinear tap mixes that colour in, so these taps
+                // interpolate premultiplied texels instead.
+                let sum = sample_premultiplied(p0) + sample_premultiplied(p1)
+                    + sample_premultiplied(p2) + sample_premultiplied(p3);
+                return vec4(sum.rgb / max(sum.a, 0.0001), sum.a * 0.25);
+            }
 
-            let left = textureSample(
-                frame_texture,
-                frame_sampler,
-                clamp(cropped_uv - offset_x, safe_min, safe_max)
-            ).rgb;
-            let right = textureSample(
-                frame_texture,
-                frame_sampler,
-                clamp(cropped_uv + offset_x, safe_min, safe_max)
-            ).rgb;
-            let top = textureSample(
-                frame_texture,
-                frame_sampler,
-                clamp(cropped_uv - offset_y, safe_min, safe_max)
-            ).rgb;
-            let bottom = textureSample(
-                frame_texture,
-                frame_sampler,
-                clamp(cropped_uv + offset_y, safe_min, safe_max)
-            ).rgb;
-
-            let blurred = (left + right + top + bottom) * 0.25;
-
-            let sharpness = min(scale_ratio.x * 0.3, 0.7);
-            let sharpened = center_color + (center_color - blurred) * sharpness;
-
-            return vec4(clamp(sharpened, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);
+            let box_sum = textureSample(frame_texture, frame_sampler, p0).rgb
+                + textureSample(frame_texture, frame_sampler, p1).rgb
+                + textureSample(frame_texture, frame_sampler, p2).rgb
+                + textureSample(frame_texture, frame_sampler, p3).rgb;
+            return vec4(box_sum * 0.25, out_alpha);
         }
 
         if is_upscaling {
@@ -546,6 +594,179 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
     }
 
     return vec4(0.0);
+}
+
+// The filter for opaque layers shrunk more than 2.2x, such as a Retina or 4K
+// recording in a 720p export, the camera bubble or the editor preview. There
+// the 2x2 box in sample_texture() covers too little of the output pixel's
+// footprint: its four taps share two rows and two columns, so 1 px lines and
+// text strokes alias. Turning the ring towards 22 degrees puts every tap on its
+// own row and column, widening it covers more of the footprint, and the centre
+// tap that sample_texture() reads anyway keeps it from going soft. Below 2.2x
+// the box is already as good as five samples get, so those layers render
+// exactly as before. Worked out once per pixel and shared by the still sample
+// and every motion blur tap, so detail doesn't change when blur starts.
+struct ShrinkRing {
+    enabled: bool,
+    // Tap offsets in source UV: (near.x, far.y) and its quarter turns.
+    near: vec2<f32>,
+    far: vec2<f32>,
+    center_weight: f32,
+};
+
+fn shrink_ring(crop_bounds_uv: vec4<f32>) -> ShrinkRing {
+    let crop_size = crop_bounds_uv.zw - crop_bounds_uv.xy;
+    let scale_ratio = uniforms.frame_size * crop_size / uniforms.target_size;
+    let ratio = max(scale_ratio.x, scale_ratio.y);
+    if ratio <= 2.2 || uniforms.preserve_source_alpha > 0.5 {
+        return ShrinkRing(false, vec2<f32>(0.0), vec2<f32>(0.0), 0.0);
+    }
+    // Blend from the 2x2 box at 2.2x (45 degrees, a quarter footprint on each
+    // axis) to the full ring at 2.8x, so a zoom passing through doesn't pop.
+    let blend = smoothstep(2.2, 2.8, ratio);
+    let angle = radians(45.0 - 23.0 * blend);
+    let radius = 0.35355 + 0.09645 * blend;
+    // One output pixel, in source UV.
+    let footprint = scale_ratio / uniforms.frame_size;
+    return ShrinkRing(
+        true,
+        footprint * (radius * sin(angle)),
+        footprint * (radius * cos(angle)),
+        0.15 * blend,
+    );
+}
+
+fn sample_layer(uv: vec2<f32>, crop_bounds_uv: vec4<f32>, ring: ShrinkRing) -> vec4<f32> {
+    if !ring.enabled || uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
+        return sample_texture(uv, crop_bounds_uv);
+    }
+
+    var sample_uv = uv;
+    if uniforms.mirror_x != 0.0 {
+        sample_uv.x = 1.0 - sample_uv.x;
+    }
+    let crop_size = crop_bounds_uv.zw - crop_bounds_uv.xy;
+    let texel_offset = 1.0 / uniforms.frame_size;
+    let safe_min = crop_bounds_uv.xy + texel_offset;
+    let safe_max = crop_bounds_uv.zw - texel_offset;
+    let center = clamp(sample_uv * crop_size + crop_bounds_uv.xy, safe_min, safe_max);
+    let near = ring.near;
+    let far = ring.far;
+    let taps = sample_clamped(center + vec2<f32>(near.x, far.y), safe_min, safe_max)
+        + sample_clamped(center + vec2<f32>(-far.x, near.y), safe_min, safe_max)
+        + sample_clamped(center - vec2<f32>(near.x, far.y), safe_min, safe_max)
+        + sample_clamped(center + vec2<f32>(far.x, -near.y), safe_min, safe_max);
+    let color = mix(taps * 0.25, sample_clamped(center, safe_min, safe_max), ring.center_weight);
+    return vec4(color, 1.0);
+}
+
+// How much of Enhance quality's 8-tap filter an opaque layer gets: none
+// unless the option is on, fading in from 1:1 to a 1.05x shrink so a zoom
+// passing full size doesn't change sharpness suddenly, and handing over to
+// shrink_ring() from 2.2x to 2.8x, which keeps 1 px detail better there. Zero
+// leaves the layer exactly as without the option.
+fn detail_amount(crop_bounds_uv: vec4<f32>) -> f32 {
+    if uniforms.enhance_params.y < 0.5 || uniforms.preserve_source_alpha > 0.5 {
+        return 0.0;
+    }
+    let crop_size = crop_bounds_uv.zw - crop_bounds_uv.xy;
+    let scale_ratio = uniforms.frame_size * crop_size / uniforms.target_size;
+    let ratio = max(scale_ratio.x, scale_ratio.y);
+    return smoothstep(1.0, 1.05, ratio) * (1.0 - smoothstep(2.2, 2.8, ratio));
+}
+
+// Enhance quality's filter for an opaque screen drawn smaller than its source,
+// such as a Retina or 4K recording in a 1080p or 2160p export. Four bilinear
+// taps on a ring turned 20 degrees average the texels under the output pixel,
+// no two on the same row or column. Four more on a wider cross are subtracted
+// from that average, like the negative lobes of a cubic, to give back the
+// sharpness the averaging takes away. Eight reads against sample_layer()'s
+// four or five, mixed with it by `amount` from detail_amount().
+fn sample_detail(
+    uv: vec2<f32>,
+    crop_bounds_uv: vec4<f32>,
+    ring: ShrinkRing,
+    amount: f32,
+) -> vec4<f32> {
+    if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
+        return sample_layer(uv, crop_bounds_uv, ring);
+    }
+
+    var sample_uv = uv;
+    if uniforms.mirror_x != 0.0 {
+        sample_uv.x = 1.0 - sample_uv.x;
+    }
+    let crop_size = crop_bounds_uv.zw - crop_bounds_uv.xy;
+    let scale_ratio = uniforms.frame_size * crop_size / uniforms.target_size;
+    let ratio = max(scale_ratio.x, scale_ratio.y);
+    let texel_offset = 1.0 / uniforms.frame_size;
+    let safe_min = crop_bounds_uv.xy + texel_offset;
+    let safe_max = crop_bounds_uv.zw - texel_offset;
+    let center = clamp(sample_uv * crop_size + crop_bounds_uv.xy, safe_min, safe_max);
+
+    // One output pixel, in source UV.
+    let footprint = scale_ratio / uniforms.frame_size;
+    let radius = clamp(0.27 + 0.6 * (ratio - 1.0), 0.27, 0.4);
+    // sin and cos of 20 degrees.
+    let near = footprint * (radius * 0.34202);
+    let far = footprint * (radius * 0.93969);
+    let average = (sample_clamped(center + vec2<f32>(near.x, far.y), safe_min, safe_max)
+        + sample_clamped(center + vec2<f32>(-far.x, near.y), safe_min, safe_max)
+        + sample_clamped(center - vec2<f32>(near.x, far.y), safe_min, safe_max)
+        + sample_clamped(center + vec2<f32>(far.x, -near.y), safe_min, safe_max)) * 0.25;
+
+    let sharpen = clamp(0.52 - 0.15 * ratio, 0.0, 0.36);
+    let reach = footprint * 1.35;
+    let cross = sample_clamped(center + vec2<f32>(reach.x, 0.0), safe_min, safe_max)
+        + sample_clamped(center - vec2<f32>(reach.x, 0.0), safe_min, safe_max)
+        + sample_clamped(center + vec2<f32>(0.0, reach.y), safe_min, safe_max)
+        + sample_clamped(center - vec2<f32>(0.0, reach.y), safe_min, safe_max);
+    let detail = clamp(average + (average - cross * 0.25) * sharpen, vec3<f32>(0.0), vec3<f32>(1.0));
+    if amount >= 1.0 {
+        return vec4(detail, 1.0);
+    }
+    return vec4(mix(sample_layer(uv, crop_bounds_uv, ring).rgb, detail, amount), 1.0);
+}
+
+// Blur taps keep sample_layer(): the smear hides the finer filter and there
+// are 13 to 21 of them. A smear under two output pixels still looks sharp, so
+// it gets the detail the still sample adds over sample_layer() (`detail`,
+// already weighted by detail_amount()), fading out as the smear grows. A
+// near-zero smear then matches the still sample and the end of a zoom
+// doesn't snap into focus.
+fn settle_into_detail(smeared: vec4<f32>, detail: vec3<f32>, smear_uv: vec2<f32>) -> vec4<f32> {
+    let smear_px = length(smear_uv * uniforms.target_size);
+    let settled = smeared.rgb + detail * (1.0 - smoothstep(0.5, 2.0, smear_px));
+    return vec4(clamp(settled, vec3<f32>(0.0), vec3<f32>(1.0)), smeared.a);
+}
+
+fn sample_clamped(uv: vec2<f32>, safe_min: vec2<f32>, safe_max: vec2<f32>) -> vec3<f32> {
+    return textureSampleLevel(frame_texture, frame_sampler, clamp(uv, safe_min, safe_max), 0.0).rgb;
+}
+
+// Bilinear sample of the frame as premultiplied colour.
+fn sample_premultiplied(uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(frame_texture));
+    let position = uv * vec2<f32>(size) - vec2<f32>(0.5);
+    let base = floor(position);
+    let fraction = position - base;
+    let origin = vec2<i32>(base);
+    let last = size - 1;
+    let t00 = textureLoad(frame_texture, clamp(origin, vec2<i32>(0), last), 0);
+    let t10 = textureLoad(frame_texture, clamp(origin + vec2<i32>(1, 0), vec2<i32>(0), last), 0);
+    let t01 = textureLoad(frame_texture, clamp(origin + vec2<i32>(0, 1), vec2<i32>(0), last), 0);
+    let t11 = textureLoad(frame_texture, clamp(origin + vec2<i32>(1, 1), vec2<i32>(0), last), 0);
+    let top = mix(
+        vec4(t00.rgb * t00.a, t00.a),
+        vec4(t10.rgb * t10.a, t10.a),
+        fraction.x
+    );
+    let bottom = mix(
+        vec4(t01.rgb * t01.a, t01.a),
+        vec4(t11.rgb * t11.a, t11.a),
+        fraction.x
+    );
+    return mix(top, bottom, fraction.y);
 }
 
 fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4<f32> {

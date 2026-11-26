@@ -39,28 +39,18 @@ pub(crate) struct VideoMeta {
     pub(crate) fps: f64,
 }
 
-fn prefer_agent_upload_sources(
-    agent: credentials::AgentCredentialSource,
-    legacy: Option<credentials::CredentialSource>,
-) -> bool {
-    match agent {
-        credentials::AgentCredentialSource::Env => true,
-        credentials::AgentCredentialSource::Keyring | credentials::AgentCredentialSource::File => {
-            legacy != Some(credentials::CredentialSource::Env)
-        }
+fn uses_agent_upload(source: credentials::AgentCredentialSource) -> bool {
+    match source {
+        credentials::AgentCredentialSource::Env
+        | credentials::AgentCredentialSource::Keyring
+        | credentials::AgentCredentialSource::File => true,
         credentials::AgentCredentialSource::LegacyEnv
         | credentials::AgentCredentialSource::Desktop => false,
     }
 }
 
-fn prefer_agent_upload() -> bool {
-    let Ok(agent) = credentials::resolve_agent() else {
-        return false;
-    };
-    prefer_agent_upload_sources(
-        agent.source,
-        credentials::resolve().ok().map(|legacy| legacy.source),
-    )
+fn prefer_agent_upload() -> Result<bool, String> {
+    credentials::resolve_agent().map(|agent| uses_agent_upload(agent.source))
 }
 
 #[derive(Deserialize)]
@@ -116,7 +106,7 @@ impl UploadArgs {
     async fn run_inner(self, format: OutputFormat) -> Result<(), String> {
         let file_path = self.resolve_upload_file().await?;
         let meta = probe_video_meta(&file_path)?;
-        let use_agent = prefer_agent_upload();
+        let use_agent = prefer_agent_upload()?;
         // The agent upload API always creates a new Cap, so honoring --video-id there would
         // silently upload to the wrong place. Fail loudly instead of scattering new videos.
         if use_agent && self.video_id.is_some() {
@@ -248,7 +238,7 @@ pub async fn upload_video_path(
     }
 
     let meta = probe_video_meta(file_path)?;
-    if prefer_agent_upload() {
+    if prefer_agent_upload()? {
         return upload_file_with_agent(file_path, name.as_deref(), &meta, organization_id)
             .await
             .map(|(_, link)| link);
@@ -562,8 +552,8 @@ async fn upload_file(http: &Client, put_url: &str, path: &Path) -> Result<(), St
 
 #[cfg(test)]
 mod tests {
-    use super::{VideoMeta, agent_upload_payload, create_video, prefer_agent_upload_sources};
-    use crate::credentials::{AgentCredentialSource, CredentialSource};
+    use super::{VideoMeta, agent_upload_payload, create_video, uses_agent_upload};
+    use crate::credentials::AgentCredentialSource;
 
     #[test]
     fn agent_upload_payload_only_includes_a_requested_title() {
@@ -666,34 +656,23 @@ mod tests {
     }
 
     #[test]
-    fn explicit_agent_environment_credential_has_highest_upload_priority() {
-        assert!(prefer_agent_upload_sources(
+    fn agent_credentials_use_the_agent_upload_api() {
+        for source in [
             AgentCredentialSource::Env,
-            Some(CredentialSource::Env),
-        ));
-    }
-
-    #[test]
-    fn explicit_legacy_environment_credential_precedes_stored_agent_credential() {
-        assert!(!prefer_agent_upload_sources(
             AgentCredentialSource::Keyring,
-            Some(CredentialSource::Env),
-        ));
-    }
-
-    #[test]
-    fn stored_agent_credential_precedes_desktop_credential() {
-        assert!(prefer_agent_upload_sources(
             AgentCredentialSource::File,
-            Some(CredentialSource::Desktop),
-        ));
+        ] {
+            assert!(uses_agent_upload(source));
+        }
     }
 
     #[test]
-    fn legacy_agent_resolution_uses_legacy_upload() {
-        assert!(!prefer_agent_upload_sources(
+    fn legacy_credentials_use_the_legacy_upload_api() {
+        for source in [
+            AgentCredentialSource::LegacyEnv,
             AgentCredentialSource::Desktop,
-            Some(CredentialSource::Desktop),
-        ));
+        ] {
+            assert!(!uses_agent_upload(source));
+        }
     }
 }

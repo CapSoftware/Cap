@@ -78,6 +78,7 @@ import {
 } from "@/lib/video-edits";
 import { navigateWithTransition } from "@/utils/view-transition";
 import { CapVideoPlayer } from "../_components/CapVideoPlayer";
+import { isMediaTimeHeld } from "../_components/media-source-refresh";
 import { VideoDownloadMenu } from "../_components/VideoDownloadMenu";
 import { captureVideoFrameDataUrl } from "../_components/video-frame-thumbnail";
 import { TranscriptSidebar } from "./TranscriptSidebar";
@@ -1268,6 +1269,7 @@ export function EditVideoClient({
 				videoElement.muted = false;
 			};
 			const syncPlayhead = (updatePlayhead: boolean) => {
+				if (isMediaTimeHeld(videoElement)) return;
 				if (previewWithoutPlayheadRef.current) {
 					// Trimming a clip edge: scrub the preview but keep the cursor put.
 					return;

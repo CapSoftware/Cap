@@ -1,0 +1,8 @@
+{
+	"name": "@cap/test-lint",
+	"private": true,
+	"devDependencies": {
+		"@interfere/landmines": "0.1.0",
+		"oxlint": "1.94.0"
+	}
+}

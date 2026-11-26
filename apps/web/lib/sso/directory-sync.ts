@@ -9,6 +9,7 @@ import { enqueueLoopsSync } from "@cap/database/loops/queue";
 import {
 	agentApiKeys,
 	authApiKeys,
+	authChallenges,
 	directoryUsers,
 	mcpOAuthTokens,
 	organizationDirectorySync,
@@ -16,6 +17,7 @@ import {
 	organizationSso,
 	organizations,
 	sessions,
+	userPasskeys,
 	users,
 } from "@cap/database/schema";
 import { hasSsoAccess } from "@cap/utils";
@@ -258,6 +260,8 @@ async function revokeUserCredentials(tx: Transaction, userId: User.UserId) {
 		.where(eq(users.id, userId));
 	await tx.delete(sessions).where(eq(sessions.userId, userId));
 	await tx.delete(authApiKeys).where(eq(authApiKeys.userId, userId));
+	await tx.delete(userPasskeys).where(eq(userPasskeys.userId, userId));
+	await tx.delete(authChallenges).where(eq(authChallenges.userId, userId));
 	await tx
 		.update(agentApiKeys)
 		.set({ revokedAt: now })

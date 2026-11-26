@@ -35,6 +35,11 @@ import {
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import type { CurrentUser } from "@/app/Layout/AuthContext";
+import {
+	DEFAULT_EMBED_TOGGLES,
+	EmbedOptionsFields,
+	embedTogglesToOptions,
+} from "@/components/embed/EmbedOptionsFields";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { buildEmbedCode } from "@/lib/embed-code";
@@ -362,7 +367,15 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 		});
 	};
 
-	const embedCode = useEmbedCode(capId);
+	const [embedToggles, setEmbedToggles] = useState(DEFAULT_EMBED_TOGGLES);
+	const canHideEmbedBranding = Boolean(user?.isPro);
+	const embedCode = useEmbedCode(
+		capId,
+		embedTogglesToOptions({
+			...embedToggles,
+			showBranding: canHideEmbedBranding ? embedToggles.showBranding : true,
+		}),
+	);
 
 	const handleCopyEmbedCode = async () => {
 		try {
@@ -720,6 +733,11 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 									{embedCode}
 								</code>
 							</div>
+							<EmbedOptionsFields
+								value={embedToggles}
+								onChange={setEmbedToggles}
+								canHideBranding={canHideEmbedBranding}
+							/>
 							<Button
 								className="w-full font-medium"
 								variant="dark"
@@ -824,11 +842,28 @@ const SpaceRow = ({
 	</button>
 );
 
-function useEmbedCode(capId: Video.VideoId) {
+function useEmbedCode(
+	capId: Video.VideoId,
+	options: ReturnType<typeof embedTogglesToOptions>,
+) {
 	const publicEnv = usePublicEnv();
+	const { showTitle, showOwner, showBranding, autoplay, muted } = options;
 
 	return useMemo(
-		() => buildEmbedCode({ webUrl: publicEnv.webUrl, videoId: capId }),
-		[publicEnv.webUrl, capId],
+		() =>
+			buildEmbedCode({
+				webUrl: publicEnv.webUrl,
+				videoId: capId,
+				options: { showTitle, showOwner, showBranding, autoplay, muted },
+			}),
+		[
+			publicEnv.webUrl,
+			capId,
+			showTitle,
+			showOwner,
+			showBranding,
+			autoplay,
+			muted,
+		],
 	);
 }

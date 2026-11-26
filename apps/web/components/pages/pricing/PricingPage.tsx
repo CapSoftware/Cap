@@ -67,10 +67,10 @@ const Hero = () => (
 				className="group mt-8 inline-flex max-w-full items-center gap-2.5 rounded-full bg-[#111111] py-1.5 pl-1.5 pr-3.5 text-[13px] leading-none text-white shadow-[0_1px_2px_rgba(17,17,17,0.12),0_10px_24px_-14px_rgba(17,17,17,0.6)] transition-colors duration-200 hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-[#EDF1F6]"
 			>
 				<span className="hidden rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[12px] leading-none text-[#111111] sm:inline-block">
-					80,000+
+					100,000+
 				</span>
 				<span className="truncate pl-2 sm:hidden">
-					Trusted by 80,000+ users
+					Trusted by 100,000+ users
 				</span>
 				<span className="hidden truncate sm:inline">
 					Trusted by teams and creators

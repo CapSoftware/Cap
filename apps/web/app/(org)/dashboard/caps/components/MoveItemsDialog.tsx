@@ -45,11 +45,13 @@ import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import {
 	buildMoveFolderDestinationRows,
+	MAX_MOVE_ITEMS,
 	type MoveDestinationGroup,
 	type MoveLocation,
 	moveLocationFolderSpaceId,
 	moveLocationKey,
 } from "@/lib/move-items";
+import { chunkIds } from "@/lib/video-archive";
 
 type MoveItem =
 	| {
@@ -181,14 +183,29 @@ export function MoveItemsDialog({
 		mutationFn: async () => {
 			if (item.type === "videos") {
 				if (!selectedGroup) throw new Error("Select a destination");
-				const placement = {
-					videoIds: item.videoIds,
-					folderId: selectedFolderId,
-					location: selectedGroup.location,
-				};
-				await (ownedVideos
-					? placeOwnedVideos({ ...placement, organizationId })
-					: moveVideos(placement));
+				// "Select all" can hold more Caps than one request accepts. If a
+				// later batch fails, the earlier ones already moved, so say so and
+				// refresh instead of reporting a plain failure.
+				let moved = 0;
+				for (const videoIds of chunkIds(item.videoIds, MAX_MOVE_ITEMS)) {
+					const placement = {
+						videoIds,
+						folderId: selectedFolderId,
+						location: selectedGroup.location,
+					};
+					try {
+						await (ownedVideos
+							? placeOwnedVideos({ ...placement, organizationId })
+							: moveVideos(placement));
+					} catch (error) {
+						if (moved === 0) throw error;
+						router.refresh();
+						throw new Error(
+							`Moved ${moved.toLocaleString("en-US")} of ${item.videoIds.length.toLocaleString("en-US")} Caps. Try again to move the rest.`,
+						);
+					}
+					moved += videoIds.length;
+				}
 				return;
 			}
 

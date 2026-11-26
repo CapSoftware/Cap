@@ -1,6 +1,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { probe } from "../../../../lib/probe";
 import { SERVICES, serviceUrl } from "../../../../lib/services";
+import { probeUrl } from "../../../../lib/signed-url";
 import { applyResult, CHECK_INTERVAL_MS } from "../../../../lib/state";
 import {
 	COMMIT_SCRIPT,
@@ -49,7 +50,7 @@ export async function GET(request: Request) {
 						const url = serviceUrl(service);
 						return {
 							id: service.id,
-							result: url ? await probe(service, url) : null,
+							result: url ? await probe(service, probeUrl(service, url)) : null,
 						};
 					} catch {
 						console.error(`Invalid monitor configuration: ${service.id}`);

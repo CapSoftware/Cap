@@ -72,6 +72,7 @@ fn seeded_captions(words: usize, duration: f64) -> cap_project::CaptionsData {
                     .collect::<Vec<_>>()
                     .join(" "),
                 words: chunk.to_vec(),
+                recording_clip: None,
             })
             .collect(),
         settings: Default::default(),

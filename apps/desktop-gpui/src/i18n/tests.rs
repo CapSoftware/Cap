@@ -12,6 +12,21 @@ fn english_matches_the_literals_it_replaced() {
     let app_name = crate::menus::APP_NAME;
     let pairs: &[(&str, String)] = &[
         (tr::common::add(), "Add".into()),
+        (tr::editor::audio_only::add_visuals(), "Add Visuals".into()),
+        (
+            tr::editor::audio_only::body(),
+            "This recording has no video. Export the sound as MP3 or WAV, or add visuals to turn it into a video.".into(),
+        ),
+        (tr::editor::audio_only::export_audio(), "Export Audio".into()),
+        (tr::editor::audio_only::show_visuals(), "Show visuals".into()),
+        (tr::editor::audio_only::size_large(), "Large".into()),
+        (tr::editor::audio_only::size_medium(), "Medium".into()),
+        (tr::editor::audio_only::size_small(), "Small".into()),
+        (tr::editor::audio_only::style_bars(), "Bars".into()),
+        (tr::editor::audio_only::style_circle(), "Circle".into()),
+        (tr::editor::audio_only::style_wave(), "Wave".into()),
+        (tr::editor::audio_only::title(), "Audio only".into()),
+        (tr::editor::audio_only::visuals(), "Visuals".into()),
         (tr::common::cancel(), "Cancel".into()),
         (tr::common::ok(), "OK".into()),
         (tr::common::reset(), "Reset".into()),
@@ -113,7 +128,7 @@ fn english_matches_the_literals_it_replaced() {
         (tr::settings::nav::recordings(), "Recordings".into()),
         (tr::settings::nav::screenshots(), "Screenshots".into()),
         (tr::settings::nav::shortcuts(), "Shortcuts".into()),
-        (tr::settings::nav::transcription(), "Transcription".into()),
+        (tr::settings::nav::transcription(), "Dictionary".into()),
         (
             tr::settings::general::appearance::description(),
             "Match Cap to your system theme or pick a fixed look.".into(),
@@ -298,44 +313,20 @@ fn english_matches_the_literals_it_replaced() {
             "Play a sound for markers".into(),
         ),
         (
+            tr::settings::general::recording::keep_drawings::label(),
+            "Keep drawings on screen".into(),
+        ),
+        (
+            tr::settings::general::recording::keep_drawings::description(),
+            "Drawings stay until you clear them. When off, each one fades a few seconds \
+                             after you draw it."
+                .into(),
+        ),
+        (
             tr::settings::general::recording::marker_sound::description(),
             "Plays a short sound when you add a marker during a Studio recording. Your \
                              microphone or system audio can pick it up."
                 .into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::description(),
-            "Maximum framerate for screen capture.".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::description_high(),
-            "Maximum framerate for screen capture. Higher values may cause \
-                             drops or increased CPU usage on some systems."
-                .into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_120(),
-            "120 FPS".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_24(),
-            "24 FPS".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_25(),
-            "25 FPS".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_30(),
-            "30 FPS".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::fps_60(),
-            "60 FPS (Recommended)".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::label(),
-            "Max capture framerate".into(),
         ),
         (
             tr::settings::general::storage::choose_folder(),
@@ -514,6 +505,13 @@ fn english_matches_the_literals_it_replaced() {
                 && !super::editor_panels_surface_tests::is_editor_panels_surface_key(key)
                 && !super::editor_shell_surface_tests::is_editor_shell_surface_key(key)
                 && !key.starts_with(super::messages::KEY_PREFIX)
+                && !key.starts_with("meeting.")
+                && !key.starts_with("settings.meetings.")
+                && !key.starts_with("meeting_setup.")
+                && !key.starts_with("documents.")
+                && !key.starts_with("cap_ai.")
+                && !key.starts_with("local_page.")
+                && !key.starts_with("library.")
         })
         .count()
         // `tray.version`, `excluded_windows.missing_body`, `self_host.confirm_change`,
@@ -574,6 +572,74 @@ fn appearance_labels_follow_language_changes_without_changing_saved_values() {
             assert_eq!(AppTheme::from_json(saved), Some(*theme));
         }
     }
+}
+
+#[test]
+fn recording_quality_page_names_the_modes_in_every_language() {
+    const CHILD: &str = "CAP_GPUI_TEST_QUALITY_MODE_NAMES";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "i18n::tests::recording_quality_page_names_the_modes_in_every_language",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove(LOCALE_ENV)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    use tr::settings::quality::{instant, studio};
+    for (locale, studio_title, instant_title, studio_in_a_sentence) in [
+        (Locale::En, "Studio Mode", "Instant Mode", "Studio Mode"),
+        (Locale::ZhCn, "Studio 模式", "Instant 模式", "Studio 模式"),
+        (Locale::Ja, "Studioモード", "Instantモード", "Studioモード"),
+        (Locale::Fr, "Mode Studio", "Mode Instant", "mode Studio"),
+        (Locale::Es, "Modo Studio", "Modo Instant", "modo Studio"),
+        (Locale::De, "Studio-Modus", "Instant-Modus", "Studio-Modus"),
+        (Locale::Hi, "Studio मोड", "Instant मोड", "Studio मोड"),
+    ] {
+        init(Some(locale.code()));
+        let code = locale.code();
+        assert_eq!(studio::title(), studio_title, "{code}");
+        assert_eq!(instant::title(), instant_title, "{code}");
+        assert_eq!(studio::title(), tr::main::mode::header::studio(), "{code}");
+        assert_eq!(
+            instant::title(),
+            tr::main::mode::header::instant(),
+            "{code}"
+        );
+        assert!(
+            instant::description().contains(studio_in_a_sentence),
+            "{code}"
+        );
+        for text in [
+            studio::description(),
+            studio::resolution_description(),
+            studio::resolution_description_several(),
+            studio::resolution_description_compatibility(),
+        ] {
+            assert!(text.contains("4K"), "{code}: {text}");
+        }
+        let camera_note = studio::resolution_description_compatibility();
+        assert!(camera_note.contains("1600 × 1000"), "{code}");
+        assert!(camera_note.contains(studio::compatibility()), "{code}");
+        assert!(!studio::resolution().is_empty(), "{code}");
+        let up_to = studio::resolution_up_to("5120 × 2880");
+        assert!(
+            up_to.contains("5120 × 2880") && up_to != "5120 × 2880",
+            "{code}"
+        );
+    }
+    init(Some(Locale::En.code()));
 }
 
 #[test]

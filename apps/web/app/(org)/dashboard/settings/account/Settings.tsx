@@ -29,10 +29,17 @@ import {
 	SettingsSection,
 	settingsFieldClass,
 } from "../organization/_components/settings-ui";
+import { ChangeEmail } from "./components/ChangeEmail";
 import { ProfileImage } from "./components/ProfileImage";
 import { patchAccountSettings, signOutAllDevices } from "./server";
 
-export const Settings = () => {
+export const Settings = ({
+	canUsePasskey = false,
+	emailManaged = false,
+}: {
+	canUsePasskey?: boolean;
+	emailManaged?: boolean;
+}) => {
 	const router = useRouter();
 	const { organizationData, user } = useDashboardContext();
 	const [firstName, setFirstName] = useState(user?.name || "");
@@ -234,19 +241,31 @@ export const Settings = () => {
 							title={
 								<label htmlFor={contactEmailId}>Contact email address</label>
 							}
-							description="This is the email address you used to sign up to Cap with."
+							description={
+								emailManaged
+									? "Your organization manages this address."
+									: "This is the email address you sign in to Cap with."
+							}
 							control={
-								<Input
-									type="email"
-									className={clsx(
-										settingsFieldClass,
-										"w-full sm:w-[17rem] disabled:bg-gray-2 disabled:text-gray-10",
+								<div className="flex gap-2 w-full sm:w-auto">
+									<Input
+										type="email"
+										className={clsx(
+											settingsFieldClass,
+											"w-full sm:w-[17rem] disabled:bg-gray-2 disabled:text-gray-10",
+										)}
+										value={user?.email as string}
+										id={contactEmailId}
+										name="contactEmail"
+										disabled
+									/>
+									{!emailManaged && user?.email && (
+										<ChangeEmail
+											email={user.email}
+											canUsePasskey={canUsePasskey}
+										/>
 									)}
-									value={user?.email as string}
-									id={contactEmailId}
-									name="contactEmail"
-									disabled
-								/>
+								</div>
 							}
 						/>
 						<SettingsRow
@@ -299,7 +318,7 @@ export const Settings = () => {
 				<SettingsCard>
 					<SettingsRow
 						title="Sign out of all devices"
-						description="Invalidate every Cap web session, desktop app authentication token, and CLI API key connected to your account."
+						description="Invalidate every Cap web session, desktop app authentication token, CLI API key, and passkey connected to your account."
 						control={
 							<Button
 								type="button"
@@ -322,7 +341,7 @@ export const Settings = () => {
 				<DialogContent>
 					<DialogHeader
 						icon={<LogOut className="size-4" />}
-						description="This will immediately invalidate existing Cap web sessions, desktop session tokens, desktop API keys, and CLI API keys for your account."
+						description="This will immediately invalidate existing Cap web sessions, desktop session tokens, desktop API keys, CLI API keys, and passkeys for your account."
 					>
 						<DialogTitle>Sign out of all devices?</DialogTitle>
 					</DialogHeader>

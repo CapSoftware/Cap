@@ -46,6 +46,7 @@ const FORMATTED: &[&str] = &[
     "editor.clips.error.unsupported_video",
     "editor.clips.import_error",
     "editor.clips.prepare_controls_failed",
+    "editor.clips.removed_media",
     "editor.clips.save_before_recording_failed",
     "editor.clips.split",
     "editor.export.estimate.gigabytes",
@@ -61,6 +62,8 @@ const FORMATTED: &[&str] = &[
     "editor.export.fps",
     "editor.export.frames",
     "editor.export.stats.output_value",
+    "editor.export.tracks.file_count",
+    "editor.export.tracks.video_detail",
     "editor.tabs.captions.download",
     "editor.tabs.captions.downloading",
     "editor.tabs.captions.generate_failed",
@@ -137,6 +140,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::clips::error::into_itself(),
             "Cannot import a recording into itself",
+        ),
+        (
+            tr::editor::clips::error::audio_only_mix(),
+            "Audio only recordings and video clips cannot be combined in one project",
         ),
         (
             tr::editor::clips::error::no_duration(),
@@ -259,6 +266,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Re-encodes with software for much smaller files (slower)",
         ),
         (tr::editor::export::optimize::title(), "Optimize file size"),
+        (
+            tr::editor::export::enhance::description(),
+            "Sharpens text and fine detail when your recording is zoomed in or scaled down. Exports can take longer.",
+        ),
+        (tr::editor::export::enhance::title(), "Enhance quality"),
         (tr::editor::export::organization(), "Organization"),
         (
             tr::editor::export::phase::clipboard_failed(),
@@ -423,6 +435,18 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::camera::blur::heavy(), "Heavy Blur"),
         (tr::editor::tabs::camera::blur::light(), "Light Blur"),
         (tr::editor::tabs::camera::blur::off(), "Off"),
+        (tr::editor::tabs::camera::picture::title(), "Picture"),
+        (
+            tr::editor::tabs::camera::picture::empty(),
+            "Add a picture to show where your camera would be.",
+        ),
+        (
+            tr::editor::tabs::camera::picture::shown(),
+            "Shown where your camera would be.",
+        ),
+        (tr::editor::tabs::camera::picture::add(), "Add picture"),
+        (tr::editor::tabs::camera::picture::replace(), "Replace"),
+        (tr::editor::tabs::camera::picture::remove(), "Remove"),
         (
             tr::editor::tabs::camera::blur::remove(),
             "Remove Background",
@@ -635,6 +659,12 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::tabs::corner::rounded(), "Rounded"),
         (tr::editor::tabs::corner::squircle(), "Squircle"),
+        (tr::editor::tabs::padding::even(), "Even"),
+        (tr::editor::tabs::padding::proportional(), "Proportional"),
+        (
+            tr::editor::tabs::cursor::follow_hover(),
+            "Follow Hover Highlights",
+        ),
         (tr::editor::tabs::cursor::friction(), "Friction"),
         (tr::editor::tabs::cursor::hide_when_idle(), "Hide When Idle"),
         (
@@ -729,6 +759,18 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::tabs::keyboard::no_presses(),
             "No recorded keyboard presses were found.",
+        ),
+        (
+            tr::editor::tabs::keyboard::permission_action(),
+            "Show me how",
+        ),
+        (
+            tr::editor::tabs::keyboard::permission_body(),
+            "Give Cap your OK so your next recordings include the keys you press.",
+        ),
+        (
+            tr::editor::tabs::keyboard::permission_title(),
+            "Keystrokes aren't being recorded",
         ),
         (tr::editor::tabs::keyboard::position(), "Position"),
         (
@@ -1295,6 +1337,16 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::transport::split_tooltip(),
             "Click a segment to split. Esc to finish.",
         ),
+        (tr::editor::window::transport::enhance(), "Enhance"),
+        (
+            tr::editor::window::transport::enhance_tooltip(),
+            "Show the paused frame enhanced",
+        ),
+        (tr::editor::window::transport::compare(), "Compare"),
+        (
+            tr::editor::window::transport::compare_tooltip(),
+            "Hold to see the original",
+        ),
         (tr::editor::window::transport::zoom_in(), "Zoom in"),
         (tr::editor::window::transport::zoom_out(), "Zoom out"),
         (tr::editor::window::undo(), "Undo"),
@@ -1452,6 +1504,47 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::audio::voice_eq::title(), "Voice EQ"),
         (tr::editor::timeline::segment::voice_eq(), "Voice EQ"),
         (tr::editor::window::clip_menu::voice_eq(), "Voice EQ"),
+        (tr::editor::export::section::tracks(), "Tracks"),
+        (
+            tr::editor::export::tracks::aligned(),
+            "Tracks follow your cuts and speed, so they line up in any video editor. Video comes out clean, without background or effects.",
+        ),
+        (tr::editor::export::tracks::audio_detail(), "WAV · 48 kHz"),
+        (tr::editor::export::tracks::camera(), "Camera"),
+        (
+            tr::editor::export::tracks::choose_one(),
+            "Choose at least one track to export.",
+        ),
+        (tr::editor::export::tracks::cta(), "Export Tracks"),
+        (tr::editor::export::audio::cta(), "Export Audio"),
+        (tr::editor::export::audio::exported(), "Audio exported"),
+        (tr::editor::export::audio::exporting(), "Exporting audio"),
+        (tr::editor::export::audio::file_type(), "File type"),
+        (tr::editor::export::audio::format(), "Audio"),
+        (
+            tr::editor::export::audio::mp3_description(),
+            "Small and plays everywhere. 192 kb/s stereo.",
+        ),
+        (
+            tr::editor::export::audio::wav_description(),
+            "Lossless 16-bit, 48 kHz. Best for further editing.",
+        ),
+        (tr::editor::export::tracks::exported(), "Tracks exported"),
+        (tr::editor::export::tracks::exporting(), "Exporting tracks"),
+        (
+            tr::editor::export::tracks::file_only(),
+            "Tracks are saved as separate files in a folder.",
+        ),
+        (tr::editor::export::tracks::files(), "Files"),
+        (tr::editor::export::tracks::format(), "Tracks"),
+        (tr::editor::export::tracks::microphone(), "Microphone"),
+        (tr::editor::export::tracks::open_folder(), "Open Folder"),
+        (tr::editor::export::tracks::screen(), "Screen"),
+        (
+            tr::editor::export::tracks::studio_only(),
+            "Separate tracks are only recorded in Studio Mode.",
+        ),
+        (tr::editor::export::tracks::system_audio(), "System audio"),
         (tr::editor::canvas::shape(), "Shape"),
         (tr::editor::timeline::track::shape(), "Shape"),
         (
@@ -1461,6 +1554,14 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::timeline::picker::shape(),
             "Draw arrows, boxes, circles and highlights over your recording.",
+        ),
+        (
+            tr::editor::export::audio::failed_title(),
+            "Couldn't save the audio",
+        ),
+        (
+            tr::editor::export::audio::failed_message(),
+            "Try again, or save it somewhere else.",
         ),
     ];
     for (translated, literal) in pairs {
@@ -1596,6 +1697,10 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
         format!("Could not prepare the recording controls: {error}")
     );
     assert_eq!(
+        tr::editor::clips::removed_media("Demo"),
+        "Demo (removed clips)"
+    );
+    assert_eq!(
         tr::editor::clips::save_before_recording_failed(&error),
         format!("Could not save the current project before recording: {error}")
     );
@@ -1637,6 +1742,20 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
         assert_eq!(
             tr::editor::export::stats::output_value(1920_u32, 1080_u32, fps),
             format!("{}×{} · {} fps", 1920, 1080, fps)
+        );
+    }
+    assert_eq!(
+        tr::editor::export::tracks::video_detail(2560_u32, 1440_u32),
+        "MP4 · 2560×1440"
+    );
+    for count in [1_usize, 4] {
+        assert_eq!(
+            tr::editor::export::tracks::file_count(count),
+            if count == 1 {
+                "1 file".to_string()
+            } else {
+                format!("{count} files")
+            }
         );
     }
     for total in [0_u32, 1, 2, 5] {

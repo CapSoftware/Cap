@@ -15,13 +15,19 @@ export function blogPostMetadata(slug: string): Metadata | undefined {
 		description,
 		image,
 		video,
+		seoTitle,
+		seoDescription,
 	} = post.metadata as {
 		title: string;
 		publishedAt: string;
 		description: string;
 		image?: string;
 		video?: string;
+		seoTitle?: string;
+		seoDescription?: string;
 	};
+	const metaTitle = seoTitle ?? title;
+	const metaDescription = seoDescription ?? description;
 	// Posts with real cover art keep it; everything else gets the branded
 	// dynamic OG image.
 	const ogImage =
@@ -30,12 +36,12 @@ export function blogPostMetadata(slug: string): Metadata | undefined {
 			: ogImageUrl({ title, tag: "Blog" });
 
 	return {
-		title,
-		description,
+		title: metaTitle,
+		description: metaDescription,
 		alternates: { canonical: `https://cap.so/blog/${post.slug}` },
 		openGraph: {
-			title,
-			description,
+			title: metaTitle,
+			description: metaDescription,
 			type: "article",
 			publishedTime,
 			url: `${buildEnv.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`,
@@ -59,8 +65,8 @@ export function blogPostMetadata(slug: string): Metadata | undefined {
 		},
 		twitter: {
 			card: "summary_large_image",
-			title,
-			description,
+			title: metaTitle,
+			description: metaDescription,
 			images: [ogImage],
 		},
 	};

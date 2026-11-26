@@ -256,6 +256,7 @@ pub struct RecordingItem {
     /// left to an `<img onError>`.
     pub thumbnail: Option<PathBuf>,
     pub thumbnail_version: Option<u128>,
+    pub audio_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -344,6 +345,9 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
         RecordingMetaInner::Instant(_) => 1,
     };
     let status = recording_status(&meta);
+    let audio_only = meta
+        .studio_meta()
+        .is_some_and(StudioRecordingMeta::is_audio_only);
 
     #[cfg(test)]
     RECORDING_ITEM_BUILDS.with(|builds| builds.set(builds.get() + 1));
@@ -354,6 +358,9 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
     } else {
         bundle_thumbnail_path(&path)
     };
+    let thumbnail = (!audio_only)
+        .then_some(thumbnail)
+        .filter(|thumbnail| thumbnail.is_file());
     let upload = crate::upload::queue::status(&path, &meta);
     RecordingItem {
         upload,
@@ -363,8 +370,9 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
         pretty_name: meta.pretty_name,
         sharing: meta.sharing.map(|sharing| sharing.link),
         sort_time_millis,
-        thumbnail_version: source_mtime_nanos(&thumbnail),
-        thumbnail: thumbnail.is_file().then_some(thumbnail),
+        thumbnail_version: thumbnail.as_deref().and_then(source_mtime_nanos),
+        thumbnail,
+        audio_only,
         path,
     }
 }
@@ -874,6 +882,10 @@ impl Drop for ProjectBeingDeleted {
     fn drop(&mut self) {
         DELETING_PROJECTS.release(self.0);
     }
+}
+
+pub fn is_being_deleted(path: &Path) -> bool {
+    DELETING_PROJECTS.holds_resolved(path)
 }
 
 /// Existing targets and roots are canonicalized before containment is checked.
@@ -1451,7 +1463,7 @@ fn drain_decode_jobs<J, R>(
 /// this app's own identifier (cache data is regenerable, so it belongs where
 /// backups and migration skip it), not the `so.cap.desktop` app-data dir both
 /// apps share.
-fn thumbnail_cache_dir() -> PathBuf {
+pub(crate) fn thumbnail_cache_dir() -> PathBuf {
     // Verification runs point CAP_GPUI_APP_DATA_DIR at a sandbox; a cache that
     // still wrote to the user's real one would leak state across runs.
     if std::env::var("CAP_GPUI_APP_DATA_DIR").is_ok_and(|dir| !dir.trim().is_empty()) {
@@ -1771,6 +1783,92 @@ pub fn create_screenshot(
             let _ = std::fs::remove_file(&staged);
             e.to_string()
         })
+}
+
+/// Skips a near-black first frame (camera warm-up, fade in) for one a tenth
+/// in. Only the Library uses it: `create_screenshot` keeps the first frame
+/// so bundle thumbnails and uploads stay as they were.
+pub fn write_representative_frame(input: &Path, output: &Path) -> Result<(), String> {
+    let mut frame = first_video_frame(input)?;
+    if mean_luma(&frame) < 0.08
+        && let Ok(later) = video_frame_at_fraction(input, 0.1)
+        && mean_luma(&later) > mean_luma(&frame)
+    {
+        frame = later;
+    }
+    let (w, h) = (frame.width().max(1), frame.height().max(1));
+    let width = w.min(640);
+    let height = ((u64::from(h) * u64::from(width) / u64::from(w)).max(2) as u32) & !1;
+    let jpeg = match encode_mjpeg(&frame, (width & !1, height)) {
+        Some(jpeg) => jpeg,
+        None => encode_rgb_jpeg(&frame, (width & !1, height))?,
+    };
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let staged = output.with_extension(format!("jpg.tmp-{}", crate::store::new_uuid_v4()));
+    std::fs::write(&staged, jpeg)
+        .and_then(|()| std::fs::rename(&staged, output))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&staged);
+            e.to_string()
+        })
+}
+
+fn mean_luma(frame: &ffmpeg::frame::Video) -> f32 {
+    use ffmpeg::format::Pixel;
+    let (plane, step, offset) = match frame.format() {
+        Pixel::BGRA | Pixel::RGBA | Pixel::ARGB | Pixel::ABGR => (0, 4, 1),
+        Pixel::RGB24 | Pixel::BGR24 => (0, 3, 1),
+        _ => (0, 1, 0),
+    };
+    let data = frame.data(plane);
+    let stride = frame.stride(plane).max(1);
+    let (w, h) = (frame.width() as usize, frame.height() as usize);
+    let mut sum = 0u64;
+    let mut n = 0u64;
+    for y in (0..h).step_by((h / 24).max(1)) {
+        for x in (0..w).step_by((w / 32).max(1)) {
+            if let Some(v) = data.get(y * stride + x * step + offset) {
+                sum += u64::from(*v);
+                n += 1;
+            }
+        }
+    }
+    if n == 0 {
+        return 1.;
+    }
+    sum as f32 / n as f32 / 255.
+}
+
+fn video_frame_at_fraction(input: &Path, fraction: f64) -> Result<ffmpeg::frame::Video, String> {
+    let mut ictx = ffmpeg::format::input(input).map_err(|e| e.to_string())?;
+    let duration = ictx.duration();
+    if duration > 0 {
+        let at = (duration as f64 * fraction) as i64;
+        ictx.seek(at, ..at).map_err(|e| e.to_string())?;
+    }
+    let input_stream = ictx
+        .streams()
+        .best(ffmpeg::media::Type::Video)
+        .ok_or("No video stream found")?;
+    let video_stream_index = input_stream.index();
+    let mut decoder = ffmpeg::codec::context::Context::from_parameters(input_stream.parameters())
+        .map_err(|e| e.to_string())?
+        .decoder()
+        .video()
+        .map_err(|e| e.to_string())?;
+    let mut frame = ffmpeg::frame::Video::empty();
+    for (stream, packet) in ictx.packets() {
+        if stream.index() != video_stream_index {
+            continue;
+        }
+        decoder.send_packet(&packet).map_err(|e| e.to_string())?;
+        if decoder.receive_frame(&mut frame).is_ok() {
+            return Ok(frame);
+        }
+    }
+    Err("No frame there".to_string())
 }
 
 fn first_video_frame(input: &Path) -> Result<ffmpeg::frame::Video, String> {

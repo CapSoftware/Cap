@@ -148,6 +148,106 @@ pub fn get_hw_decoder_capabilities() -> &'static HwDecoderCapabilities {
     HW_CAPABILITIES.get_or_init(query_d3d11_video_decoder_capabilities)
 }
 
+/// Whether a video's chroma is subsampled 4:2:0, the only layout hardware and
+/// platform decoders hand frames back in. Sources with fuller chroma (an
+/// import that kept a 4:4:4 stream) decode in software so none is lost.
+/// `None` when neither the pixel format nor the codec configuration record
+/// says, which callers treat like 4:2:0.
+pub fn chroma_is_420(
+    format: avformat::Pixel,
+    parameters: &ffmpeg::ffi::AVCodecParameters,
+) -> Option<bool> {
+    if let Some(descriptor) = format.descriptor() {
+        return Some(descriptor.log2_chroma_w() == 1 && descriptor.log2_chroma_h() == 1);
+    }
+    if parameters.extradata.is_null() || parameters.extradata_size <= 0 {
+        return None;
+    }
+    let record = unsafe {
+        std::slice::from_raw_parts(parameters.extradata, parameters.extradata_size as usize)
+    };
+    match parameters.codec_id {
+        ffmpeg::ffi::AVCodecID::AV_CODEC_ID_H264 => avc_record_chroma_is_420(record),
+        ffmpeg::ffi::AVCodecID::AV_CODEC_ID_HEVC => hevc_record_chroma_is_420(record),
+        _ => None,
+    }
+}
+
+/// `chromaFormat` in an `hvcC` record (ISO/IEC 14496-15 8.3.3.1).
+fn hevc_record_chroma_is_420(record: &[u8]) -> Option<bool> {
+    (record.len() > 16 && record[0] == 1).then(|| record[16] & 0b11 == 1)
+}
+
+/// `chroma_format_idc` from the first sequence parameter set in an `avcC`
+/// record. Profiles below High carry no such field and are always 4:2:0.
+fn avc_record_chroma_is_420(record: &[u8]) -> Option<bool> {
+    const CHROMA_PROFILES: [u8; 13] =
+        [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135];
+    if record.len() < 8 || record[0] != 1 || record[5] & 0x1f == 0 {
+        return None;
+    }
+    let length = usize::from(u16::from_be_bytes([record[6], record[7]]));
+    let sps = record.get(8..8 + length)?;
+    let profile = *sps.get(1)?;
+    if !CHROMA_PROFILES.contains(&profile) {
+        return Some(true);
+    }
+    let mut bits = RbspBits::new(sps.get(4..)?);
+    bits.exp_golomb()?;
+    Some(bits.exp_golomb()? == 1)
+}
+
+struct RbspBits<'a> {
+    data: &'a [u8],
+    byte: usize,
+    bit: u8,
+    zeros: usize,
+}
+
+impl<'a> RbspBits<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self {
+            data,
+            byte: 0,
+            bit: 0,
+            zeros: 0,
+        }
+    }
+
+    fn read_bit(&mut self) -> Option<u32> {
+        if self.bit == 0 {
+            if self.zeros >= 2 && self.data.get(self.byte) == Some(&3) {
+                self.byte += 1;
+                self.zeros = 0;
+            }
+            let current = *self.data.get(self.byte)?;
+            self.zeros = if current == 0 { self.zeros + 1 } else { 0 };
+        }
+        let value = (self.data[self.byte] >> (7 - self.bit)) & 1;
+        self.bit += 1;
+        if self.bit == 8 {
+            self.bit = 0;
+            self.byte += 1;
+        }
+        Some(u32::from(value))
+    }
+
+    fn exp_golomb(&mut self) -> Option<u32> {
+        let mut leading = 0;
+        while self.read_bit()? == 0 {
+            leading += 1;
+            if leading > 31 {
+                return None;
+            }
+        }
+        let mut value = 0u32;
+        for _ in 0..leading {
+            value = (value << 1) | self.read_bit()?;
+        }
+        Some((1u32 << leading) - 1 + value)
+    }
+}
+
 fn configure_software_threading(decoder: &mut avcodec::decoder::Decoder, width: u32, height: u32) {
     let pixel_count = (width as u64) * (height as u64);
     let cpu_count = num_cpus::get();
@@ -311,7 +411,8 @@ impl FFmpegDecoder {
             DecoderInput::Segmented(open_fragmented_input(&path)?)
         } else {
             DecoderInput::File(
-                ffmpeg::format::input(&path).map_err(|e| format!("open file / {e}"))?,
+                cap_enc_ffmpeg::decode_limit::open_input(&path)
+                    .map_err(|e| format!("open file / {e}"))?,
             )
         };
 
@@ -371,6 +472,13 @@ impl FFmpegDecoder {
                 (*parameters).height.max(0) as u32,
             )
         };
+        if let Some(limit) = cap_enc_ffmpeg::decode_limit::decode_pixel_limit()
+            && i64::from(width) * i64::from(height) > limit
+        {
+            return Err(format!(
+                "video is {width}x{height}, above the {limit}-pixel decode limit"
+            ));
+        }
 
         // avcodec_open2, which `.video()` calls, reads the thread settings, so
         // software threading must be configured on the unopened decoder.
@@ -378,6 +486,7 @@ impl FFmpegDecoder {
             let mut decoder = avcodec::Context::from_parameters(input_stream.parameters())
                 .map_err(|e| format!("decoder context / {e}"))?
                 .decoder();
+            cap_enc_ffmpeg::decode_limit::apply_decode_pixel_limit(&mut decoder);
             if software_threading {
                 configure_software_threading(&mut decoder, width, height);
             }
@@ -401,6 +510,17 @@ impl FFmpegDecoder {
             }
             Some(hw_device_type) => {
                 let mut decoder = open(false)?;
+                let parameters = unsafe { &*input_stream.parameters().as_ptr() };
+                if chroma_is_420(decoder.format(), parameters) == Some(false) {
+                    info!("Video {width}x{height} has full chroma, using software decode");
+                    return Ok(FFmpegDecoder {
+                        decoder: open(true)?,
+                        input,
+                        stream_index,
+                        hw_device: None,
+                        start_time,
+                    });
+                }
                 match decoder.try_use_hw_device(hw_device_type) {
                     Ok(device) => {
                         info!(
@@ -558,6 +678,88 @@ mod tests {
     use super::*;
     use cap_enc_ffmpeg::segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig};
     use std::{fs::File, time::Duration};
+
+    fn parameters_with_record(
+        codec_id: ffmpeg::ffi::AVCodecID,
+        record: &mut [u8],
+    ) -> ffmpeg::ffi::AVCodecParameters {
+        let mut parameters: ffmpeg::ffi::AVCodecParameters = unsafe { std::mem::zeroed() };
+        parameters.codec_id = codec_id;
+        parameters.extradata = record.as_mut_ptr();
+        parameters.extradata_size = record.len() as i32;
+        parameters
+    }
+
+    fn avc_record(sps: &[u8]) -> Vec<u8> {
+        let mut record = vec![1, sps[1], 0, sps[3], 0xff, 0xe1];
+        record.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+        record.extend_from_slice(sps);
+        record.extend_from_slice(&[1, 0, 2, 0x68, 0xce]);
+        record
+    }
+
+    #[test]
+    fn known_pixel_formats_say_whether_chroma_is_420() {
+        let empty: ffmpeg::ffi::AVCodecParameters = unsafe { std::mem::zeroed() };
+        for (format, expected) in [
+            (avformat::Pixel::YUV420P, Some(true)),
+            (avformat::Pixel::NV12, Some(true)),
+            (avformat::Pixel::YUV420P10LE, Some(true)),
+            (avformat::Pixel::YUV444P, Some(false)),
+            (avformat::Pixel::YUV422P, Some(false)),
+            (avformat::Pixel::None, None),
+        ] {
+            assert_eq!(chroma_is_420(format, &empty), expected, "{format:?}");
+        }
+    }
+
+    #[test]
+    fn avc_records_report_the_sequence_parameter_set_chroma() {
+        // High 4:4:4 Predictive, seq_parameter_set_id 0, chroma_format_idc 3.
+        let mut high_444 = avc_record(&[0x67, 244, 0, 31, 0b1001_0000]);
+        // High, seq_parameter_set_id 0, chroma_format_idc 1.
+        let mut high_420 = avc_record(&[0x67, 100, 0, 31, 0b1010_0000]);
+        // Main carries no chroma_format_idc and is always 4:2:0.
+        let mut main = avc_record(&[0x67, 77, 0, 31, 0b1000_0000]);
+        let mut truncated = avc_record(&[0x67, 244, 0, 31]);
+        for (record, expected) in [
+            (&mut high_444, Some(false)),
+            (&mut high_420, Some(true)),
+            (&mut main, Some(true)),
+            (&mut truncated, None),
+        ] {
+            let parameters =
+                parameters_with_record(ffmpeg::ffi::AVCodecID::AV_CODEC_ID_H264, record);
+            assert_eq!(chroma_is_420(avformat::Pixel::None, &parameters), expected);
+        }
+    }
+
+    #[test]
+    fn hevc_records_report_their_chroma_format() {
+        for (chroma_format, expected) in [(1u8, Some(true)), (3, Some(false)), (2, Some(false))] {
+            let mut record = vec![0u8; 23];
+            record[0] = 1;
+            record[16] = 0b1111_1100 | chroma_format;
+            let parameters =
+                parameters_with_record(ffmpeg::ffi::AVCodecID::AV_CODEC_ID_HEVC, &mut record);
+            assert_eq!(chroma_is_420(avformat::Pixel::None, &parameters), expected);
+        }
+        let mut annex_b = vec![0, 0, 0, 1, 0x40, 0x01];
+        let parameters =
+            parameters_with_record(ffmpeg::ffi::AVCodecID::AV_CODEC_ID_HEVC, &mut annex_b);
+        assert_eq!(chroma_is_420(avformat::Pixel::None, &parameters), None);
+    }
+
+    #[test]
+    fn rbsp_bits_skip_emulation_prevention_bytes() {
+        let mut bits = RbspBits::new(&[0x00, 0x00, 0x03, 0x80]);
+        for _ in 0..16 {
+            assert_eq!(bits.read_bit(), Some(0));
+        }
+        assert_eq!(bits.read_bit(), Some(1));
+        assert_eq!(RbspBits::new(&[0b0010_1000]).exp_golomb(), Some(4));
+        assert_eq!(RbspBits::new(&[0x00]).exp_golomb(), None);
+    }
 
     fn encode_segments(directory: &std::path::Path) {
         ffmpeg::init().unwrap();
@@ -956,5 +1158,47 @@ mod tests {
         assert!(open_fragmented_input(directory.path()).is_err());
         std::fs::create_dir(directory.path().join("segment_001.m4s")).unwrap();
         assert!(open_fragmented_input(directory.path()).is_err());
+    }
+
+    #[test]
+    fn large_420_video_opens_and_decodes() {
+        ffmpeg::init().unwrap();
+        let (width, height) = (8000, 6000);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large.mkv");
+        let codec = avcodec::encoder::find(avcodec::Id::MJPEG).unwrap();
+        let mut output = avformat::output(&path).unwrap();
+        let mut encoder = avcodec::Context::new_with_codec(codec)
+            .encoder()
+            .video()
+            .unwrap();
+        encoder.set_width(width);
+        encoder.set_height(height);
+        encoder.set_format(avformat::Pixel::YUVJ420P);
+        encoder.set_time_base((1, 30));
+        let mut encoder = encoder.open_as(codec).unwrap();
+        output.add_stream(codec).unwrap().set_parameters(&encoder);
+        output.write_header().unwrap();
+        let stream_time_base = output.stream(0).unwrap().time_base();
+        let mut frame = avframe::Video::new(avformat::Pixel::YUVJ420P, width, height);
+        for plane in 0..3 {
+            frame
+                .data_mut(plane)
+                .fill(if plane == 0 { 90 } else { 128 });
+        }
+        frame.set_pts(Some(0));
+        encoder.send_frame(&frame).unwrap();
+        encoder.send_eof().unwrap();
+        let mut packet = ffmpeg::Packet::empty();
+        while encoder.receive_packet(&mut packet).is_ok() {
+            packet.set_stream(0);
+            packet.rescale_ts((1, 30), stream_time_base);
+            packet.write_interleaved(&mut output).unwrap();
+        }
+        output.write_trailer().unwrap();
+
+        let mut decoder = FFmpegDecoder::new(&path, None).unwrap();
+        let frame = decoder.frames().next().unwrap().unwrap();
+        assert_eq!((frame.width(), frame.height()), (width, height));
     }
 }

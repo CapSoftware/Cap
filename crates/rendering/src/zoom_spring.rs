@@ -790,6 +790,14 @@ impl ZoomSegmentIndex {
             .iter()
             .any(|&(start, end)| timeline_secs >= start && timeline_secs <= end)
     }
+
+    fn starting_within(&self, timeline_secs: f64, lead_secs: f64) -> Option<usize> {
+        let next = self.starts.partition_point(|&start| start < timeline_secs);
+        self.starts
+            .get(next)
+            .filter(|&&start| start - timeline_secs <= lead_secs)
+            .map(|_| self.ordered[next])
+    }
 }
 
 /// Deterministic, lazily precomputed zoom transform timeline.
@@ -810,6 +818,7 @@ pub struct ZoomTransformTimeline {
     time_map_ordered: bool,
     recording_clip: Option<u32>,
     prefer_outgoing: bool,
+    lead_in_secs: f64,
     /// Total number of samples covering [0, duration] plus one lerp partner.
     total_samples: usize,
 }
@@ -918,6 +927,11 @@ impl ZoomTransformTimeline {
         // One sample per step across the duration, plus one trailing sample so
         // a lookup right at the end always has a lerp partner.
         let total_samples = ((duration_secs * 1000.0 / STEP_MS).ceil() as usize).saturating_add(2);
+        let lead_in_secs = if spring.start_zooms_early {
+            ScreenMovementSpring::EARLY_START_SECS
+        } else {
+            0.0
+        };
         if zoom_segments.is_empty() {
             return Self {
                 samples: Vec::new(),
@@ -929,6 +943,7 @@ impl ZoomTransformTimeline {
                 time_map_ordered,
                 recording_clip,
                 prefer_outgoing,
+                lead_in_secs,
                 total_samples: 1,
             };
         }
@@ -949,12 +964,15 @@ impl ZoomTransformTimeline {
             time_map_ordered,
             recording_clip,
             prefer_outgoing,
+            lead_in_secs,
             total_samples,
         };
 
         // Seed the simulations at rest on the t=0 target so the very first
         // frame is already correct and `samples` is never empty.
-        let initial = timeline.targets_at(0.0, XY::new(0.5, 0.5));
+        // Seeded without the lead-in: a zoom starting within it still has to
+        // animate in from the unzoomed opening frame.
+        let initial = timeline.targets_with_lead(0.0, XY::new(0.5, 0.5), 0.0);
         let mut center_sim = SpringMassDamperSimulation::new(spring_config);
         center_sim.set_position(initial.center);
         center_sim.set_velocity(XY::new(0.0, 0.0));
@@ -1244,12 +1262,33 @@ impl ZoomTransformTimeline {
     }
 
     fn targets_at(&self, timeline_secs: f64, held_center: XY<f32>) -> StepTargets {
-        let active = self.segment_index.active_at(timeline_secs);
+        self.targets_with_lead(timeline_secs, held_center, self.lead_in_secs)
+    }
+
+    fn targets_with_lead(
+        &self,
+        timeline_secs: f64,
+        held_center: XY<f32>,
+        lead_in_secs: f64,
+    ) -> StepTargets {
         let snap = self.segment_index.snaps_at(timeline_secs);
+        let active = self.segment_index.active_at(timeline_secs).or_else(|| {
+            // An early zoom aims at the upcoming segment's framing; instant
+            // segments keep their cut.
+            (lead_in_secs > 0.0 && !snap)
+                .then(|| {
+                    self.segment_index
+                        .starting_within(timeline_secs, lead_in_secs)
+                })
+                .flatten()
+                .filter(|&index| !self.zoom_segments[index].instant_animation)
+        });
 
         match active {
             Some(index) => {
                 let segment = &self.zoom_segments[index];
+                // During the lead-in, frame the segment as it opens.
+                let timeline_secs = timeline_secs.max(segment.start);
                 let amount = if segment.amount.is_finite() {
                     segment.amount.max(1.0)
                 } else {
@@ -1363,6 +1402,139 @@ mod tests {
             duration,
             None,
         )
+    }
+
+    fn precomputed(
+        segments: &[ZoomSegment],
+        spring: ScreenMovementSpring,
+        duration: f64,
+    ) -> ZoomTransformTimeline {
+        let mut timeline = ZoomTransformTimeline::new(
+            segments,
+            None,
+            &CursorEvents::default(),
+            spring,
+            duration,
+            None,
+        );
+        timeline.precompute();
+        timeline
+    }
+
+    fn amount_at(timeline: &ZoomTransformTimeline, secs: f64) -> f32 {
+        timeline.samples[(secs * 1000.0 / STEP_MS).round() as usize].amount
+    }
+
+    fn early(spring: ScreenMovementSpring) -> ScreenMovementSpring {
+        ScreenMovementSpring {
+            start_zooms_early: true,
+            ..spring
+        }
+    }
+
+    /// Seconds from `start` until the amount first covers `fraction` of the
+    /// way to `target`, and the highest amount reached.
+    fn rise(
+        timeline: &ZoomTransformTimeline,
+        start: f64,
+        target: f32,
+        fraction: f32,
+    ) -> (f64, f32) {
+        let threshold = 1.0 + (target - 1.0) * fraction;
+        let first = timeline
+            .samples
+            .iter()
+            .position(|sample| sample.amount >= threshold)
+            .unwrap();
+        let peak = timeline
+            .samples
+            .iter()
+            .map(|sample| sample.amount)
+            .fold(f32::MIN, f32::max);
+        (first as f64 * STEP_MS / 1000.0 - start, peak)
+    }
+
+    #[test]
+    fn new_project_zoom_is_quicker_without_overshoot() {
+        // New projects reach 90% of a zoom by about 317 ms with no
+        // overshoot; saved projects keep the old spring, about 383 ms.
+        let segments = [manual_segment(0.5, 6.0, 2.0, 0.5, 0.5)];
+        let fresh = precomputed(&segments, ScreenMovementSpring::NEW_PROJECT, 6.0);
+        let (t90, peak) = rise(&fresh, 0.5, 2.0, 0.9);
+        assert!((0.30..=0.33).contains(&t90), "new project t90 {t90}");
+        assert!(peak <= 2.0 + 2e-3, "new project overshoot {peak}");
+
+        let saved = precomputed(&segments, ScreenMovementSpring::default(), 6.0);
+        let (t90, _) = rise(&saved, 0.5, 2.0, 0.9);
+        assert!((0.37..=0.40).contains(&t90), "saved project t90 {t90}");
+    }
+
+    #[test]
+    fn early_zooms_start_ahead_of_their_segment_only_when_on() {
+        let segments = [manual_segment(1.0, 3.0, 2.0, 0.3, 0.6)];
+        for spring in [
+            ScreenMovementSpring::default(),
+            ScreenMovementSpring::NEW_PROJECT,
+        ] {
+            let on_time = precomputed(&segments, spring, 5.0);
+            let early_zoom = precomputed(&segments, early(spring), 5.0);
+
+            assert_eq!(amount_at(&on_time, 0.96), 1.0);
+            assert_eq!(amount_at(&early_zoom, 0.6), 1.0);
+            assert!(amount_at(&early_zoom, 0.8) > 1.0);
+            assert!(amount_at(&early_zoom, 1.0) > amount_at(&on_time, 1.0) + 0.3);
+            // Zooming out is not moved: both leave at the segment end.
+            assert!((amount_at(&early_zoom, 2.96) - amount_at(&on_time, 2.96)).abs() < 1e-3);
+            for secs in [3.2, 3.5, 4.0, 4.9] {
+                assert!(
+                    (amount_at(&early_zoom, secs) - amount_at(&on_time, secs)).abs() < 1e-3,
+                    "{secs}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn early_zooms_near_the_start_still_animate_in() {
+        // Starts before, at and after the lead-in all open unzoomed, and a
+        // start just past the lead-in moves like one just inside it.
+        let spring = early(ScreenMovementSpring::NEW_PROJECT);
+        for start in [0.0, 0.2, 0.35, 0.36, 0.5] {
+            let timeline = precomputed(&[manual_segment(start, 3.0, 2.0, 0.5, 0.5)], spring, 4.0);
+            assert_eq!(timeline.samples[0].amount, 1.0, "start {start}");
+            assert!(amount_at(&timeline, 0.016) < 1.1, "start {start}");
+        }
+        let at_lead = precomputed(&[manual_segment(0.35, 3.0, 2.0, 0.5, 0.5)], spring, 4.0);
+        let after_lead = precomputed(&[manual_segment(0.36, 3.0, 2.0, 0.5, 0.5)], spring, 4.0);
+        assert!((amount_at(&at_lead, 0.6) - amount_at(&after_lead, 0.616)).abs() < 0.05);
+    }
+
+    #[test]
+    fn early_zooms_keep_instant_cuts_and_seek_like_playback() {
+        let mut instant = manual_segment(1.0, 3.0, 2.0, 0.5, 0.5);
+        instant.instant_animation = true;
+        assert_samples_identical(
+            &precomputed(&[instant.clone()], ScreenMovementSpring::NEW_PROJECT, 4.0),
+            &precomputed(&[instant], early(ScreenMovementSpring::NEW_PROJECT), 4.0),
+        );
+
+        let segments = [
+            manual_segment(1.0, 2.0, 2.0, 0.2, 0.2),
+            manual_segment(2.2, 3.0, 1.5, 0.8, 0.8),
+        ];
+        let full = precomputed(&segments, early(ScreenMovementSpring::NEW_PROJECT), 4.0);
+        let mut lazy = ZoomTransformTimeline::new(
+            &segments,
+            None,
+            &CursorEvents::default(),
+            early(ScreenMovementSpring::NEW_PROJECT),
+            4.0,
+            None,
+        );
+        for secs in [2.5_f32, 0.4, 3.9, 1.1] {
+            lazy.ensure_precomputed_until(secs);
+            assert_eq!(lazy.sample(secs).bounds, full.sample(secs).bounds, "{secs}");
+        }
     }
 
     fn project_with_crop_styles(

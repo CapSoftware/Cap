@@ -116,6 +116,40 @@ fn agent_env_token() -> Option<String> {
     env_var("CAP_AGENT_TOKEN").or_else(|| env_var("CAP_API_KEY").filter(|v| is_agent_api_key(v)))
 }
 
+fn legacy_env_key() -> Option<String> {
+    env_var("CAP_API_KEY").filter(|v| !is_agent_api_key(v))
+}
+
+fn server_override() -> Option<String> {
+    env_var("CAP_SERVER_URL").map(normalize_server)
+}
+
+fn same_server(left: &str, right: &str) -> bool {
+    match (url::Url::parse(left), url::Url::parse(right)) {
+        (Ok(left), Ok(right)) => {
+            left.origin() == right.origin()
+                && left.path().trim_end_matches('/') == right.path().trim_end_matches('/')
+        }
+        _ => normalize_server(left.to_string()) == normalize_server(right.to_string()),
+    }
+}
+
+fn ensure_server_override_matches(
+    server_override: Option<&str>,
+    credential_server: &str,
+    credential: &str,
+) -> Result<(), String> {
+    match server_override {
+        Some(requested) if !same_server(requested, credential_server) => Err(format!(
+            "CAP_SERVER_URL is {requested}, but the {credential} belongs to {credential_server}. \
+             Cap will not send requests to a different server than CAP_SERVER_URL. Set \
+             CAP_AGENT_TOKEN or CAP_API_KEY to a credential for {requested}, run `cap auth login` \
+             with CAP_SERVER_URL set, or unset CAP_SERVER_URL."
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// The environment variable currently supplying the agent token, for messages that tell the user
 /// what to unset.
 pub fn agent_env_var_name() -> Option<&'static str> {
@@ -401,30 +435,55 @@ pub fn store_agent(
     Ok(AgentCredentialStorage::PermissionRestrictedFile)
 }
 
+fn load_stored_agent() -> Option<(StoredAgentCredential, AgentCredentialSource)> {
+    load_agent_keyring()
+        .map(|stored| (stored, AgentCredentialSource::Keyring))
+        .or_else(|_| load_agent_file().map(|stored| (stored, AgentCredentialSource::File)))
+        .ok()
+}
+
 pub fn resolve_agent() -> Result<AgentCredentials, String> {
-    let server = server_url();
-    if let Some(access_token) = agent_env_token() {
+    resolve_agent_from(
+        server_override(),
+        agent_env_token(),
+        legacy_env_key().is_some(),
+        server_url,
+        load_stored_agent,
+        resolve,
+    )
+}
+
+/// Explicit environment credentials always win, and a stored credential is never sent anywhere
+/// other than CAP_SERVER_URL when it is set: a stored login for another server is refused instead.
+fn resolve_agent_from(
+    server_override: Option<String>,
+    agent_env: Option<String>,
+    has_legacy_env: bool,
+    default_server: impl FnOnce() -> String,
+    load_stored: impl FnOnce() -> Option<(StoredAgentCredential, AgentCredentialSource)>,
+    load_legacy: impl FnOnce() -> Result<Credentials, String>,
+) -> Result<AgentCredentials, String> {
+    if let Some(access_token) = agent_env {
         return Ok(AgentCredentials {
             access_token,
-            server: validate_agent_server(server)?,
+            server: validate_agent_server(server_override.unwrap_or_else(default_server))?,
             source: AgentCredentialSource::Env,
         });
     }
-    if let Ok(stored) = load_agent_keyring() {
+    if !has_legacy_env && let Some((stored, source)) = load_stored() {
+        let server = validate_agent_server(stored.server)?;
+        let credential = match source {
+            AgentCredentialSource::Keyring => "Cap CLI login in the OS credential store",
+            _ => "Cap CLI login in the permission-restricted credential file",
+        };
+        ensure_server_override_matches(server_override.as_deref(), &server, credential)?;
         return Ok(AgentCredentials {
             access_token: stored.access_token,
-            server: validate_agent_server(stored.server)?,
-            source: AgentCredentialSource::Keyring,
+            server,
+            source,
         });
     }
-    if let Ok(stored) = load_agent_file() {
-        return Ok(AgentCredentials {
-            access_token: stored.access_token,
-            server: validate_agent_server(stored.server)?,
-            source: AgentCredentialSource::File,
-        });
-    }
-    let legacy = resolve()?;
+    let legacy = load_legacy()?;
     let source = match legacy.source {
         CredentialSource::Env => AgentCredentialSource::LegacyEnv,
         CredentialSource::Desktop => AgentCredentialSource::Desktop,
@@ -454,21 +513,41 @@ pub fn delete_agent() -> Result<(), String> {
 /// Resolve the upload credential and target server. Returns a clear, actionable error when neither an
 /// env var nor a desktop login is available.
 pub fn resolve() -> Result<Credentials, String> {
-    let store = load_desktop_store();
-    let server = server_url();
+    resolve_from(
+        server_override(),
+        env_var("CAP_API_KEY"),
+        load_desktop_store().as_ref(),
+    )
+}
 
-    if let Some(api_key) = env_var("CAP_API_KEY") {
+fn resolve_from(
+    server_override: Option<String>,
+    env_api_key: Option<String>,
+    store: Option<&Value>,
+) -> Result<Credentials, String> {
+    let desktop_server = normalize_server(
+        store
+            .and_then(store_server)
+            .unwrap_or_else(|| DEFAULT_SERVER.to_string()),
+    );
+
+    if let Some(api_key) = env_api_key {
         return Ok(Credentials {
             api_key,
-            server,
+            server: server_override.unwrap_or(desktop_server),
             source: CredentialSource::Env,
             user_id: None,
         });
     }
 
-    if let Some(store) = &store
+    if let Some(store) = store
         && let Some(api_key) = store_api_key(store)
     {
+        ensure_server_override_matches(
+            server_override.as_deref(),
+            &desktop_server,
+            "Cap Desktop login",
+        )?;
         let user_id = store
             .get("auth")
             .and_then(|auth| auth.get("user_id"))
@@ -476,7 +555,7 @@ pub fn resolve() -> Result<Credentials, String> {
             .map(str::to_string);
         return Ok(Credentials {
             api_key,
-            server,
+            server: server_override.unwrap_or(desktop_server),
             source: CredentialSource::Desktop,
             user_id,
         });
@@ -644,27 +723,14 @@ async fn verify_agent_status(credentials: &AgentCredentials) -> AgentVerificatio
 }
 
 fn resolve_status() -> Result<StatusCredentials, String> {
-    let agent = resolve_agent();
-    if agent_env_token().is_some() {
-        return agent.map(StatusCredentials::Agent);
-    }
-    let legacy = resolve();
-    if matches!(
-        legacy.as_ref().map(|credentials| credentials.source),
-        Ok(CredentialSource::Env)
-    ) {
-        return legacy.map(StatusCredentials::Legacy);
-    }
-    match agent {
-        Ok(credentials)
-            if matches!(
-                credentials.source,
-                AgentCredentialSource::Keyring | AgentCredentialSource::File
-            ) =>
-        {
-            Ok(StatusCredentials::Agent(credentials))
+    let agent = resolve_agent()?;
+    match agent.source {
+        AgentCredentialSource::Env
+        | AgentCredentialSource::Keyring
+        | AgentCredentialSource::File => Ok(StatusCredentials::Agent(agent)),
+        AgentCredentialSource::LegacyEnv | AgentCredentialSource::Desktop => {
+            resolve().map(StatusCredentials::Legacy)
         }
-        _ => legacy.map(StatusCredentials::Legacy),
     }
 }
 
@@ -811,6 +877,180 @@ mod tests {
     #[test]
     fn file_fallback_is_only_available_where_permissions_are_enforced() {
         assert_eq!(file_fallback_supported(), cfg!(unix));
+    }
+
+    const STORED_SERVER: &str = "https://stored.example";
+    const OVERRIDE_SERVER: &str = "https://override.example";
+
+    fn stored(
+        source: AgentCredentialSource,
+    ) -> Option<(StoredAgentCredential, AgentCredentialSource)> {
+        Some((
+            StoredAgentCredential {
+                access_token: "cap_cli_stored".to_string(),
+                expires_at: "2099-01-01T00:00:00.000Z".to_string(),
+                scopes: vec!["caps:read".to_string()],
+                server: STORED_SERVER.to_string(),
+            },
+            source,
+        ))
+    }
+
+    fn not_loaded<T>() -> T {
+        panic!("an explicit environment credential must not read stored credentials")
+    }
+
+    fn resolve_case(
+        server_override: Option<&str>,
+        agent_env: Option<&str>,
+        legacy_env: Option<&str>,
+        stored_source: Option<AgentCredentialSource>,
+        store: Option<&Value>,
+    ) -> Result<AgentCredentials, String> {
+        let server_override = server_override.map(|server| normalize_server(server.to_string()));
+        let legacy_override = server_override.clone();
+        resolve_agent_from(
+            server_override,
+            agent_env.map(str::to_string),
+            legacy_env.is_some(),
+            || "https://desktop.example".to_string(),
+            || match (agent_env, legacy_env) {
+                (None, None) => stored_source.and_then(stored),
+                _ => not_loaded(),
+            },
+            || resolve_from(legacy_override, legacy_env.map(str::to_string), store),
+        )
+    }
+
+    fn desktop_store(server: Option<&str>) -> Value {
+        let mut store = serde_json::json!({
+            "auth": { "secret": { "api_key": "desktop-key" }, "user_id": "user-1" }
+        });
+        if let Some(server) = server {
+            store["general_settings"] = serde_json::json!({ "serverUrl": server });
+        }
+        store
+    }
+
+    #[test]
+    fn without_environment_the_stored_login_keeps_its_own_server() {
+        for source in [AgentCredentialSource::Keyring, AgentCredentialSource::File] {
+            let resolved = resolve_case(None, None, None, Some(source), None).unwrap();
+            assert!(resolved.source == source);
+            assert_eq!(resolved.server, STORED_SERVER);
+            assert_eq!(resolved.access_token, "cap_cli_stored");
+        }
+    }
+
+    #[test]
+    fn without_environment_or_stored_login_the_desktop_login_is_used() {
+        let store = desktop_store(Some("https://desktop.example/"));
+        let resolved = resolve_case(None, None, None, None, Some(&store)).unwrap();
+        assert!(resolved.source == AgentCredentialSource::Desktop);
+        assert_eq!(resolved.server, "https://desktop.example");
+        assert_eq!(resolved.access_token, "desktop-key");
+        let store = desktop_store(None);
+        let resolved = resolve_case(None, None, None, None, Some(&store)).unwrap();
+        assert_eq!(resolved.server, DEFAULT_SERVER);
+    }
+
+    #[test]
+    fn agent_environment_credential_beats_a_stored_login() {
+        let resolved = resolve_case(
+            Some(OVERRIDE_SERVER),
+            Some("cap_cli_env"),
+            None,
+            Some(AgentCredentialSource::Keyring),
+            None,
+        )
+        .unwrap();
+        assert!(resolved.source == AgentCredentialSource::Env);
+        assert_eq!(resolved.server, OVERRIDE_SERVER);
+        assert_eq!(resolved.access_token, "cap_cli_env");
+        let resolved = resolve_case(
+            None,
+            Some("cap_cli_env"),
+            None,
+            Some(AgentCredentialSource::Keyring),
+            None,
+        )
+        .unwrap();
+        assert_eq!(resolved.server, "https://desktop.example");
+    }
+
+    #[test]
+    fn legacy_environment_key_beats_a_stored_login() {
+        let store = desktop_store(Some(STORED_SERVER));
+        let resolved = resolve_case(
+            Some(OVERRIDE_SERVER),
+            None,
+            Some("legacy-key"),
+            Some(AgentCredentialSource::Keyring),
+            Some(&store),
+        )
+        .unwrap();
+        assert!(resolved.source == AgentCredentialSource::LegacyEnv);
+        assert_eq!(resolved.server, OVERRIDE_SERVER);
+        assert_eq!(resolved.access_token, "legacy-key");
+        let resolved = resolve_case(
+            None,
+            None,
+            Some("legacy-key"),
+            Some(AgentCredentialSource::File),
+            Some(&store),
+        )
+        .unwrap();
+        assert_eq!(resolved.server, STORED_SERVER);
+    }
+
+    #[test]
+    fn server_override_refuses_a_stored_login_for_another_server() {
+        for source in [AgentCredentialSource::Keyring, AgentCredentialSource::File] {
+            let error = resolve_case(Some(OVERRIDE_SERVER), None, None, Some(source), None)
+                .err()
+                .unwrap();
+            assert!(error.contains(OVERRIDE_SERVER), "{error}");
+            assert!(error.contains(STORED_SERVER), "{error}");
+        }
+        let store = desktop_store(Some(STORED_SERVER));
+        let error = resolve_case(Some(OVERRIDE_SERVER), None, None, None, Some(&store))
+            .err()
+            .unwrap();
+        assert!(error.contains("Cap Desktop login"), "{error}");
+        let store = desktop_store(None);
+        let error = resolve_case(Some(OVERRIDE_SERVER), None, None, None, Some(&store))
+            .err()
+            .unwrap();
+        assert!(error.contains(DEFAULT_SERVER), "{error}");
+    }
+
+    #[test]
+    fn server_override_matching_the_stored_login_uses_it() {
+        let resolved = resolve_case(
+            Some("https://STORED.example/"),
+            None,
+            None,
+            Some(AgentCredentialSource::Keyring),
+            None,
+        )
+        .unwrap();
+        assert!(resolved.source == AgentCredentialSource::Keyring);
+        assert_eq!(resolved.server, STORED_SERVER);
+        let store = desktop_store(Some(STORED_SERVER));
+        let resolved = resolve_case(Some(STORED_SERVER), None, None, None, Some(&store)).unwrap();
+        assert!(resolved.source == AgentCredentialSource::Desktop);
+        assert_eq!(resolved.server, STORED_SERVER);
+    }
+
+    #[test]
+    fn server_override_never_changes_a_stored_logins_server() {
+        assert!(!same_server("https://cap.so", "https://preview.cap.so"));
+        assert!(!same_server("https://cap.so", "https://cap.so/base"));
+        assert!(!same_server(
+            "http://localhost:3000",
+            "http://localhost:3001"
+        ));
+        assert!(same_server("https://cap.so", "https://cap.so:443/"));
     }
 
     #[test]

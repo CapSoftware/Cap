@@ -16,6 +16,12 @@ const mocks = vi.hoisted(() => ({
 	},
 }));
 
+vi.mock("@/app/(org)/dashboard/caps/components/CapListHeader", () => ({
+	CapListHeader: () => null,
+	PageSizeSelect: () => null,
+	SelectAllCheckbox: () => null,
+	listControlClass: "",
+}));
 vi.mock("@cap/ui", () => ({ Button: () => null }));
 vi.mock("@fortawesome/free-solid-svg-icons", () => ({
 	faFolderPlus: {},

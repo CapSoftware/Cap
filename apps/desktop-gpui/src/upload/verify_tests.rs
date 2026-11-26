@@ -14,7 +14,7 @@
 //! behaviour of main when the case was written. Lower is allowed; higher fails.
 
 use super::*;
-use cap_recording::upload_verification::UploadVerification;
+use cap_recording::upload_verification::{UploadArtifact, UploadVerification};
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
@@ -38,6 +38,9 @@ const RETRY_WINDOW: Duration = Duration::from_secs(5 * 60);
 
 const SETTLE: Duration = Duration::from_millis(50);
 const WORKED: Duration = Duration::from_micros(200);
+const MIN_IDLE_STEP: Duration = Duration::from_millis(1);
+// Caps how far virtual time can pass an app-side wake during a quiet step.
+const MAX_IDLE_STEP: Duration = Duration::from_millis(8);
 
 #[derive(Default)]
 struct Activity {
@@ -94,15 +97,24 @@ pub(super) fn virtual_time<F: Future>(future: F) -> F::Output {
         .unwrap()
         .block_on(async {
             let ticker = tokio::spawn(async move {
+                // A 1 ms tick costs ~35 us of real time on the macOS CI VMs
+                // (~1.3 us on Linux), so hour-long windows took minutes.
+                // Timers still fire at their exact deadlines; only quiet
+                // stretches advance in longer steps.
+                let mut idle_step = MIN_IDLE_STEP;
                 loop {
                     if activity.busy() {
+                        idle_step = MIN_IDLE_STEP;
                         std::thread::sleep(Duration::from_micros(50));
                         tokio::task::yield_now().await;
                     } else {
                         let step = std::time::Instant::now();
-                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        tokio::time::sleep(idle_step).await;
                         if step.elapsed() > WORKED {
                             activity.touch();
+                            idle_step = MIN_IDLE_STEP;
+                        } else {
+                            idle_step = (idle_step * 2).min(MAX_IDLE_STEP);
                         }
                     }
                 }
@@ -189,6 +201,7 @@ struct Multipart {
     parts: BTreeMap<u32, (String, Vec<u8>)>,
     completed: bool,
     aborted: bool,
+    replacement: bool,
 }
 
 #[derive(Default)]
@@ -211,6 +224,11 @@ struct MockState {
     created: Vec<String>,
     created_orgs: Vec<Option<String>>,
     deleted: Vec<String>,
+    deleted_on_web: Vec<String>,
+    delete_on_completion: Vec<String>,
+    deleting_on_web: Vec<String>,
+    replaced: Vec<String>,
+    identities: BTreeMap<String, String>,
     problems: Vec<String>,
 }
 
@@ -445,6 +463,11 @@ impl MockCap {
         self.lock().created.clone()
     }
 
+    /// Videos whose published output a replacement upload superseded.
+    pub(super) fn replaced(&self) -> Vec<String> {
+        self.lock().replaced.clone()
+    }
+
     #[cfg(target_os = "macos")]
     pub(super) fn created_orgs(&self) -> Vec<Option<String>> {
         self.lock().created_orgs.clone()
@@ -452,6 +475,25 @@ impl MockCap {
 
     pub(super) fn deleted(&self) -> Vec<String> {
         self.lock().deleted.clone()
+    }
+
+    /// Deletes the cap on the web, as its owner can at any time: the server
+    /// then answers its upload URL and completion calls with 404 "Video not
+    /// found".
+    pub(super) fn delete_on_web(&self, video_id: &str) {
+        self.lock().deleted_on_web.push(video_id.to_string());
+    }
+
+    /// Starts deleting the cap on the web: its processing job is retired, so
+    /// the server answers completion calls with 409 code "video-deleting".
+    pub(super) fn start_deleting_on_web(&self, video_id: &str) {
+        self.lock().deleting_on_web.push(video_id.to_string());
+    }
+
+    /// Deletes the cap on the web just before its first completion call, after
+    /// every upload URL was issued and the media uploaded.
+    pub(super) fn delete_on_web_before_completion(&self, video_id: &str) {
+        self.lock().delete_on_completion.push(video_id.to_string());
     }
 
     pub(super) fn deletes(&self) -> u32 {
@@ -827,11 +869,17 @@ impl Server {
             }
             ("POST", "/api/upload/multipart/initiate") => {
                 state.next_id += 1;
-                let upload_id = format!("upload{:04}", state.next_id);
+                let replacement = request.get("replaceExisting") == Some(&Value::Bool(true));
+                let upload_id = if replacement {
+                    format!("cap-reupload.upload{:04}", state.next_id)
+                } else {
+                    format!("upload{:04}", state.next_id)
+                };
                 state.uploads.insert(
                     upload_id.clone(),
                     Multipart {
                         video_id: text(&request, "videoId"),
+                        replacement,
                         ..Default::default()
                     },
                 );
@@ -894,11 +942,21 @@ impl Server {
                     state.problems.extend(problems);
                     return reply(400, json!({ "error": "invalid parts" }));
                 }
-                state
-                    .objects
-                    .insert(format!("{}/result.mp4", upload.video_id), object);
+                let identity = format!(
+                    "\"{}-{}\"",
+                    to_hex(&cap_gpui_kernels::codec::md5(&object)),
+                    listed.len()
+                );
+                // The server publishes a replacement at a new output key and
+                // retires the recording's processing job, as a web edit does.
+                if upload.replacement && !state.replaced.contains(&upload.video_id) {
+                    state.replaced.push(upload.video_id.clone());
+                }
+                let key = format!("{}/result.mp4", upload.video_id);
+                state.identities.insert(key.clone(), identity.clone());
+                state.objects.insert(key, object);
                 state.uploads.get_mut(&upload_id).unwrap().completed = true;
-                reply(200, json!({ "success": true }))
+                reply(200, json!({ "success": true, "objectIdentity": identity }))
             }
             ("POST", "/api/upload/multipart/abort") => {
                 if let Some(upload) = state.uploads.get_mut(&text(&request, "uploadId")) {
@@ -907,6 +965,9 @@ impl Server {
                 reply(200, json!({ "success": true }))
             }
             ("POST", "/api/upload/signed") => {
+                if state.deleted_on_web.contains(&text(&request, "videoId")) {
+                    return reply(404, json!({ "error": "Video not found" }));
+                }
                 let url = format!(
                     "{}/s3/{}/{}",
                     self.url,
@@ -920,6 +981,9 @@ impl Server {
             }
             ("POST", "/api/upload/signed/batch") => {
                 let video_id = text(&request, "videoId");
+                if state.deleted_on_web.contains(&video_id) {
+                    return reply(404, json!({ "error": "Video not found" }));
+                }
                 let urls = request
                     .get("subpaths")
                     .and_then(Value::as_array)
@@ -937,12 +1001,39 @@ impl Server {
             }
             ("POST", "/api/recording/prepare") => reply(404, json!({ "error": "not found" })),
             ("POST", "/api/upload/recording-complete") => {
-                state.confirmations.push(request.clone());
                 let video_id = text(&request, "videoId");
+                if state.delete_on_completion.contains(&video_id)
+                    && !state.deleted_on_web.contains(&video_id)
+                {
+                    state.deleted_on_web.push(video_id.clone());
+                }
+                if state.deleted_on_web.contains(&video_id) {
+                    return reply(404, json!({ "error": "Video not found" }));
+                }
+                if state.deleting_on_web.contains(&video_id) {
+                    return reply(
+                        409,
+                        json!({ "success": false, "status": "reupload-required", "code": "video-deleting" }),
+                    );
+                }
+                state.confirmations.push(request.clone());
                 let Some(verification) = request.get("verification") else {
                     return reply(200, json!({ "success": true }));
                 };
-                match state.verify_segments(&video_id, verification) {
+                if state.replaced.contains(&video_id) {
+                    return reply(
+                        409,
+                        json!({ "success": false, "status": "reupload-required", "code": "output-replaced" }),
+                    );
+                }
+                let verified = if verification.pointer("/artifact/kind")
+                    == Some(&Value::String("mp4".into()))
+                {
+                    state.verify_mp4(&video_id, verification)
+                } else {
+                    state.verify_segments(&video_id, verification)
+                };
+                match verified {
                     Ok(receipt) => reply(
                         200,
                         json!({ "success": true, "status": "verified", "verification": receipt }),
@@ -981,6 +1072,37 @@ impl MockState {
             .filter(|(key, _)| !is_metadata_object(key))
             .map(|(_, object)| object.len() as u64)
             .sum()
+    }
+
+    fn verify_mp4(&self, video_id: &str, verification: &Value) -> Result<Value, String> {
+        let claimed: UploadVerification = serde_json::from_value(verification.clone())
+            .map_err(|error| format!("unreadable verification: {error}"))?;
+        let UploadArtifact::Mp4 {
+            file_size,
+            duration,
+            object_identity,
+        } = &claimed.artifact
+        else {
+            return Err("verification is not an MP4 artifact".into());
+        };
+        let key = format!("{video_id}/result.mp4");
+        let stored = self
+            .objects
+            .get(&key)
+            .ok_or("verification without a stored recording")?;
+        if stored.len() as u64 != *file_size || self.identities.get(&key) != Some(object_identity) {
+            return Err("verification does not match the stored recording".into());
+        }
+        Ok(json!({
+            "version": 1,
+            "videoId": video_id,
+            "artifact": claimed.artifact,
+            "fileSize": file_size,
+            "duration": duration,
+            "hasAudio": claimed.required_audio,
+            "fullDecode": true,
+            "requiredAudioVerified": claimed.required_audio,
+        }))
     }
 
     fn verify_segments(&self, video_id: &str, verification: &Value) -> Result<Value, String> {
@@ -1613,6 +1735,31 @@ fn studio_share_complete_500_fails_and_keeps_the_video_id() {
             mock.assert_clean();
         },
     );
+}
+
+/// Sharing a Studio recording that already has a link uploads the new render
+/// as a replacement of that link, the way "Reupload to same link" does.
+#[test]
+fn studio_share_again_replaces_the_shared_video() {
+    ffmpeg::init().unwrap();
+    let scratch = Scratch::new("studio_share_again");
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let project = studio_project(&scratch.0);
+        let first = share(&project, Arc::new(AtomicBool::new(false))).await;
+        assert_shared(&mock, &project, &first);
+        assert!(mock.replaced().is_empty());
+        let second = share(&project, Arc::new(AtomicBool::new(false))).await;
+        assert_shared(&mock, &project, &second);
+        let id = RecordingMeta::load_for_project(&project)
+            .unwrap()
+            .sharing
+            .unwrap()
+            .id;
+        assert_eq!(mock.replaced(), vec![id]);
+        assert_eq!(mock.count("POST", "multipart/initiate"), 2);
+    });
 }
 
 /// Cancel (or quit) while part 3 is half sent, then share again. The second

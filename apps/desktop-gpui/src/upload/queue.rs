@@ -16,7 +16,11 @@ const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(45);
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 const PENDING_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
 const FAST_PENDING_RECHECKS: u32 = 12;
+const STEADY_PENDING_RECHECKS: u32 = 30;
+const MAX_PENDING_RECHECK_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const MAX_AUTOMATIC_ATTEMPTS: u32 = 5;
+pub(crate) const RECORDING_DELETED_ON_WEB: &str =
+    "This recording was deleted on the web; the local recording is preserved";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum UploadKind {
@@ -123,14 +127,16 @@ impl UploadState {
     }
 
     fn fail(&mut self, error: String, now: i64) {
-        self.attempt_count = self.attempt_count.saturating_add(1);
         let auth = error.to_ascii_lowercase();
-        self.phase = if auth.contains("authenticat")
+        let needs_authentication = auth.contains("authenticat")
             || auth.contains("sign in")
-            || auth.contains("session has expired")
-        {
+            || auth.contains("session has expired");
+        if !needs_authentication {
+            self.attempt_count = self.attempt_count.saturating_add(1);
+        }
+        self.phase = if needs_authentication {
             UploadPhase::NeedsAuthentication
-        } else if self.attempt_count < MAX_AUTOMATIC_ATTEMPTS {
+        } else if self.attempt_count < MAX_AUTOMATIC_ATTEMPTS && error != RECORDING_DELETED_ON_WEB {
             UploadPhase::Retrying
         } else {
             UploadPhase::Failed
@@ -149,7 +155,26 @@ fn owner_id() -> Option<String> {
 }
 
 fn now() -> i64 {
-    chrono::Utc::now().timestamp()
+    let now = chrono::Utc::now();
+    #[cfg(test)]
+    let now = now + virtual_clock_lead();
+    now.timestamp()
+}
+
+/// How far a paused test runtime's clock is from real time, so retry and
+/// recheck times follow the virtual clock the queue tests advance. It is
+/// negative while real work outpaces the paused clock.
+#[cfg(test)]
+fn virtual_clock_lead() -> chrono::Duration {
+    let virtual_now = tokio::time::Instant::now().into_std();
+    let real_now = std::time::Instant::now();
+    let signed = |ahead: Duration, sign: i32| {
+        chrono::Duration::from_std(ahead).unwrap_or(chrono::Duration::zero()) * sign
+    };
+    match virtual_now.checked_duration_since(real_now) {
+        Some(ahead) => signed(ahead, 1),
+        None => signed(real_now.saturating_duration_since(virtual_now), -1),
+    }
 }
 
 fn regular_file(path: &Path) -> Result<std::fs::Metadata, String> {
@@ -373,6 +398,7 @@ enum Confirmation {
     Pending,
     Verified(VerifiedUploadReceipt),
     ReuploadRequired,
+    DeletedOnWeb,
 }
 
 trait UploadBackend: Send + Sync + 'static {
@@ -453,6 +479,10 @@ impl UploadBackend for LiveBackend {
                     |_| {},
                     upload.cancel.clone(),
                     true,
+                    // Instant recordings save their share link up front, but this upload is the
+                    // recording itself. Sent as a replacement, the server retires the recording's
+                    // processing job and every confirmation asks for another upload.
+                    false,
                 )
                 .await?;
                 match result {
@@ -489,7 +519,15 @@ impl UploadBackend for LiveBackend {
         if status == StatusCode::CONFLICT
             && response.get("status").and_then(Value::as_str) == Some("reupload-required")
         {
+            if response.get("code").and_then(Value::as_str) == Some("video-deleting") {
+                return Ok(Confirmation::DeletedOnWeb);
+            }
             return Ok(Confirmation::ReuploadRequired);
+        }
+        if status == StatusCode::NOT_FOUND
+            && response.get("error").and_then(Value::as_str) == Some("Video not found")
+        {
+            return Ok(Confirmation::DeletedOnWeb);
         }
         if !status.is_success() {
             return Err(format!("Recording verification failed: {status}"));
@@ -596,8 +634,12 @@ impl<B: UploadBackend> Manager<B> {
         *count = count.saturating_add(1);
         if *count <= FAST_PENDING_RECHECKS {
             PENDING_RECHECK_INTERVAL
+        } else if *count <= STEADY_PENDING_RECHECKS {
+            RECONCILE_INTERVAL
         } else {
             RECONCILE_INTERVAL
+                .saturating_mul(1 << (*count - STEADY_PENDING_RECHECKS).min(5))
+                .min(MAX_PENDING_RECHECK_INTERVAL)
         }
     }
 
@@ -811,6 +853,7 @@ impl<B: UploadBackend> Manager<B> {
                     "Cloud verification failed; the saved recording will upload again".into(),
                 );
             }
+            Confirmation::DeletedOnWeb => return Err(RECORDING_DELETED_ON_WEB.into()),
             Confirmation::Verified(receipt) => state.receipt = Some(receipt),
         }
         let receipt = state.receipt.as_ref().ok_or("Upload receipt is missing")?;
@@ -2484,6 +2527,42 @@ mod tests {
             manager.backend.transfers.load(Ordering::Acquire),
             MAX_AUTOMATIC_ATTEMPTS as usize
         );
+        fixture.assert_retained();
+    }
+
+    #[tokio::test]
+    async fn sign_in_failures_leave_the_retry_budget_for_after_sign_in() {
+        let fixture = Fixture::new();
+        let manager = Arc::new(Manager::new(FakeBackend::default(), Duration::from_secs(1)));
+        manager
+            .backend
+            .unauthenticated
+            .store(true, Ordering::Release);
+        for _ in 0..=MAX_AUTOMATIC_ATTEMPTS {
+            manager
+                .admit(fixture.project(), fixture.upload(), false)
+                .await
+                .unwrap();
+            joined(&manager).await;
+            let state = fixture.state();
+            assert_eq!(state.phase, UploadPhase::NeedsAuthentication);
+            assert_eq!(state.attempt_count, 0);
+        }
+
+        manager
+            .backend
+            .unauthenticated
+            .store(false, Ordering::Release);
+        manager.backend.fail_transfer.store(true, Ordering::Release);
+        manager
+            .admit(fixture.project(), fixture.upload(), false)
+            .await
+            .unwrap();
+        joined(&manager).await;
+        let state = fixture.state();
+        assert_eq!(state.phase, UploadPhase::Retrying);
+        assert_eq!(state.attempt_count, 1);
+        assert!(state.next_retry_at.is_some());
         fixture.assert_retained();
     }
 

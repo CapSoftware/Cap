@@ -1,5 +1,6 @@
 import { serverEnv } from "@cap/env";
 import type { PublicShareVideo } from "@/lib/public-share-video";
+import { buildVideoOgImageUrl } from "@/lib/share-video-metadata";
 
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 450;
@@ -120,8 +121,11 @@ export const buildOEmbedVideo = ({
 		maxHeight: parsedMaxHeight,
 	});
 	const embedUrl = new URL(`/embed/${video.id}`, webUrl).toString();
-	const thumbnailUrl = new URL("/api/video/og", webUrl);
-	thumbnailUrl.searchParams.set("videoId", video.id);
+	const thumbnailUrl = buildVideoOgImageUrl({
+		videoId: video.id,
+		webUrl,
+		thumbnailVersion: video.thumbnailVersion,
+	});
 	const html = `<iframe src="${embedUrl}" width="${dimensions.width}" height="${dimensions.height}" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen title="Cap video player" style="border:0;width:100%;aspect-ratio:${dimensions.width}/${dimensions.height}" loading="lazy"></iframe>`;
 
 	return {
@@ -138,7 +142,7 @@ export const buildOEmbedVideo = ({
 		...((parsedMaxWidth === undefined || parsedMaxWidth >= 1200) &&
 		(parsedMaxHeight === undefined || parsedMaxHeight >= 630)
 			? {
-					thumbnail_url: thumbnailUrl.toString(),
+					thumbnail_url: thumbnailUrl,
 					thumbnail_width: 1200,
 					thumbnail_height: 630,
 				}

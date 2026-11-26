@@ -11,6 +11,9 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import {
 	forwardRef,
+	type RefObject,
+	Suspense,
+	use,
 	useCallback,
 	useEffect,
 	useImperativeHandle,
@@ -21,12 +24,14 @@ import {
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
 import { Tooltip } from "@/components/Tooltip";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
+import type { SpaceUpNext } from "@/lib/space-up-next";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "./RecordingInProgress";
+import { useContinueFromUpNext } from "./up-next-playback";
 import {
 	isRecordingUpload,
 	shouldDeferPlaybackSource,
@@ -65,6 +70,32 @@ const UploadProgressTracker = dynamic(() => import("./UploadProgressTracker"), {
 const importUpgradeModal = () =>
 	import("@/components/UpgradeModal").then((m) => m.UpgradeModal);
 const UpgradeModal = dynamic(importUpgradeModal, { ssr: false });
+const UpNextOverlay = dynamic(
+	() => import("./UpNextOverlay").then((m) => m.UpNextOverlay),
+	{ ssr: false },
+);
+
+// The next Cap is looked up after the page starts streaming, so opening a Cap
+// from a large Space does not wait on the Space's order before first paint.
+function UpNextWhenReady({
+	upNext,
+	videoRef,
+	holdAutoplay,
+}: {
+	upNext: Promise<SpaceUpNext | null>;
+	videoRef: RefObject<HTMLVideoElement | null>;
+	holdAutoplay: boolean;
+}) {
+	const next = use(upNext);
+	if (!next) return null;
+	return (
+		<UpNextOverlay
+			upNext={next}
+			videoRef={videoRef}
+			holdAutoplay={holdAutoplay}
+		/>
+	);
+}
 
 type AiGenerationStatus =
 	| "QUEUED"
@@ -85,6 +116,7 @@ export const ShareVideo = forwardRef<
 		};
 		initialPlaybackUrl?: Promise<string | null>;
 		serverPlaybackUrl?: string | null;
+		posterUrl?: string | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
 		areChaptersDisabled?: boolean;
@@ -106,6 +138,7 @@ export const ShareVideo = forwardRef<
 		defaultPlaybackSpeed?: number;
 		viewerIsOwner?: boolean;
 		callToAction?: ShareCallToAction | null;
+		upNext?: Promise<SpaceUpNext | null> | null;
 	}
 >(
 	(
@@ -113,6 +146,7 @@ export const ShareVideo = forwardRef<
 			data,
 			initialPlaybackUrl,
 			serverPlaybackUrl = null,
+			posterUrl = null,
 			comments,
 			chapters = NO_CHAPTERS,
 			areCaptionsDisabled,
@@ -131,11 +165,13 @@ export const ShareVideo = forwardRef<
 			defaultPlaybackSpeed,
 			viewerIsOwner = false,
 			callToAction = null,
+			upNext = null,
 		},
 		ref,
 	) => {
 		const videoRef = useRef<HTMLVideoElement | null>(null);
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
+		useContinueFromUpNext(videoRef, data.id);
 		const router = useRouter();
 		const handleUploadComplete = useCallback(() => {
 			router.refresh();
@@ -592,6 +628,7 @@ export const ShareVideo = forwardRef<
 							}
 							canRetryProcessing={canRetryProcessing}
 							callToAction={callToAction}
+							posterUrl={posterUrl}
 						/>
 					) : (
 						<HLSVideoPlayer
@@ -629,7 +666,17 @@ export const ShareVideo = forwardRef<
 							}
 							canRetryProcessing={canRetryProcessing}
 							callToAction={callToAction}
+							posterUrl={posterUrl}
 						/>
+					)}
+					{upNext && !isActivelyRecording && (
+						<Suspense fallback={null}>
+							<UpNextWhenReady
+								upNext={upNext}
+								videoRef={videoRef}
+								holdAutoplay={callToAction !== null}
+							/>
+						</Suspense>
 					)}
 					{showFinalizeRecordingControl && (
 						<div className="absolute bottom-3 left-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-1.5">

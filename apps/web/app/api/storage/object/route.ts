@@ -10,11 +10,14 @@ import {
 } from "@cap/web-backend";
 import { getRecordingObjectIdentity } from "@cap/web-backend/src/Storage/recording-object-identity";
 import { isInternalRecordingKey } from "@cap/web-backend/src/Storage/recording-output";
-import { Storage as StorageDomain, Video } from "@cap/web-domain";
+import { CurrentUser, Storage as StorageDomain, Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import { isPrivateEditTranscriptObjectKey } from "@/lib/edit-transcript";
 import { runPromise } from "@/lib/server";
+import { isVideoLockedByShareableLinkLimit } from "@/lib/shareable-link-quota";
+import { playbackUrlValidity } from "@/lib/signed-url-validity";
+import { isEditSourceObjectKey } from "@/lib/video-edit-processing";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 
 export const dynamic = "force-dynamic";
@@ -196,17 +199,21 @@ export async function GET(request: NextRequest) {
 	const effect = Effect.gen(function* () {
 		const tokenPayload = token ? verifyStorageObjectToken(token) : null;
 		const videoId = Video.VideoId.make(videoIdParam);
-		const video =
-			tokenPayload?.videoId === videoIdParam && tokenPayload.key === key
-				? yield* getTokenVideo(videoId)
-				: yield* getPolicyVideo(videoId);
+		const hasKeyToken =
+			tokenPayload?.videoId === videoIdParam && tokenPayload.key === key;
+		const video = hasKeyToken
+			? yield* getTokenVideo(videoId)
+			: yield* getPolicyVideo(videoId);
 
 		if (!key.startsWith(`${video.ownerId}/${video.id}/`)) {
 			return yield* Effect.fail("not-found" as const);
 		}
+		if (isEditSourceObjectKey(key) && !hasKeyToken) {
+			return yield* Effect.fail("not-found" as const);
+		}
 		if (
 			isInternalRecordingKey(key) &&
-			!(tokenPayload?.videoId === videoIdParam && tokenPayload.key === key) &&
+			!hasKeyToken &&
 			!(
 				key === Video.getAudioLevelOutputKey(video) ||
 				((video.source.type === "desktopMP4" ||
@@ -221,11 +228,28 @@ export async function GET(request: NextRequest) {
 			return yield* Effect.fail("not-found" as const);
 		}
 
+		if (
+			!hasKeyToken &&
+			!internalDownload &&
+			!key.startsWith(`${video.ownerId}/${video.id}/comments/`)
+		) {
+			const viewer = yield* Effect.serviceOption(CurrentUser);
+			if (!Option.exists(viewer, (user) => user.id === video.ownerId)) {
+				const locked = yield* Effect.tryPromise(() =>
+					isVideoLockedByShareableLinkLimit(video.id),
+				).pipe(
+					Effect.tapError(Effect.logError),
+					Effect.orElseSucceed(() => false),
+				);
+				if (locked) return yield* Effect.fail("not-found" as const);
+			}
+		}
+
 		const [storage] = yield* Storage.getAccessForVideo(video);
 		if (!("getObjectResponse" in storage)) {
 			const url = downloadName
 				? yield* storage.getSignedDownloadUrl(key, downloadName)
-				: yield* storage.getSignedObjectUrl(key);
+				: yield* storage.getSignedObjectUrl(key, playbackUrlValidity());
 			return Response.redirect(url);
 		}
 

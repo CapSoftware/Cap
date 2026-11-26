@@ -307,7 +307,7 @@ export const homepageCopy: HomePageCopy = {
 		title: "Simple, Honest Pricing",
 		subtitle:
 			"Start free, upgrade when you need more. Early adopter pricing locked in forever.",
-		lovedBy: "Trusted by 80,000+ users",
+		lovedBy: "Trusted by 100,000+ users",
 		free: {
 			title: "Free",
 			description:

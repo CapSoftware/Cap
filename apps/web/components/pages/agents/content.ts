@@ -3,9 +3,9 @@ import type { ModeKey } from "@/components/pages/HomeTwo/theme";
 export const agentsSeo = {
 	path: "/agents",
 	url: "https://cap.so/agents",
-	title: "Screen Recorder for AI Agents | Cap for Agents",
+	title: "Open source screen recorder for AI agents | Cap",
 	description:
-		"Cap is the open source screen recorder built for AI agents. Record, upload, transcribe, and share from Claude Code, Codex, Cursor, or OpenCode through a CLI and MCP server. No app or dashboard needed.",
+		"Cap is an open source screen recorder with instant share links. AI agents can record, share and manage recordings through the Cap CLI and MCP server.",
 	keywords: [
 		"screen recorder for AI agents",
 		"AI agent screen recording",

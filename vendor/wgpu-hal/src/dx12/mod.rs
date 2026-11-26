@@ -571,6 +571,7 @@ struct PrivateCapabilities {
     heap_create_not_zeroed: bool,
     casting_fully_typed_format_supported: bool,
     suballocation_supported: bool,
+    avoid_cpu_descriptor_overwrites: bool,
     shader_model: naga::back::hlsl::ShaderModel,
     max_sampler_descriptor_heap_size: u32,
 }
@@ -995,6 +996,7 @@ pub struct BindGroup {
     handle_views: Option<descriptor::DualHandle>,
     sampler_index_buffer: Option<SamplerIndexBuffer>,
     dynamic_buffers: Vec<DynamicBuffer>,
+    _staging_views: Option<descriptor::CpuHeap>,
 }
 
 impl crate::DynBindGroup for BindGroup {}

@@ -1,12 +1,15 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { organizationInvites } from "@cap/database/schema";
+import {
+	findPendingOrganizationInviteId,
+	readActiveOrganizationId,
+} from "@cap/database/organization-pointer";
 import { userIsPro } from "@cap/utils";
-import { and, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AuthContextProvider } from "@/app/Layout/AuthContext";
 import { resolveCurrentUser } from "@/app/Layout/current-user";
+import { shouldOfferPasskey } from "@/lib/passkey-prompt";
 import { runPromise } from "@/lib/server";
 import { getShareableLinkUsage } from "@/lib/shareable-link-quota";
 import DashboardInner from "./_components/DashboardInner";
@@ -14,6 +17,7 @@ import { DashboardPasteImport } from "./_components/DashboardPasteImport";
 import MobileTab from "./_components/MobileTab";
 import DesktopNav from "./_components/Navbar/Desktop";
 import MobileNav from "./_components/Navbar/Mobile";
+import { PasskeyPrompt } from "./_components/PasskeyPrompt";
 import { DashboardContexts } from "./Contexts";
 import { UploadingProvider } from "./caps/UploadingContext";
 import {
@@ -26,21 +30,6 @@ import {
 
 export const dynamic = "force-dynamic";
 
-async function getPendingInviteIdForUser(email: string) {
-	const [invite] = await db()
-		.select({ id: organizationInvites.id })
-		.from(organizationInvites)
-		.where(
-			and(
-				eq(organizationInvites.invitedEmail, email.toLowerCase()),
-				eq(organizationInvites.status, "pending"),
-			),
-		)
-		.limit(1);
-
-	return invite?.id ?? null;
-}
-
 export default async function DashboardLayout({
 	children,
 }: {
@@ -50,8 +39,17 @@ export default async function DashboardLayout({
 	if (!user) redirect("/login");
 
 	const hasName = Boolean(user.name && user.name.length > 0);
-	const pendingInviteIdPromise = getPendingInviteIdForUser(user.email);
-	const dashboardDataPromise = hasName ? getDashboardData(user) : null;
+	const pendingInviteIdPromise = findPendingOrganizationInviteId(
+		db(),
+		user.email,
+	);
+	const offerPasskeyPromise = shouldOfferPasskey(user);
+	const dashboardDataPromise = hasName
+		? getDashboardData(user, {
+				canCreatePersonalOrganization: async () =>
+					!(await pendingInviteIdPromise),
+			})
+		: null;
 	// Fail-open: the meter is informational and must never take the shell down.
 	const shareableLinkUsagePromise =
 		hasName && !userIsPro(user)
@@ -69,6 +67,7 @@ export default async function DashboardLayout({
 	}
 
 	let organizationSelect: Organization[] = [];
+	let activeOrganizationId: string | null = null;
 	let userCapsCount: number | null = 0;
 	let organizationSettings: OrganizationSettings | null = null;
 	let spacesData: Spaces[] = [];
@@ -77,6 +76,7 @@ export default async function DashboardLayout({
 	try {
 		const dashboardData = await dashboardDataPromise;
 		organizationSelect = dashboardData.organizationSelect;
+		activeOrganizationId = dashboardData.activeOrganizationId;
 		userCapsCount = dashboardData.userCapsCount;
 		organizationSettings = dashboardData.organizationSettings;
 		userPreferences = dashboardData.userPreferences?.preferences || null;
@@ -92,11 +92,24 @@ export default async function DashboardLayout({
 		userPreferences = null;
 	}
 
+	// The current user is cached for this request, so pages rendered with this
+	// layout would still read the organization the dashboard just moved off.
+	// Reloading once makes them read the stored one.
+	if (
+		activeOrganizationId &&
+		activeOrganizationId !== user.activeOrganizationId &&
+		(await readActiveOrganizationId(db(), user.id)) === activeOrganizationId
+	) {
+		redirect("/dashboard/caps");
+	}
+
 	const shareableLinkUsage = await shareableLinkUsagePromise;
+	const offerPasskey = await offerPasskeyPromise;
 
 	let activeOrganization = organizationSelect.find(
 		(organization) =>
-			organization.organization.id === user.activeOrganizationId,
+			organization.organization.id ===
+			(activeOrganizationId ?? user.activeOrganizationId),
 	);
 
 	if (!activeOrganization && organizationSelect.length > 0) {
@@ -124,6 +137,7 @@ export default async function DashboardLayout({
 					shareableLinkUsage={shareableLinkUsage}
 				>
 					<DashboardPasteImport />
+					{offerPasskey && <PasskeyPrompt />}
 					<div className="dashboard-chrome dashboard-grid">
 						<DesktopNav />
 						<div className="flex h-full [grid-area:main] focus:outline-none">

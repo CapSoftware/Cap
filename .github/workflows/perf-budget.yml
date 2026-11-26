@@ -5,6 +5,7 @@ name: Perf budget
 # drifts between jobs. "Perf budget" is the job to require.
 
 on:
+  merge_group:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
@@ -38,7 +39,9 @@ jobs:
           EVENT: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
           DRAFT: ${{ github.event.pull_request.draft }}
-          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'merge_group' }}
+          MQ_BASE: ${{ github.event.merge_group.base_sha }}
+          MQ_HEAD: ${{ github.event.merge_group.head_sha }}
           RUSTUP_TOOLCHAIN: stable
         run: |
           set -euo pipefail
@@ -49,7 +52,11 @@ jobs:
             echo "Draft: the perf budget runs once the pull request is ready." | tee -a "$GITHUB_STEP_SUMMARY"
             echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+          if [[ "$EVENT" == merge_group ]]; then
+            python3 scripts/ci/merge_queue.py files --base "$MQ_BASE" --head "$MQ_HEAD" > "$RUNNER_TEMP/changed.txt"
+          else
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+          fi
           python3 scripts/verify/plan.py risk --files "$RUNNER_TEMP/changed.txt" --output "$RUNNER_TEMP/risk.txt"
           # A change to the budget itself is measured only from this
           # repository's branches, so a fork cannot queue the macOS job by
@@ -65,9 +72,20 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # Workload groups (scripts/verify/perf-ab.py GROUPS) run side by side, one
+  # runner each; every base and head pair still shares one machine. In one
+  # job they took about 19 minutes, 8 of them on report-only playback.
   measure:
+    name: measure (${{ matrix.group }})
     needs: scope
     if: needs.scope.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          - export
+          - export-camera-and-seek
+          - playback
     runs-on: blacksmith-6vcpu-macos-26
     timeout-minutes: 120
     steps:
@@ -94,7 +112,7 @@ jobs:
       - name: Base worktree
         env:
           BASE_INPUT: ${{ inputs.base }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
           set -euo pipefail
           base="${BASE_INPUT:-}"
@@ -123,12 +141,13 @@ jobs:
             --head "$RUNNER_TEMP/perf/head/binaries.json" \
             --fixtures "$RUNNER_TEMP/perf/fixtures" \
             --out "$RUNNER_TEMP/perf/runs" \
+            --group "${{ matrix.group }}" \
             --summary "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
-          name: perf-budget
+          name: perf-budget-${{ matrix.group }}
           path: ${{ runner.temp }}/perf/runs/**/perf-budget.md
           if-no-files-found: ignore
 

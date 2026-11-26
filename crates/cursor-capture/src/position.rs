@@ -10,7 +10,11 @@ pub struct RawCursorPosition {
 
 impl RawCursorPosition {
     pub fn get() -> Self {
-        Self::from_coords(DeviceState::new().get_mouse().coords)
+        #[cfg(target_os = "macos")]
+        let device_state = DeviceState;
+        #[cfg(not(target_os = "macos"))]
+        let device_state = DeviceState::new();
+        Self::from_coords(device_state.get_mouse().coords)
     }
 
     pub fn from_coords((x, y): (i32, i32)) -> Self {

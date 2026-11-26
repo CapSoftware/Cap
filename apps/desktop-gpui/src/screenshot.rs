@@ -20,10 +20,13 @@ use gpui::App;
 use crate::app_windows;
 
 pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
-    if matches!(target, ScreenCaptureTarget::CameraOnly) {
+    if matches!(
+        target,
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+    ) {
         // `capture_screenshot` rejects it too; failing here keeps the pickers
         // up instead of tearing them down for nothing.
-        tracing::error!("camera-only is not a screenshot target");
+        tracing::error!(kind = target.kind_str(), "not a screenshot target");
         return;
     }
     tracing::info!(kind = target.kind_str(), "taking a screenshot");

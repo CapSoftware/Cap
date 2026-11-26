@@ -222,6 +222,8 @@ struct Entry {
     thumbnail: Option<PathBuf>,
     details: Option<Details>,
     shared: bool,
+    /// Sound only: no thumbnail, and no share link, since links play video.
+    audio_only: bool,
     state: ActionState,
     cancel: Arc<AtomicBool>,
     task: Option<Task<()>>,
@@ -288,7 +290,8 @@ pub fn show_studio_recording(project_dir: PathBuf, cx: &mut App) {
 /// actions on the newest card in order, each after the previous one settles,
 /// so the real-app tests can drive the overlay without synthetic clicks
 /// (which unprivileged CI sessions drop). Export writes to
-/// `CAP_GPUI_AUTO_EXPORT`.
+/// `CAP_GPUI_AUTO_EXPORT`. `after:<path>` holds the next step until that file
+/// exists, so a test can start an action at a moment it chooses.
 #[cfg(debug_assertions)]
 fn run_auto_actions(model: Entity<Overlay>, cx: &mut App) {
     let Ok(spec) = std::env::var("CAP_GPUI_AUTO_RECORDINGS_OVERLAY") else {
@@ -313,6 +316,12 @@ fn run_auto_actions(model: Entity<Overlay>, cx: &mut App) {
                     Some(true) => cx.background_executor().timer(PROGRESS_POLL).await,
                     None => return,
                 }
+            }
+            if let Some(path) = step.strip_prefix("after:") {
+                while !Path::new(path).exists() {
+                    cx.background_executor().timer(PROGRESS_POLL).await;
+                }
+                continue;
             }
             tracing::info!(step = %step, "recordings overlay auto action");
             cx.update(|cx| {
@@ -398,6 +407,27 @@ pub fn show_after(capture: Capture, cx: &mut App) {
     }
 }
 
+pub fn project_changed(project: &Path, cx: &mut App) {
+    let Some(model) = existing_model(cx) else {
+        return;
+    };
+    model.update(cx, |overlay, cx| {
+        let reload: Vec<_> = overlay
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.kind == MediaKind::Recording
+                    && (entry.path == project
+                        || entry.path.canonicalize().is_ok_and(|path| path == project))
+            })
+            .map(|entry| (entry.id, entry.path.clone()))
+            .collect();
+        for (id, path) in reload {
+            overlay.load_details(id, path, cx);
+        }
+    });
+}
+
 pub fn work_in_flight(cx: &App) -> bool {
     existing_model(cx).is_some_and(|model| {
         model
@@ -466,9 +496,9 @@ fn sync_window(model: &Entity<Overlay>, cx: &mut App) {
 
 fn overlay_level() -> isize {
     if cfg!(target_os = "macos") {
-        platform::target_overlay_level() - 1
+        platform::recording_area_level() - 1
     } else {
-        platform::target_overlay_level()
+        platform::recording_area_level()
     }
 }
 
@@ -658,17 +688,21 @@ impl Overlay {
         }
         let id = self.next_id;
         self.next_id += 1;
-        let thumbnail = match kind {
-            MediaKind::Recording => recording_thumbnail(&path),
-            MediaKind::Screenshot => Some(path.clone()),
-        };
         let bundle = match kind {
             MediaKind::Recording => path.clone(),
             MediaKind::Screenshot => path.parent().map(Path::to_path_buf).unwrap_or_default(),
         };
-        let shared = RecordingMeta::load_for_project(&bundle)
-            .ok()
-            .is_some_and(|meta| meta.sharing.is_some());
+        let meta = RecordingMeta::load_for_project(&bundle).ok();
+        let shared = meta.as_ref().is_some_and(|meta| meta.sharing.is_some());
+        let audio_only = meta
+            .as_ref()
+            .and_then(RecordingMeta::studio_meta)
+            .is_some_and(cap_project::StudioRecordingMeta::is_audio_only);
+        let thumbnail = match kind {
+            MediaKind::Recording if audio_only => None,
+            MediaKind::Recording => recording_thumbnail(&path),
+            MediaKind::Screenshot => Some(path.clone()),
+        };
         self.entries.insert(
             0,
             Entry {
@@ -678,6 +712,7 @@ impl Overlay {
                 thumbnail,
                 details: None,
                 shared,
+                audio_only,
                 state: ActionState::Idle,
                 cancel: Arc::new(AtomicBool::new(false)),
                 task: None,
@@ -686,22 +721,26 @@ impl Overlay {
         );
         self.enforce_limit(cx);
         if kind == MediaKind::Recording {
-            let task = cx
-                .background_executor()
-                .spawn(async move { load_details(&path) });
-            cx.spawn(async move |this, cx| {
-                let details = task.await;
-                this.update(cx, |overlay, cx| {
-                    if let Some(entry) = overlay.entry_mut(id) {
-                        entry.details = Some(details);
-                        cx.notify();
-                    }
-                })
-                .ok();
-            })
-            .detach();
+            self.load_details(id, path, cx);
         }
         cx.notify();
+    }
+
+    fn load_details(&self, id: u64, path: PathBuf, cx: &mut Context<Self>) {
+        let task = cx
+            .background_executor()
+            .spawn(async move { load_details(&path) });
+        cx.spawn(async move |this, cx| {
+            let details = task.await;
+            this.update(cx, |overlay, cx| {
+                if let Some(entry) = overlay.entry_mut(id) {
+                    entry.details = Some(details);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn entry(&self, id: u64) -> Option<&Entry> {
@@ -1119,6 +1158,10 @@ async fn render_for_project(
         cancel.store(true, Ordering::Release);
         return Err("Export cancelled".into());
     }
+    let settling = project_path.to_path_buf();
+    cx.background_executor()
+        .spawn(async move { crate::unused_media::settle(&settling) })
+        .await?;
     let project = cap_project::ProjectConfiguration::load(project_path).unwrap_or_default();
     let (progress_tx, progress_rx) = flume::unbounded::<(u32, u32)>();
     let (width, height) = OVERLAY_EXPORT_SIZE;
@@ -1459,6 +1502,14 @@ impl OverlayView {
                 .inset_0()
                 .rounded(px(CARD_INNER_RADIUS))
                 .bg(theme.gray_5)
+                .when(entry.audio_only, |this| {
+                    this.flex().items_center().justify_center().child(
+                        svg()
+                            .path("icons/microphone.svg")
+                            .size(px(28.))
+                            .text_color(theme.gray_11),
+                    )
+                })
                 .into_any_element(),
         };
 
@@ -1516,12 +1567,9 @@ impl OverlayView {
                         )
                     }),
             )
-            .child(
-                div()
-                    .absolute()
-                    .bottom(px(10.))
-                    .right(px(10.))
-                    .child(self.action_button(
+            .when(!entry.audio_only, |this| {
+                this.child(div().absolute().bottom(px(10.)).right(px(10.)).child(
+                    self.action_button(
                         ("overlay-share", id),
                         "icons/upload-arrow.svg",
                         if has_link {
@@ -1530,8 +1578,9 @@ impl OverlayView {
                             tr::recordings_overlay::create_link()
                         },
                         cx.listener(move |this, _, _, cx| this.share(id, cx)),
-                    )),
-            )
+                    ),
+                ))
+            })
             .child(
                 div()
                     .absolute()

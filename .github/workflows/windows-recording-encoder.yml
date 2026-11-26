@@ -5,6 +5,7 @@ name: Windows recording encoder
 # Media Foundation self-test that runs in a child process because Intel's
 # transform faults on odd frame sizes.
 on:
+  merge_group:
   pull_request:
     paths:
       - "crates/enc-ffmpeg/**"
@@ -34,7 +35,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # GitHub ignores paths filters in the merge queue, so the queue run applies
+  # this workflow's pull_request paths to the queued change itself.
+  scope:
+    name: Scope
+    if: github.event_name == 'merge_group'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.queue.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          filter: blob:none
+          sparse-checkout: |
+            .github/workflows
+            scripts/ci
+      - name: Merge queue scope
+        id: queue
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.merge_group.head_sha }}
+        run: python3 scripts/ci/merge_queue.py scope --workflow .github/workflows/windows-recording-encoder.yml --base "$BASE" --head "$HEAD" >> "$GITHUB_OUTPUT"
+
   segmented-encoder:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run != 'false' }}
     name: Segmented encoder (windows-2022)
     runs-on: windows-2022
     timeout-minutes: 45
@@ -66,6 +94,9 @@ jobs:
 
       - name: Encoder selection and isolated self-test tests
         run: cargo test --locked -p cap-media-info --lib intel_h264_mft && cargo test --locked -p cap-enc-ffmpeg --lib self_test -- --nocapture
+
+      - name: Explicit video bitrate tests
+        run: cargo test --locked -p cap-enc-mediafoundation --lib bitrate_multiplier && cargo test --locked -p cap-enc-ffmpeg --lib video_bitrate -- --nocapture
 
       # The fault runs wherever the self-test runs: in a child it fails only
       # the child, in this process it would end the test with 0xc0000005.

@@ -38,6 +38,7 @@ const FORMATTED: &[&str] = &[
     "main.storage.blocked",
     "main.storage.can_start",
     "main.storage.check_failed",
+    "controls.settings.switch_failed",
 ];
 
 #[test]
@@ -69,10 +70,87 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::camera::blur::light(), "Light"),
         (tr::camera::blur::heavy(), "Heavy"),
         (tr::camera::blur::cutout(), "Cutout"),
+        (tr::camera::toolbar::close(), "Close camera"),
+        (tr::camera::toolbar::larger(), "Make larger"),
+        (tr::camera::toolbar::smaller(), "Make smaller"),
+        (
+            tr::camera::toolbar::size_body(),
+            "Or drag any corner to resize.",
+        ),
+        (tr::camera::toolbar::shape(), "Change shape"),
+        (
+            tr::camera::toolbar::shape_to_square(),
+            "Switch to a square.",
+        ),
+        (
+            tr::camera::toolbar::shape_to_full(),
+            "Switch to a rectangle that shows your whole camera.",
+        ),
+        (
+            tr::camera::toolbar::shape_to_round(),
+            "Switch back to a circle.",
+        ),
+        (tr::camera::toolbar::mirror(), "Mirror preview"),
+        (
+            tr::camera::toolbar::mirror_off(),
+            "Flip the preview like a mirror.",
+        ),
+        (
+            tr::camera::toolbar::mirror_on(),
+            "Mirrored now. Click to flip it back.",
+        ),
+        (tr::camera::toolbar::blur(), "Background blur"),
+        (
+            tr::camera::toolbar::blur_off(),
+            "Off. Click for a light blur.",
+        ),
+        (
+            tr::camera::toolbar::blur_light(),
+            "Light. Click for a heavier blur.",
+        ),
+        (
+            tr::camera::toolbar::blur_heavy_then_cutout(),
+            "Heavy. Click to remove the background.",
+        ),
+        (
+            tr::camera::toolbar::blur_heavy_then_off(),
+            "Heavy. Click to turn it off.",
+        ),
+        (
+            tr::camera::toolbar::blur_cutout(),
+            "Background removed. Click to turn it off.",
+        ),
+        (tr::camera::toolbar::picture(), "Use a picture"),
+        (
+            tr::camera::toolbar::picture_body(),
+            "Show a still picture instead of your camera.",
+        ),
+        (tr::camera::toolbar::change_picture(), "Change picture"),
+        (
+            tr::camera::toolbar::change_picture_body(),
+            "Choose another picture to show.",
+        ),
+        (tr::camera::toolbar::use_camera(), "Use your camera"),
+        (
+            tr::camera::toolbar::use_camera_body(),
+            "Show your camera again instead of the picture.",
+        ),
+        (tr::main::device::picture::label(), "Picture"),
+        (tr::main::device::picture::choose(), "Use a picture"),
+        (
+            tr::main::device::picture::detail(),
+            "Shows in place of a camera",
+        ),
+        (
+            tr::main::device::picture::change(),
+            "Choose another picture",
+        ),
+        (tr::main::device::picture::filter(), "Images"),
         (tr::main::target::display(), "Display"),
         (tr::main::target::window(), "Window"),
         (tr::main::target::area(), "Area"),
         (tr::main::target::camera_only(), "Camera Only"),
+        (tr::main::target::audio_only(), "Audio Only"),
         (tr::main::target::choose_display(), "Choose a display"),
         (tr::main::target::choose_window(), "Choose a window"),
         (tr::main::target::no_displays(), "No displays found"),
@@ -141,6 +219,13 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::main::library::import_screenshots(), "Import image"),
         (tr::main::library::no_recordings(), "No recordings yet"),
         (tr::main::library::no_screenshots(), "No screenshots yet"),
+        (tr::main::library::no_notes(), "No notes yet"),
+        (tr::main::library::no_matching_notes(), "No matching notes"),
+        (tr::main::library::open_notes(), "Open Notes"),
+        (
+            tr::main::library::notes_description(),
+            "Your notes will appear here. Write one any time, or record a meeting into one.",
+        ),
         (
             tr::main::library::view_all_recordings(),
             "View All Recordings",
@@ -184,8 +269,9 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::main::header::settings(), "Settings"),
         (tr::main::header::screenshots(), "Screenshots"),
         (tr::main::header::recordings(), "Recordings"),
+        (tr::main::header::notes(), "Notes"),
         (tr::main::header::teleprompter(), "Teleprompter"),
-        (tr::main::header::changelog(), "Changelog"),
+        (tr::main::header::library(), "Library"),
         (tr::main::plan::personal(), "Personal"),
         (tr::main::plan::commercial(), "Commercial"),
         (tr::main::clip::record_new(), "Record a new clip"),
@@ -212,6 +298,10 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (
             tr::main::error::camera_only_needs_camera(),
             "Camera-only recording requires a selected camera.",
+        ),
+        (
+            tr::main::error::audio_only_needs_audio(),
+            "Audio only recording needs a microphone or system audio.",
         ),
         (
             tr::main::error::devices_not_ready(),
@@ -270,6 +360,21 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::controls::stop::resuming(), "Resuming…"),
         (tr::controls::stop::pausing(), "Pausing…"),
         (tr::controls::stop::paused(), "Paused"),
+        (tr::controls::draw::start(), "Draw on screen"),
+        (tr::controls::draw::stop(), "Stop drawing"),
+        (
+            tr::controls::draw::window_unavailable(),
+            "Drawing works in display and area recordings",
+        ),
+        (tr::controls::draw::pen(), "Pen, ⇧ for a straight line"),
+        (
+            tr::controls::draw::highlighter(),
+            "Highlighter, ⇧ for a straight line",
+        ),
+        (tr::controls::draw::arrow(), "Arrow, ⇧ snaps to 45°"),
+        (tr::controls::draw::rectangle(), "Rectangle, ⇧ for a square"),
+        (tr::controls::draw::undo(), "Undo"),
+        (tr::controls::draw::clear(), "Clear all"),
         (tr::controls::stop::error(), "Error"),
         (tr::controls::confirm::restart_title(), "Confirm Restart"),
         (
@@ -291,6 +396,20 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::controls::pause::pausing(), "Pausing recording…"),
         (tr::controls::pause::resume(), "Resume recording"),
         (tr::controls::marker::add(), "Add marker"),
+        (tr::controls::settings::open(), "Recording settings"),
+        (
+            tr::controls::settings::show_camera_preview(),
+            "Show camera preview",
+        ),
+        (tr::controls::settings::switching(), "Switching…"),
+        (
+            tr::controls::settings::locked(),
+            "Can't change in this recording",
+        ),
+        (
+            tr::controls::settings::not_in_recording(),
+            "Not in this recording",
+        ),
         (tr::controls::pause::pause(), "Pause recording"),
         (
             tr::controls::low_storage(),
@@ -310,6 +429,22 @@ fn main_surfaces_match_the_literals_they_replaced() {
             "Click to allow Cap to use your camera in System Settings.",
         ),
         (tr::camera::issue::unavailable_title(), "Camera unavailable"),
+        (
+            tr::camera::issue::disconnected_title(),
+            "Camera disconnected",
+        ),
+        (
+            tr::camera::issue::disconnected_message(),
+            "The selected camera stopped sending video.",
+        ),
+        (
+            tr::controls::disconnected::microphone(),
+            "Microphone disconnected. Silence will be used until it reconnects.",
+        ),
+        (
+            tr::controls::disconnected::camera(),
+            "Camera disconnected. Recording continues without camera overlay.",
+        ),
         (
             tr::camera::issue::not_found(),
             "This camera is no longer available. Check that it is connected and allowed by system permissions.",
@@ -637,6 +772,14 @@ fn main_surfaces_match_the_literals_they_replaced() {
     for key in FORMATTED {
         assert!(KEYS.contains(key), "{key}");
     }
+}
+
+#[test]
+fn a_failed_input_switch_names_the_device_and_says_recording_continues() {
+    assert_eq!(
+        tr::controls::settings::switch_failed("USB Mic"),
+        "Couldn't switch to USB Mic. The recording continues."
+    );
 }
 
 #[test]

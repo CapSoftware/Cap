@@ -3,8 +3,11 @@ import {
 	createLevelPatchedMp4ObjectUrl,
 	isIosSafari,
 	patchMp4AvcLevel,
+	probeAvcFromUrl,
 	probeAvcLevelFromUrl,
+	readAvcFromMp4Prefix,
 	readAvcLevelFromMp4Prefix,
+	shouldPatchAvcLevelForIos,
 } from "@/app/s/[videoId]/_components/mp4-level-patch";
 
 type BuiltAvcCFixture = {
@@ -128,6 +131,80 @@ describe("readAvcLevelFromMp4Prefix", () => {
 	});
 });
 
+function buildSampleEntryFixture(
+	level: number,
+	width: number,
+	height: number,
+	fourcc = "avc1",
+): Uint8Array {
+	const { bytes: avcC } = buildAvcCFixture(level);
+	const entry = new Uint8Array(86 + avcC.length);
+	const view = new DataView(entry.buffer);
+	view.setUint32(0, entry.length);
+	entry.set(new TextEncoder().encode(fourcc), 4);
+	view.setUint16(14, 1);
+	view.setUint16(32, width);
+	view.setUint16(34, height);
+	entry.set(avcC, 86);
+	return entry;
+}
+
+describe("readAvcFromMp4Prefix", () => {
+	it("reads the level and the coded size from the avc1 sample entry", () => {
+		expect(
+			readAvcFromMp4Prefix(buildSampleEntryFixture(0x3c, 5120, 2880)),
+		).toEqual({ level: 0x3c, width: 5120, height: 2880 });
+	});
+
+	it("reads avc3 sample entries", () => {
+		expect(
+			readAvcFromMp4Prefix(buildSampleEntryFixture(0x3e, 1920, 1080, "avc3")),
+		).toEqual({ level: 0x3e, width: 1920, height: 1080 });
+	});
+
+	it("reports an unknown size when avcC is not directly inside a sample entry", () => {
+		const { bytes } = buildAvcCFixture(0x3e);
+		expect(readAvcFromMp4Prefix(bytes)).toEqual({
+			level: 0x3e,
+			width: null,
+			height: null,
+		});
+	});
+});
+
+describe("shouldPatchAvcLevelForIos", () => {
+	it("leaves levels at or below 5.2 alone", () => {
+		expect(
+			shouldPatchAvcLevelForIos({ level: 0x34, width: 3840, height: 2160 }),
+		).toBe(false);
+		expect(shouldPatchAvcLevelForIos(null)).toBe(false);
+	});
+
+	it("patches a stream labelled above 5.2 whose frames fit level 5.2", () => {
+		expect(
+			shouldPatchAvcLevelForIos({ level: 0x3e, width: 1920, height: 1080 }),
+		).toBe(true);
+		expect(
+			shouldPatchAvcLevelForIos({ level: 0x3c, width: 4096, height: 2304 }),
+		).toBe(true);
+	});
+
+	it("skips frames larger than level 5.2 allows", () => {
+		expect(
+			shouldPatchAvcLevelForIos({ level: 0x3c, width: 5120, height: 2880 }),
+		).toBe(false);
+		expect(
+			shouldPatchAvcLevelForIos({ level: 0x3c, width: 4112, height: 2304 }),
+		).toBe(false);
+	});
+
+	it("keeps today's behaviour when the size cannot be read", () => {
+		expect(
+			shouldPatchAvcLevelForIos({ level: 0x3e, width: null, height: null }),
+		).toBe(true);
+	});
+});
+
 describe("isIosSafari", () => {
 	it("detects iPhone Safari user agents", () => {
 		expect(
@@ -187,6 +264,23 @@ describe("probeAvcLevelFromUrl", () => {
 			fetchImpl,
 		});
 		expect(level).toBe(null);
+	});
+});
+
+describe("probeAvcFromUrl", () => {
+	it("reads the level and frame size from the first bytes", async () => {
+		const bytes = buildSampleEntryFixture(0x3c, 5120, 2880);
+		const fetchImpl = vi.fn(async () => {
+			return new Response(toArrayBuffer(bytes), { status: 206 });
+		}) as unknown as typeof fetch;
+
+		const probe = await probeAvcFromUrl("https://example/video.mp4", {
+			fetchImpl,
+			rangeBytes: bytes.byteLength,
+		});
+
+		expect(probe).toEqual({ level: 0x3c, width: 5120, height: 2880 });
+		expect(shouldPatchAvcLevelForIos(probe)).toBe(false);
 	});
 });
 

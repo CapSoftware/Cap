@@ -103,6 +103,10 @@ const EXACT: &[(&str, fn() -> &'static str)] = &[
         "The upload worker failed; the local recording is preserved",
         tr::message::upload::worker_failed,
     ),
+    (
+        "This recording was deleted on the web; the local recording is preserved",
+        tr::message::upload::deleted_on_web,
+    ),
     ("The saved recording is empty", tr::message::upload::empty),
     (
         "This recording has no resumable upload state",

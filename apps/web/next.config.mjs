@@ -153,6 +153,11 @@ const nextConfig = {
 				permanent: true,
 			},
 			{
+				source: "/obs-alternative",
+				destination: "/",
+				permanent: true,
+			},
+			{
 				source: "/updates",
 				destination: "/blog",
 				permanent: true,
@@ -160,11 +165,6 @@ const nextConfig = {
 			{
 				source: "/updates/:slug",
 				destination: "/blog/:slug",
-				permanent: true,
-			},
-			{
-				source: "/docs/s3-config",
-				destination: "/docs",
 				permanent: true,
 			},
 			{

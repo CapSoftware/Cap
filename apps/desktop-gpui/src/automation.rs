@@ -320,6 +320,17 @@ pub async fn studio_rules_finished(project_dir: &Path) {
         .await;
 }
 
+/// Whether a finished Studio recording's rules may still export or upload
+/// `project_dir`, which is canonical.
+pub fn studio_rules_running(project_dir: &Path) -> bool {
+    running_events().lock().iter().any(|(trigger, key)| {
+        *trigger == Trigger::StudioRecordingFinished && {
+            let path = Path::new(key);
+            path == project_dir || path.canonicalize().is_ok_and(|path| path == project_dir)
+        }
+    })
+}
+
 fn studio_context(project_dir: PathBuf, store: &AutomationsStore) -> TriggerContext {
     let ctx = TriggerContext::new()
         .with_project_path(project_dir.clone())
@@ -566,7 +577,7 @@ fn capture_target_kind(target: &ScreenCaptureTarget) -> Option<CaptureTargetKind
         ScreenCaptureTarget::Window { .. } => Some(CaptureTargetKind::Window),
         ScreenCaptureTarget::Display { .. } => Some(CaptureTargetKind::Display),
         ScreenCaptureTarget::Area { .. } => Some(CaptureTargetKind::Area),
-        ScreenCaptureTarget::CameraOnly => None,
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => None,
     }
 }
 
@@ -729,6 +740,11 @@ struct FileFingerprint {
     modified: Option<std::time::SystemTime>,
     #[cfg(unix)]
     inode: (u64, u64),
+    /// Volume serial and NTFS file index. A copy keeps its source's modified
+    /// time on Windows, so length and time alone cannot tell a same-size file
+    /// put in its place from the one written.
+    #[cfg(windows)]
+    file_id: (u32, u64),
 }
 
 fn file_fingerprint(path: &Path) -> std::io::Result<FileFingerprint> {
@@ -740,7 +756,28 @@ fn file_fingerprint(path: &Path) -> std::io::Result<FileFingerprint> {
         modified: metadata.modified().ok(),
         #[cfg(unix)]
         inode: (metadata.dev(), metadata.ino()),
+        #[cfg(windows)]
+        file_id: windows_file_id(path)?,
     })
+}
+
+/// std opens with read, write and delete sharing, and the handle closes on
+/// return, so this never holds up a later delete of the file.
+#[cfg(windows)]
+fn windows_file_id(path: &Path) -> std::io::Result<(u32, u64)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+    let file = std::fs::File::open(path)?;
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((
+        info.dwVolumeSerialNumber,
+        (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    ))
 }
 
 impl GpuiAutomationHost {
@@ -1158,39 +1195,46 @@ async fn render(
         builder = builder.with_output_path(output);
     }
     let reservation = ReservedOutput(reserved);
-    let base = builder.build().await.map_err(|error| format!("{error}"))?;
-    let output = match profile.format {
-        ExportFormat::Mp4 => {
-            cap_export::mp4::Mp4ExportSettings {
-                fps: profile.fps,
-                resolution_base: profile.resolution_base,
-                compression: export_compression(profile.compression),
-                custom_bpp: None,
-                force_ffmpeg_decoder: false,
-                optimize_filesize: false,
+    // Boxed so the exporter's large futures live on the heap, not on the
+    // stack of whichever thread polls the automation run.
+    let base = Box::pin(builder.build())
+        .await
+        .map_err(|error| format!("{error}"))?;
+    let output = Box::pin(async {
+        match profile.format {
+            ExportFormat::Mp4 => {
+                cap_export::mp4::Mp4ExportSettings {
+                    fps: profile.fps,
+                    resolution_base: profile.resolution_base,
+                    compression: export_compression(profile.compression),
+                    custom_bpp: None,
+                    force_ffmpeg_decoder: false,
+                    optimize_filesize: false,
+                }
+                .export(base, |_| true)
+                .await
             }
-            .export(base, |_| true)
-            .await
-        }
-        ExportFormat::Gif => {
-            cap_export::gif::GifExportSettings {
-                fps: profile.fps,
-                resolution_base: profile.resolution_base,
-                quality: None,
+            ExportFormat::Gif => {
+                cap_export::gif::GifExportSettings {
+                    fps: profile.fps,
+                    resolution_base: profile.resolution_base,
+                    quality: None,
+                }
+                .export(base, |_| true)
+                .await
             }
-            .export(base, |_| true)
-            .await
-        }
-        ExportFormat::Mov => {
-            cap_export::mov::MovExportSettings {
-                fps: profile.fps,
-                resolution_base: profile.resolution_base,
-                cursor_only: false,
+            ExportFormat::Mov => {
+                cap_export::mov::MovExportSettings {
+                    fps: profile.fps,
+                    resolution_base: profile.resolution_base,
+                    cursor_only: false,
+                }
+                .export(base, |_| true)
+                .await
             }
-            .export(base, |_| true)
-            .await
         }
-    }
+    })
+    .await
     .map_err(|error| format!("Export failed: {error}"))?;
     reservation.keep();
     tracing::info!(output = %output.display(), "automation: export complete");

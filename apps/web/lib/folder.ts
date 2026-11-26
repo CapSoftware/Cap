@@ -221,7 +221,9 @@ export const getVideosByFolderId = Effect.fn(function* (
 					: db
 							.select({ id: videos.id })
 							.from(videos)
-							.where(eq(videos.folderId, folderId))
+							.where(
+								and(eq(videos.folderId, folderId), isNull(videos.archivedAt)),
+							)
 							.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id))
 							.as("folder_videos_page");
 
@@ -419,6 +421,7 @@ export const getChildFolders = Effect.fn(function* (
 				: sql<number>`(
 						SELECT COUNT(*) FROM ${videos}
 						WHERE ${videos.folderId} = ${folders.id}
+							AND ${videos.archivedAt} IS NULL
 					)`;
 
 	const childFolders = yield* db.use((db) =>

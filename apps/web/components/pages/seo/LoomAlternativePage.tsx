@@ -28,8 +28,8 @@ export const loomAlternativeContent: SeoPageContent = {
 				"Cap prioritizes your privacy with GDPR compliance and the option to use your own Google Drive or S3 storage, ensuring your data remains under your control. Connect your own custom domain for a branded experience while maintaining 100% ownership of your data.",
 		},
 		{
-			title: "Half the Price of Loom",
-			description: `Cap starts from just $${PRICING.pro.annualPerMonth}/month per user, compared to Loom's $18/month per user. Plus, Cap offers a generous free plan that includes Studio mode for personal use.`,
+			title: "Cap Pro costs less than Loom Business",
+			description: `Billed annually, Cap Pro is $${PRICING.pro.annualPerMonth}/month per user ($${PRICING.pro.yearlyTotal} a year), compared to $180 a year per user for Loom Business. Billed monthly, it's $${PRICING.pro.monthly} against Loom Business at $18. Cap's free plan for personal use includes Studio Mode with the full editor.`,
 		},
 		{
 			title: "High-Quality Recordings",
@@ -125,7 +125,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		},
 		{
 			question: "How does Cap compare in pricing with Loom?",
-			answer: `Cap is significantly more affordable at just $${PRICING.pro.annualPerMonth}/month per user when billed annually, compared to Loom's $18/month per user. Cap also has a more generous free plan that includes Studio mode for personal use and the ability to record shareable links up to 5 minutes in 4K quality.`,
+			answer: `Billed annually, Cap Pro is $${PRICING.pro.annualPerMonth}/month per user, a single yearly charge of $${PRICING.pro.yearlyTotal}, while Loom Business is $180 per user per year. Billed monthly, Cap Pro is $${PRICING.pro.monthly}/month per user and Loom Business is $18/month per user. Cap's free plan is for personal use with no credit card required. It includes Studio Mode with the full editor and 4K export at 60 fps, plus 25 shareable links a month of up to 5 minutes each. Cap Pro adds 4K Instant Mode and unlimited shareable links.`,
 		},
 		{
 			question: "Can I keep full ownership of my recordings with Cap?",
@@ -156,10 +156,10 @@ export const loomAlternativeContent: SeoPageContent = {
 			[
 				"Pricing",
 				{
-					text: `from $${PRICING.pro.annualPerMonth}/month per user`,
+					text: `Cap Pro: $${PRICING.pro.yearlyTotal}/year per user`,
 					status: "positive",
 				},
-				{ text: "$18/month per user", status: "warning" },
+				{ text: "Business: $180/year per user", status: "warning" },
 			],
 			[
 				"Free Plan",

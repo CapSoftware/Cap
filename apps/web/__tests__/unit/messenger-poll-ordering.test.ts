@@ -63,6 +63,16 @@ beforeEach(() => {
 		return id;
 	});
 	vi.stubGlobal("clearInterval", (id: number) => polls.delete(id));
+	vi.stubGlobal("fetch", async (input: string) => {
+		const conversationId = decodeURIComponent(
+			new URL(input, "https://cap.so").pathname.split("/")[4] ?? "",
+		);
+		const data = await actions.fetchMessengerConversation(conversationId);
+		return Response.json({
+			mode: data.conversation.mode,
+			messages: data.messages,
+		});
+	});
 	actions.fetchMessengerConversations.mockResolvedValue([]);
 	actions.createMessengerConversation.mockResolvedValue(conversation.id);
 	actions.fetchMessengerConversation.mockReset().mockResolvedValue(data());

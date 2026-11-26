@@ -18,6 +18,8 @@ pub(super) fn is_dialogs_surface_key(key: &str) -> bool {
 }
 
 const FORMATTED: &[&str] = &[
+    "permission.help.window_step_choose_app",
+    "permission.help.window_step_add_app",
     "dialog.teleprompter.words_per_minute",
     "diagnostics.error.create_folder",
     "diagnostics.error.exited",
@@ -37,6 +39,7 @@ const FORMATTED: &[&str] = &[
     "dialog.clipboard.copy_image",
     "dialog.clipboard.unavailable_error",
     "dialog.file.failed",
+    "import.audio_failed",
     "import.image_failed",
     "import.video_failed",
     "import.progress.converting",
@@ -55,6 +58,7 @@ const FORMATTED: &[&str] = &[
     "screenshot_editor.error.upload_task",
     "transcription.download.failed",
     "transcription.download.file_progress",
+    "transcription.download.no_space",
     "transcription.download.progress",
     "dialog.quit.canceled",
     "dialog.startup.failed",
@@ -325,6 +329,7 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         (tr::import::filter::image(), "Image Files"),
         (tr::import::filter::media(), "Media Files"),
         (tr::import::filter::video(), "Video Files"),
+        (tr::import::filter::audio(), "Audio Files"),
         (tr::import::progress::analyzing(), "Analyzing video file..."),
         (tr::import::progress::complete(), "Import complete!"),
         (tr::import::progress::image(), "Importing image..."),
@@ -397,12 +402,12 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Resize the window to a ratio or an exact size before you record.",
         ),
         (
-            tr::overlay::window::size_needs_accessibility_title(),
-            "Resizing needs Accessibility",
+            tr::overlay::window::size_needs_permission_title(),
+            "Resizing needs your OK",
         ),
         (
-            tr::overlay::window::size_needs_accessibility_body(),
-            "Turn on Accessibility for Cap in System Settings to resize other apps' windows.",
+            tr::overlay::window::size_needs_permission_body(),
+            "Click to see how to let Cap resize windows.",
         ),
         (
             tr::overlay::window::size_unavailable_title(),
@@ -443,6 +448,23 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             tr::overlay::camera_only::description(),
             "Record using only your camera and microphone",
         ),
+        (
+            tr::overlay::audio_only::description(),
+            "Record your microphone and your computer's sound, without the screen or camera",
+        ),
+        (
+            tr::overlay::audio_only::meter_hint(),
+            "Say something to check your level",
+        ),
+        (
+            tr::overlay::audio_only::system_audio_only(),
+            "Recording system audio only",
+        ),
+        (
+            tr::overlay::audio_only::choose_source(),
+            "Choose a microphone or turn on system audio",
+        ),
+        (tr::overlay::audio_only::system_audio(), "System audio"),
         (
             tr::overlay::camera_only::select_camera(),
             "Please select a camera",
@@ -567,6 +589,10 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Let's get Cap ready",
         ),
         (
+            tr::permission::onboarding::hint::add_with_plus(),
+            "Click + under the Screen & System Audio Recording list in System Settings, then choose Cap. Already listed? Just switch it on.",
+        ),
+        (
             tr::permission::onboarding::hint::drag_into_list(),
             "Drag Cap from the panel under System Settings into the list. Already listed? Just switch it on.",
         ),
@@ -671,10 +697,146 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Drop it on the Screen & System Audio Recording list above, then make sure its switch is on.",
         ),
         (tr::permission::guide::title(), "Drag Cap into the list"),
+        (
+            tr::permission::guide::plus_title(),
+            "Add Cap with the + button",
+        ),
+        (
+            tr::permission::guide::screen_plus_body(),
+            "Click + under the Screen & System Audio Recording list above, then choose Cap.",
+        ),
         (tr::permission::name::accessibility(), "Accessibility"),
         (tr::permission::name::camera(), "Camera"),
         (tr::permission::name::microphone(), "Microphone"),
         (tr::permission::name::screen_recording(), "Screen Recording"),
+        (tr::permission::name::input_monitoring(), "Input Monitoring"),
+        (
+            tr::permission::guide::input_monitoring_plus_body(),
+            "Click + under the Input Monitoring list above, then choose Cap.",
+        ),
+        (
+            tr::permission::guide::override_title(),
+            "Add Cap, then choose apps",
+        ),
+        (
+            tr::permission::guide::override_body(),
+            "Click + above and choose Cap. Then pick Choose Apps and add the apps Cap should resize.",
+        ),
+        (
+            tr::permission::onboarding::hint::input_monitoring_plus(),
+            "Click + under the Input Monitoring list in System Settings, then choose Cap. Already listed? Just switch it on.",
+        ),
+        (
+            tr::permission::onboarding::keystrokes::allow(),
+            "Set up keystrokes",
+        ),
+        (
+            tr::permission::onboarding::keystrokes::body(),
+            "Cap can show the keys you press in your recordings. macOS calls this Input Monitoring. Skip it if you don't need it.",
+        ),
+        (
+            tr::permission::onboarding::keystrokes::done_body(),
+            "Your recordings can show the keys you press.",
+        ),
+        (
+            tr::permission::onboarding::keystrokes::done_title(),
+            "Keystrokes are on",
+        ),
+        (
+            tr::permission::onboarding::keystrokes::title(),
+            "Show your keystrokes",
+        ),
+        (tr::permission::help::done(), "Done"),
+        (
+            tr::permission::help::window_step_info(),
+            "Click ⓘ next to Cap.",
+        ),
+        (
+            tr::permission::help::window_step_add_apps(),
+            "Click + and add the app you're recording.",
+        ),
+        (
+            tr::permission::help::relaunch_keystrokes(),
+            "macOS turns on keystrokes once Cap restarts.",
+        ),
+        (
+            tr::permission::onboarding::relaunch::keystrokes_body(),
+            "macOS turns on keystrokes once Cap restarts. You'll pick up right here.",
+        ),
+        (
+            tr::permission::help::done_keystrokes(),
+            "Your next recording will include the keys you press.",
+        ),
+        (tr::permission::help::done_title(), "You're all set"),
+        (
+            tr::permission::help::done_window(),
+            "Cap can resize windows now.",
+        ),
+        (
+            tr::permission::help::keystrokes_body(),
+            "macOS needs your OK before Cap can see the keys you press while recording.",
+        ),
+        (
+            tr::permission::help::keystrokes_title(),
+            "Show your keystrokes",
+        ),
+        (tr::permission::help::not_now(), "Not now"),
+        (
+            tr::permission::help::step_accessibility(),
+            "Find Cap under Accessibility and switch it on.",
+        ),
+        (
+            tr::permission::help::step_choose_cap(),
+            "Choose Cap and enter your Mac password.",
+        ),
+        (
+            tr::permission::help::step_input_monitoring(),
+            "Click + under Input Monitoring.",
+        ),
+        (
+            tr::permission::help::step_open(),
+            "Click Open System Settings below.",
+        ),
+        (
+            tr::permission::help::window_body(),
+            "macOS needs your OK before Cap can move or resize another app's window.",
+        ),
+        (
+            tr::permission::help::window_step_any_time(),
+            "Set it to At Any Time so macOS doesn't ask again every day.",
+        ),
+        (
+            tr::permission::help::window_step_choose_apps(),
+            "Pick Choose Apps, then add the app you're recording.",
+        ),
+        (
+            tr::permission::help::window_step_override(),
+            "Click + in the pane that opens and choose Cap.",
+        ),
+        (
+            tr::permission::help::window_title(),
+            "Let Cap resize windows",
+        ),
+        (
+            tr::permission::help::meeting_title(),
+            "Name speakers from meeting apps",
+        ),
+        (
+            tr::permission::help::meeting_body(),
+            "macOS needs your OK before Cap can see who’s talking in Zoom, Teams or your browser.",
+        ),
+        (
+            tr::permission::help::done_meeting(),
+            "Cap can name speakers from your meeting apps now.",
+        ),
+        (
+            tr::permission::help::meeting_step_choose_apps(),
+            "Pick Choose Apps, then add Zoom, Teams or your browser.",
+        ),
+        (
+            tr::permission::help::meeting_step_add_apps(),
+            "Click + and add Zoom, Teams or your browser.",
+        ),
         (
             tr::screenshot_editor::loading_preview(),
             "Loading preview...",
@@ -861,6 +1023,16 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Everything recorded so far stays in the recording's folder.",
         ),
         (tr::dialog::quit::keep_open(), "Keep Cap Open"),
+        (
+            tr::dialog::quit::meeting_title(),
+            "Stop recording this meeting?",
+        ),
+        (
+            tr::dialog::quit::meeting_message(),
+            "Quitting stops the recording. Cap keeps everything so far and finishes the transcript.",
+        ),
+        (tr::dialog::quit::meeting_quit(), "Stop and Quit"),
+        (tr::dialog::quit::meeting_keep(), "Keep Recording"),
         (tr::dialog::quit::quit_anyway(), "Quit Anyway"),
         (
             tr::dialog::quit::pending(),
@@ -1045,6 +1217,7 @@ fn assembled_dialog_messages_match_the_code_they_replaced() {
     for (media, formatted) in [
         ("video", tr::import::video_failed(message)),
         ("image", tr::import::image_failed(message)),
+        ("audio", tr::import::audio_failed(message)),
     ] {
         assert_eq!(formatted, format!("Failed to import {media}: {message}"));
     }
@@ -1055,6 +1228,14 @@ fn assembled_dialog_messages_match_the_code_they_replaced() {
     for permission in crate::permissions::OSPermission::ALL {
         assert_eq!(permission.display_name(), permission.label());
     }
+    assert_eq!(
+        tr::permission::help::window_step_choose_app("Safari"),
+        "Pick Choose Apps, then add Safari."
+    );
+    assert_eq!(
+        tr::permission::help::window_step_add_app("Safari"),
+        "Click + and add Safari."
+    );
 }
 
 #[test]
@@ -1203,6 +1384,12 @@ fn dialog_messages_format_like_the_code_they_replaced() {
         assert_eq!(
             tr::transcription::download::file_progress(filename, format!("{progress:.0}")),
             format!("Downloading {filename}: {progress:.0}%")
+        );
+    }
+    for size in ["420 MB", "1.3 GB"] {
+        assert_eq!(
+            tr::transcription::download::no_space(size),
+            format!("Not enough free space. Free up {size} and try again")
         );
     }
     for progress in [0.0_f64, 0.5, 0.999, 1.0] {

@@ -459,7 +459,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 
 					<div className="mt-14">
 						<p className="mb-4 text-sm italic text-gray-10 text-center md:text-left">
-							Trusted by <strong>80,000+</strong> teams, builders and creators
+							Trusted by <strong>100,000+</strong> teams, builders and creators
 						</p>
 						<LogoMarquee />
 					</div>

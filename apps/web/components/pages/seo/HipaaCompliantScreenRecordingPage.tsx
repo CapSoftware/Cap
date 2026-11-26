@@ -87,91 +87,11 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 		],
 	},
 
-	comparisonTable: {
-		title: "Cap vs Other Tools for HIPAA Screen Recording",
-		headers: ["Feature", "Cap", "Loom", "Zoom", "Camtasia"],
-		rows: [
-			[
-				"HIPAA compliant",
-				{ text: "Yes, signed BAA", status: "positive" },
-				{ text: "Enterprise only", status: "warning" },
-				{ text: "BAA available", status: "warning" },
-				{ text: "N/A", status: "neutral" },
-			],
-			[
-				"Self-hosted storage",
-				{ text: "Yes — any S3", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Open-source code",
-				{ text: "Yes — AGPLv3 and MIT crates", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"AWS S3 HIPAA support",
-				{ text: "Yes — via your BAA", status: "positive" },
-				{ text: "N/A", status: "neutral" },
-				{ text: "BAA available", status: "warning" },
-				{ text: "N/A", status: "neutral" },
-			],
-			[
-				"PHI off third-party servers",
-				{ text: "Yes — with self-hosting", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "Local only", status: "warning" },
-			],
-			[
-				"AI captions optional",
-				{ text: "Yes — can disable", status: "positive" },
-				{ text: "Always on (paid)", status: "warning" },
-				{ text: "Always on", status: "warning" },
-				{ text: "Optional", status: "positive" },
-			],
-			[
-				"Password-protected links",
-				{ text: "Yes", status: "positive" },
-				{ text: "Paid only", status: "warning" },
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Fully self-hostable platform",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Free for personal use",
-				{ text: "Yes — Studio Mode", status: "positive" },
-				{ text: "Limited", status: "warning" },
-				{ text: "Limited", status: "warning" },
-				{ text: "$299.99 one-time", status: "negative" },
-			],
-		],
-	},
-
 	comparisonTitle: "HIPAA-Compliant Recording Out of the Box",
 	comparisonDescription:
 		"Cap is HIPAA compliant with signed BAAs, and self-hosted storage gives healthcare teams even more control over where PHI lives",
 
 	comparison: [
-		{
-			title: "Cap vs Loom for Healthcare",
-			description:
-				"Loom stores all recordings on Loom's servers with no option to self-host. For healthcare organizations handling PHI, this creates significant HIPAA risk. Cap with self-hosted storage keeps all recording data on infrastructure you control. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.",
-		},
-		{
-			title: "Cap vs Zoom for Recording",
-			description:
-				"Zoom offers HIPAA BAAs for video conferencing but stores cloud recordings on Zoom's infrastructure. Cap records asynchronously to your own S3 bucket — no third-party cloud storage required. Better suited for recorded training content, EHR walkthroughs, and async clinical communications.",
-		},
 		{
 			title: "Cap for Medical Education Content",
 			description:
@@ -257,7 +177,7 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 			question:
 				"Is Cap open source and auditable for HIPAA vendor assessments?",
 			answer:
-				"Yes. Cap is open source on GitHub, with most code under AGPLv3 and specified Rust crates under MIT. Your security and compliance teams can audit the complete source code to verify data handling behavior, network calls, and storage logic. This transparency simplifies HIPAA vendor security reviews compared to closed-source recording tools.",
+				"Yes. Cap is open source on GitHub, with most code under AGPLv3 and specified Rust crates under MIT. Your security and compliance teams can audit the complete source code to verify data handling behavior, network calls, and storage logic.",
 		},
 		{
 			question: "Can I disable AI transcription in Cap for HIPAA compliance?",
@@ -283,7 +203,7 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 		{
 			question: "What screen recording tools are HIPAA-compliant?",
 			answer:
-				"Cap is HIPAA compliant, with signed BAAs available and a fully auditable open-source codebase. Tools that only offer cloud storage on the vendor's servers, like standard Loom, restrict HIPAA support to enterprise plans and require additional vendor review. Local-only recorders like Camtasia avoid cloud storage entirely but lack Cap's async sharing capabilities. Cap also supports self-hosted S3 storage for teams that want recordings to stay entirely within their own infrastructure.",
+				"Cap is HIPAA compliant, with signed BAAs available and a fully auditable open-source codebase. Cap also supports self-hosted S3 storage for teams that want recordings to stay entirely within their own infrastructure.",
 		},
 	],
 

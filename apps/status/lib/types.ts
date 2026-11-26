@@ -42,6 +42,7 @@ export type ServiceDefinition = {
 	defaultUrl?: string;
 	method: "GET" | "HEAD";
 	validation?: "auth" | "media" | "render";
+	signedUrl?: true;
 };
 
 export type PublicService = Pick<

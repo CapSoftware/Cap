@@ -54,7 +54,7 @@ export async function createWithReferralDiscount<T>(
 	}
 }
 
-function isRejectedCoupon(error: unknown) {
+export function isRejectedCoupon(error: unknown) {
 	if (!error || typeof error !== "object") return false;
 	const { type, param, code } = error as {
 		type?: unknown;

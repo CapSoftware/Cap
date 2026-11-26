@@ -1195,3 +1195,31 @@ footer a {
 		}
 	}
 }
+
+/* Organization brand colour on share pages and embeds. Set by
+   `playerBrandAttributes` (lib/player-brand.ts); without the attribute these
+   rules match nothing and the player keeps Cap's own colours. */
+[data-player-brand] .player-brand-play {
+	background-color: var(--player-brand);
+	color: var(--player-brand-foreground);
+}
+
+[data-player-brand] .player-brand-play:hover {
+	background-color: var(--player-brand-hover);
+}
+
+[data-player-brand] .player-brand-play > svg {
+	color: var(--player-brand-foreground);
+}
+
+[data-player-brand-accent] .player-brand-range,
+[data-player-brand-accent] .player-brand-thumb {
+	background-color: var(--player-brand-accent);
+}
+
+/* The control bar scopes its own `.dark`, which resets `--ring`, so it needs
+   the brand ring set again. Light bars (the timeline deck) keep Cap's ring. */
+[data-player-brand-accent] [data-slot="media-player"],
+[data-player-brand-accent] [data-slot="media-player-controls"].dark {
+	--ring: var(--player-brand-ring);
+}

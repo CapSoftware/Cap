@@ -5,6 +5,7 @@ import {
 	giftLink,
 	groupLicenseKey,
 	isLicenseKey,
+	licensesCsv,
 	lookupGift,
 	lookupPurchase,
 	parseRedeemIntent,
@@ -418,5 +419,63 @@ describe("retryAfterText", () => {
 		expect(retryAfterText(3600)).toBe("an hour");
 		expect(retryAfterText(3601)).toBe("2 hours");
 		expect(retryAfterText(86400)).toBe("24 hours");
+	});
+});
+
+describe("licensesCsv", () => {
+	const OTHER = "Zz9yY8xX7wW6vV5uU4tT3sS2rR1qQ0";
+
+	it("lists a gift link and key per unclaimed gift and blanks claimed ones", () => {
+		const csv = licensesCsv({
+			origin: "https://cap.so",
+			gift: true,
+			duration: "lifetime",
+			licenses: [
+				{ position: 1, licenseKey: KEY, redeemed: false },
+				{ position: 2, licenseKey: null, redeemed: true },
+				{ position: 3, licenseKey: OTHER, redeemed: false },
+			],
+		});
+		expect(csv).toBe(
+			[
+				"License,Gift link,License key,Type,Status",
+				`1,https://cap.so/redeem#${KEY},${KEY},Lifetime,Unclaimed`,
+				"2,,,Lifetime,Claimed",
+				`3,https://cap.so/redeem#${OTHER},${OTHER},Lifetime,Unclaimed`,
+				"",
+			].join("\r\n"),
+		);
+	});
+
+	it("lists only keys for an order bought for the buyer", () => {
+		const csv = licensesCsv({
+			origin: "https://cap.so",
+			gift: false,
+			duration: "yearly",
+			licenses: [
+				{ position: 1, licenseKey: KEY, redeemed: false },
+				{ position: 2, licenseKey: OTHER, redeemed: false },
+			],
+		});
+		expect(csv).toBe(
+			[
+				"License,License key,Type",
+				`1,${KEY},Yearly`,
+				`2,${OTHER},Yearly`,
+				"",
+			].join("\r\n"),
+		);
+	});
+
+	it("quotes cells that contain commas or quotes", () => {
+		const csv = licensesCsv({
+			origin: 'https://a,"b"',
+			gift: true,
+			duration: "lifetime",
+			licenses: [{ position: 1, licenseKey: KEY, redeemed: false }],
+		});
+		expect(csv.split("\r\n")[1]).toBe(
+			`1,"https://a,""b""/redeem#${KEY}",${KEY},Lifetime,Unclaimed`,
+		);
 	});
 });

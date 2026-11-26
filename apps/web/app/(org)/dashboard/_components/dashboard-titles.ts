@@ -2,6 +2,10 @@ export type DashboardCrumb = { label: string; href?: string };
 
 const exact: Record<string, DashboardCrumb[]> = {
 	"/dashboard/caps": [{ label: "My Caps" }],
+	"/dashboard/caps/archived": [
+		{ label: "My Caps", href: "/dashboard/caps" },
+		{ label: "Archived" },
+	],
 	"/dashboard/caps/record": [{ label: "Record a Cap" }],
 	"/dashboard/analytics": [{ label: "Analytics" }],
 	"/dashboard/import": [{ label: "Import Media" }],

@@ -103,6 +103,37 @@ impl H264EncoderBuilder {
     pub const ULTRA_BPP: f32 = 1.0;
     pub const INSTANT_MODE_BPP: f32 = 0.15;
 
+    pub fn bitrate_for(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
+        get_bitrate(ensure_even(width), ensure_even(height), frame_rate, bpp)
+    }
+
+    pub fn bpp_for_video_bitrate(
+        bpp: f32,
+        video_bitrate: Option<u32>,
+        input_config: &VideoInfo,
+        output_size: Option<(u32, u32)>,
+    ) -> f32 {
+        let Some(video_bitrate) = video_bitrate else {
+            return bpp;
+        };
+        let (width, height) = output_size.unwrap_or((input_config.width, input_config.height));
+        let (width, height) = (ensure_even(width), ensure_even(height));
+        let frame_rate = input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32;
+        let pixels_per_second = rate_pixels_per_second(width, height, frame_rate);
+        if !pixels_per_second.is_finite() || pixels_per_second <= 0.0 {
+            return bpp;
+        }
+        let target = (video_bitrate as usize).min(MAX_BITRATE);
+        let mut resolved = (target as f64 / pixels_per_second) as f32;
+        for _ in 0..64 {
+            if get_bitrate(width, height, frame_rate, resolved) >= target {
+                break;
+            }
+            resolved = resolved.next_up();
+        }
+        resolved
+    }
+
     pub fn new(input_config: VideoInfo) -> Self {
         Self {
             input_config,
@@ -466,6 +497,7 @@ impl H264EncoderBuilder {
         output: &mut format::context::Output,
     ) -> Result<H264Encoder, H264EncoderError> {
         let input_config = self.input_config;
+        let software_fallback = Box::new(self.clone());
 
         if input_config.pixel_format != ffmpeg::format::Pixel::NV12 {
             return Err(H264EncoderError::VideoToolboxHwInput(format!(
@@ -582,7 +614,7 @@ impl H264EncoderBuilder {
             converted_frame_pool: None,
             hw_upload: HwUpload::default(),
             videotoolbox_hw: Some(Arc::new(hw_frames)),
-            software_fallback: None,
+            software_fallback: Some(software_fallback),
             #[cfg(test)]
             injected_failure: None,
             hardware_session: None,
@@ -1209,6 +1241,16 @@ impl H264Encoder {
         }
     }
 
+    /// An IOSurface-backed CVPixelBuffer frame holding `software`'s pixels,
+    /// for queueing through the zero-copy input path in tests.
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn test_videotoolbox_frame(&self, software: &frame::Video) -> frame::Video {
+        self.videotoolbox_hw
+            .as_ref()
+            .expect("zero-copy VideoToolbox input")
+            .upload(software)
+    }
+
     #[cfg(test)]
     fn injected_codec_failure(&mut self) -> Option<ffmpeg::Error> {
         let failure = self.injected_failure.as_mut()?;
@@ -1255,6 +1297,13 @@ impl H264Encoder {
         #[cfg(test)]
         if let Some(error) = self.injected_codec_failure() {
             return Err(QueueFrameError::Encode(error));
+        }
+
+        #[cfg(target_os = "macos")]
+        if frame.format() == format::Pixel::VIDEOTOOLBOX
+            && self.output_format != format::Pixel::VIDEOTOOLBOX
+        {
+            frame = download_videotoolbox_frame(&frame).map_err(QueueFrameError::Converter)?;
         }
 
         self.base
@@ -1380,6 +1429,20 @@ impl H264Encoder {
     pub fn set_packet_stats(&mut self, stats: Arc<crate::EncodedPacketStats>) {
         self.base.set_packet_stats(stats);
     }
+}
+
+/// A zero-copy VideoToolbox encoder replaced by libx264 keeps receiving
+/// CVPixelBuffer frames, so their planes are copied out for the software
+/// encoder from then on.
+#[cfg(target_os = "macos")]
+fn download_videotoolbox_frame(frame: &frame::Video) -> Result<frame::Video, ffmpeg::Error> {
+    let mut software = frame::Video::empty();
+    let result =
+        unsafe { ffmpeg::ffi::av_hwframe_transfer_data(software.as_mut_ptr(), frame.as_ptr(), 0) };
+    if result < 0 {
+        return Err(ffmpeg::Error::from(result));
+    }
+    Ok(software)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -2134,11 +2197,15 @@ fn verify_neutral_gray(frame: &frame::Video) -> Result<(), String> {
     Ok(())
 }
 
-fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
+fn rate_pixels_per_second(width: u32, height: u32, frame_rate: f32) -> f64 {
     // higher frame rates don't really need double the bitrate lets be real
     let frame_rate_multiplier = ((frame_rate as f64 - 30.0).max(0.0) * 0.6) + 30.0;
     let area = (width as f64) * (height as f64);
-    let pixels_per_second = area * frame_rate_multiplier;
+    area * frame_rate_multiplier
+}
+
+fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
+    let pixels_per_second = rate_pixels_per_second(width, height, frame_rate);
 
     // 1 Gbit/s is far past any real H.264 stream; the cap keeps a hostile
     // bpp from overflowing the max-bitrate math below.
@@ -2827,6 +2894,96 @@ mod rgb_color_tests {
             format::Pixel::None,
         ] {
             assert!(!is_rgb(format));
+        }
+    }
+}
+
+#[cfg(test)]
+mod video_bitrate_tests {
+    use super::*;
+
+    fn within_tolerance(actual: usize, target: usize) -> bool {
+        actual >= target && actual - target <= target / 1_000_000 + 1
+    }
+
+    #[test]
+    fn no_video_bitrate_leaves_every_tier_unchanged() {
+        let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 1920, 1080, 60);
+        for bpp in [
+            H264EncoderBuilder::QUALITY_BPP,
+            H264EncoderBuilder::QUALITY_BPP * 0.5,
+            H264EncoderBuilder::ULTRA_BPP,
+            H264EncoderBuilder::INSTANT_MODE_BPP,
+        ] {
+            for output_size in [None, Some((1280, 720))] {
+                assert_eq!(
+                    H264EncoderBuilder::bpp_for_video_bitrate(bpp, None, &config, output_size)
+                        .to_bits(),
+                    bpp.to_bits()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn video_bitrate_becomes_the_encoder_target() {
+        for (width, height) in [
+            (1920, 1080),
+            (2560, 1440),
+            (3024, 1964),
+            (3840, 2160),
+            (1279, 719),
+        ] {
+            for fps in [24, 30, 60, 120, 144, 165, 240] {
+                let config =
+                    VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, width, height, fps);
+                for output_size in [None, Some((width / 2, height / 2))] {
+                    for target in [
+                        2_000_000u32,
+                        8_000_000,
+                        30_000_000,
+                        100_000_000,
+                        400_000_000,
+                    ] {
+                        let bpp = H264EncoderBuilder::bpp_for_video_bitrate(
+                            H264EncoderBuilder::QUALITY_BPP,
+                            Some(target),
+                            &config,
+                            output_size,
+                        );
+                        let (out_width, out_height) = output_size.unwrap_or((width, height));
+                        let actual =
+                            H264EncoderBuilder::bitrate_for(out_width, out_height, fps as f32, bpp);
+                        assert!(
+                            within_tolerance(actual, target as usize),
+                            "{width}x{height}@{fps} -> {output_size:?}: {actual} for {target}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn software_encoder_is_configured_with_the_video_bitrate() {
+        ffmpeg::init().ok();
+        for (fps, target) in [(60, 12_000_000u32), (240, 45_000_000)] {
+            let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Nv12, 1280, 720, fps);
+            let bpp = H264EncoderBuilder::bpp_for_video_bitrate(
+                H264EncoderBuilder::QUALITY_BPP,
+                Some(target),
+                &config,
+                None,
+            );
+            let encoder = H264EncoderBuilder::new(config)
+                .with_bpp(bpp)
+                .build_software_detached()
+                .expect("libx264 opens");
+            assert!(
+                within_tolerance(encoder.bit_rate() as usize, target as usize),
+                "{fps} fps: {}",
+                encoder.bit_rate()
+            );
         }
     }
 }

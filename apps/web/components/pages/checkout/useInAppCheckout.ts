@@ -22,7 +22,7 @@ export function useInAppCheckout() {
 				getStripe(checkoutKey),
 			);
 		},
-		open: (input: { plan: CheckoutPlan; seats: number }) =>
+		open: (input: { plan: CheckoutPlan; seats: number; promo?: string }) =>
 			startTransition(() => router.push(checkoutPath(input))),
 	};
 }

@@ -9,6 +9,7 @@ pub mod isolated_self_test;
 mod packed_yuv;
 pub mod prores;
 mod rgb_to_yuv;
+pub mod standin;
 #[cfg(target_os = "linux")]
 pub(crate) mod vaapi;
 #[cfg(target_os = "macos")]

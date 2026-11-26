@@ -1,6 +1,6 @@
 # Cap — Open-Source Screen Recorder & Loom Alternative (Full Reference)
 
-> Cap is a free, open-source screen recorder and async video messaging platform — a privacy-first alternative to Loom, Vidyard, and OBS. Record your screen, camera, and audio, then share an instant link or edit locally in a professional studio editor. Native desktop apps for macOS, Windows, and Linux (written in Rust with GPUI, not Electron or a web view), and a web viewer. Bring your own storage (Google Drive, any S3-compatible bucket, or fully local) so you own every recording. Website: https://cap.so · Source: https://github.com/CapSoftware/Cap
+> Cap is a free, open-source screen recorder and async video messaging platform. Record your screen, camera, and audio, then share an instant link or edit locally in a professional studio editor. Native desktop apps for macOS, Windows, and Linux (written in Rust with GPUI, not Electron or a web view), and a web viewer. Bring your own storage (Google Drive, any S3-compatible bucket, or fully local) so you own every recording. Website: https://cap.so · Source: https://github.com/CapSoftware/Cap
 
 This is the full-detail reference for LLMs and agents. For a concise overview, see https://cap.so/llms.txt.
 
@@ -198,16 +198,7 @@ Current desktop app version: 0.5.3.
 - **Enterprise** — Custom. SLAs & priority support, SAML SSO & SCIM provisioning, managed self-hosting, volume discounts, advanced security controls, dedicated onboarding.
 - **Discounts** — STUDENT50 (30% off, students), MIGRATE20 (20% off first year, Loom switchers); volume discounts for teams over 10 users.
 
-Early-adopter pricing is locked in for the lifetime of the subscription. Trusted by 80,000+ users, teams, and creators.
-
-## How Cap Compares
-
-- **vs Loom** — Open source and self-hostable; from $8.16/user/month vs Loom's $18/user/month; 4K on free & paid plans (Loom paid-only); custom domains on Pro (Loom enterprise-only); connect your own S3 or Google Drive (Loom: not available); built-in Loom importer; desktop app works offline.
-- **vs OBS Studio** — Simpler, no complex scene setup; instant cloud sharing and AI built in; native lightweight app.
-- **vs Camtasia / ScreenFlow** — Free and open source, cross-platform, cloud sharing built in, lighter weight.
-- **vs Vidyard / Panopto** — Open source, bring-your-own storage, transparent pricing, self-hosting option.
-- **vs Zoom recordings** — Purpose-built async video with editing, analytics, and HIPAA compliance with signed BAAs.
-- **vs Scribe** — Real screen video with narration and chapters vs static step screenshots.
+Early-adopter pricing is locked in for the lifetime of the subscription. Trusted by 100,000+ users, teams, and creators.
 
 ## Use Cases & Solution Pages
 
@@ -278,7 +269,6 @@ Cap offers free browser tools at https://cap.so/tools: WebM→MP4, MOV→MP4, AV
 - Self-hosting: https://cap.so/self-hosting
 - Loom alternative: https://cap.so/loom-alternative
 - Migrate from Loom: https://cap.so/migrate-from-loom
-- OBS alternative: https://cap.so/obs-alternative
 - Open-source screen recorder: https://cap.so/open-source-screen-recorder
 - Screen recorder for Mac: https://cap.so/screen-recorder-mac
 - Screen recorder for Windows: https://cap.so/screen-recorder-windows

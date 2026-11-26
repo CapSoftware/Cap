@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 const CAMERA_ATTACH_TIMEOUT: Duration = Duration::from_millis(1500);
 const CAMERA_STALE_AFTER: Duration = Duration::from_secs(1);
 const SCREEN_CHANNEL_CAPACITY: usize = 4;
+const STILL_RECHECK: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Coordinates refer to the capture frame before the encoder applies output resizing.
@@ -339,6 +340,36 @@ pub struct LinuxProcessedCameraSource {
     camera_feed: Arc<CameraFeedLock>,
 }
 
+/// A still picture shown in place of a camera: tightly packed RGBA rows.
+#[derive(Debug, Clone)]
+pub struct LinuxCameraPicture {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Arc<[u8]>,
+}
+
+impl LinuxCameraPicture {
+    fn to_frame(&self) -> anyhow::Result<FFmpegVideoFrame> {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        anyhow::ensure!(
+            width > 0 && height > 0 && self.rgba.len() == width * height * 4,
+            "Camera picture has invalid dimensions"
+        );
+        let mut frame = ffmpeg::frame::Video::new(Pixel::RGBA, self.width, self.height);
+        let stride = frame.stride(0);
+        let row = width * 4;
+        let data = frame.data_mut(0);
+        for (y, source) in self.rgba.chunks_exact(row).enumerate() {
+            data[y * stride..y * stride + row].copy_from_slice(source);
+        }
+        Ok(FFmpegVideoFrame {
+            inner: frame,
+            timestamp: Timestamp::Instant(Instant::now()),
+        })
+    }
+}
+
 struct ProcessedCameraReader {
     state: tokio::sync::watch::Receiver<ProcessedCameraState>,
     processing: LinuxCameraProcessing,
@@ -558,9 +589,9 @@ pub(super) struct Config {
 }
 
 pub(super) struct PreparedCamera {
-    camera_feed: Arc<CameraFeedLock>,
+    camera_feed: Option<Arc<CameraFeedLock>>,
     frames: PreparedCameraFrames,
-    mjpeg_overlay: camera::MjpegOverlayHold,
+    mjpeg_overlay: Option<camera::MjpegOverlayHold>,
 }
 
 /// Portable blur downscales the camera to this before the matte. Scaled IDCT
@@ -633,9 +664,35 @@ impl PreparedCamera {
         let (frames, timestamps) = prepare_camera_frames(receiver, info, presentation).await?;
         Ok((
             Self {
-                camera_feed,
+                camera_feed: Some(camera_feed),
                 frames,
-                mjpeg_overlay,
+                mjpeg_overlay: Some(mjpeg_overlay),
+            },
+            timestamps,
+        ))
+    }
+
+    /// A picture is shown as the bubble shows it: never mirrored or blurred.
+    pub(super) async fn prepare_picture(
+        picture: LinuxCameraPicture,
+        presentation: Option<LinuxCameraPresentation>,
+        reference_size: Option<(u32, u32)>,
+        info: VideoInfo,
+    ) -> anyhow::Result<(Self, cap_timestamp::Timestamps)> {
+        let mut presentation = presentation
+            .unwrap_or_else(|| LinuxCameraPresentation::default_for(info.width, info.height));
+        if let Some(reference) = reference_size {
+            presentation = presentation.resolve(reference, (info.width, info.height))?;
+        }
+        presentation.mirrored = false;
+        presentation.effect = LinuxCameraEffect::None;
+        let receiver = CameraReceiver::Still(picture.to_frame()?);
+        let (frames, timestamps) = prepare_camera_frames(receiver, info, presentation).await?;
+        Ok((
+            Self {
+                camera_feed: None,
+                frames,
+                mjpeg_overlay: None,
             },
             timestamps,
         ))
@@ -665,9 +722,9 @@ async fn prepare_camera_frames(
 pub(super) struct CameraCompositeSource {
     inner: screen_capture::VideoSource,
     info: VideoInfo,
-    _camera_feed: Arc<CameraFeedLock>,
+    _camera_feed: Option<Arc<CameraFeedLock>>,
     _compositor_stop: tokio_util::sync::DropGuard,
-    _mjpeg_overlay: camera::MjpegOverlayHold,
+    _mjpeg_overlay: Option<camera::MjpegOverlayHold>,
 }
 
 impl VideoSource for CameraCompositeSource {
@@ -692,7 +749,9 @@ impl VideoSource for CameraCompositeSource {
             first: first_camera,
             presentation,
         } = frames;
-        validate_camera_frame(&first_camera, Instant::now())?;
+        if !camera_rx.is_still() {
+            validate_camera_frame(&first_camera, Instant::now())?;
+        }
         let (screen_tx, screen_rx) = mpsc::channel(SCREEN_CHANNEL_CAPACITY);
         let inner = screen_capture::VideoSource::setup(config.screen_capture, screen_tx, ctx)
             .await
@@ -737,11 +796,21 @@ impl VideoSource for CameraCompositeSource {
 enum CameraReceiver {
     Raw(flume::Receiver<FFmpegVideoFrame>),
     Processed(ProcessedCameraReader),
+    /// A picture never changes and never goes stale.
+    Still(FFmpegVideoFrame),
 }
 
 impl CameraReceiver {
+    fn is_still(&self) -> bool {
+        matches!(self, Self::Still(_))
+    }
+
     async fn first(&mut self, stop: &CancellationToken) -> anyhow::Result<FFmpegVideoFrame> {
         match self {
+            Self::Still(frame) => Ok(FFmpegVideoFrame {
+                inner: frame.inner.clone(),
+                timestamp: frame.timestamp,
+            }),
             Self::Raw(rx) => first_camera_frame(rx, stop, CAMERA_ATTACH_TIMEOUT).await,
             Self::Processed(source) => {
                 tokio::select! {
@@ -762,6 +831,7 @@ impl CameraReceiver {
                 .recv_async()
                 .await
                 .context("Required camera disconnected"),
+            Self::Still(_) => std::future::pending().await,
             Self::Processed(source) => loop {
                 source
                     .state
@@ -784,6 +854,7 @@ impl CameraReceiver {
                     anyhow::bail!("Required camera disconnected")
                 }
             },
+            Self::Still(_) => Ok(None),
             Self::Processed(source) => {
                 if source
                     .state
@@ -838,6 +909,7 @@ fn compositor_thread(
 ) -> anyhow::Result<()> {
     let result = futures::executor::block_on(async {
         let mut screen_rx = screen_rx.fuse();
+        let still = camera_rx.is_still();
         let mut latest_camera = first_camera;
         let mut camera_generation = 0u64;
         let mut freshness_anchor = camera_freshness_anchor(&latest_camera, Instant::now());
@@ -852,7 +924,11 @@ fn compositor_thread(
                 let stop = stop_token.cancelled().fuse();
                 let camera = camera_rx.recv().fuse();
                 let screen = screen_rx.next().fuse();
-                let remaining = CAMERA_STALE_AFTER.saturating_sub(freshness_anchor.elapsed());
+                let remaining = if still {
+                    STILL_RECHECK
+                } else {
+                    CAMERA_STALE_AFTER.saturating_sub(freshness_anchor.elapsed())
+                };
                 let stale = tokio::time::sleep(remaining).fuse();
                 futures::pin_mut!(stop, camera, screen, stale);
                 futures::select_biased! {
@@ -864,6 +940,7 @@ fn compositor_thread(
             };
             match event {
                 Event::Stop | Event::Screen(None) => break,
+                Event::Stale if still => {}
                 Event::Stale => anyhow::bail!("Required camera stopped delivering fresh frames"),
                 Event::Camera(frame) => {
                     latest_camera = frame?;
@@ -877,7 +954,9 @@ fn compositor_thread(
                         camera_generation += 1;
                         freshness_anchor = camera_freshness_anchor(&latest_camera, Instant::now());
                     }
-                    validate_camera_frame(&latest_camera, Instant::now())?;
+                    if !still {
+                        validate_camera_frame(&latest_camera, Instant::now())?;
+                    }
                     let output = compositor
                         .compose(screen, &latest_camera, camera_generation)
                         .context("Required camera composition failed")?;
@@ -3001,6 +3080,58 @@ mod tests {
                 .is_ok()
         );
         assert!(worker.output.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_picture_is_drawn_on_every_frame_and_never_goes_stale() {
+        ffmpeg::init().unwrap();
+        let picture = LinuxCameraPicture {
+            width: 2,
+            height: 2,
+            rgba: [200u8, 10, 20, 255].repeat(4).into(),
+        };
+        let mut first = picture.to_frame().unwrap();
+        first.timestamp =
+            Timestamp::Instant(Instant::now().checked_sub(Duration::from_secs(5)).unwrap());
+        let (mut screen_tx, screen_rx) = mpsc::channel(1);
+        let (video_tx, mut output) = mpsc::channel(1);
+        let (health_tx, _health_rx) = tokio::sync::mpsc::channel(4);
+        let stop = CancellationToken::new();
+        let thread_stop = stop.clone();
+        let runtime = tokio::runtime::Handle::current();
+        let still = CameraReceiver::Still(picture.to_frame().unwrap());
+        let worker = std::thread::spawn(move || {
+            let _runtime = runtime.enter();
+            compositor_thread(
+                screen_rx,
+                still,
+                video_tx,
+                thread_stop,
+                health_tx,
+                Compositor::new(
+                    VideoInfo::from_raw_ffmpeg(Pixel::RGBA, 4, 4, 30),
+                    presentation(2, 2),
+                ),
+                first,
+            )
+        });
+        for pts in [1, 2] {
+            if pts == 2 {
+                tokio::time::sleep(CAMERA_STALE_AFTER + Duration::from_millis(200)).await;
+            }
+            let mut screen = camera_frame();
+            screen.inner.data_mut(0).fill(0);
+            screen.inner.set_pts(Some(pts));
+            screen_tx.send(screen).await.unwrap();
+            let composed = tokio::time::timeout(Duration::from_secs(2), output.next())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(&composed.inner.data(0)[..4], &[200, 10, 20, 255]);
+        }
+        stop.cancel();
+        drop(screen_tx);
+        assert!(worker.join().unwrap().is_ok());
     }
 
     #[test]
