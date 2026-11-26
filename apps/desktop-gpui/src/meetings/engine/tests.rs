@@ -59,6 +59,8 @@ enum Answer {
     AuthThen(usize, &'static [&'static str]),
     /// The account's cloud audio for the day is used up.
     DailyLimit,
+    /// The day is used up, then every later request fails as an outage.
+    DailyLimitThenFail,
 }
 
 struct Ran {
@@ -355,6 +357,10 @@ fn run_opts(opts: Opts) -> Ran {
                 Answer::DailyLimit => Err(CloudError::DailyLimit {
                     retry_after_secs: 3_600,
                 }),
+                Answer::DailyLimitThenFail if n == 0 => Err(CloudError::DailyLimit {
+                    retry_after_secs: 3_600,
+                }),
+                Answer::DailyLimitThenFail => Err(CloudError::Failed("server error".into())),
             }
         })
     });
@@ -472,6 +478,23 @@ fn a_used_up_day_without_a_model_keeps_the_audio_for_later() {
         "the clip waits in the ledger"
     );
     assert_eq!(ran.transcript.gaps().len(), 1, "the audio is kept for after the reset");
+}
+
+#[test]
+fn a_used_up_day_stays_used_up_when_the_other_track_then_fails() {
+    let system = SegmentJob {
+        source: Source::System,
+        ..job()
+    };
+    let ran = run_opts(Opts {
+        fallback: true,
+        cloud: Some(Answer::DailyLimitThenFail),
+        segments: vec![job(), system],
+        ..Opts::default()
+    });
+    let status = ran.last_status().unwrap();
+    assert_eq!(status.cloud, CloudState::DailyLimit { local: true });
+    assert_eq!(status.issue.as_deref(), Some("Today's cloud transcription is used up"));
 }
 
 #[test]

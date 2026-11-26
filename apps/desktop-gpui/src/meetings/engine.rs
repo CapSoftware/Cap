@@ -573,6 +573,9 @@ struct Bridge {
     /// The token the cloud refused; a different one is worth a try at once.
     token: Option<String>,
     probing: bool,
+    /// The day is used up until then: another clip's ordinary failure
+    /// keeps that wait.
+    daily_until: Option<Instant>,
 }
 
 /// One track's cloud requests run here so an upload, a retry wait or a slow
@@ -1760,8 +1763,17 @@ impl Worker {
             _ => None,
         };
         let now = Instant::now();
+        let used_up = self
+            .bridge
+            .as_ref()
+            .and_then(|bridge| bridge.daily_until)
+            .is_some_and(|until| now < until);
+        if used_up && daily.is_none() && !sign_in {
+            return;
+        }
         match self.bridge.as_mut() {
             Some(bridge) => {
+                bridge.daily_until = None;
                 bridge.interval = (bridge.interval * 2).min(self.policy.probe_max);
                 bridge.next_probe = now + self.policy.next_probe(bridge.interval);
                 bridge.sign_in = sign_in;
@@ -1776,6 +1788,7 @@ impl Worker {
                     sign_in,
                     token: current_token(),
                     probing: false,
+                    daily_until: None,
                 });
             }
         }
@@ -1783,6 +1796,7 @@ impl Worker {
         if let (Some(reset), Some(bridge)) = (daily, self.bridge.as_mut()) {
             bridge.interval = reset;
             bridge.next_probe = now + reset + self.policy.probe_jitter.mul_f64(jitter());
+            bridge.daily_until = Some(bridge.next_probe);
         }
         let local = self.config.fallback.is_some();
         self.status.cloud = if sign_in {
