@@ -1973,18 +1973,30 @@ pub(crate) enum SystemAudioStartupAttach {
     WatchDirectOutput,
 }
 
+/// `direct_through_pulse`: a named input whose ALSA chain ends in the Pulse
+/// plugin. A loopback or "Stereo Mix" opened straight from the card has no
+/// Pulse stream to watch, and the server cannot move it onto a microphone,
+/// so it records as it always did.
 pub(crate) fn system_audio_startup_attach(
     role: PulseInputRole,
     prepared_route: bool,
+    direct_through_pulse: bool,
 ) -> Option<SystemAudioStartupAttach> {
     if role != PulseInputRole::SystemAudio {
         return None;
     }
-    Some(if prepared_route {
-        SystemAudioStartupAttach::FollowPreparedRoute
+    if prepared_route {
+        Some(SystemAudioStartupAttach::FollowPreparedRoute)
+    } else if direct_through_pulse {
+        Some(SystemAudioStartupAttach::WatchDirectOutput)
     } else {
-        SystemAudioStartupAttach::WatchDirectOutput
-    })
+        None
+    }
+}
+
+pub(crate) fn input_runs_through_pulse(device_name: &str) -> bool {
+    alsa_input_backend::capture_backend(device_name)
+        .is_ok_and(|backend| backend == alsa_input_backend::CaptureBackend::Pulse)
 }
 
 pub(crate) struct PendingSystemAudioOutput {
@@ -4831,15 +4843,20 @@ mod system_audio_tests {
     #[test]
     fn named_monitor_input_watches_its_own_output_before_ready() {
         assert_eq!(
-            system_audio_startup_attach(PulseInputRole::SystemAudio, false),
+            system_audio_startup_attach(PulseInputRole::SystemAudio, false, true),
             Some(SystemAudioStartupAttach::WatchDirectOutput)
         );
         assert_eq!(
-            system_audio_startup_attach(PulseInputRole::SystemAudio, true),
+            system_audio_startup_attach(PulseInputRole::SystemAudio, true, false),
             Some(SystemAudioStartupAttach::FollowPreparedRoute)
         );
         assert_eq!(
-            system_audio_startup_attach(PulseInputRole::Microphone, false),
+            system_audio_startup_attach(PulseInputRole::SystemAudio, false, false),
+            None,
+            "a loopback opened straight from the card has no Pulse stream to wait for"
+        );
+        assert_eq!(
+            system_audio_startup_attach(PulseInputRole::Microphone, false, true),
             None
         );
         assert!(!uses_default_pulse_input(

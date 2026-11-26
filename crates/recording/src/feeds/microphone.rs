@@ -2272,8 +2272,16 @@ impl MicrophoneFeed {
                         PendingSystemAudioOutput, SystemAudioStartupAttach,
                         system_audio_startup_attach,
                     };
+                    let direct_through_pulse = input_route.is_none()
+                        && pulse_input_role
+                            == crate::sources::screen_capture::PulseInputRole::SystemAudio
+                        && crate::sources::screen_capture::input_runs_through_pulse(&label);
                     match (
-                        system_audio_startup_attach(pulse_input_role, input_route.is_some()),
+                        system_audio_startup_attach(
+                            pulse_input_role,
+                            input_route.is_some(),
+                            direct_through_pulse,
+                        ),
                         input_route,
                     ) {
                         (Some(SystemAudioStartupAttach::WatchDirectOutput), _) => {
@@ -2291,6 +2299,11 @@ impl MicrophoneFeed {
                         (_, None) => PreparedLinuxInput::Open,
                     }
                 };
+                // Only a watched stream holds its samples: nothing would
+                // release them on an input the route watch never follows.
+                #[cfg(target_os = "linux")]
+                let system_audio_staging = system_audio_staging
+                    .filter(|_| !matches!(prepared_input, PreparedLinuxInput::Open));
 
                 if setup_cancel.is_cancelled() || ready_tx.is_canceled() {
                     return;
@@ -2528,6 +2541,7 @@ impl MicrophoneFeed {
                                     if crate::sources::screen_capture::system_audio_startup_attach(
                                         pulse_input_role,
                                         true,
+                                        false,
                                     ) == Some(SystemAudioStartupAttach::FollowPreparedRoute) =>
                                 {
                                     Some(source_output)
