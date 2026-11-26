@@ -1,9 +1,12 @@
 "use client";
 
 import { classNames } from "@cap/utils/helpers";
-import { CheckoutElementsProvider } from "@stripe/react-stripe-js/checkout";
+import {
+	CheckoutElementsProvider,
+	useCheckoutElements,
+} from "@stripe/react-stripe-js/checkout";
 import Link from "next/link";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type CreateCheckoutResult,
 	createProCheckout,
@@ -29,6 +32,7 @@ export type CheckoutViewProps = {
 	plan: CheckoutPlan;
 	seats: number;
 	onboarding: boolean;
+	promo?: string | null;
 	priceIds: Record<CheckoutPlan, string>;
 };
 
@@ -125,6 +129,7 @@ function CheckoutSession(
 					},
 				}}
 			>
+				{props.promo ? <ApplyPromotion code={props.promo} /> : null}
 				<CheckoutForm
 					clientSecret={clientSecret}
 					email={props.email}
@@ -171,6 +176,24 @@ function CheckoutSession(
 	);
 }
 
+function ApplyPromotion({ code }: { code: string }) {
+	const state = useCheckoutElements();
+	const tried = useRef(false);
+	const checkout = state.type === "success" ? state.checkout : null;
+
+	useEffect(() => {
+		if (!checkout || tried.current) return;
+		if (checkout.status.type !== "open") return;
+		tried.current = true;
+		// A partner referral coupon is already applied: Stripe won't stack a
+		// promotion code on top, so keep the referral discount.
+		if (checkout.discountAmounts?.length) return;
+		void checkout.applyPromotionCode(code).catch(() => {});
+	}, [checkout, code]);
+
+	return null;
+}
+
 function Notice({
 	title,
 	body,
@@ -203,6 +226,7 @@ function HostedFallback({
 	plan,
 	seats,
 	onboarding,
+	promo,
 	priceIds,
 	onRetry,
 }: Omit<CheckoutViewProps, "session"> & { onRetry: () => void }) {
@@ -225,6 +249,7 @@ function HostedFallback({
 						quantity: seats,
 						isOnBoarding: onboarding,
 						hosted: true,
+						promo,
 					}),
 				},
 			);

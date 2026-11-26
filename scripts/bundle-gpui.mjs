@@ -59,6 +59,7 @@ export function gpuiPlatformConfig(platform) {
 					"../../target/native-deps/dxc/*.dll": "./",
 					"../../target/native-deps/dxc/LICENSE-*.txt": "licenses/dxc/",
 					"../../target/native-deps/onnxruntime/lib/*.dll": "./",
+					"../../target/native-deps/vcruntime/*.dll": "./",
 				},
 			},
 		};

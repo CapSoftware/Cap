@@ -15,7 +15,6 @@ import {
 	ThemeContext,
 } from "./DashboardContext";
 import type { Spaces } from "./dashboard-data";
-import type { DeveloperApp } from "./developers/developer-data";
 
 // The context objects and hooks live in `DashboardContext.ts` (so the share
 // page can read the context without pulling this file's dialogs); re-exported
@@ -59,11 +58,7 @@ export function DashboardContexts({
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
 	const [referClickedState, setReferClickedState] = useState(referClicked);
-	const [developerApps, setDeveloperApps] = useState<DeveloperApp[] | null>(
-		null,
-	);
 	const pathname = usePathname();
-	const isDeveloperSection = pathname.startsWith("/dashboard/developers");
 
 	// Calculate user's spaces (both owned and member of)
 	const userSpaces =
@@ -163,9 +158,6 @@ export function DashboardContexts({
 					setInviteDialogOpen,
 					referClickedState,
 					setReferClickedStateHandler,
-					isDeveloperSection,
-					developerApps,
-					setDeveloperApps,
 					shareableLinkUsage,
 				}}
 			>

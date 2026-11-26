@@ -1,10 +1,10 @@
 "use client";
 
-import { faXmark } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faXmark } from "@fortawesome/free-solid-svg-icons/faXmark";
 import clsx from "clsx";
 import { motion, useDragControls, useMotionValue } from "motion/react";
 import React, { useEffect, useRef, useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 export type VideoValue = string; // Can be video IDs in the future
 

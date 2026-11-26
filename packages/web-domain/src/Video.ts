@@ -15,6 +15,16 @@ export type VideoId = typeof VideoId.Type;
 
 export const FREE_PLAN_MAX_RECORDING_SECONDS = 5 * 60;
 
+export const isLinkOpenToAnyone = (
+	videoSettings: { linkAccess?: string } | null | undefined,
+	organizationSettings:
+		| { allowPublicLinkOverride?: boolean }
+		| null
+		| undefined,
+) =>
+	organizationSettings?.allowPublicLinkOverride === true &&
+	videoSettings?.linkAccess === "anyone";
+
 export const FREE_PLAN_SHAREABLE_LINKS_PER_MONTH = 25;
 
 // Quota is not retroactive: videos created before this date never count

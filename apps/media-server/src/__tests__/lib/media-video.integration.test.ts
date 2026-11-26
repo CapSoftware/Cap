@@ -380,7 +380,8 @@ describe("generateThumbnail integration tests", () => {
 			},
 		});
 		const controller = new AbortController();
-		const input = `http://127.0.0.1:${server.port}/${crypto.randomUUID()}.mp4`;
+		const name = `${crypto.randomUUID()}.mp4`;
+		const input = `http://127.0.0.1:${server.port}/${name}`;
 		const reason = new Error("Recording worker lease expired");
 		const outcome = generateThumbnail(input, 5, {}, controller.signal).catch(
 			(error: unknown) => error,
@@ -409,7 +410,7 @@ describe("generateThumbnail integration tests", () => {
 							.split("\n");
 			const pids = commands
 				.filter(
-					(command) => command.includes("ffmpeg") && command.includes(input),
+					(command) => command.includes("ffmpeg") && command.includes(name),
 				)
 				.map((command) => Number.parseInt(command.trim(), 10));
 			expect(pids).toHaveLength(1);
@@ -537,6 +538,67 @@ describe("generatePreviewGif integration tests", () => {
 			generatePreviewGif(TEST_VIDEO_WITH_AUDIO, 10, {}, controller.signal),
 		).rejects.toThrow("Preview GIF generation aborted");
 	});
+
+	test.each([
+		["untagged BT.709", "bt709", "unknown", "unknown"],
+		["tagged BT.709", "bt709", "bt709", "tv"],
+		["tagged BT.601", "bt601", "smpte170m", "tv"],
+	])(
+		"keeps colours accurate for %s video",
+		async (label, matrix, tag, range) => {
+			const orange = [224, 122, 48];
+			await ensureTempDir();
+			const input = join(
+				getTempDir(),
+				`gif-colour-${label.replace(/\W+/g, "-")}-${Date.now()}.mp4`,
+			);
+			tempFiles.push(input);
+			execFileSync("ffmpeg", [
+				"-hide_banner",
+				"-v",
+				"error",
+				"-f",
+				"lavfi",
+				"-i",
+				"color=c=0xE07A30:s=320x180:r=10:d=3",
+				"-vf",
+				`scale=out_color_matrix=${matrix}:out_range=tv,format=yuv420p,setparams=colorspace=${tag}:color_primaries=${tag}:color_trc=${tag}:range=${range}`,
+				"-c:v",
+				"libx264",
+				"-qp",
+				"0",
+				"-y",
+				input,
+			]);
+
+			const preview = await generatePreviewGif(input, 3, { startTime: 0 });
+			try {
+				const pixel = execFileSync("ffmpeg", [
+					"-hide_banner",
+					"-v",
+					"error",
+					"-i",
+					preview.path,
+					"-frames:v",
+					"1",
+					"-vf",
+					"crop=1:1:80:45",
+					"-f",
+					"rawvideo",
+					"-pix_fmt",
+					"rgb24",
+					"-",
+				]);
+				for (const [index, channel] of orange.entries()) {
+					expect(Math.abs((pixel[index] ?? 0) - channel)).toBeLessThanOrEqual(
+						8,
+					);
+				}
+			} finally {
+				await preview.cleanup();
+			}
+		},
+	);
 });
 
 describe("processVideo integration tests", () => {
@@ -1424,6 +1486,42 @@ describe("processVideo integration tests", () => {
 			rmSync(workDir, { recursive: true, force: true });
 		}
 	}, 120000);
+
+	test("keeps audio in a codec the probe cannot name, as AAC", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-unnamed-audio-"));
+		try {
+			const losslessPath = join(workDir, "input.mov");
+			execFileSync("ffmpeg", [
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-i",
+				TEST_VIDEO_WITH_AUDIO,
+				"-c:v",
+				"copy",
+				"-c:a",
+				"alac",
+				losslessPath,
+			]);
+
+			const metadata = await probeVideo(`file://${losslessPath}`);
+			expect(metadata.audioCodec).toBeNull();
+			expect(metadata.audioChannels).not.toBeNull();
+
+			for (const options of [{}, { remuxOnly: true }]) {
+				const tempFile = await processVideo(losslessPath, metadata, options);
+				tempFiles.push(tempFile.path);
+				const output = await probeVideo(`file://${tempFile.path}`);
+				expect(output.videoCodec).toBe("h264");
+				expect(output.audioCodec).toBe("aac");
+				expect(output.audioChannels).toBe(metadata.audioChannels);
+				await tempFile.cleanup();
+			}
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	}, 120000);
 });
 
 describe("ffmpeg-backed media utilities integration tests", () => {
@@ -1905,6 +2003,67 @@ describe("DASH segment expansion", () => {
 			},
 		);
 		expect(performance.now() - startedAt).toBeLessThan(5_000);
+	});
+
+	describe("audio-only manifests", () => {
+		const audioOnly =
+			'<MPD type="static" mediaPresentationDuration="PT0.000S"><Period id="0"><AdaptationSet id="0" contentType="audio"><Representation id="0" bandwidth="128000" codecs="opus" mimeType="audio/webm"><SegmentTemplate timescale="1000000" initialization="a-init.webm" media="a-$Number$.webm" startNumber="0"><SegmentTimeline><S t="0" d="4020000"/><S t="4020000" d="1320000"/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>';
+		const url = "https://cdn.example/audio/manifest.mpd?Policy=p";
+
+		test("are refused unless the caller opts in", async () => {
+			await withManifest(audioOnly, async (dir) => {
+				await expect(materializeMpdAsHlsPlaylist(url, dir)).rejects.toThrow(
+					"DASH manifest did not contain a supported video track",
+				);
+				const path = await materializeStreamingInput(url, dir);
+				expect(path.endsWith(".mpd")).toBe(true);
+			});
+		});
+
+		test("become a single audio variant when the caller opts in", async () => {
+			await withManifest(audioOnly, async (dir) => {
+				const master = readFileSync(
+					await materializeStreamingInput(url, dir, undefined, undefined, {
+						allowAudioOnly: true,
+					}),
+					"utf8",
+				);
+				expect(master).not.toContain("#EXT-X-MEDIA");
+				const variants = master
+					.split("\n")
+					.filter((line) => line.startsWith("#EXT-X-STREAM-INF:"));
+				expect(variants).toEqual([
+					'#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS="opus"',
+				]);
+				const playlist = readFileSync(
+					master.trim().split("\n").at(-1) ?? "",
+					"utf8",
+				);
+				expect(playlist).toContain(
+					'#EXT-X-MAP:URI="https://cdn.example/audio/a-init.webm?Policy=p"',
+				);
+				expect(playlist).toContain("#EXTINF:4.020000,");
+				expect(playlist).toContain(
+					"https://cdn.example/audio/a-1.webm?Policy=p",
+				);
+			});
+		});
+
+		test("are not inferred when the video uses an unsupported segment layout", async () => {
+			const unsupportedVideo = audioOnly.replace(
+				"</Period>",
+				'<AdaptationSet id="1" contentType="video"><Representation id="1" bandwidth="1500000" codecs="vp9" mimeType="video/webm" width="1280" height="720"><SegmentList><Initialization sourceURL="v-init.webm"/><SegmentURL media="v-0.webm"/></SegmentList></Representation></AdaptationSet></Period>',
+			);
+			await withManifest(unsupportedVideo, async (dir) => {
+				await expect(
+					materializeMpdAsHlsPlaylist(url, dir, undefined, {
+						allowAudioOnly: true,
+					}),
+				).rejects.toThrow(
+					"DASH manifest did not contain a supported video track",
+				);
+			});
+		});
 	});
 
 	test.each([

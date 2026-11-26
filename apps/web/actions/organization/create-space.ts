@@ -17,6 +17,13 @@ import {
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
+import {
+	reserveSpaceSlot,
+	SPACE_LIMIT_MESSAGE,
+	SPACE_RATE_MESSAGE,
+	spaceCreationLimited,
+} from "@/lib/workspace-creation-limits";
+import { getOrganizationAccess } from "./authorization";
 import { filterUsersInOrganization } from "./organization-member-ids";
 import {
 	getSpaceSettingsFromFormData,
@@ -38,7 +45,11 @@ export async function createSpace(
 	try {
 		const user = await getCurrentUser();
 
-		if (!user || !user.activeOrganizationId) {
+		if (
+			!user ||
+			!user.activeOrganizationId ||
+			!(await getOrganizationAccess(user.id, user.activeOrganizationId))
+		) {
 			return {
 				success: false,
 				error: "User not logged in or no active organization",
@@ -92,6 +103,10 @@ export async function createSpace(
 			};
 		}
 
+		if (await spaceCreationLimited(user.id)) {
+			return { success: false, error: SPACE_RATE_MESSAGE };
+		}
+
 		const existingSpace = await db()
 			.select({ id: spaces.id })
 			.from(spaces)
@@ -140,7 +155,15 @@ export async function createSpace(
 				? await hashPassword(password.trim())
 				: null;
 
-		await db().transaction(async (tx) => {
+		const created = await db().transaction(async (tx) => {
+			if (
+				!(await reserveSpaceSlot(
+					tx,
+					Organisation.OrganisationId.make(user.activeOrganizationId),
+				))
+			)
+				return false;
+
 			await tx.insert(spaces).values({
 				id: spaceId,
 				name,
@@ -163,7 +186,11 @@ export async function createSpace(
 			});
 
 			await tx.insert(spaceMembers).values(spaceMembersToInsert);
+			return true;
 		});
+		if (!created) {
+			return { success: false, error: SPACE_LIMIT_MESSAGE };
+		}
 
 		const iconFile = formData.get("icon") as File | null;
 

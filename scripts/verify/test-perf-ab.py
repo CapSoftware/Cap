@@ -87,5 +87,41 @@ sys.exit(fixture["exit"])
         self.assertEqual((output / "perf-budget.md").read_text().count("BROKEN:"), len(PERF.WORKLOADS))
 
 
+@unittest.skipUnless(hasattr(os, "wait4"), "The performance runner requires POSIX wait4")
+class GroupRunTests(unittest.TestCase):
+    setUp = PerformanceReportTests.setUp
+    side = PerformanceReportTests.side
+
+    def test_cli_measures_exactly_the_chosen_group(self):
+        manifest = self.root / "binaries.json"
+        manifest.write_text(json.dumps(self.side([])))
+        for group, names in PERF.GROUPS.items():
+            with self.subTest(group=group):
+                output = self.root / f"output-{group}"
+                output.mkdir()
+                result = subprocess.run([
+                    sys.executable, "-B", str(SCRIPT), "--base", str(manifest), "--head", str(manifest),
+                    "--fixtures", str(self.root / "fixtures"), "--out", str(output), "--pairs", "1",
+                    "--group", group,
+                ], capture_output=True, text=True, timeout=30)
+                report = (output / "perf-budget.md").read_text()
+                rows = [line.split("|")[1].strip() for line in report.splitlines()
+                        if line.startswith("| ") and not line.startswith("| Workload") and not line.startswith("| ---")]
+                self.assertEqual(sorted(rows), sorted(names), result.stdout + result.stderr)
+                self.assertTrue(report.startswith(f"## Perf budget ({group})"))
+                self.assertEqual(sorted(p.name for p in output.iterdir() if p.is_dir()), sorted(names))
+
+
+class WorkloadGroupTests(unittest.TestCase):
+    def test_every_workload_is_in_exactly_one_group(self):
+        grouped = [name for names in PERF.GROUPS.values() for name in names]
+        self.assertEqual(sorted(grouped), sorted(w[0] for w in PERF.WORKLOADS))
+
+    def test_the_workflow_measures_every_group(self):
+        workflow = (SCRIPT.parents[2] / ".github/workflows/perf-budget.yml").read_text()
+        for group in PERF.GROUPS:
+            self.assertIn(f"- {group}\n", workflow)
+
+
 if __name__ == "__main__":
     unittest.main()

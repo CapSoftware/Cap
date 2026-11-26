@@ -26,6 +26,7 @@
 		"docker:up": "turbo run docker:up",
 		"format": "bun run biome check --write",
 		"lint": "bun run biome lint",
+		"lint:tests": "bun install --frozen-lockfile --cwd scripts/test-lint && node scripts/test-lint/run.mjs",
 		"gpui:build": "dotenv -e .env -- node scripts/bundle-gpui.mjs",
 		"typecheck": "bun run --cwd apps/web next typegen && tsc-rs -b",
 		"test": "turbo run test",

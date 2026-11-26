@@ -144,6 +144,30 @@ describe("POST /video/probe", () => {
 		expect(data.metadata).toEqual(mockMetadata);
 	});
 
+	test("returns 422 with the reason when the input cannot be used", async () => {
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
+			probeVideo: async () => {
+				throw new mediaProbe.UnreadableMediaInputError(
+					"Media input could not be read",
+				);
+			},
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+
+		const response = await appWithMock.fetch(
+			videoPostRequest("/video/probe", {
+				videoUrl: "https://example.com/video.mp4",
+			}),
+		);
+
+		expect(response.status).toBe(422);
+		const data = await response.json();
+		expect(data.code).toBe("UNREADABLE_INPUT");
+		expect(data.details).toBe("Media input could not be read");
+	});
+
 	test("returns 503 when server is busy", async () => {
 		mock.module("../../lib/media-probe", () => ({
 			...mediaProbe,

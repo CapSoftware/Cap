@@ -87,6 +87,7 @@ mod tests {
             speed_audio_mode: None,
             volume: None,
             hide_cursor: None,
+            voice_eq: None,
         }
     }
 

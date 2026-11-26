@@ -1,0 +1,786 @@
+export interface CapPlayerSource {
+	hls?: string;
+	mp4?: string;
+}
+
+export type PlaybackMode = "native" | "mse" | "file" | "none";
+
+export interface CapPlayerLevel {
+	index: number;
+	width: number;
+	height: number;
+	bitrate: number;
+	label: string;
+}
+
+export interface Attachment {
+	stop: () => void;
+	warm: () => void;
+	setLevel: (index: number) => void;
+	seekDuringSwitch: (time: number) => boolean;
+	heldTime: () => number | null;
+	takeSwitchPlay: () => boolean;
+}
+
+export interface AttachOptions {
+	autoPlay: boolean;
+	startAt?: number;
+	onFatal: () => void;
+	onLevels?: (levels: CapPlayerLevel[]) => void;
+}
+
+export const AUTO_LEVEL = -1;
+
+export const resolutionLabel = (width: number, height: number) => {
+	const long = Math.max(width, height);
+	if (long >= 3840) return "4K";
+	if (long >= 2560) return "1440p";
+	if (long >= 1920) return "1080p";
+	if (long >= 1280) return "720p";
+	return long > 0 ? "360p" : "";
+};
+
+const NAMED_RENDITION = /(?:^|\/)(\d{3,4})p(?:\.m3u8)?(?:$|[?#])/;
+
+export const renditionLabel = (level: {
+	width: number;
+	height: number;
+	name?: string;
+	uri?: string;
+}) => {
+	const named =
+		NAMED_RENDITION.exec(level.name ?? "") ??
+		NAMED_RENDITION.exec(level.uri ?? "");
+	if (named) return named[1] === "2160" ? "4K" : `${named[1]}p`;
+	return resolutionLabel(level.width, level.height);
+};
+
+type Rendition = { width: number; height: number; bitrate: number };
+
+// Renditions are ranked by resolution, never by bitrate. The ladder is encoded
+// at constant quality, so a higher rung of a simple video can carry fewer bits
+// than a lower one, and hls.js lists levels in bitrate order.
+const sharperFirst = (a: Rendition, b: Rendition) =>
+	b.height - a.height || b.width - a.width || b.bitrate - a.bitrate;
+
+export const listLevels = (
+	levels: readonly {
+		width: number;
+		height: number;
+		bitrate: number;
+		name?: string;
+		uri?: string;
+	}[],
+): CapPlayerLevel[] => {
+	const best = new Map<string, CapPlayerLevel>();
+	levels.forEach((level, index) => {
+		const label = renditionLabel(level);
+		if (!label) return;
+		const kept = best.get(label);
+		if (!kept || level.bitrate > kept.bitrate) {
+			best.set(label, {
+				index,
+				label,
+				width: level.width,
+				height: level.height,
+				bitrate: level.bitrate,
+			});
+		}
+	});
+	return [...best.values()].sort(sharperFirst);
+};
+
+const RENDITION_URI = /^(\d{3,4}p)\.m3u8(?:$|\?)/;
+
+export interface MasterLevel {
+	width: number;
+	height: number;
+	bitrate: number;
+	uri: string;
+}
+
+export const parseMasterLevels = (master: string): MasterLevel[] => {
+	const lines = master.split(/\r?\n/).map((line) => line.trim());
+	const levels: MasterLevel[] = [];
+	lines.forEach((line, index) => {
+		if (!line.startsWith("#EXT-X-STREAM-INF:")) return;
+		const uri = lines[index + 1];
+		if (!uri || !RENDITION_URI.test(uri)) return;
+		const resolution = /[:,]RESOLUTION=(\d+)x(\d+)/.exec(line);
+		levels.push({
+			width: Number(resolution?.[1] ?? 0),
+			height: Number(resolution?.[2] ?? 0),
+			bitrate: Number(/[:,]BANDWIDTH=(\d+)/.exec(line)?.[1] ?? 0),
+			uri,
+		});
+	});
+	return levels;
+};
+
+// Safari's own HLS player picks renditions by itself and lets no page pick
+// one. Picking means loading a master playlist that lists only that
+// rendition, with its audio, so the time and play state carry over.
+export const renditionSource = (hls: string, uri: string | undefined) => {
+	const name = RENDITION_URI.exec(uri ?? "")?.[1];
+	if (!name) return null;
+	try {
+		const url = new URL(hls, document.baseURI);
+		url.searchParams.set("rendition", name);
+		return url.toString();
+	} catch {
+		return null;
+	}
+};
+
+const HLS_MIME = "application/vnd.apple.mpegurl";
+// The line assumed before anything is measured. Chrome's connection hint
+// reads about 1.6 Mbps on a fast line as on a slow one, so it starts low, and
+// the first segment's measured speed then swaps a fast line up. Safari and
+// Firefox give no hint at all. Assuming a fast line there held a slow-line
+// viewer on a whole 720p segment before the first frame (5 to 11 s on 3G),
+// so they start as low as Chrome does and are swapped up the same way.
+const DEFAULT_BITS_PER_SECOND = 5_000_000;
+const UNHINTED_BITS_PER_SECOND = 1_200_000;
+const SLOW_LINE_BITS_PER_SECOND = 500_000;
+const SLOW_LINE_TYPES = ["slow-2g", "2g", "3g"];
+
+// Seconds hls.js may buffer ahead of the playhead before anyone presses play.
+// Any value below one segment loads exactly the segment under the playhead.
+export const SECONDS_AHEAD_BEFORE_PLAY = 1;
+
+// Seconds the segment that fits the player may take to arrive, at the speed
+// measured on the segment held first, for it to replace that one before play.
+export const SECONDS_TO_SHARPEN = 0.5;
+
+// A manual pick sharper than the picture switches at once only when the
+// measured line brings a segment of it in about this share of its length.
+// On a slower line the flush froze the picture for longer than waiting for
+// the next segment does (5 s further behind after 15 s on 3G).
+export const PICK_AT_ONCE_SHARE = 0.25;
+
+type ConnectionHint = {
+	downlink?: number;
+	effectiveType?: string;
+	saveData?: boolean;
+};
+
+const isApple = () => navigator.vendor.includes("Apple");
+
+const playsHlsItself = (video: HTMLVideoElement) =>
+	video.canPlayType(HLS_MIME) !== "";
+
+export const pickPlaybackMode = (
+	video: HTMLVideoElement,
+	source: CapPlayerSource,
+): PlaybackMode => {
+	if (source.hls) {
+		const native = playsHlsItself(video);
+		const classic = "MediaSource" in window;
+		const mse = classic || "ManagedMediaSource" in window;
+		// Safari on a Mac runs hls.js, which can hold one segment before play.
+		// iPhone and iPad keep their own HLS player.
+		const hlsJs = isApple() ? classic && !navigator.maxTouchPoints : mse;
+		if (hlsJs) return "mse";
+		if (native) return "native";
+		if (mse) return "mse";
+	}
+	return source.mp4 ? "file" : "none";
+};
+
+let hlsModule: Promise<typeof import("hls.js")> | undefined;
+
+const loadHls = () => {
+	hlsModule ??= import("hls.js");
+	return hlsModule;
+};
+
+export const warmSource = (source: CapPlayerSource) => {
+	const mode = pickPlaybackMode(document.createElement("video"), source);
+	if (mode === "mse") void loadHls().catch(() => undefined);
+};
+
+const connectionHint = () =>
+	(navigator as Navigator & { connection?: ConnectionHint }).connection;
+
+export const startingEstimate = () => {
+	const connection = connectionHint();
+	if (!connection) return UNHINTED_BITS_PER_SECOND;
+	if (connection.saveData === true) return SLOW_LINE_BITS_PER_SECOND;
+	const megabits = connection?.downlink ?? 0;
+	if (megabits > 0) {
+		return Math.min(megabits * 800_000, DEFAULT_BITS_PER_SECOND);
+	}
+	return SLOW_LINE_TYPES.includes(connection?.effectiveType ?? "")
+		? SLOW_LINE_BITS_PER_SECOND
+		: DEFAULT_BITS_PER_SECOND;
+};
+
+// The smallest rendition that covers the player in either direction, or the
+// sharpest below it the line can carry. Returns an index into `levels`.
+export const pickStartingLevel = (
+	levels: readonly Rendition[],
+	player: { width: number; height: number },
+	bitsPerSecond: number,
+) => {
+	const ranked = levels
+		.map((level, index) => ({ level, index }))
+		.sort((a, b) => -sharperFirst(a.level, b.level));
+	let pick = ranked[0]?.index ?? 0;
+	for (const [rank, { level, index }] of ranked.entries()) {
+		if (rank > 0 && level.bitrate <= bitsPerSecond) pick = index;
+		if (level.width >= player.width || level.height >= player.height) break;
+	}
+	return pick;
+};
+
+export const isSharper = (
+	levels: readonly Rendition[],
+	a: number,
+	b: number,
+) => {
+	const first = levels[a];
+	const second = levels[b];
+	return !!first && (!second || sharperFirst(first, second) < 0);
+};
+
+// A long video's playlists sign every segment. Asked for the short form, the
+// server signs the first and lists the rest by name, which hls.js follows.
+// Safari's own player asks the server again for every segment, so only
+// hls.js gets this.
+export const withShortPlaylists = (hls: string) => {
+	try {
+		const url = new URL(hls, document.baseURI);
+		url.searchParams.set("segments", "short");
+		return url.toString();
+	} catch {
+		return hls;
+	}
+};
+
+// The player draws the captions it is given. Subtitles listed in the master
+// as well would show twice in Safari's own captions menu, and could be drawn
+// over the player's own.
+export const withoutPlaylistSubtitles = (hls: string) => {
+	try {
+		const url = new URL(hls, document.baseURI);
+		url.searchParams.set("subtitles", "none");
+		return url.toString();
+	} catch {
+		return hls;
+	}
+};
+
+export const startWithin = (startAt: number, duration: number) =>
+	Number.isFinite(duration) && startAt > 0 && startAt < duration ? startAt : 0;
+
+// A browser that refuses to start with sound is asked again without it. One
+// that refuses both leaves the video paused with its sound setting untouched.
+export const playAllowingMuted = async (
+	video: Pick<HTMLVideoElement, "play" | "muted">,
+) => {
+	try {
+		await video.play();
+	} catch (error) {
+		const refused = error instanceof Error && error.name === "NotAllowedError";
+		if (!refused || video.muted) return;
+		video.muted = true;
+		try {
+			await video.play();
+		} catch {
+			video.muted = false;
+		}
+	}
+};
+
+const release = (video: HTMLVideoElement) => {
+	video.removeAttribute("src");
+	video.load();
+};
+
+const afterDocumentLoad = (run: () => void) => {
+	if (document.readyState === "complete") {
+		run();
+		return () => undefined;
+	}
+	window.addEventListener("load", run, { once: true });
+	return () => window.removeEventListener("load", run);
+};
+
+export const attachSource = (
+	video: HTMLVideoElement,
+	given: CapPlayerSource,
+	options: AttachOptions,
+): Attachment => {
+	const source: CapPlayerSource = given.hls
+		? { ...given, hls: withoutPlaylistSubtitles(given.hls) }
+		: given;
+	const { autoPlay, onFatal, onLevels } = options;
+	const startAt = options.startAt ?? 0;
+	const mode = pickPlaybackMode(video, source);
+	let cancelled = false;
+	let detach = () => release(video);
+	let cancelWarm: () => void = () => undefined;
+	let startPending = startAt > 0;
+	let hlsSeeks = false;
+	let setLevel: (index: number) => void = () => undefined;
+
+	const start = () => {
+		if (autoPlay) void playAllowingMuted(video);
+	};
+
+	const playerSize = () => ({
+		width: video.clientWidth * window.devicePixelRatio,
+		height: video.clientHeight * window.devicePixelRatio,
+	});
+
+	// While a native quality switch loads, the element reads time zero, so the
+	// switch holds the real place for a second pick, a seek or a fallback to
+	// the MP4. Whether it plays is read from the element each time: a pause in
+	// that window must hold.
+	let switchingFrom: number | null = null;
+	// A seek made as a new source loads can read zero until it lands. Its
+	// place is held for the events the page is sent and for a switch or
+	// fallback made meanwhile, but only while the element still reads zero:
+	// any other time it reports is newer, such as the viewer's own seek.
+	let held: number | null = null;
+	const releaseHeld = () => {
+		held = null;
+	};
+	const now = () =>
+		held !== null && video.currentTime === 0 ? held : video.currentTime;
+	const position = () => ({
+		resumeAt: switchingFrom ?? now(),
+		wasPlaying: !video.paused,
+	});
+
+	const seekHolding = (time: number) => {
+		held = time;
+		video.removeEventListener("seeked", releaseHeld);
+		video.addEventListener("seeked", releaseHeld, { once: true });
+		video.currentTime = time;
+	};
+	const heldTime = () => {
+		if (switchingFrom !== null) return switchingFrom;
+		if (held !== null && video.currentTime === 0) return held;
+		return startPending && !hlsSeeks && startAt > 0 ? startAt : null;
+	};
+
+	const seekToStart = () => {
+		if (!startPending || hlsSeeks) return;
+		startPending = false;
+		const at = startWithin(startAt, video.duration);
+		if (at > 0) seekHolding(at);
+	};
+
+	// WebKit holds the document's load event, and with it the load event of a
+	// page that embeds this one, for as long as a media element with a source
+	// is preloading. So the element starts at preload="none" and only reads
+	// its metadata, or autoplays, once the document has loaded.
+	const warmAfterLoad = (fromTheStart: boolean) => {
+		cancelWarm();
+		cancelWarm = afterDocumentLoad(() => {
+			if (cancelled) return;
+			if (video.paused) video.preload = "metadata";
+			if (fromTheStart) start();
+		});
+	};
+
+	let fileAttached = false;
+	let nativeAttached = false;
+	let nativeLevels: MasterLevel[] = [];
+	let nativeSrc = "";
+	let listing: AbortController | null = null;
+	let resumeAfterSwitch: (() => void) | null = null;
+	// A source swapped while playing is played again at once, which the
+	// element reports as a new play. That one is not the viewer's.
+	let switchPlay = false;
+
+	function onNativeError() {
+		playFile();
+	}
+
+	function listNativeLevels() {
+		video.removeEventListener("loadedmetadata", listNativeLevels);
+		const hls = source.hls;
+		if (!hls || listing || cancelled || fileAttached) return;
+		listing = new AbortController();
+		fetch(hls, { signal: listing.signal })
+			.then((response) => (response.ok ? response.text() : ""))
+			.then((master) => {
+				if (cancelled || fileAttached) return;
+				nativeLevels = parseMasterLevels(master);
+				onLevels?.(listLevels(nativeLevels));
+			})
+			.catch(() => undefined);
+	}
+
+	function dropResume() {
+		if (resumeAfterSwitch) {
+			video.removeEventListener("loadedmetadata", resumeAfterSwitch);
+		}
+		resumeAfterSwitch = null;
+		switchingFrom = null;
+		switchPlay = false;
+	}
+
+	function pickNativeLevel(index: number) {
+		const hls = source.hls;
+		if (!hls || fileAttached) return;
+		const next =
+			index === AUTO_LEVEL
+				? hls
+				: renditionSource(hls, nativeLevels[index]?.uri);
+		if (!next || next === nativeSrc) return;
+		const resumeAt = switchingFrom ?? now();
+		const wasPlaying = !video.paused;
+		const speed = video.playbackRate;
+		dropResume();
+		nativeSrc = next;
+		video.src = next;
+		video.playbackRate = speed;
+		switchingFrom = resumeAt;
+		const resume = () => {
+			const at = switchingFrom ?? resumeAt;
+			resumeAfterSwitch = null;
+			switchingFrom = null;
+			switchPlay = false;
+			video.playbackRate = speed;
+			if (at > 0) seekHolding(at);
+		};
+		resumeAfterSwitch = resume;
+		video.addEventListener("loadedmetadata", resume, { once: true });
+		if (wasPlaying) {
+			switchPlay = true;
+			void video.play().catch(() => undefined);
+		}
+	}
+
+	// When hls.js fails, the browser's own HLS is tried before the MP4. Only
+	// on Apple browsers: others that claim HLS go straight to the file.
+	function playNative({ resumeAt, wasPlaying } = position()) {
+		if (cancelled) return;
+		const able = playsHlsItself(video) && (mode === "native" || isApple());
+		if (!source.hls || nativeAttached || !able) {
+			playFile({ resumeAt, wasPlaying });
+			return;
+		}
+		nativeAttached = true;
+		setLevel = pickNativeLevel;
+		onLevels?.([]);
+		detach = () => release(video);
+		video.addEventListener("error", onNativeError);
+		video.addEventListener("loadedmetadata", listNativeLevels);
+		video.preload = "none";
+		nativeSrc = source.hls;
+		video.src = source.hls;
+		if (resumeAt > 0) {
+			startPending = false;
+			seekHolding(resumeAt);
+		}
+		if (wasPlaying) void video.play().catch(() => undefined);
+		else warmAfterLoad(resumeAt === 0);
+	}
+
+	function playFile({ resumeAt, wasPlaying } = position()) {
+		if (cancelled) return;
+		if (!source.mp4 || fileAttached) {
+			onFatal();
+			return;
+		}
+		fileAttached = true;
+		dropResume();
+		setLevel = () => undefined;
+		onLevels?.([]);
+		video.removeEventListener("error", onNativeError);
+		video.addEventListener("error", onFatal);
+		detach = () => {
+			video.removeEventListener("error", onFatal);
+			release(video);
+		};
+		video.preload = "none";
+		video.src = source.mp4;
+		if (resumeAt > 0) {
+			startPending = false;
+			seekHolding(resumeAt);
+		}
+		if (wasPlaying) void video.play().catch(() => undefined);
+		else warmAfterLoad(resumeAt === 0);
+	}
+
+	const stop = () => {
+		cancelled = true;
+		cancelWarm();
+		listing?.abort();
+		dropResume();
+		video.removeEventListener("error", onNativeError);
+		video.removeEventListener("loadedmetadata", listNativeLevels);
+		video.removeEventListener("loadedmetadata", seekToStart);
+		video.removeEventListener("seeked", releaseHeld);
+		held = null;
+		detach();
+	};
+
+	// A browser playing HLS itself cannot preload a single segment: at
+	// preload="auto" it keeps downloading and cannot be stopped again. So it
+	// holds only the playlists until the viewer is about to press play.
+	const warm = () => {
+		if (!nativeAttached || fileAttached || cancelled) return;
+		if (video.paused && document.readyState === "complete") {
+			video.preload = "auto";
+		}
+	};
+
+	// A seek asked for while a quality switch loads becomes the place the
+	// switch resumes at, instead of being overwritten by the old one.
+	const seekDuringSwitch = (time: number) => {
+		if (resumeAfterSwitch === null) return false;
+		switchingFrom = time;
+		return true;
+	};
+
+	const takeSwitchPlay = () => {
+		const taken = switchPlay;
+		switchPlay = false;
+		return taken;
+	};
+
+	const attachment: Attachment = {
+		stop,
+		warm,
+		setLevel: (index) => setLevel(index),
+		seekDuringSwitch,
+		heldTime,
+		takeSwitchPlay,
+	};
+
+	if (mode === "none") {
+		onFatal();
+		return {
+			stop: () => undefined,
+			warm: () => undefined,
+			setLevel: () => undefined,
+			seekDuringSwitch: () => false,
+			heldTime: () => null,
+			takeSwitchPlay: () => false,
+		};
+	}
+
+	video.addEventListener("loadedmetadata", seekToStart);
+
+	if (mode === "file") {
+		playFile({ resumeAt: 0, wasPlaying: false });
+		return attachment;
+	}
+
+	if (mode === "native") {
+		playNative({ resumeAt: 0, wasPlaying: false });
+		return attachment;
+	}
+
+	loadHls()
+		.then(({ default: Hls }) => {
+			if (cancelled || !source.hls) return;
+			if (!Hls.isSupported()) {
+				playNative();
+				return;
+			}
+			const estimate = startingEstimate();
+			const hls = new Hls({
+				autoStartLoad: false,
+				capLevelToPlayerSize: true,
+				abrEwmaDefaultEstimate: estimate,
+				abrEwmaDefaultEstimateMax: estimate,
+				startFragPrefetch: true,
+				// Safari on a Mac runs hls.js only where it has the classic
+				// MediaSource. With the managed one, a seek far ahead never
+				// finished in Safari 27: no segment was asked for.
+				preferManagedMediaSource: false,
+				backBufferLength: 30,
+				maxMaxBufferLength: SECONDS_AHEAD_BEFORE_PLAY,
+				// Cap's streams carry no subtitle renditions and no captions inside
+				// the video. Left on, these hls.js parts clear the cues of every
+				// caption track on the video when a manifest loads and switch the
+				// tracks off when it detaches, which emptied the player's own
+				// captions in Chrome.
+				subtitleStreamController: undefined,
+				subtitleTrackController: undefined,
+				timelineController: undefined,
+			});
+			let playRequested = false;
+			let picked = AUTO_LEVEL;
+			// A sharper rendition that the first segment's speed says the line
+			// can carry. Nothing more is fetched before play: the switch is made
+			// when playback starts, and after hls.js's own seek to a start time.
+			let sharper = AUTO_LEVEL;
+			let swappedTo = AUTO_LEVEL;
+			// Without a connection hint every line starts low, and the step up is
+			// made at the next segment boundary once a frame is on screen. A
+			// switch at play flushed the held segment: Safari's first frame then
+			// waited for the sharper one (about 200 ms on a fast line), and the
+			// flush paused playback once in Safari and Firefox, which start on
+			// the fitting rendition on main.
+			const hinted = connectionHint() !== undefined;
+			let framed = hinted;
+			let steppedTo = AUTO_LEVEL;
+			let watchingFrame = false;
+			let destroyed = false;
+			const onFirstFrame = () => {
+				video.removeEventListener("timeupdate", onFirstFrame);
+				if (destroyed || framed) return;
+				framed = true;
+				switchWhenPlaying();
+			};
+			const watchFirstFrame = () => {
+				if (framed || watchingFrame) return;
+				watchingFrame = true;
+				const frames = video as {
+					requestVideoFrameCallback?: HTMLVideoElement["requestVideoFrameCallback"];
+				};
+				if (frames.requestVideoFrameCallback) {
+					frames.requestVideoFrameCallback.call(video, onFirstFrame);
+				} else {
+					video.addEventListener("timeupdate", onFirstFrame);
+				}
+			};
+			const switchWhenPlaying = () => {
+				if (sharper === AUTO_LEVEL || !playRequested || startPending) return;
+				if (!framed) return;
+				const level = sharper;
+				sharper = AUTO_LEVEL;
+				if (picked !== AUTO_LEVEL) return;
+				if (hinted) {
+					swappedTo = level;
+					hls.currentLevel = level;
+				} else {
+					steppedTo = level;
+					hls.nextLevel = level;
+				}
+			};
+			const bufferFreely = () => {
+				playRequested = true;
+				hls.config.maxMaxBufferLength = Hls.DefaultConfig.maxMaxBufferLength;
+				if (picked === AUTO_LEVEL) hls.loadLevel = AUTO_LEVEL;
+				else hls.nextLevel = picked;
+				watchFirstFrame();
+				switchWhenPlaying();
+			};
+			// hls.js seeks to the start time itself. The time stays pending
+			// until that seek lands, so a fallback to the MP4 before then
+			// still starts at it.
+			const reachedStart = () => {
+				startPending = false;
+				switchWhenPlaying();
+			};
+			const destroy = () => {
+				destroyed = true;
+				video.removeEventListener("timeupdate", onFirstFrame);
+				hlsSeeks = false;
+				video.removeEventListener("play", bufferFreely);
+				video.removeEventListener("seeked", reachedStart);
+				hls.destroy();
+			};
+			hlsSeeks = true;
+			video.addEventListener("seeked", reachedStart, { once: true });
+			video.addEventListener("play", bufferFreely);
+			if (!video.paused) bufferFreely();
+			// Until play, hls.js keeps to one rendition and one segment. The
+			// level is fixed because the first segment's speed reading would
+			// otherwise send it off to fetch a second rendition's playlist.
+			hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+				onLevels?.(listLevels(data.levels));
+				const level = pickStartingLevel(data.levels, playerSize(), estimate);
+				hls.startLevel = level;
+				if (!playRequested) hls.loadLevel = level;
+				hls.startLoad(startPending ? startAt : -1);
+			});
+			// The first video segment measures the line. When the measured line
+			// can fetch a sharper rendition that fits the player in time, the
+			// player switches to it as playback starts, rather than playing the
+			// first segment soft.
+			let measured = false;
+			hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
+				if (data.frag.type !== "main") return;
+				if (data.frag.level === steppedTo) {
+					steppedTo = AUTO_LEVEL;
+					if (playRequested && picked === AUTO_LEVEL) {
+						hls.loadLevel = AUTO_LEVEL;
+					}
+					return;
+				}
+				if (data.frag.level === swappedTo) {
+					swappedTo = AUTO_LEVEL;
+					// Chrome keeps showing frames it decoded from the old segment
+					// until the next keyframe. A seek in place decodes the new one.
+					const at = video.currentTime;
+					video.currentTime = at;
+					// The switch fixed the level; adapting resumes from here.
+					if (playRequested && picked === AUTO_LEVEL) {
+						hls.loadLevel = AUTO_LEVEL;
+					}
+					return;
+				}
+				if (measured) return;
+				measured = true;
+				if (picked !== AUTO_LEVEL) return;
+				const level = pickStartingLevel(
+					hls.levels,
+					playerSize(),
+					(hls.bandwidthEstimate * SECONDS_TO_SHARPEN) / data.frag.duration,
+				);
+				if (!isSharper(hls.levels, level, data.frag.level)) return;
+				sharper = level;
+				switchWhenPlaying();
+			});
+			hls.once(Hls.Events.LEVEL_LOADED, (_event, data) => {
+				if (!startPending) return;
+				if (startWithin(startAt, data.details.totalduration) === 0) {
+					startPending = false;
+					hls.startLoad(0);
+				}
+			});
+			let recovered = false;
+			hls.on(Hls.Events.ERROR, (_event, data) => {
+				if (!data.fatal) return;
+				if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recovered) {
+					recovered = true;
+					hls.recoverMediaError();
+					return;
+				}
+				const reached = position();
+				destroy();
+				playNative(reached);
+			});
+			// A pick changes at the next segment: switching at once flushes the
+			// buffer and freezes the picture on a slow line. A pick sharper than
+			// the picture switches at once on a line fast enough to refill it
+			// quickly, or the old rendition plays out everything already
+			// buffered. Before play a pick is only remembered, so it downloads
+			// nothing.
+			setLevel = (index) => {
+				picked = index;
+				if (!playRequested) return;
+				const level = hls.levels[index];
+				const fast =
+					!!level &&
+					hls.bandwidthEstimate * PICK_AT_ONCE_SHARE >= level.bitrate;
+				if (
+					index !== AUTO_LEVEL &&
+					fast &&
+					isSharper(hls.levels, index, hls.currentLevel)
+				) {
+					swappedTo = index;
+					hls.currentLevel = index;
+				} else {
+					hls.nextLevel = index;
+				}
+			};
+			video.preload = "auto";
+			hls.loadSource(withShortPlaylists(source.hls));
+			hls.attachMedia(video);
+			detach = destroy;
+			start();
+		})
+		.catch(() => playNative());
+
+	return attachment;
+};

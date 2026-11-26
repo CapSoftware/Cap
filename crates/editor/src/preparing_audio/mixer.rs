@@ -75,6 +75,7 @@ impl PreparingAudioSources {
                 || segment.timescale != 1.0
                 || segment.speed_audio_mode.is_some()
                 || segment.volume() != 1.0
+                || segment.active_voice_eq().is_some()
                 || !segment.end.is_finite()
                 || segment.end <= 0.0
             {

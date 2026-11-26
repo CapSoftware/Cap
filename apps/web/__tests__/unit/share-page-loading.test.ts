@@ -119,7 +119,10 @@ vi.mock("@/lib/share-web-url", () => ({
 	resolveForeignShareRedirect: mocks.foreignRedirect,
 }));
 vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
-vi.mock("@/lib/video-download-permissions", () => ({
+vi.mock("@/lib/video-download-permissions", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("@/lib/video-download-permissions")
+	>()),
 	canUserDownloadVideo: async () => false,
 }));
 vi.mock("@/utils/flags", () => ({ isAiGenerationEnabled: async () => false }));
@@ -153,7 +156,11 @@ const createVideo = () => ({
 	metadata: null,
 	videoSettings: {
 		callToAction: { label: "Book a call", url: "https://example.com/" },
+	} as {
+		callToAction: { label: string; url: string };
+		disableDownloads?: boolean;
 	},
+	orgSettings: null as { disableDownloads?: boolean } | null,
 	transcriptionStatus: "COMPLETE",
 	createdAt: new Date("2026-09-01T00:00:00.000Z"),
 	updatedAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -188,10 +195,13 @@ function arrangeRows(rows: ReturnType<typeof createVideo>[]) {
 	});
 }
 
-const renderPage = () =>
+const renderPage = (
+	videoId = "video",
+	searchParams: Record<string, string> = {},
+) =>
 	ShareVideoPage({
-		params: Promise.resolve({ videoId: "video" }),
-		searchParams: Promise.resolve({}),
+		params: Promise.resolve({ videoId }),
+		searchParams: Promise.resolve(searchParams),
 	});
 
 async function renderAuthorizedContent() {
@@ -204,6 +214,7 @@ async function renderAuthorizedContent() {
 		content.props,
 	)) as ReactElement<{
 		children: ReactElement<{
+			header: ReactElement<{ canDownload: boolean; hasEdits: boolean }>;
 			initialPlaybackUrl?: Promise<string | null>;
 			serverPlaybackUrl?: string | null;
 			screenshotImageUrl?: string | null;
@@ -211,6 +222,9 @@ async function renderAuthorizedContent() {
 				sharedOrganizations: unknown[];
 				ownerIsOverShareLimit: boolean;
 				callToAction: { label: string; url: string } | null;
+				callToActionSource: string | null;
+				workspaceCallToAction: { label: string; url: string } | null;
+				orgSettings: Record<string, unknown> | null;
 			};
 		}>;
 	}>;
@@ -278,6 +292,31 @@ describe("share page loading", () => {
 		expect(mocks.playbackUrl).not.toHaveBeenCalled();
 	});
 
+	it("sends the owner landing after a recording on a custom domain to the main origin", async () => {
+		const videoId = "abcdefghjkmnpqr";
+		mocks.restrictedRedirect.mockResolvedValue(
+			`https://cap.so/s/${videoId}?recordingStopped=1`,
+		);
+		await expect(
+			renderPage(videoId, { recordingStopped: "1" }),
+		).rejects.toThrow(
+			`REDIRECT https://cap.so/s/${videoId}?recordingStopped=1`,
+		);
+		expect(mocks.restrictedRedirect).toHaveBeenCalledWith(
+			expect.any(Headers),
+			videoId,
+			{ recordingStopped: "1" },
+		);
+		expect(mocks.select).not.toHaveBeenCalled();
+	});
+
+	it("keeps the owner landing after a recording on the main origin", async () => {
+		const videoId = "abcdefghjkmnpqr";
+		await renderPage(videoId, { recordingStopped: "1" });
+		expect(mocks.restrictedRedirect).toHaveBeenCalledOnce();
+		expect(mocks.select).toHaveBeenCalled();
+	});
+
 	it("does not look up the host for authorized videos", async () => {
 		await renderAuthorizedContent();
 		expect(mocks.restrictedRedirect).not.toHaveBeenCalled();
@@ -298,6 +337,106 @@ describe("share page loading", () => {
 			}
 		},
 	);
+
+	describe("workspace call to action", () => {
+		const workspaceDefault = {
+			label: "Talk to sales",
+			url: "https://example.com/sales",
+			enabledAt: "2026-10-01T00:00:00.000Z",
+		};
+		const arrangeWorkspaceVideo = (
+			videoSettings: Record<string, unknown>,
+			createdAt: string,
+			includeExisting = false,
+		) =>
+			arrangeRows([
+				{
+					...createVideo(),
+					videoSettings: videoSettings as ReturnType<
+						typeof createVideo
+					>["videoSettings"],
+					orgSettings: {
+						disableDownloads: false,
+						defaultCallToAction: { ...workspaceDefault, includeExisting },
+					} as ReturnType<typeof createVideo>["orgSettings"],
+					createdAt: new Date(createdAt),
+				},
+			]);
+
+		beforeEach(() => {
+			mocks.ownerIsPro = true;
+		});
+
+		it("shows the default on a video made after it was set, without another query", async () => {
+			arrangeWorkspaceVideo({}, "2026-10-02T00:00:00.000Z");
+			const content = await renderAuthorizedContent();
+			const data = content.props.children.props.data;
+			expect(data.callToAction).toMatchObject({
+				label: "Talk to sales",
+				url: "https://example.com/sales",
+			});
+			expect(data.orgSettings).toEqual({ disableDownloads: false });
+			expect(data.callToActionSource).toBeNull();
+			expect(data.workspaceCallToAction).toBeNull();
+			expect(mocks.select).toHaveBeenCalledTimes(3);
+		});
+
+		it("leaves older videos alone unless the default covers existing videos", async () => {
+			arrangeWorkspaceVideo({}, "2026-09-01T00:00:00.000Z");
+			let content = await renderAuthorizedContent();
+			expect(content.props.children.props.data.callToAction).toBeNull();
+
+			arrangeWorkspaceVideo({}, "2026-09-01T00:00:00.000Z", true);
+			content = await renderAuthorizedContent();
+			expect(content.props.children.props.data.callToAction).toMatchObject({
+				label: "Talk to sales",
+			});
+		});
+
+		it("lets a video's own call to action or opt-out win", async () => {
+			arrangeWorkspaceVideo(
+				{ callToAction: { label: "Mine", url: "https://example.com/" } },
+				"2026-10-02T00:00:00.000Z",
+			);
+			let content = await renderAuthorizedContent();
+			expect(content.props.children.props.data.callToAction).toMatchObject({
+				label: "Mine",
+			});
+
+			arrangeWorkspaceVideo(
+				{ callToAction: false },
+				"2026-10-02T00:00:00.000Z",
+				true,
+			);
+			content = await renderAuthorizedContent();
+			expect(content.props.children.props.data.callToAction).toBeNull();
+		});
+
+		it("does not serve the default when the owner is not on Pro", async () => {
+			mocks.ownerIsPro = false;
+			arrangeWorkspaceVideo({}, "2026-10-02T00:00:00.000Z");
+			const content = await renderAuthorizedContent();
+			expect(content.props.children.props.data.callToAction).toBeNull();
+		});
+
+		it("tells only the owner where the call to action comes from", async () => {
+			mocks.user.mockResolvedValue({
+				id: "owner",
+				activeOrganizationId: "organization",
+			});
+			arrangeWorkspaceVideo(
+				{ callToAction: false },
+				"2026-10-02T00:00:00.000Z",
+			);
+			const content = await renderAuthorizedContent();
+			const data = content.props.children.props.data;
+			expect(data.callToAction).toBeNull();
+			expect(data.callToActionSource).toBe("off");
+			expect(data.workspaceCallToAction).toMatchObject({
+				label: "Talk to sales",
+			});
+		});
+	});
 
 	it.each([
 		{
@@ -419,6 +558,57 @@ describe("share page loading", () => {
 			Promise,
 		);
 		expect(mocks.playbackUrl).toHaveBeenCalledOnce();
+	});
+
+	const headerProps = async () =>
+		(await renderAuthorizedContent()).props.children.props.header.props;
+
+	it("offers a download to a signed-out viewer by default", async () => {
+		expect(await headerProps()).toMatchObject({
+			canDownload: true,
+			hasEdits: false,
+		});
+	});
+
+	it.each([
+		[null, {}, true],
+		[{ disableDownloads: false }, { disableDownloads: false }, true],
+		[{ disableDownloads: true }, {}, false],
+		[null, { disableDownloads: true }, false],
+		[{ disableDownloads: true }, { disableDownloads: false }, false],
+		[{ disableDownloads: false }, { disableDownloads: true }, false],
+	])(
+		"with organization %j and video %j, a signed-out viewer can download: %s",
+		async (orgSettings, videoSettings, canDownload) => {
+			const video = createVideo();
+			arrangeRows([
+				{
+					...video,
+					orgSettings,
+					videoSettings: { ...video.videoSettings, ...videoSettings },
+				},
+			]);
+			expect(await headerProps()).toMatchObject({
+				canDownload,
+				hasEdits: false,
+			});
+		},
+	);
+
+	it.each([
+		["the share limit hides the video", { quota: true }],
+		["the video is still uploading", { hasActiveUpload: true }],
+		["the video is a screenshot", { isScreenshot: true }],
+		[
+			"the cap is an older MediaConvert one",
+			{ source: { type: "MediaConvert" } },
+		],
+		["the cap is an older local one", { source: { type: "local" } }],
+	])("offers no viewer download when %s", async (_label, state) => {
+		if ("quota" in state) mocks.quota.mockResolvedValue(true);
+		const { quota: _quota, ...row } = { quota: false, ...state };
+		arrangeRows([{ ...createVideo(), ...row }]);
+		expect(await headerProps()).toMatchObject({ canDownload: false });
 	});
 
 	it("does not sign media hidden by the shareable link quota", async () => {

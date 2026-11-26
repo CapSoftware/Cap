@@ -290,7 +290,7 @@ const VideoThumbnailView = memo(
 					/>
 				)}
 				{videoDuration && (
-					<p className="text-white leading-0 px-2 left-3 rounded-full backdrop-blur-sm absolute z-10 bottom-3 bg-black/50 text-[11px]">
+					<p className="absolute bottom-2.5 left-2.5 z-10 px-1.5 py-[3px] text-[11px] font-medium tabular-nums leading-none text-white rounded-md backdrop-blur-sm bg-black/60">
 						{formatDuration(videoDuration)}
 					</p>
 				)}

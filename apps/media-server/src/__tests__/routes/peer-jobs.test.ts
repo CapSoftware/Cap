@@ -102,6 +102,51 @@ describe("peer job lookup", () => {
 		expect((await response.json()).code).toBe("NOT_FOUND");
 	});
 
+	test("answers a retryable 503 when a peer fails instead of answering", async () => {
+		respond = () => new Response("overloaded", { status: 500 });
+		const response = await app.fetch(statusRequest("job-unknown"));
+		expect(response.status).toBe(503);
+		expect(response.headers.get("Retry-After")).toBe("5");
+		expect((await response.json()).code).toBe("PEER_LOOKUP_FAILED");
+	});
+
+	test("answers a retryable 503 when a peer cannot be reached", async () => {
+		const unreachable = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => new Response(null),
+		});
+		const port = unreachable.port;
+		await unreachable.stop(true);
+		const peers = process.env.MEDIA_SERVER_PEERS;
+		process.env.MEDIA_SERVER_PEERS = `${peers},http://127.0.0.1:${port}`;
+		try {
+			const response = await app.fetch(statusRequest("job-unreachable"));
+			expect(response.status).toBe(503);
+			expect(response.headers.get("Retry-After")).toBe("5");
+		} finally {
+			process.env.MEDIA_SERVER_PEERS = peers;
+		}
+	});
+
+	test("still finds the job when another peer fails", async () => {
+		respond = () => Response.json({ jobId: "job-found", phase: "processing" });
+		const peers = process.env.MEDIA_SERVER_PEERS;
+		const failing = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => new Response("down", { status: 502 }),
+		});
+		process.env.MEDIA_SERVER_PEERS = `${peers},http://127.0.0.1:${failing.port}`;
+		try {
+			const response = await app.fetch(statusRequest("job-found"));
+			expect(response.status).toBe(200);
+		} finally {
+			process.env.MEDIA_SERVER_PEERS = peers;
+			await failing.stop(true);
+		}
+	});
+
 	test("does not forward a lookup that already came from a peer", async () => {
 		respond = () => Response.json({ jobId: "job-loop", phase: "processing" });
 		const response = await app.fetch(
@@ -120,10 +165,13 @@ describe("peer job lookup", () => {
 		expect(peerRequests).toHaveLength(0);
 	});
 
-	test("ignores a peer that rejects the shared secret", async () => {
-		respond = () => new Response("Unauthorized", { status: 401 });
-		const response = await app.fetch(statusRequest("job-rejected"));
-		expect(response.status).toBe(404);
+	test("does not call a job missing when a peer rejects the shared secret", async () => {
+		for (const status of [401, 403]) {
+			respond = () => new Response("Unauthorized", { status });
+			const response = await app.fetch(statusRequest("job-rejected"));
+			expect(response.status).toBe(503);
+			expect(response.headers.get("Retry-After")).toBe("5");
+		}
 	});
 
 	test("waits for an owner that delivers its webhook before confirming a cancel", async () => {

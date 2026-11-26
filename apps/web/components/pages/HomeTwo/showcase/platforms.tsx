@@ -6,6 +6,8 @@ import { ArrowUpRight, Download, Monitor } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { trackEvent } from "@/app/utils/analytics";
+import { getDownloadStartedUrl } from "@/lib/download";
 import { getDownloadUrl } from "@/utils/platform";
 import { AppleGlyph } from "../glyphs";
 import { MONO } from "../theme";
@@ -56,8 +58,14 @@ const Desktop = ({
 			{note}
 		</div>
 		<Link
-			href={href}
-			prefetch={false}
+			href={getDownloadStartedUrl(href)}
+			onClick={() =>
+				trackEvent("download_cta_clicked", {
+					source_page: "home_platforms",
+					cta_location: "platform_tile",
+					target_url: href,
+				})
+			}
 			className={classNames(
 				"mt-6 inline-flex h-10 items-center justify-center gap-2 rounded-[10px] text-[14.5px] transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111]",
 				yours

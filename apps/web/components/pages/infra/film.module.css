@@ -1,0 +1,153 @@
+.play {
+	position: absolute;
+	left: 50%;
+	top: calc((var(--slab-base) + 0.047) * 100%);
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	height: 32px;
+	padding: 0 13px 0 11px;
+	border: 0;
+	border-radius: 8px;
+	background: rgba(5, 5, 6, 0.55);
+	box-shadow: inset 0 0 0 1px rgba(222, 230, 246, 0.16);
+	font: inherit;
+	font-size: 13px;
+	line-height: 1;
+	white-space: nowrap;
+	color: #e8ecf4;
+	translate: -50% -50%;
+	cursor: pointer;
+	pointer-events: auto;
+	transition:
+		box-shadow 0.2s ease,
+		background-color 0.2s ease;
+	-webkit-tap-highlight-color: transparent;
+}
+
+.play::before {
+	content: "";
+	position: absolute;
+	inset: -6px;
+}
+
+.play:hover {
+	background: rgba(24, 26, 31, 0.7);
+	box-shadow: inset 0 0 0 1px rgba(222, 230, 246, 0.3);
+}
+
+.play:focus-visible {
+	outline: 2px solid rgba(232, 236, 244, 0.8);
+	outline-offset: 2px;
+}
+
+.icon {
+	flex: none;
+	width: 9px;
+	height: 9px;
+	fill: currentColor;
+}
+
+.dialog {
+	position: fixed;
+	inset: 0;
+	width: 100vw;
+	max-width: none;
+	height: 100dvh;
+	max-height: none;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: #e8ecf4;
+	overflow: hidden;
+	pointer-events: auto;
+}
+
+.dialog[open] {
+	display: grid;
+	place-items: center;
+	animation: film-in 0.26s ease-out;
+}
+
+.dialog::backdrop {
+	background: rgba(2, 2, 3, 0.94);
+	animation: film-veil 0.26s ease-out;
+}
+
+@keyframes film-in {
+	from {
+		opacity: 0;
+		scale: 0.985;
+	}
+}
+
+@keyframes film-veil {
+	from {
+		opacity: 0;
+	}
+}
+
+.away {
+	position: absolute;
+	inset: 0;
+	padding: 0;
+	border: 0;
+	background: none;
+	cursor: default;
+}
+
+.frame {
+	position: relative;
+	width: min(calc(100vw - 32px), calc((100dvh - 120px) * 3840 / 1608), 1760px);
+	aspect-ratio: 3840 / 1608;
+	background: #000;
+	box-shadow:
+		0 0 0 1px rgba(222, 230, 246, 0.08),
+		0 40px 120px rgba(0, 0, 0, 0.6);
+}
+
+.close {
+	position: absolute;
+	top: 14px;
+	right: 14px;
+	display: grid;
+	place-items: center;
+	width: 36px;
+	height: 36px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: rgba(232, 236, 244, 0.06);
+	color: rgba(232, 236, 244, 0.8);
+	cursor: pointer;
+	transition:
+		background-color 0.2s,
+		color 0.2s;
+}
+
+.close:hover {
+	background: rgba(232, 236, 244, 0.14);
+	color: #fff;
+}
+
+.close:focus-visible {
+	outline: 2px solid rgba(232, 236, 244, 0.85);
+	outline-offset: 2px;
+}
+
+.close svg {
+	width: 16px;
+	height: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.dialog[open],
+	.dialog::backdrop {
+		animation: none;
+	}
+
+	.play {
+		transition: none;
+	}
+}

@@ -277,6 +277,7 @@ async fn load_recording(
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    voice_eq: None,
                     volume: None,
                 }]
             }
@@ -301,6 +302,7 @@ async fn load_recording(
                         name: None,
                         speed_audio_mode: None,
                         hide_cursor: None,
+                        voice_eq: None,
                         volume: None,
                     })
                 })

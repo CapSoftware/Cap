@@ -1,0 +1,34 @@
+{
+	"kind": "calendar#calendarList",
+	"etag": "\"p32g8r7rmf6l8g0g\"",
+	"nextSyncToken": "CICqyPj0iIIDEhBtZUBhY21lLmV4YW1wbGU=",
+	"items": [
+		{
+			"kind": "calendar#calendarListEntry",
+			"id": "me@acme.example",
+			"summary": "me@acme.example",
+			"timeZone": "America/New_York",
+			"colorId": "14",
+			"backgroundColor": "#9fe1e7",
+			"foregroundColor": "#000000",
+			"selected": true,
+			"accessRole": "owner",
+			"primary": true
+		},
+		{
+			"id": "en.usa#holiday@group.v.calendar.google.com",
+			"summary": "Holidays in United States",
+			"summaryOverride": "US holidays",
+			"backgroundColor": "#16a765",
+			"accessRole": "reader"
+		},
+		{
+			"id": "c_0123456789abcdef@group.calendar.google.com",
+			"summary": "Team rota",
+			"selected": true,
+			"accessRole": "writer",
+			"deleted": true
+		},
+		{ "summary": "No id" }
+	]
+}

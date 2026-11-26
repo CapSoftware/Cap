@@ -1,8 +1,10 @@
 import { Agent as HttpAgent, request as httpRequest } from "node:http";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
+import { isIP } from "node:net";
 import { Readable } from "node:stream";
 import {
 	isBlockedS3Endpoint,
+	isPrivateAddress,
 	publicOnlyLookup,
 	shouldBlockPrivateS3Endpoints,
 } from "@/lib/s3-endpoint-policy";
@@ -33,19 +35,28 @@ const httpsAgent = new HttpsAgent({
 });
 
 // The connection resolves through publicOnlyLookup, so the address it dials is the address that was checked.
+// Node skips the lookup when the host is already an IP address, so a literal is checked here instead.
 export function requestPublicOnly(
 	url: string,
 	init: RequestInit = {},
 ): Promise<Response> {
-	if (init.body !== undefined && init.body !== null)
+	const body = init.body ?? undefined;
+	if (body !== undefined && typeof body !== "string")
 		return Promise.reject(
-			new Error("Storage requests do not send a request body"),
+			new Error("Storage requests only send a text request body"),
 		);
 	const target = new URL(url);
 	const isHttps = target.protocol === "https:";
 	if (!isHttps && target.protocol !== "http:")
 		return Promise.reject(
 			new StorageFetchRefusedError("Storage URLs must use http or https"),
+		);
+	const literal = target.hostname.replace(/^\[|\]$/g, "");
+	if (isIP(literal) && isPrivateAddress(literal))
+		return Promise.reject(
+			new StorageFetchRefusedError(
+				`Refused to connect to private address ${literal}`,
+			),
 		);
 	const method = init.method ?? "GET";
 	return new Promise((resolve, reject) => {
@@ -76,7 +87,13 @@ export function requestPublicOnly(
 						else if (value !== undefined) headers.set(name, value);
 					}
 					const hasBody = method !== "HEAD" && !BODYLESS_STATUSES.has(status);
-					if (!hasBody) response.resume();
+					if (!hasBody) {
+						// These answers carry no content. A server that sends some
+						// anyway loses the connection instead of having it read
+						// without end.
+						response.on("error", () => {});
+						response.on("data", () => response.destroy());
+					}
 					resolve(
 						new Response(
 							hasBody
@@ -92,7 +109,7 @@ export function requestPublicOnly(
 			},
 		);
 		request.on("error", reject);
-		request.end();
+		request.end(body);
 	});
 }
 

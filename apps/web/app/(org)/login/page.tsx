@@ -1,9 +1,9 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { serverEnv } from "@cap/env";
-import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { getSafeNextPath } from "../safe-next";
 import { LoginForm } from "./form";
 
@@ -42,7 +42,7 @@ export default async function LoginPage(props: {
 			error === "signin_consent_denied",
 	);
 
-	if (session && !isSsoEntry) {
+	if (session && !isSsoEntry && error !== "SignupBlocked") {
 		redirect(getSafeNextPath(searchParams.next, serverEnv().WEB_URL));
 	}
 

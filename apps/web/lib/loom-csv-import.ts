@@ -35,6 +35,7 @@ import { renewConciergeImport } from "@/lib/loom-concierge";
 import {
 	getLoomDownloadUrl,
 	LoomDownloadTemporaryError,
+	LoomDownloadUnavailableError,
 } from "@/lib/loom-download-url";
 import type { LoomImportDestination } from "@/lib/loom-import-destination";
 import {
@@ -45,7 +46,10 @@ import {
 	startLoomImportWorkflow,
 } from "@/lib/loom-import-start";
 import { LoomMigrationError } from "@/lib/loom-migration-state";
-import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
+import {
+	InviteeRequiresAcceptanceError,
+	provisionOrganizationInvitee,
+} from "@/lib/organization-provisioning";
 import { runPromise } from "@/lib/server";
 
 export type LoomDownloadMode = "direct-download" | "browser-conversion";
@@ -242,6 +246,9 @@ export async function resolveLoomDownload(
 				errorCode: "loom_temporarily_unavailable",
 				retryAfterMs: error.retryAfterMs,
 			};
+		}
+		if (error instanceof LoomDownloadUnavailableError) {
+			return { success: false, error: error.message };
 		}
 		return {
 			success: false,
@@ -491,6 +498,9 @@ export async function importLoomVideoForOwner({
 				error: error.message,
 				errorCode: "loom_temporarily_unavailable",
 			};
+		}
+		if (error instanceof LoomDownloadUnavailableError) {
+			return { success: false, error: error.message };
 		}
 		throw error;
 	}
@@ -854,6 +864,7 @@ export async function processLoomCsvRows({
 	migrationLeaseToken,
 	allowFolders = false,
 	importPriority,
+	operatorApproved = false,
 }: {
 	rows: LoomCsvImportRow[];
 	orgId: Organisation.OrganisationId;
@@ -862,6 +873,7 @@ export async function processLoomCsvRows({
 	migrationLeaseToken?: string;
 	allowFolders?: boolean;
 	importPriority?: "customer" | "bulk";
+	operatorApproved?: boolean;
 }): Promise<LoomCsvImportResult> {
 	const inputRows = Array.isArray(rows) ? rows : [];
 	const normalizedRows = inputRows
@@ -961,18 +973,22 @@ export async function processLoomCsvRows({
 					email: row.userEmail,
 					invitedByUserId: actorId,
 					role: "member",
+					operatorApproved,
 				});
 				member = {
 					userId: provisionedMember.userId,
 					email: row.userEmail,
 				};
-			} catch {
+			} catch (error) {
 				results.push({
 					rowNumber: row.rowNumber,
 					userEmail: row.userEmail,
 					spaceName: row.spaceName || undefined,
 					success: false,
-					error: "Could not add this email to the organization.",
+					error:
+						error instanceof InviteeRequiresAcceptanceError
+							? "Invite this person to the organization first. Their videos can be imported once they accept."
+							: "Could not add this email to the organization.",
 				});
 				continue;
 			}

@@ -6,15 +6,14 @@ import { ogImageUrl } from "@/lib/og/url";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 const ogImage = ogImageUrl({
-	title: "Speed up or slow down videos — free, in your browser",
+	title: "Speed up or slow down a video",
 	tag: "Tools",
 });
 
 export const metadata: Metadata = {
-	title:
-		"Video Speed Controller Online – Speed Up or Slow Down Videos Free | Cap",
+	title: "Video speed controller: speed up or slow down a video | Cap",
 	description:
-		"Free online video speed controller. Adjust playback from 0.25× to 3× without quality loss — processed locally in your browser for complete privacy. No uploads required.",
+		"Change the playback speed of a video file. The Cap editor can also split, mute and change the speed of clips, then export MP4 at up to 4K and 60 fps.",
 	keywords: [
 		"video speed controller",
 		"speed up video online",
@@ -25,10 +24,9 @@ export const metadata: Metadata = {
 		"online video speed controller",
 	],
 	openGraph: {
-		title:
-			"Video Speed Controller Online – Speed Up or Slow Down Videos Free | Cap",
+		title: "Video speed controller: speed up or slow down a video | Cap",
 		description:
-			"Adjust video playback speed from 0.25× to 3× directly in your browser. Free, private, no uploads — works with MP4, WebM, MOV, AVI and MKV.",
+			"Change the playback speed of a video file. The Cap editor can also split, mute and change the speed of clips, then export MP4 at up to 4K and 60 fps.",
 		url: "https://cap.so/tools/video-speed-controller",
 		siteName: "Cap",
 		images: [
@@ -36,7 +34,7 @@ export const metadata: Metadata = {
 				url: ogImage,
 				width: 1200,
 				height: 630,
-				alt: "Speed up or slow down videos — free, in your browser",
+				alt: "Speed up or slow down a video",
 			},
 		],
 		locale: "en_US",
@@ -44,10 +42,9 @@ export const metadata: Metadata = {
 	},
 	twitter: {
 		card: "summary_large_image",
-		title:
-			"Video Speed Controller Online – Speed Up or Slow Down Videos Free | Cap",
+		title: "Video speed controller: speed up or slow down a video | Cap",
 		description:
-			"Adjust video playback speed from 0.25× to 3× directly in your browser. Free, private, no uploads required.",
+			"Change the playback speed of a video file. The Cap editor can also split, mute and change the speed of clips, then export MP4 at up to 4K and 60 fps.",
 		images: [ogImage],
 	},
 	alternates: {

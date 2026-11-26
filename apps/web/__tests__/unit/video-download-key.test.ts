@@ -1,5 +1,6 @@
-import { CurrentUser, Organisation, User, Video } from "@cap/web-domain";
-import { Effect, Option } from "effect";
+import type { VideosPolicy as VideosPolicyService } from "@cap/web-backend";
+import { Video } from "@cap/web-domain";
+import { Effect, type Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	verifiedPasswords: [] as string[],
 }));
 
+vi.mock("server-only", () => ({}));
 vi.mock("@cap/database", () => ({
 	db: () => ({
 		select: () => ({
@@ -20,7 +22,13 @@ vi.mock("@cap/database", () => ({
 	}),
 }));
 vi.mock("@cap/database/auth/session", () => ({
-	getCurrentUser: () => Promise.resolve({ id: mocks.userId }),
+	getCurrentUser: () =>
+		Promise.resolve({
+			id: mocks.userId,
+			email: "member@example.com",
+			activeOrganizationId: "organization",
+			image: null,
+		}),
 }));
 vi.mock("@cap/web-backend", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@cap/web-backend")>();
@@ -35,6 +43,7 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 						repo: {
 							getById: () => Effect.succeedNone,
 							hasViewerGrant: () => Effect.succeed(false),
+							isLinkOpenToAnyone: () => Effect.succeed(false),
 						},
 						orgsRepo: {
 							membershipForVideo: () =>
@@ -57,26 +66,38 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 	return {
 		Storage: { getAccessForVideo: mocks.access },
 		VideosPolicy,
-		provideOptionalAuth: <A, E, R>(app: Effect.Effect<A, E, R>) =>
-			app.pipe(
-				Effect.provide(VideosPolicy.Default),
-				Effect.provideService(CurrentUser, {
-					id: User.UserId.make(mocks.userId),
-					email: "member@example.com",
-					activeOrganizationId:
-						Organisation.OrganisationId.make("organization"),
-					iconUrlOrKey: Option.none(),
-				}),
-				Effect.provideService(Video.VideoPasswordAttachment, {
-					passwords: mocks.verifiedPasswords,
-				}),
-			),
+		makeCurrentUser: actual.makeCurrentUser,
 	};
 });
 vi.mock("@/lib/video-download-permissions", () => ({
 	canUserDownloadVideo: () => Promise.resolve(true),
 }));
-vi.mock("@/lib/server", () => ({ runPromise: Effect.runPromise }));
+vi.mock("@/lib/shareable-link-quota", () => ({
+	isVideoLockedByShareableLinkLimit: () => Promise.resolve(false),
+}));
+vi.mock("@/lib/rate-limit", () => ({
+	RATE_LIMIT_IDS: { VIEWER_DOWNLOAD: "rl_viewer_download" },
+	isRateLimited: () => Promise.resolve(false),
+}));
+vi.mock("@/lib/server", async () => {
+	const backend = await import("@cap/web-backend");
+	return {
+		runPromise: <A, E>(
+			effect: Effect.Effect<
+				A,
+				E,
+				VideosPolicyService | Video.VideoPasswordAttachment
+			>,
+		) =>
+			effect.pipe(
+				Effect.provide(backend.VideosPolicy.Default),
+				Effect.provideService(Video.VideoPasswordAttachment, {
+					passwords: mocks.verifiedPasswords,
+				}),
+				Effect.runPromise,
+			),
+	};
+});
 
 import { getVideoDownloadInfo } from "@/actions/videos/download";
 
@@ -126,7 +147,7 @@ describe("current video download", () => {
 				Effect.succeed([
 					{
 						headObject: () => Effect.succeed({}),
-						getSignedObjectUrl: mocks.sign,
+						getSignedDownloadUrl: mocks.sign,
 					},
 				]),
 			);
@@ -138,6 +159,7 @@ describe("current video download", () => {
 			});
 			expect(mocks.sign).toHaveBeenCalledExactlyOnceWith(
 				variant === "current" ? outputKey : originalKey,
+				variant === "current" ? "Recording.mp4" : "Recording (original).mp4",
 			);
 		},
 	);
@@ -158,7 +180,7 @@ describe.each(["current", "original"] as const)(
 				Effect.succeed([
 					{
 						headObject: () => Effect.succeed({}),
-						getSignedObjectUrl: mocks.sign,
+						getSignedDownloadUrl: mocks.sign,
 					},
 				]),
 			);

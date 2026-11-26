@@ -11,17 +11,15 @@ import {
 	Logo,
 } from "@cap/ui";
 import type { ViewerSettingKey } from "@cap/web-backend";
-import {
-	faChartSimple,
-	faChevronDown,
-	faEllipsis,
-	faGear,
-	faLock,
-	faShare,
-	faTrash,
-	faUnlock,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { getCustomThumbnailMetadata } from "@cap/web-backend/src/Storage/custom-thumbnail";
+import { faChartSimple } from "@fortawesome/free-solid-svg-icons/faChartSimple";
+import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
+import { faEllipsis } from "@fortawesome/free-solid-svg-icons/faEllipsis";
+import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
+import { faShare } from "@fortawesome/free-solid-svg-icons/faShare";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
+import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
@@ -31,6 +29,7 @@ import {
 	Download,
 	FolderInput,
 	Globe2,
+	ImageIcon,
 	Lock,
 	MousePointer2,
 	Pencil,
@@ -52,6 +51,7 @@ import type { VideoStatusResult } from "@/actions/videos/get-status";
 import { useDashboardContext } from "@/app/(org)/dashboard/DashboardContext";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";
@@ -63,6 +63,7 @@ import { usePublicEnv } from "@/utils/public-env";
 import { navigateWithTransition } from "@/utils/view-transition";
 import type { SharePageBranding, VideoData } from "../types";
 import { DashboardBackLink } from "./DashboardBackLink";
+import { RelativeTime } from "./RelativeTime";
 import { describeShareAudience } from "./share-audience";
 import { useVideoDownload } from "./use-video-download";
 import { fromNow } from "./utils/from-now";
@@ -123,6 +124,10 @@ const CallToActionDialog = dynamic(
 		),
 	{ ssr: false },
 );
+const CustomThumbnailDialog = dynamic(
+	() => import("@/components/custom-thumbnail/CustomThumbnailDialog"),
+	{ ssr: false },
+);
 const DuplicateCapMenuItem = dynamic(() => import("./DuplicateCapMenuItem"), {
 	ssr: false,
 });
@@ -156,12 +161,15 @@ export const ShareHeader = ({
 	customDomain,
 	domainVerified,
 	allowedEmailDomain,
+	allowLinkOverride = false,
+	linkOpenToAnyone = false,
 	sharedOrganizations = [],
 	sharedSpaces = [],
 	viewerCount = 0,
 	spacesData = null,
 	branding,
 	canManageSharePageBranding = false,
+	brandColor = null,
 	canDownload = false,
 	canMoveToFolder = false,
 	hasEdits = false,
@@ -172,6 +180,8 @@ export const ShareHeader = ({
 	customDomain?: string | null;
 	domainVerified?: boolean;
 	allowedEmailDomain?: string | null;
+	allowLinkOverride?: boolean;
+	linkOpenToAnyone?: boolean;
 	sharedOrganizations?: { id: string; name: string }[];
 	viewerCount?: number;
 	userOrganizations?: { id: string; name: string }[];
@@ -194,6 +204,7 @@ export const ShareHeader = ({
 	spacesData?: Spaces[] | null;
 	branding?: SharePageBranding | null;
 	canManageSharePageBranding?: boolean;
+	brandColor?: string | null;
 	canDownload?: boolean;
 	canMoveToFolder?: boolean;
 	hasEdits?: boolean;
@@ -231,6 +242,8 @@ export const ShareHeader = ({
 	const [deleteDialogMounted, setDeleteDialogMounted] = useState(false);
 	const [ctaDialogMounted, setCtaDialogMounted] = useState(false);
 	const [isCtaDialogOpen, setIsCtaDialogOpenRaw] = useState(false);
+	const [thumbnailDialogMounted, setThumbnailDialogMounted] = useState(false);
+	const [isThumbnailDialogOpen, setIsThumbnailDialogOpenRaw] = useState(false);
 	const [isSettingsDialogOpen, setIsSettingsDialogOpenRaw] = useState(false);
 	const [isPasswordDialogOpen, setIsPasswordDialogOpenRaw] = useState(false);
 	const [isDeleteDialogOpen, setIsDeleteDialogOpenRaw] = useState(false);
@@ -257,6 +270,10 @@ export const ShareHeader = ({
 	const setIsCtaDialogOpen = (open: boolean) => {
 		if (open) setCtaDialogMounted(true);
 		setIsCtaDialogOpenRaw(open);
+	};
+	const setIsThumbnailDialogOpen = (open: boolean) => {
+		if (open) setThumbnailDialogMounted(true);
+		setIsThumbnailDialogOpenRaw(open);
 	};
 	const [passwordProtected, setPasswordProtected] = useState(
 		Boolean(data.hasPassword),
@@ -523,7 +540,8 @@ export const ShareHeader = ({
 	 */
 	const audience = describeShareAudience({
 		isPublic: Boolean(data.public),
-		allowedEmailDomain,
+		allowedEmailDomain:
+			allowLinkOverride && linkOpenToAnyone ? null : allowedEmailDomain,
 		passwordProtected: effectivePasswordProtected,
 		audienceNames: [
 			...(sharedOrganizations ?? []).map((org) => org.name),
@@ -666,6 +684,10 @@ export const ShareHeader = ({
 	const canEditVideo =
 		isOwner &&
 		!data.isScreenshot &&
+		!data.hasActiveUpload &&
+		(data.source.type === "desktopMP4" || data.source.type === "webMP4");
+	const customThumbnail = getCustomThumbnailMetadata(data.metadata);
+	const canPickThumbnailFrame =
 		!data.hasActiveUpload &&
 		(data.source.type === "desktopMP4" || data.source.type === "webMP4");
 	const handleEditVideo = () => {
@@ -854,12 +876,15 @@ export const ShareHeader = ({
 					onSharingUpdated={handleSharingUpdated}
 					isPublic={data.public}
 					allowedEmailDomain={allowedEmailDomain}
+					allowLinkOverride={allowLinkOverride}
+					linkOpenToAnyone={linkOpenToAnyone}
 					spacesData={spacesData}
 					hasPassword={passwordProtected}
 					inheritedPasswordSources={data.inheritedPasswordSources}
 					onPasswordUpdated={handlePasswordUpdated}
 					user={user}
 					onUpgradeRequest={setUpgradeModalOpen}
+					shareUrl={getVideoLink()}
 				/>
 			)}
 			{shareLinkDialogMounted && (
@@ -875,6 +900,7 @@ export const ShareHeader = ({
 						setIsShareLinkDialogOpen(false);
 						setIsSharingDialogOpen(true);
 					}}
+					ownerIsPro={data.owner.isPro}
 				/>
 			)}
 			{isOwner && (
@@ -918,10 +944,26 @@ export const ShareHeader = ({
 						<CallToActionDialog
 							open={isCtaDialogOpen}
 							onOpenChange={setIsCtaDialogOpen}
-							videoId={data.id}
+							target={{
+								kind: "video",
+								videoId: data.id,
+								source: data.callToActionSource ?? null,
+								workspaceCallToAction: data.workspaceCallToAction ?? null,
+							}}
 							callToAction={data.callToAction ?? null}
 							onSaved={refresh}
 							onUpgradeRequest={() => setUpgradeModalOpen(true)}
+							brandColor={brandColor}
+						/>
+					)}
+					{thumbnailDialogMounted && (
+						<CustomThumbnailDialog
+							open={isThumbnailDialogOpen}
+							onOpenChange={setIsThumbnailDialogOpen}
+							videoId={data.id}
+							hasCustomThumbnail={customThumbnail !== null}
+							canPickFrame={canPickThumbnailFrame}
+							initialFrameTime={customThumbnail?.time ?? null}
 						/>
 					)}
 					{deleteDialogMounted && (
@@ -936,12 +978,33 @@ export const ShareHeader = ({
 			)}
 			{/* Sits in the page bar above both panes, so the spacing is the bar's
 			    own padding rather than a top margin against the video. */}
-			<div className={clsx("pb-4", dashboardDestination ? "pt-2" : "pt-4")}>
-				{dashboardDestination && (
-					<DashboardBackLink
-						destination={dashboardDestination}
-						className="-ml-1.5 mb-1.5"
-					/>
+			<div
+				className={clsx(
+					"pb-4",
+					dashboardDestination || (isOwner && canMoveToFolder)
+						? "pt-2"
+						: "pt-4",
+				)}
+			>
+				{(dashboardDestination || (isOwner && canMoveToFolder)) && (
+					<div className="flex flex-wrap gap-1 items-center -ml-1.5 mb-1.5 min-w-0">
+						{dashboardDestination && (
+							<DashboardBackLink destination={dashboardDestination} />
+						)}
+						{isOwner && canMoveToFolder && (
+							<button
+								type="button"
+								onClick={() => {
+									setMoveDialogMounted(true);
+									setMoveDialogOpen(true);
+								}}
+								className="inline-flex gap-1.5 items-center px-3 h-8 text-[13px] rounded-full border transition-colors border-gray-4 bg-gray-1 text-gray-11 hover:border-gray-6 hover:bg-gray-3 hover:text-gray-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9"
+							>
+								<FolderInput className="size-3.5 shrink-0" aria-hidden />
+								Move to folder or space
+							</button>
+						)}
+					</div>
 				)}
 				<div className="flex flex-col gap-4">
 					<div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -1082,7 +1145,7 @@ export const ShareHeader = ({
 										{data.owner.name}
 									</p>
 									<p className="truncate text-xs text-gray-10">
-										{fromNow(data.createdAt)}
+										<RelativeTime date={data.createdAt} format={fromNow} />
 										{views !== undefined && (
 											<Suspense fallback={null}>
 												<ViewCount views={views} />
@@ -1094,6 +1157,20 @@ export const ShareHeader = ({
 							{user !== null ? (
 								<div className="flex min-w-0 max-w-[60%] justify-end lg:max-w-xs">
 									{renderSharedStatus()}
+								</div>
+							) : canDownload ? (
+								<div className="flex shrink-0 items-center gap-2">
+									<Button
+										variant="gray"
+										size="xs"
+										className="gap-1.5 px-3"
+										disabled={isDownloading}
+										onClick={() => download("current")}
+									>
+										<Download className="size-3.5 text-gray-12" />
+										Download
+									</Button>
+									{data.public && renderShareButton()}
 								</div>
 							) : (
 								data.public && renderShareButton("shrink-0")
@@ -1209,7 +1286,7 @@ export const ShareHeader = ({
 														>
 															<FolderInput className="size-3" />
 															<p className="text-sm text-gray-12">
-																Move to folder
+																Move or add to space
 															</p>
 														</DropdownMenuItem>
 													)}
@@ -1239,12 +1316,35 @@ export const ShareHeader = ({
 															<span className="ml-auto pl-3 text-xs text-gray-10">
 																Pro
 															</span>
+														) : data.callToActionSource === "workspace" ? (
+															<span className="ml-auto pl-3 text-xs text-gray-10">
+																Default
+															</span>
 														) : data.callToAction ? (
 															<span className="ml-auto pl-3 text-xs text-gray-10">
 																On
 															</span>
+														) : data.callToActionSource === "off" &&
+															data.workspaceCallToAction ? (
+															<span className="ml-auto pl-3 text-xs text-gray-10">
+																Off
+															</span>
 														) : null}
 													</DropdownMenuItem>
+													{!data.isScreenshot && (
+														<DropdownMenuItem
+															onClick={() => setIsThumbnailDialogOpen(true)}
+															className="flex items-center gap-2 rounded-lg"
+														>
+															<ImageIcon className="size-3.5" />
+															<p className="text-sm text-gray-12">Thumbnail</p>
+															{customThumbnail && (
+																<span className="ml-auto pl-3 text-xs text-gray-10">
+																	Custom
+																</span>
+															)}
+														</DropdownMenuItem>
+													)}
 													<DropdownMenuItem
 														onClick={() => {
 															if (!user.isPro) setUpgradeModalOpen(true);

@@ -29,6 +29,10 @@ export async function AppProviders({ children }: PropsWithChildren) {
 								webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
 								workosAuthAvailable: !!serverEnv().WORKOS_CLIENT_ID,
 								googleAuthAvailable: !!serverEnv().GOOGLE_CLIENT_ID,
+								googleOneTapClientId:
+									(serverEnv().GOOGLE_CLIENT_SECRET &&
+										serverEnv().GOOGLE_CLIENT_ID) ||
+									null,
 								oidcAuthAvailable: !!(
 									serverEnv().OIDC_ISSUER &&
 									serverEnv().OIDC_CLIENT_ID &&

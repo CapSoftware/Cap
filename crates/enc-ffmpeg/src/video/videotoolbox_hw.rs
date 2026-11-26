@@ -163,6 +163,23 @@ impl VideoToolboxHwFrames {
     }
 }
 
+#[cfg(test)]
+impl VideoToolboxHwFrames {
+    pub(crate) fn upload(&self, software: &ffmpeg::frame::Video) -> ffmpeg::frame::Video {
+        let mut frame = ffmpeg::frame::Video::empty();
+        unsafe {
+            assert!(
+                ffmpeg::sys::av_hwframe_get_buffer(self.frames_ctx, frame.as_mut_ptr(), 0) >= 0
+            );
+            assert!(
+                ffmpeg::sys::av_hwframe_transfer_data(frame.as_mut_ptr(), software.as_ptr(), 0)
+                    >= 0
+            );
+        }
+        frame
+    }
+}
+
 impl Drop for VideoToolboxHwFrames {
     fn drop(&mut self) {
         unsafe {

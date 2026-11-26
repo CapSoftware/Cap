@@ -96,12 +96,14 @@ def check_recording(config, runners, tier, reports):
     lines, failed = [], 0
     floor = config.get("recording", {}).get("cases", {}).get(tier, 0)
     for runner in runners:
-        d = os.path.join(reports, f"verify-recording-{runner}")
+        dirs = [os.path.join(reports, f"verify-recording-{runner}")]
+        dirs += sorted(glob.glob(os.path.join(reports, f"verify-recording-{runner}-{tier}-*")))
+        dirs = [d for d in dirs if os.path.isdir(d)]
         ids = {
-            i for i in case_ids([d])
+            i for i in case_ids(dirs)
             if i.startswith("recording/") and "(self-check" not in i
         }
-        ok = os.path.isdir(d) and len(ids) >= floor
+        ok = bool(dirs) and len(ids) >= floor
         failed += not ok
         lines.append(f"{'ok  ' if ok else 'FAIL'} {runner}: {len(ids)} real-capture cases recorded (floor {floor})")
     return lines, failed

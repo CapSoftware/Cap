@@ -1,6 +1,6 @@
 use clap::{Args, ValueEnum};
 
-use crate::{OutputFormat, agent_client};
+use crate::{OutputFormat, agent_client, caps::AgentApiError};
 
 #[derive(Clone, Copy, ValueEnum)]
 enum AnalyticsRange {
@@ -36,7 +36,7 @@ pub struct AnalyticsArgs {
 }
 
 impl AnalyticsArgs {
-    pub async fn run(self, global_json: bool) -> Result<(), String> {
+    pub async fn run(self, global_json: bool) -> Result<(), AgentApiError> {
         let query = agent_client::query(&[
             ("organizationId", Some(self.organization)),
             ("spaceId", self.space),

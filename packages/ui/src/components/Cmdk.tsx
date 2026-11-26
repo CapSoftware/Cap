@@ -3,6 +3,7 @@
 import { classNames } from "@cap/utils";
 import type { DialogProps } from "@radix-ui/react-dialog";
 import { Command as CommandPrimitive } from "cmdk";
+import { commandScore } from "cmdk/dist/command-score";
 import { Search } from "lucide-react";
 import * as React from "react";
 import { Dialog, DialogContent } from "./Dialog";
@@ -87,7 +88,7 @@ const CommandInput: CommandInputComponent = React.forwardRef<
 		<CommandPrimitive.Input
 			ref={ref}
 			className={classNames(
-				"flex py-3 w-full h-11 text-sm bg-transparent rounded-md outline-hidden text-gray-12 placeholder:text-gray-10 disabled:cursor-not-allowed disabled:opacity-50",
+				"flex py-3 w-full h-11 text-sm bg-transparent rounded-md outline-none outline-hidden text-gray-12 placeholder:text-gray-10 disabled:cursor-not-allowed disabled:opacity-50",
 				className,
 			)}
 			{...props}
@@ -196,4 +197,5 @@ export {
 	CommandList,
 	CommandSeparator,
 	CommandShortcut,
+	commandScore,
 };

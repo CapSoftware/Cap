@@ -7,7 +7,7 @@ use std::{
     ffi::CString,
     io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
 
@@ -54,15 +54,17 @@ impl CodecFailureHistory {
 
 /// Whether a hardware encoder that fails mid-recording is replaced with
 /// libx264. Windows encoders report a lost or hung GPU (driver reset, sleep,
-/// display change) as an error on every later frame, so without this the
-/// rest of the recording is lost.
-const RUNTIME_SOFTWARE_FALLBACK: bool = cfg!(windows);
+/// display change) as an error on every later frame, and so does
+/// VideoToolbox once its session is invalidated and cannot be recreated
+/// (`-12903`), so without this the rest of the recording is lost.
+const RUNTIME_SOFTWARE_FALLBACK: bool = cfg!(any(windows, target_os = "macos"));
 
 /// Tells an encoder failure apart from a write failure: only the first
 /// warrants switching encoders.
 struct SinkProbe<'a, S: ?Sized> {
     inner: &'a mut S,
     failed: bool,
+    written: u64,
 }
 
 impl<'a, S: PacketSink + ?Sized> SinkProbe<'a, S> {
@@ -70,6 +72,7 @@ impl<'a, S: PacketSink + ?Sized> SinkProbe<'a, S> {
         Self {
             inner,
             failed: false,
+            written: 0,
         }
     }
 }
@@ -82,6 +85,7 @@ impl<S: PacketSink + ?Sized> PacketSink for SinkProbe<'_, S> {
     fn write_packet(&mut self, packet: ffmpeg::Packet) -> Result<(), ffmpeg::Error> {
         let result = self.inner.write_packet(packet);
         self.failed |= result.is_err();
+        self.written += u64::from(result.is_ok());
         result
     }
 }
@@ -191,6 +195,8 @@ pub struct SegmentedVideoEncoder {
     pending_fallback: Option<EncoderFallback>,
     unrecovered_codec_failure: Option<(String, ffmpeg::Error)>,
     flush_failure: Option<EncoderFlushFailure>,
+    packets_written: Arc<AtomicU64>,
+    packets_lost: Arc<AtomicU64>,
 }
 
 struct SegmentMux {
@@ -526,12 +532,22 @@ impl SegmentedVideoEncoder {
             pending_fallback: None,
             unrecovered_codec_failure: None,
             flush_failure: None,
+            packets_written: Arc::new(AtomicU64::new(0)),
+            packets_lost: Arc::new(AtomicU64::new(0)),
         };
 
         if write_behind {
             let budget = super::write_behind::video_budget_bytes(instance.encoder.bit_rate());
             match instance.mux.enable_write_behind("video", budget) {
-                Ok(()) => tracing::debug!(budget_bytes = budget, "Video write-behind enabled"),
+                Ok(()) => {
+                    tracing::debug!(budget_bytes = budget, "Video write-behind enabled");
+                    if let Some(written) = instance.mux.written_packets_counter() {
+                        instance.packets_written = written;
+                    }
+                    if let Some(lost) = instance.mux.lost_packets_counter() {
+                        instance.packets_lost = lost;
+                    }
+                }
                 Err(error) => {
                     tracing::warn!(%error, "Video write-behind unavailable, muxing inline");
                 }
@@ -591,9 +607,14 @@ impl SegmentedVideoEncoder {
         // anchors pts at the first frame, so capture gaps (static content,
         // stream restarts, dropped frames) stay in the timeline instead of
         // compressing it and drifting video ahead of audio.
+        let inline = !self.mux.is_write_behind();
         let mut sink = SinkProbe::new(&mut self.mux);
         let result = self.encoder.queue_frame_to(frame, timestamp, &mut sink);
         let sink_failed = sink.failed;
+        if inline {
+            self.packets_written
+                .fetch_add(sink.written, std::sync::atomic::Ordering::Relaxed);
+        }
         match result {
             Ok(()) => self.codec_failures.record(false),
             Err(EncodeError::Encode(error)) if !sink_failed => {
@@ -664,6 +685,14 @@ impl SegmentedVideoEncoder {
         self.pending_fallback.take()
     }
 
+    /// The hardware encoder that stopped working and could not be replaced,
+    /// after which every frame fails.
+    pub fn unrecovered_encoder_failure(&self) -> Option<(&str, ffmpeg::Error)> {
+        self.unrecovered_codec_failure
+            .as_ref()
+            .map(|(encoder, error)| (encoder.as_str(), *error))
+    }
+
     pub fn finish(&mut self) -> Result<(), FinishError> {
         // A hardware encoder that dies at the very end loses only the frames
         // it still held, so its flush error alone does not fail the
@@ -677,10 +706,15 @@ impl SegmentedVideoEncoder {
         let mut tolerated_flush_error = None;
         let tail_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let finalize_tail_lost = tail_lost.clone();
+        let packets_written = self.packets_written.clone();
         let finished = self.mux.finish(
             |mux| {
+                let inline = !mux.is_write_behind();
                 let mut sink = SinkProbe::new(mux);
                 let result = encoder.flush_to(&mut sink);
+                if inline {
+                    packets_written.fetch_add(sink.written, std::sync::atomic::Ordering::Relaxed);
+                }
                 match result {
                     Err(error) if tolerate_codec_flush_failure && !sink.failed => {
                         tracing::warn!(
@@ -722,6 +756,19 @@ impl SegmentedVideoEncoder {
     /// is marked `encoder_tail_lost` too.
     pub fn take_flush_failure(&mut self) -> Option<EncoderFlushFailure> {
         self.flush_failure.take()
+    }
+
+    pub fn packets_written(&self) -> u64 {
+        self.packets_written
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn packets_written_counter(&self) -> Arc<AtomicU64> {
+        self.packets_written.clone()
+    }
+
+    pub fn packets_lost(&self) -> u64 {
+        self.packets_lost.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -1275,6 +1322,42 @@ mod tests {
             segment.as_object_mut().unwrap().remove("file_size");
         }
         (names, mpd, manifest)
+    }
+
+    #[test]
+    fn write_behind_counts_the_packets_the_writer_put_in_the_file() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let mut encoder = SegmentedVideoEncoder::init_write_behind(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+            false,
+        )
+        .unwrap();
+        assert!(encoder.mux.is_write_behind());
+        let counter = encoder.packets_written_counter();
+        for i in 0..120u64 {
+            encoder
+                .queue_frame(
+                    create_test_frame(320, 240),
+                    Duration::from_micros(i * 33_333),
+                )
+                .unwrap();
+        }
+        encoder
+            .finish_with_timestamp(Duration::from_secs(4))
+            .unwrap();
+        let decoded = decode_every_packet(&recorded_track(&base_path));
+        assert!(decoded.frames >= 119);
+        assert_eq!(encoder.packets_written(), decoded.frames as u64);
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::Relaxed),
+            decoded.frames as u64,
+            "a counter taken before recording follows the writer"
+        );
+        assert_eq!(encoder.packets_lost(), 0);
     }
 
     #[test]
@@ -2119,6 +2202,11 @@ mod tests {
             decoded.frames,
             total_frames as usize - HARDWARE_FAILURES_BEFORE_FALLBACK as usize
         );
+        assert_eq!(
+            encoder.packets_written(),
+            decoded.frames as u64,
+            "the frame that triggered the switch is not counted as written"
+        );
         assert!(
             (decoded.last_pts_secs - (total_frames - 1) as f64 / 30.0).abs() < 0.01,
             "frames after the switch keep the capture timeline, last pts {:.3}s",
@@ -2283,7 +2371,12 @@ mod tests {
         assert_eq!(failure.error, HARDWARE_FAILURE);
         assert_eq!(failure.encoder, "libx264");
         assert!(encoder.take_flush_failure().is_none());
-        decode_every_packet(&recorded_track(temp.path()));
+        let decoded = decode_every_packet(&recorded_track(temp.path()));
+        assert_eq!(encoder.packets_written(), decoded.frames as u64);
+        assert!(
+            encoder.packets_written() < 90,
+            "frames the encoder held at the failed flush are not counted as written"
+        );
     }
 
     #[test]
@@ -2330,6 +2423,7 @@ mod tests {
         assert_eq!(manifest["is_complete"], true);
         assert!(manifest.get("encoder_tail_lost").is_none());
         assert!(encoder.take_flush_failure().is_none());
+        assert_eq!(encoder.packets_written(), 90);
     }
 
     #[test]
@@ -2365,6 +2459,10 @@ mod tests {
             error
                 .to_string()
                 .contains("libx264 video encoder stopped working")
+        );
+        assert_eq!(
+            encoder.unrecovered_encoder_failure(),
+            Some(("libx264", HARDWARE_FAILURE))
         );
         assert!(base_path.join(INIT_SEGMENT_NAME).is_file());
         let manifest: serde_json::Value =
@@ -2439,9 +2537,154 @@ mod tests {
         assert_eq!(history.recent_failures(), 0);
     }
 
+    /// `None` where VideoToolbox has no hardware encoder (Blacksmith Macs),
+    /// unless `CAP_REQUIRE_VIDEOTOOLBOX` is set, as on the hosted Mac that
+    /// runs the encoder tests, where that is a failure.
+    #[cfg(target_os = "macos")]
+    fn record_videotoolbox_input(
+        base_path: &Path,
+        total_frames: u64,
+        failure: Option<(usize, Option<H264Preset>)>,
+    ) -> Option<(SegmentedVideoEncoder, Vec<bool>)> {
+        let (width, height) = (640, 360);
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path.to_path_buf(),
+            VideoInfo {
+                width,
+                height,
+                ..test_video_info()
+            },
+            SegmentedVideoEncoderConfig {
+                prefer_videotoolbox_hw_input: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        if !encoder.is_videotoolbox_hw_input() {
+            assert!(
+                std::env::var_os("CAP_REQUIRE_VIDEOTOOLBOX").is_none(),
+                "zero-copy VideoToolbox input is required but unavailable"
+            );
+            eprintln!("skipped: zero-copy VideoToolbox input unavailable");
+            return None;
+        }
+        assert_eq!(encoder.encoder.codec_name(), "h264_videotoolbox");
+        if let Some((healthy_frames, replacement)) = failure {
+            encoder.encoder.inject_codec_failure_after(
+                healthy_frames,
+                HARDWARE_FAILURE,
+                replacement,
+            );
+        }
+        let accepted = (0..total_frames)
+            .map(|i| {
+                let pixel_buffer = encoder
+                    .encoder
+                    .test_videotoolbox_frame(&create_test_frame(width, height));
+                let pixel_buffer = unsafe { (*pixel_buffer.as_ptr()).data[3] }.cast();
+                unsafe {
+                    encoder.queue_hw_pixel_buffer(pixel_buffer, Duration::from_micros(i * 33_333))
+                }
+                .is_ok()
+            })
+            .collect();
+        Some((encoder, accepted))
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
-    fn runtime_software_fallback_is_windows_only() {
-        assert_eq!(RUNTIME_SOFTWARE_FALLBACK, cfg!(windows));
+    fn videotoolbox_input_failure_mid_recording_continues_on_the_software_encoder() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let healthy_frames = 30;
+        let total_frames = 120;
+        let Some((mut encoder, accepted)) = record_videotoolbox_input(
+            temp.path(),
+            total_frames,
+            Some((healthy_frames, Some(H264Preset::Ultrafast))),
+        ) else {
+            return;
+        };
+
+        let fallback = encoder
+            .take_encoder_fallback()
+            .expect("the failed VideoToolbox encoder is replaced");
+        assert_eq!(fallback.failed_encoder, "h264_videotoolbox");
+        assert_eq!(fallback.replacement, "libx264");
+        assert_eq!(fallback.error, HARDWARE_FAILURE);
+        let rejected = accepted.iter().filter(|accepted| !**accepted).count();
+        assert_eq!(rejected, HARDWARE_FAILURES_BEFORE_FALLBACK as usize - 1);
+        assert!(encoder.is_videotoolbox_hw_input());
+        assert!(encoder.unrecovered_encoder_failure().is_none());
+        encoder.finish().unwrap();
+
+        let decoded = decode_every_packet(&recorded_track(temp.path()));
+        let software_frames =
+            total_frames as usize - healthy_frames - HARDWARE_FAILURES_BEFORE_FALLBACK as usize;
+        assert!(
+            decoded.frames > software_frames && decoded.frames <= total_frames as usize,
+            "{} frames decoded, {software_frames} from libx264",
+            decoded.frames
+        );
+        assert!(
+            (decoded.last_pts_secs - (total_frames - 1) as f64 / 30.0).abs() < 0.01,
+            "frames after the switch keep the capture timeline, last pts {:.3}s",
+            decoded.last_pts_secs
+        );
+        assert_eq!(read_manifest(temp.path())["is_complete"], true);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn videotoolbox_input_without_a_replacement_reports_the_stopped_encoder() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let Some((mut encoder, accepted)) =
+            record_videotoolbox_input(temp.path(), 60, Some((30, None)))
+        else {
+            return;
+        };
+
+        assert!(accepted[..30].iter().all(|accepted| *accepted));
+        assert!(accepted[30..].iter().all(|accepted| !*accepted));
+        assert!(encoder.take_encoder_fallback().is_none());
+        assert_eq!(
+            encoder.unrecovered_encoder_failure(),
+            Some(("h264_videotoolbox", HARDWARE_FAILURE))
+        );
+        assert!(matches!(
+            encoder.finish(),
+            Err(FinishError::EncoderStopped { error, .. }) if error == HARDWARE_FAILURE
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn healthy_videotoolbox_input_keeps_the_hardware_encoder() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let total_frames = 90;
+        let Some((mut encoder, accepted)) =
+            record_videotoolbox_input(temp.path(), total_frames, None)
+        else {
+            return;
+        };
+
+        assert!(accepted.iter().all(|accepted| *accepted));
+        assert!(encoder.take_encoder_fallback().is_none());
+        assert_eq!(encoder.encoder.codec_name(), "h264_videotoolbox");
+        encoder.finish().unwrap();
+        assert!(encoder.take_flush_failure().is_none());
+        let decoded = decode_every_packet(&recorded_track(temp.path()));
+        assert_eq!(decoded.frames, total_frames as usize);
+    }
+
+    #[test]
+    fn runtime_software_fallback_covers_windows_and_macos() {
+        assert_eq!(
+            RUNTIME_SOFTWARE_FALLBACK,
+            cfg!(any(windows, target_os = "macos"))
+        );
     }
 
     #[test]

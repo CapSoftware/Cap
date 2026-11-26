@@ -6,16 +6,20 @@ import {
 	Semaphore,
 } from "../../loom-importer/fetch";
 import {
+	buildAudioOnlyArgs,
 	buildRemuxArgs,
 	chooseContainer,
+	isAudioCopyFailure,
 	resolveFps,
 } from "../../loom-importer/media";
 import {
 	canSkipMissingSegments,
+	EmptyHlsPlaylistError,
 	listMediaPlaylistResources,
 	parseHlsAttributes,
 	selectHlsTracks,
 	UnsupportedStreamError,
+	withoutAudioRendition,
 } from "../../loom-importer/streaming";
 
 describe("selectHlsTracks", () => {
@@ -60,6 +64,33 @@ describe("selectHlsTracks", () => {
 		expect(
 			selectHlsTracks("#EXTM3U\n#EXTINF:4,\nhttps://cdn.loom.com/a.ts"),
 		).toBeNull();
+	});
+
+	test("drops the audio rendition and the variant's audio group", () => {
+		const selected = selectHlsTracks(master);
+		if (!selected) throw new Error("expected a selection");
+		const videoOnly = withoutAudioRendition(selected);
+		expect(videoOnly.video).toBe("/m/video-5500.m3u8");
+		expect(videoOnly.audio).toBeNull();
+		expect(videoOnly.masterLines).toEqual([
+			"#EXTM3U",
+			"#EXT-X-VERSION:3",
+			'#EXT-X-STREAM-INF:BANDWIDTH=5500000,RESOLUTION=2400x1350,CODECS="avc1.4d002a,mp4a.40.2"',
+			"/m/video-5500.m3u8",
+		]);
+		expect(
+			withoutAudioRendition({
+				video: "v.m3u8",
+				audio: "a.m3u8",
+				masterLines: [
+					'#EXT-X-STREAM-INF:AUDIO="audio",BANDWIDTH=10,CLOSED-CAPTIONS=NONE',
+					"v.m3u8",
+				],
+			}).masterLines,
+		).toEqual([
+			"#EXT-X-STREAM-INF:BANDWIDTH=10,CLOSED-CAPTIONS=NONE",
+			"v.m3u8",
+		]);
 	});
 
 	test("parses quoted attribute values containing commas", () => {
@@ -112,6 +143,25 @@ describe("listMediaPlaylistResources", () => {
 		expect(() => listMediaPlaylistResources(playlist)).toThrow(
 			UnsupportedStreamError,
 		);
+	});
+
+	test("reports a valid playlist without segments as empty", () => {
+		expect(() =>
+			listMediaPlaylistResources(
+				[
+					"#EXTM3U",
+					"#EXT-X-VERSION:3",
+					"#EXT-X-TARGETDURATION:0",
+					"#EXT-X-MEDIA-SEQUENCE:0",
+					"#EXT-X-PLAYLIST-TYPE:VOD",
+					"",
+					"#EXT-X-ENDLIST",
+				].join("\n"),
+			),
+		).toThrow(EmptyHlsPlaylistError);
+		expect(() =>
+			listMediaPlaylistResources('#EXTM3U\n#EXT-X-MAP:URI="init.mp4"'),
+		).toThrow(EmptyHlsPlaylistError);
 	});
 
 	test("accepts an explicit unencrypted key tag", () => {
@@ -210,6 +260,63 @@ describe("media decisions", () => {
 		expect(
 			buildRemuxArgs([], "in.m3u8", "out.webm", "webm", false).join(" "),
 		).not.toContain("0:a:0");
+	});
+
+	test("re-encodes only the audio when asked to", () => {
+		const args = buildRemuxArgs(
+			[],
+			"in.m3u8",
+			"out.mp4",
+			"mp4",
+			true,
+			"encode",
+		).join(" ");
+		expect(args).toContain("-c:v copy -c:a aac -b:a 128k");
+		expect(args).not.toContain("-c copy");
+		expect(
+			buildRemuxArgs([], "in.m3u8", "out.mp4", "mp4", false, "encode").join(
+				" ",
+			),
+		).toContain("-c copy");
+	});
+
+	test("re-encodes AAC in an audio-only source when asked to", () => {
+		expect(
+			buildAudioOnlyArgs([], "in.m3u8", "out.mp4", "aac", 5).join(" "),
+		).toContain("-c:a copy");
+		expect(
+			buildAudioOnlyArgs([], "in.m3u8", "out.mp4", "aac", 5, "encode").join(
+				" ",
+			),
+		).toContain("-c:a aac -b:a 128k");
+	});
+
+	test("recognises a failed AAC stream copy", () => {
+		expect(
+			isAudioCopyFailure(
+				new Error(
+					"ffmpeg exited with code 183: [aac_adtstoasc @ 0x1] Error parsing ADTS frame header!\n[mp4 @ 0x2] Error applying bitstream filters to an output packet for stream #1: Invalid data found when processing input",
+				),
+			),
+		).toBe(true);
+		expect(
+			isAudioCopyFailure(
+				new Error(
+					"ffmpeg exited with code 183: Error applying bitstream filters to an output packet for stream #1: Invalid data",
+				),
+			),
+		).toBe(true);
+		expect(
+			isAudioCopyFailure(
+				new Error(
+					"ffmpeg exited with code 183: Error applying bitstream filters to an output packet for stream #0: Invalid data",
+				),
+			),
+		).toBe(false);
+		expect(isAudioCopyFailure(new Error("ffmpeg exited with code 1"))).toBe(
+			false,
+		);
+		expect(isAudioCopyFailure("Error parsing ADTS frame header")).toBe(false);
 	});
 });
 

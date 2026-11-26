@@ -31,6 +31,7 @@ fn main() {
                             end: index as f32 * 4.0 + (word + 1) as f32 * 0.4,
                         })
                         .collect(),
+                    recording_clip: None,
                 })
                 .collect(),
             ..Default::default()

@@ -372,6 +372,111 @@
 			"when": 1793990840043,
 			"tag": "0052_directory_sync",
 			"breakpoints": true
+		},
+		{
+			"idx": 53,
+			"version": "5",
+			"when": 1794257295772,
+			"tag": "0053_mobile_push_tokens",
+			"breakpoints": true
+		},
+		{
+			"idx": 54,
+			"version": "5",
+			"when": 1794447346042,
+			"tag": "0054_developer_video_playback",
+			"breakpoints": true
+		},
+		{
+			"idx": 55,
+			"version": "5",
+			"when": 1794461929204,
+			"tag": "0055_developer_transcripts",
+			"breakpoints": true
+		},
+		{
+			"idx": 56,
+			"version": "5",
+			"when": 1794532188306,
+			"tag": "0056_developer_billing_read_indexes",
+			"breakpoints": true
+		},
+		{
+			"idx": 57,
+			"version": "5",
+			"when": 1794545935647,
+			"tag": "0057_developer_transcript_video",
+			"breakpoints": true
+		},
+		{
+			"idx": 58,
+			"version": "5",
+			"when": 1794549219180,
+			"tag": "0058_developer_webhook_endpoints",
+			"breakpoints": true
+		},
+		{
+			"idx": 59,
+			"version": "5",
+			"when": 1794555548432,
+			"tag": "0059_developer_video_first_month",
+			"breakpoints": true
+		},
+		{
+			"idx": 60,
+			"version": "5",
+			"when": 1794575853185,
+			"tag": "0060_developer_video_imports",
+			"breakpoints": true
+		},
+		{
+			"idx": 61,
+			"version": "5",
+			"when": 1794582375191,
+			"tag": "0061_developer_delivery_metering",
+			"breakpoints": true
+		},
+		{
+			"idx": 62,
+			"version": "5",
+			"when": 1794867892168,
+			"tag": "0062_dashboard_library_tools",
+			"breakpoints": true
+		},
+		{
+			"idx": 63,
+			"version": "5",
+			"when": 1795200696826,
+			"tag": "0063_passkeys",
+			"breakpoints": true
+		},
+		{
+			"idx": 64,
+			"version": "5",
+			"when": 1795202295715,
+			"tag": "0064_email_change_requests",
+			"breakpoints": true
+		},
+		{
+			"idx": 65,
+			"version": "5",
+			"when": 1795219397974,
+			"tag": "0065_passkey_confirms_identity",
+			"breakpoints": true
+		},
+		{
+			"idx": 66,
+			"version": "5",
+			"when": 1795222559682,
+			"tag": "0066_meeting_notes_trial_uses",
+			"breakpoints": true
+		},
+		{
+			"idx": 67,
+			"version": "5",
+			"when": 1795524690496,
+			"tag": "0067_meeting_audio_usage",
+			"breakpoints": true
 		}
 	]
 }

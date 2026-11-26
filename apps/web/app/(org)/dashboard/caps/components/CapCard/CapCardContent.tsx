@@ -1,11 +1,11 @@
-import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
 import clsx from "clsx";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { Tooltip } from "@/components/Tooltip";
 import { formatDateTime, formatFromNow } from "@/lib/date-format";
 import type { CapCardProps } from "./CapCard";
@@ -40,18 +40,40 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	const [isDateEditing, setIsDateEditing] = useState(false);
 	const [showFullDate, setShowFullDate] = useState(false);
 	const [title, setTitle] = useState(cap.name);
+	const [savedTitle, setSavedTitle] = useState(cap.name);
 	const [isEditing, setIsEditing] = useState(false);
+	// The field stays editable while a save is in flight, so the save reads
+	// the latest draft and the editor state to avoid replacing text typed
+	// after the blur.
+	const draftRef = useRef(cap.name);
+	const editingRef = useRef(false);
 
-	const handleTitleBlur = async (capName: string) => {
-		if (!title || capName === title) {
-			setIsEditing(false);
+	const setEditing = (value: boolean) => {
+		editingRef.current = value;
+		setIsEditing(value);
+	};
+
+	const setDraft = (value: string) => {
+		draftRef.current = value;
+		setTitle(value);
+	};
+
+	const handleTitleBlur = async () => {
+		const next = title.trim();
+		if (!next || next === savedTitle) {
+			setDraft(savedTitle);
+			setEditing(false);
 			return;
 		}
 
 		try {
-			await editTitle(cap.id, title);
+			await editTitle(cap.id, next);
+			setSavedTitle(next);
 			toast.success("Video title updated");
-			setIsEditing(false);
+			if (!editingRef.current || draftRef.current.trim() === next) {
+				setDraft(next);
+				setEditing(false);
+			}
 			router.refresh();
 		} catch (error) {
 			if (error instanceof Error) {
@@ -141,7 +163,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 
 	const renderSharedStatus = () => {
 		const baseClassName = clsx(
-			"text-sm text-gray-10 transition-colors duration-200 flex items-center mb-1",
+			"flex shrink-0 gap-1 items-center text-[13px] text-gray-10 transition-colors duration-200",
 			"hover:text-gray-12",
 			hideSharedStatus ? "pointer-events-none" : "cursor-pointer",
 		);
@@ -157,8 +179,11 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						className={baseClassName}
 						onClick={() => setIsSharingDialogOpen(true)}
 					>
-						Not shared{" "}
-						<FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
+						Not shared
+						<FontAwesomeIcon
+							className="size-2 text-gray-9"
+							icon={faChevronDown}
+						/>
 					</p>
 				);
 			} else {
@@ -167,37 +192,40 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						className={baseClassName}
 						onClick={() => setIsSharingDialogOpen(true)}
 					>
-						Shared{" "}
-						<FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
+						Shared
+						<FontAwesomeIcon
+							className="size-2 text-gray-9"
+							icon={faChevronDown}
+						/>
 					</p>
 				);
 			}
-		} else {
-			return <p className={baseClassName}>Shared with you</p>;
 		}
+		if (isOwner) return null;
+		return <p className={baseClassName}>Shared with you</p>;
 	};
+	const sharedStatus = renderSharedStatus();
 
 	return (
-		<div>
-			<div className="h-[1.25rem] mb-1">
-				{" "}
-				{/* Fixed height container */}
+		<div className="flex flex-col gap-1 min-w-0">
+			<div className="min-h-5">
 				{isEditing && !sharedCapCard ? (
 					<textarea
 						rows={1}
 						value={title}
-						onChange={(e) => setTitle(e.target.value)}
-						onBlur={() => handleTitleBlur(cap.name)}
+						onChange={(e) => setDraft(e.target.value)}
+						onBlur={handleTitleBlur}
 						onKeyDown={(e) => handleTitleKeyDown(e)}
-						className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
+						className="overflow-hidden p-0 m-0 w-full text-sm font-medium tracking-normal leading-5 bg-transparent border-0 resize-none outline-0 text-gray-12 font-[inherit] [field-sizing:content] max-h-10"
 					/>
 				) : (
 					<p
-						className="text-md truncate leading-[1.25rem] text-gray-12 font-medium p-0 m-0 h-[1.25rem] tracking-normal"
+						title={title}
+						className="p-0 m-0 text-sm font-medium tracking-normal leading-5 line-clamp-2 text-gray-12 [overflow-wrap:anywhere]"
 						onClick={() => {
 							if (!sharedCapCard) {
 								if (userId === cap.ownerId) {
-									setIsEditing(true);
+									setEditing(true);
 								}
 							}
 						}}
@@ -207,25 +235,27 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 				)}
 			</div>
 
-			{renderSharedStatus()}
-			<div className="mb-1 h-[1.5rem]">
-				{" "}
+			<div className="flex gap-1.5 items-center min-w-0 h-5">
+				{sharedStatus}
+				{sharedStatus && (
+					<span aria-hidden className="text-[13px] text-gray-7">
+						·
+					</span>
+				)}
 				{isDateEditing && !sharedCapCard ? (
-					<div className="flex items-center h-full">
-						<input
-							type="text"
-							value={dateValue}
-							onChange={handleDateChange}
-							onBlur={handleDateBlur}
-							onKeyDown={handleDateKeyDown}
-							className="text-sm w-full truncate text-gray-10 bg-transparent focus:outline-none h-full leading-[1.5rem]"
-							placeholder="YYYY-MM-DD HH:mm:ss"
-						/>
-					</div>
+					<input
+						type="text"
+						value={dateValue}
+						onChange={handleDateChange}
+						onBlur={handleDateBlur}
+						onKeyDown={handleDateKeyDown}
+						className="flex-1 min-w-0 h-5 text-[13px] leading-5 truncate bg-transparent text-gray-10 focus:outline-none"
+						placeholder="YYYY-MM-DD HH:mm:ss"
+					/>
 				) : (
 					<Tooltip content={`Cap created at ${effectiveDate}`}>
 						<p
-							className="text-sm truncate text-gray-10 cursor-pointer flex items-center h-full leading-[1.5rem]"
+							className="min-w-0 text-[13px] leading-5 truncate transition-colors cursor-pointer text-gray-10 hover:text-gray-12"
 							onClick={handleDateClick}
 						>
 							{showFullDate

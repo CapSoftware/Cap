@@ -40,10 +40,18 @@ fi
 # DOCKER_EXTRA: more `docker run` flags, e.g. `--gpus all -e
 # NVIDIA_DRIVER_CAPABILITIES=all` to hand a real GPU's userspace to the desktop.
 read -r -a docker_extra <<<"${DOCKER_EXTRA:-}"
+# The .deb's dependencies come from Ubuntu's mirrors. Every run on this host
+# shares one package cache, so only the first run downloads them.
+apt_cache=${HARNESS_APT_CACHE:-${RUNNER_TEMP:-/tmp}/cap-harness-apt}
+cache_mounts=()
+if [[ $desktop == gnome ]]; then
+  mkdir -p "$apt_cache/partial"
+  cache_mounts=(-v "$apt_cache":/var/cache/apt/archives)
+fi
 docker run -d --name "$name" --privileged --cgroupns=host "${docker_extra[@]}" \
   -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock \
   -v "$package":/pkgs/"$(basename "$package")":ro -v "$here":/harness:ro -v "$out":/out \
-  "${dev_mounts[@]}" "$image" >/dev/null
+  "${cache_mounts[@]}" "${dev_mounts[@]}" "$image" >/dev/null
 trap 'docker rm -f "$name" >/dev/null 2>&1' EXIT
 for _ in $(seq 60); do
   state=$(docker exec "$name" systemctl is-system-running 2>/dev/null || true)
@@ -54,9 +62,33 @@ done
 # test user the access a seat grants it on a real machine.
 docker exec "$name" sh -c 'chmod 666 /dev/dri/* 2>/dev/null || true'
 envs=(-e HARNESS_OUT=/out -e DESKTOP="$desktop" "${extra_env[@]}")
+# Ubuntu's mirrors answer 502 for minutes at a time: apt retries each file,
+# a failed install is tried again, and then again from another mirror.
+install_deb() {
+  local deb mirror attempt
+  deb=/pkgs/$(basename "$package")
+  : >"$out/install.log"
+  # The image's apt deletes packages once installed; keep them in the cache.
+  docker exec "$name" rm -f /etc/apt/apt.conf.d/docker-clean
+  for mirror in "" http://azure.archive.ubuntu.com/ubuntu; do
+    if [[ -n $mirror ]]; then
+      echo "switching to $mirror" >>"$out/install.log"
+      docker exec "$name" sed -i "s#http://archive.ubuntu.com/ubuntu#$mirror#g" \
+        /etc/apt/sources.list.d/ubuntu.sources >>"$out/install.log" 2>&1 || continue
+      docker exec "$name" apt-get update -qq >>"$out/install.log" 2>&1 || continue
+    fi
+    for attempt in 1 2; do
+      docker exec "$name" apt-get install -y -qq -o Acquire::Retries=4 "$deb" \
+        >>"$out/install.log" 2>&1 && return 0
+      echo "install attempt $attempt failed" >>"$out/install.log"
+      sleep $((attempt * 15))
+    done
+  done
+  return 100
+}
 case "$package" in
   *.deb) if [[ $desktop == gnome ]]; then
-           docker exec "$name" apt-get install -y -qq "/pkgs/$(basename "$package")" >"$out/install.log" 2>&1
+           install_deb
          elif [[ -z "${DEV_BIN:-}" ]]; then
            echo "a .deb needs the gnome image; pass an AppImage or DEV_BIN for $desktop" >&2
            exit 2

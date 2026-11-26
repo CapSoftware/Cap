@@ -1,4 +1,3 @@
-import { getServerSession } from "@cap/database/auth/auth-options";
 import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
 import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import * as Db from "@cap/database/schema";
@@ -31,7 +30,12 @@ export const getCurrentUser = Effect.gen(function* () {
 		return Option.none<typeof Db.users.$inferSelect>();
 
 	return yield* Option.fromNullable(
-		yield* Effect.tryPromise(() => getServerSession()),
+		yield* Effect.tryPromise(async () => {
+			const { getServerSession } = await import(
+				"@cap/database/auth/auth-options"
+			);
+			return getServerSession();
+		}),
 	).pipe(
 		Option.map((session) =>
 			Effect.gen(function* () {

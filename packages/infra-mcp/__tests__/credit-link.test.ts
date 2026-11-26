@@ -1,0 +1,168 @@
+import { describe, expect, it } from "vitest";
+import { appBillingUrl, CreditLink } from "../src/credit-link";
+import { createHostedTools } from "../src/hosted";
+
+const CONSOLE = "https://cap.test/dashboard/infra";
+
+describe("credit link", () => {
+	it("names the app's Billing page when the app is known", async () => {
+		const link = new CreditLink(CONSOLE, "app_1", () => {
+			throw new Error("not called");
+		});
+		expect(link.url).toBe(`${CONSOLE}/app_1/billing`);
+		expect(await link.resolve()).toBe(`${CONSOLE}/app_1/billing`);
+	});
+
+	it("encodes the app id into the path", () => {
+		expect(appBillingUrl(CONSOLE, "a/b?c")).toBe(
+			`${CONSOLE}/a%2Fb%3Fc/billing`,
+		);
+	});
+
+	it("looks the app up once for calls that arrive together", async () => {
+		let lookups = 0;
+		const link = new CreditLink(CONSOLE, null, async () => {
+			lookups++;
+			return { data: { appId: "app_2" } };
+		});
+		expect(link.url).toBe(CONSOLE);
+		const urls = await Promise.all([link.resolve(), link.resolve()]);
+		expect(urls).toEqual([
+			`${CONSOLE}/app_2/billing`,
+			`${CONSOLE}/app_2/billing`,
+		]);
+		await link.resolve();
+		expect(lookups).toBe(1);
+	});
+
+	it("falls back to the console root when the lookup fails, and tries again next time", async () => {
+		let lookups = 0;
+		const link = new CreditLink(CONSOLE, null, async () => {
+			lookups++;
+			if (lookups === 1) throw new Error("offline");
+			return { data: { appId: "app_3" } };
+		});
+		expect(await link.resolve()).toBe(CONSOLE);
+		expect(await link.resolve()).toBe(`${CONSOLE}/app_3/billing`);
+	});
+
+	it("stops waiting for a shared lookup when a joining call is cancelled", async () => {
+		const link = new CreditLink(CONSOLE, null, () => new Promise(() => {}));
+		const first = link.resolve();
+		let firstSettled = false;
+		void first.then(() => {
+			firstSettled = true;
+		});
+		const controller = new AbortController();
+		const second = link.resolve(controller.signal);
+		const startedAt = Date.now();
+		controller.abort();
+		expect(await second).toBe(CONSOLE);
+		expect(Date.now() - startedAt).toBeLessThan(100);
+		expect(firstSettled).toBe(false);
+	});
+
+	it("keeps the console root when the server does not name the app", async () => {
+		const link = new CreditLink(CONSOLE, null, async () => ({
+			data: { balanceMicroCredits: 0 },
+		}));
+		expect(await link.resolve()).toBe(CONSOLE);
+	});
+
+	it("learns the app from a usage result", () => {
+		const link = new CreditLink(CONSOLE, null, null);
+		link.learn({ appId: "app_4" });
+		expect(link.url).toBe(`${CONSOLE}/app_4/billing`);
+	});
+});
+
+describe("hosted credit link", () => {
+	it("links the key's own app on a 402 without asking the API which app it is", async () => {
+		const requests: string[] = [];
+		const tools = createHostedTools({
+			apiUrl: "https://cap.test",
+			secretKey: "csk_hostedtest123",
+			appId: "app_hosted",
+			fetch: async (input) => {
+				const url = new URL(
+					String(input instanceof Request ? input.url : input),
+				);
+				requests.push(url.pathname);
+				return new Response(
+					JSON.stringify({
+						error: "Starting a transcript needs $0.01 of available credit.",
+						code: "insufficient_credits",
+						message: "Starting a transcript needs $0.01 of available credit.",
+						hint: "Add credits to this app at https://cap.so/dashboard/infra/app_hosted/billing, then retry.",
+						docs: "https://cap.so/docs/api/rest-api",
+					}),
+					{ status: 402, headers: { "Content-Type": "application/json" } },
+				);
+			},
+			log: () => {},
+		});
+		const create = tools.find((tool) => tool.name === "transcripts_create");
+		const result = await create?.run(
+			{ url: "https://files.example.com/a.mp3" },
+			{
+				signal: new AbortController().signal,
+				progressToken: undefined,
+				sendProgress: async () => {},
+				sendLog: async () => {},
+			},
+		);
+		expect(result?.isError).toBe(true);
+		const body = JSON.parse(result?.content[0]?.text ?? "{}");
+		expect(body.addCreditAt).toBe(
+			"https://cap.test/dashboard/infra/app_hosted/billing",
+		);
+		expect(body.credit).toContain(
+			"https://cap.test/dashboard/infra/app_hosted/billing",
+		);
+		expect(requests.some((path) => path.endsWith("/usage"))).toBe(false);
+	});
+
+	it("keeps the lookup inside the call's time limit", async () => {
+		const tools = createHostedTools({
+			apiUrl: "https://cap.test",
+			secretKey: "csk_hostedtest123",
+			fetch: async (input, init) => {
+				const url = new URL(
+					String(input instanceof Request ? input.url : input),
+				);
+				if (url.pathname.endsWith("/usage")) {
+					return new Promise<Response>((_, reject) => {
+						init?.signal?.addEventListener("abort", () =>
+							reject(new DOMException("aborted", "AbortError")),
+						);
+					});
+				}
+				await new Promise((resolve) => setTimeout(resolve, 150));
+				return new Response(
+					JSON.stringify({
+						error: "Not enough credit",
+						code: "insufficient_credits",
+						message: "Not enough credit",
+					}),
+					{ status: 402, headers: { "Content-Type": "application/json" } },
+				);
+			},
+			log: () => {},
+			budgetMs: 300,
+		});
+		const create = tools.find((tool) => tool.name === "transcripts_create");
+		const startedAt = Date.now();
+		const result = await create?.run(
+			{ url: "https://files.example.com/a.mp3" },
+			{
+				signal: new AbortController().signal,
+				progressToken: undefined,
+				sendProgress: async () => {},
+				sendLog: async () => {},
+			},
+		);
+		expect(Date.now() - startedAt).toBeLessThan(1_500);
+		const body = JSON.parse(result?.content[0]?.text ?? "{}");
+		expect(body.addCreditAt).toBe("https://cap.test/dashboard/infra");
+	});
+});

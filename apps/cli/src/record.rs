@@ -5,7 +5,7 @@ use cap_recording::{
     CameraFeed, DoneFut, MicrophoneFeed, PipelineStoppedByUser,
     feeds::{camera, microphone},
     instant_recording,
-    screen_capture::ScreenCaptureTarget,
+    screen_capture::{ScreenCaptureTarget, frame_accounting::ScreenFrameTotals},
     studio_recording::{self, ActorHandle as StudioActorHandle},
     upload_resume::UploadLock,
 };
@@ -56,9 +56,12 @@ pub struct RecordParams {
         help = "New '.cap' project path (defaults to <recordingId>.cap in the working directory). The path must not already exist, including an empty directory."
     )]
     path: Option<PathBuf>,
-    /// Maximum fps to record at (clamped to 1-120; camera recordings follow the desktop camera cap)
+    /// Maximum fps to record at, never above the display's refresh rate (Studio 1-240 on macOS and 1-120 elsewhere, Instant 1-120; camera recordings follow the desktop camera cap)
     #[arg(long)]
     fps: Option<u32>,
+    /// Studio screen video bitrate in Mbps, replacing the quality preset's target (2-400)
+    #[arg(long, value_name = "MBPS")]
+    video_bitrate: Option<f64>,
     /// Stop automatically after N seconds
     #[arg(long)]
     duration: Option<f64>,
@@ -74,6 +77,18 @@ impl RecordParams {
         }
         if self.fps == Some(0) {
             return Err("--fps must be greater than 0".to_string());
+        }
+        if let Some(mbps) = self.video_bitrate {
+            if self.mode != RecordMode::Studio {
+                return Err("--video-bitrate only applies to Studio recordings".to_string());
+            }
+            let min = cap_recording::MIN_STUDIO_VIDEO_BITRATE as f64 / 1_000_000.0;
+            let max = cap_recording::MAX_STUDIO_VIDEO_BITRATE as f64 / 1_000_000.0;
+            if !mbps.is_finite() || !(min..=max).contains(&mbps) {
+                return Err(format!(
+                    "--video-bitrate must be between {min} and {max} Mbps"
+                ));
+            }
         }
         Ok(())
     }
@@ -109,12 +124,20 @@ impl RecordParams {
             args.push("--fps".to_string());
             args.push(fps.to_string());
         }
+        if let Some(mbps) = self.video_bitrate {
+            args.push("--video-bitrate".to_string());
+            args.push(mbps.to_string());
+        }
         if let Some(duration) = self.duration {
             args.push("--duration".to_string());
             args.push(duration.to_string());
         }
         args
     }
+}
+
+fn video_bitrate_bps(mbps: f64) -> u32 {
+    (mbps * 1_000_000.0).round() as u32
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -490,6 +513,7 @@ impl RecordStopArgs {
                 &RecordEvent::Stopped {
                     path: &session.path.display().to_string(),
                     recording_meta_exists: session.recording_meta_exists.unwrap_or(true),
+                    screen_frames: None,
                 },
             )?;
             cleanup_session(&id, &session.path);
@@ -510,6 +534,7 @@ impl RecordStopArgs {
                         &RecordEvent::Stopped {
                             path: &current.path.display().to_string(),
                             recording_meta_exists: current.recording_meta_exists.unwrap_or(true),
+                            screen_frames: None,
                         },
                     )?;
                     cleanup_session(&id, &current.path);
@@ -543,6 +568,7 @@ impl RecordStopArgs {
                     &RecordEvent::Stopped {
                         path: &current.path.display().to_string(),
                         recording_meta_exists: true,
+                        screen_frames: None,
                     },
                 );
             }
@@ -601,10 +627,17 @@ fn resolve_session(id: Option<&str>, path: Option<&Path>) -> Result<Session, Str
             .ok_or_else(|| format!("No recording session found for path {}", path.display()));
     }
 
-    let mut active: Vec<Session> = sessions
+    select_active_session(sessions)
+}
+
+fn select_active_session(sessions: Vec<Session>) -> Result<Session, String> {
+    let (mut active, inactive): (Vec<Session>, Vec<Session>) = sessions
         .into_iter()
         .filter(|s| s.status == SessionStatus::Recording)
-        .collect();
+        .partition(|session| session::process_alive(session.pid));
+    if active.is_empty() {
+        active = inactive;
+    }
     match active.len() {
         0 => Err(
             "No active recording sessions. Start one with `cap record start --detach`".to_string(),
@@ -745,19 +778,13 @@ async fn start_recording(
     target: ScreenCaptureTarget,
     path: PathBuf,
 ) -> Result<ActorHandle, String> {
-    let upload_lock = prepare_recording_project(
-        &path,
-        params.mode,
-        params.mic.is_some() || params.system_audio,
-    )?;
-
     #[cfg(target_os = "macos")]
     let target_for_shareable_content = target.clone();
     let camera_only_target = matches!(target, ScreenCaptureTarget::CameraOnly);
     let mut studio_builder = studio_recording::Actor::builder(path.clone(), target.clone())
         .with_system_audio(params.system_audio);
-    let mut instant_builder =
-        instant_recording::Actor::builder(path, target).with_system_audio(params.system_audio);
+    let mut instant_builder = instant_recording::Actor::builder(path.clone(), target)
+        .with_system_audio(params.system_audio);
     let mut camera_active = false;
     let camera_recorded =
         !(cfg!(target_os = "macos") && params.mode == RecordMode::Instant && !camera_only_target);
@@ -804,12 +831,16 @@ async fn start_recording(
     }
 
     if let Some(mic_name) = params.mic.as_deref() {
-        let available = MicrophoneFeed::list();
-        if !available.contains_key(mic_name) {
-            let names: Vec<&str> = available.keys().map(String::as_str).collect();
-            return Err(format!(
-                "Microphone '{mic_name}' not found. Available: {names:?} (see `cap targets mics`)"
-            ));
+        // Listed devices keep their inputs open (on Linux the sound card itself),
+        // so the list goes before the microphone is opened.
+        {
+            let available = MicrophoneFeed::list();
+            if !available.contains_key(mic_name) {
+                let names: Vec<&str> = available.keys().map(String::as_str).collect();
+                return Err(format!(
+                    "Microphone '{mic_name}' not found. Available: {names:?} (see `cap targets mics`)"
+                ));
+            }
         }
 
         let (error_tx, _error_rx) = flume::bounded(16);
@@ -834,13 +865,17 @@ async fn start_recording(
         instant_builder = instant_builder.with_mic_feed(lock);
     }
 
+    let upload_lock = prepare_recording_project(
+        &path,
+        params.mode,
+        params.mic.is_some() || params.system_audio,
+    )?;
+
     match params.mode {
         RecordMode::Studio => {
-            let builder = cap_recording::RecordingDefaults::default().apply_to_studio_builder(
-                studio_builder,
-                camera_active,
-                params.fps,
-            );
+            let builder = cap_recording::RecordingDefaults::default()
+                .apply_to_studio_builder(studio_builder, camera_active, params.fps)
+                .with_video_bitrate(params.video_bitrate.map(video_bitrate_bps));
 
             builder
                 .build(
@@ -1174,6 +1209,10 @@ fn emit_stopped(format: OutputFormat, completed: &CompletedRecording) -> Result<
         &RecordEvent::Stopped {
             path: &completed.project_path().display().to_string(),
             recording_meta_exists,
+            screen_frames: match completed {
+                CompletedRecording::Studio(recording) => recording.screen_frames,
+                CompletedRecording::Instant(_) => None,
+            },
         },
     )
 }
@@ -1297,6 +1336,8 @@ enum RecordEvent<'a> {
     Stopped {
         path: &'a str,
         recording_meta_exists: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        screen_frames: Option<ScreenFrameTotals>,
     },
     Error {
         error: &'a str,
@@ -1315,10 +1356,20 @@ fn emit_record_event(format: OutputFormat, event: &RecordEvent<'_>) -> Result<()
                 RecordEvent::Stopped {
                     path,
                     recording_meta_exists,
+                    screen_frames,
                 } => {
                     println!("Recording stopped: {path}");
                     if !recording_meta_exists {
                         println!("warning: recording-meta.json was not written");
+                    }
+                    if let Some(frames) = screen_frames {
+                        println!(
+                            "Screen frames: {} written, {} lost of {} on screen ({:.2}%)",
+                            frames.written,
+                            frames.lost(),
+                            frames.displayed,
+                            frames.lost_pct()
+                        );
                     }
                 }
                 RecordEvent::Error { error } => println!("Recording error: {error}"),
@@ -1332,6 +1383,55 @@ fn emit_record_event(format: OutputFormat, event: &RecordEvent<'_>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn studio_params(mode: RecordMode, video_bitrate: Option<f64>) -> RecordParams {
+        RecordParams {
+            target: RecordTargets {
+                screen: None,
+                window: None,
+            },
+            mode,
+            camera: None,
+            mic: None,
+            system_audio: false,
+            path: None,
+            fps: None,
+            video_bitrate,
+            duration: None,
+        }
+    }
+
+    #[test]
+    fn video_bitrate_is_validated_and_forwarded_for_studio_only() {
+        assert!(studio_params(RecordMode::Studio, None).validate().is_ok());
+        for mbps in [2.0, 12.5, 30.0, 400.0] {
+            let params = studio_params(RecordMode::Studio, Some(mbps));
+            assert!(params.validate().is_ok(), "{mbps}");
+            let args = params.to_cli_args();
+            let flag = args
+                .iter()
+                .position(|arg| arg == "--video-bitrate")
+                .unwrap();
+            assert_eq!(args[flag + 1].parse::<f64>().unwrap(), mbps);
+        }
+        for mbps in [0.0, 1.9, 400.5, f64::NAN, f64::INFINITY] {
+            assert!(
+                studio_params(RecordMode::Studio, Some(mbps))
+                    .validate()
+                    .is_err(),
+                "{mbps}"
+            );
+        }
+        let instant = studio_params(RecordMode::Instant, Some(30.0)).validate();
+        assert!(instant.unwrap_err().contains("Studio"));
+        assert!(
+            !studio_params(RecordMode::Studio, None)
+                .to_cli_args()
+                .contains(&"--video-bitrate".to_string())
+        );
+        assert_eq!(video_bitrate_bps(12.5), 12_500_000);
+        assert_eq!(video_bitrate_bps(400.0), 400_000_000);
+    }
 
     #[cfg(unix)]
     #[tokio::test]
@@ -1353,6 +1453,7 @@ mod tests {
             system_audio: false,
             path: Some(path.clone()),
             fps: None,
+            video_bitrate: None,
             duration: None,
         };
 
@@ -1368,6 +1469,41 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.contains("No target specified"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn invalid_microphone_does_not_reserve_recording_path() {
+        let root = tempfile::tempdir().unwrap();
+        for mode in [RecordMode::Studio, RecordMode::Instant] {
+            let path = root.path().join(format!("{mode}.cap"));
+            let params = RecordParams {
+                target: RecordTargets {
+                    screen: None,
+                    window: None,
+                },
+                mode,
+                camera: None,
+                mic: Some(format!("missing-microphone-{}", Uuid::new_v4())),
+                system_audio: false,
+                path: Some(path.clone()),
+                fps: None,
+                video_bitrate: None,
+                duration: Some(1.0),
+            };
+
+            for _ in 0..2 {
+                let error = start_recording(&params, ScreenCaptureTarget::CameraOnly, path.clone())
+                    .await
+                    .err()
+                    .unwrap();
+                assert!(error.contains("Microphone 'missing-microphone-"), "{error}");
+                assert!(
+                    !path.exists(),
+                    "failed {mode} startup reserved {}",
+                    path.display()
+                );
+            }
+        }
     }
 
     #[test]
@@ -1646,11 +1782,27 @@ mod tests {
         let stopped = serde_json::to_value(RecordEvent::Stopped {
             path: "p",
             recording_meta_exists: true,
+            screen_frames: None,
         })
         .unwrap();
         assert_eq!(stopped["type"], "stopped");
         assert_eq!(stopped["recordingMetaExists"], true);
         assert!(stopped.get("recording_meta_exists").is_none());
+        assert!(stopped.get("screenFrames").is_none());
+
+        let counted = serde_json::to_value(RecordEvent::Stopped {
+            path: "p",
+            recording_meta_exists: true,
+            screen_frames: Some(ScreenFrameTotals {
+                displayed: 2400,
+                written: 2390,
+                lost_in_capture: 10,
+                ..Default::default()
+            }),
+        })
+        .unwrap();
+        assert_eq!(counted["screenFrames"]["displayed"], 2400);
+        assert_eq!(counted["screenFrames"]["lostInCapture"], 10);
     }
 
     #[test]
@@ -1673,6 +1825,44 @@ mod tests {
         assert_eq!(
             row.error.as_deref(),
             Some("recording process is not running")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stale_sessions_do_not_hide_the_only_running_recording() {
+        let mut worker = std::process::Command::new("/bin/true").spawn().unwrap();
+        let dead_pid = worker.id();
+        worker.wait().unwrap();
+        assert!(!session::process_alive(dead_pid));
+        let interrupted = Session {
+            recording_id: "interrupted".to_string(),
+            pid: dead_pid,
+            path: PathBuf::from("interrupted.cap"),
+            status: SessionStatus::Recording,
+            started_at: Some(1),
+            recording_meta_exists: None,
+            error: None,
+        };
+        let current = Session {
+            recording_id: "current".to_string(),
+            pid: std::process::id(),
+            path: PathBuf::from("current.cap"),
+            ..interrupted.clone()
+        };
+        let selected = select_active_session(vec![interrupted.clone(), current.clone()]).unwrap();
+        assert_eq!(selected.recording_id, "current");
+        let selected = select_active_session(vec![interrupted]).unwrap();
+        assert_eq!(selected.recording_id, "interrupted");
+        let other = Session {
+            recording_id: "other".to_string(),
+            ..current.clone()
+        };
+        assert!(
+            select_active_session(vec![current, other])
+                .err()
+                .unwrap()
+                .contains("Multiple active recordings")
         );
     }
 }

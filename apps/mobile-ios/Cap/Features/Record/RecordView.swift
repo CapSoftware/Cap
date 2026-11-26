@@ -12,6 +12,8 @@ struct RecordView: View {
     @AppStorage("so.cap.mobile.recordMode") private var mode: RecordMode = .camera
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.scenePhase) private var scenePhase
     private let upgrade = WebUpgrade.shared
 
@@ -24,7 +26,14 @@ struct RecordView: View {
             Color.black.ignoresSafeArea()
 
             if mode == .camera {
-                CameraPreview(session: model.capture.session, position: model.position)
+                CameraPreview(
+                    session: model.capture.session,
+                    position: model.position,
+                    isLive: model.phase == .ready,
+                    followsDevice: horizontalSizeClass == .regular && verticalSizeClass == .regular,
+                    recordingAngle: model.recordingRotationAngle,
+                    onCaptureAngle: model.setRotationAngle
+                )
                     .ignoresSafeArea()
                     .opacity(model.phase == .ready || model.isRecording || model.phase == .finishing ? 1 : 0)
                     .animation(.easeOut(duration: 0.25), value: model.phase)
@@ -73,7 +82,10 @@ struct RecordView: View {
             ScreenRecordingSession.shared.began(withCamera: mode == .screenAndCamera)
             if mode == .screenAndCamera { bubble.float() }
         }
-        .onAppear { recent.isRecorderVisible = true }
+        .onAppear {
+            recent.isRecorderVisible = true
+            Usage.screen("record")
+        }
         .onDisappear {
             recent.isRecorderVisible = false
             model.teardown()
@@ -115,6 +127,9 @@ struct RecordView: View {
                 if case let .recording(startedAt) = model.phase {
                     RecordingTimer(startedAt: startedAt, limit: model.limit)
                         .transition(.scale(scale: 0.8).combined(with: .opacity))
+                } else if !screen.isCapturing, model.phase != .finishing {
+                    CaptureModeSwitch()
+                        .transition(.opacity)
                 }
 
                 Spacer()
@@ -134,9 +149,18 @@ struct RecordView: View {
             Spacer(minLength: 12)
 
             if mode.recordsScreen {
-                // In the same column as the list above, so the two never overlap.
-                ScreenModePanel(recorder: screen, mode: mode, bubble: bubble, compact: !recent.items.isEmpty)
-                    .transition(.opacity)
+                // In the same column as the list above, so the two never overlap. At accessibility text sizes on an
+                // iPhone SE the steps outgrow the screen; they scroll then, so close and record stay on screen.
+                ViewThatFits(in: .vertical) {
+                    screenPanel
+                    ScrollView {
+                        screenPanel
+                            .padding(.vertical, 8)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .scrollIndicators(.hidden)
+                }
+                .transition(.opacity)
                 Spacer(minLength: 12)
             }
 
@@ -206,6 +230,7 @@ struct RecordView: View {
                 .accessibilityHidden(mode != .camera)
                 .accessibilityLabel(model.position == .front ? "Switch to back camera" : "Switch to front camera")
             }
+            .frame(maxWidth: 440)
             .padding(.horizontal, 36)
             .padding(.bottom, 24)
         }
@@ -213,6 +238,10 @@ struct RecordView: View {
         .animation(.spring(duration: 0.35), value: model.isRecording)
         .animation(.spring(duration: 0.35), value: mode)
         .animation(.spring(duration: 0.35), value: recent.items)
+    }
+
+    private var screenPanel: some View {
+        ScreenModePanel(recorder: screen, mode: mode, bubble: bubble, compact: !recent.items.isEmpty)
     }
 
     private func blocked(title: String, message: String, systemImage: String, action: (String, () -> Void)?) -> some View {
@@ -231,6 +260,77 @@ struct RecordView: View {
 
     private func openSettings() {
         if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+    }
+}
+
+private struct CaptureModeSwitch: View {
+    @State private var comingSoon: CaptureMode?
+    @State private var taps = 0
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(CaptureMode.allCases) { option in
+                if option.isAvailable {
+                    // 375 pt wide phones can't fit "Instant Mode" between the close button and its spacer.
+                    ViewThatFits(in: .horizontal) {
+                        current(option, title: option.title)
+                        current(option, title: option.shortTitle)
+                    }
+                } else {
+                    Button {
+                        comingSoon = option
+                        taps += 1
+                        AccessibilityNotification.Announcement(option.comingSoonMessage).post()
+                    } label: {
+                        Image(systemName: option.systemImage)
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 40, height: 36)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .accessibilityLabel(option.title)
+                    .accessibilityValue("Coming soon")
+                }
+            }
+        }
+        .opacity(comingSoon == nil ? 1 : 0)
+        .allowsHitTesting(comingSoon == nil)
+        .accessibilityHidden(comingSoon != nil)
+        .overlay {
+            if let comingSoon {
+                Text(comingSoon.comingSoonMessage)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .padding(.horizontal, 8)
+                    .transition(.opacity)
+            }
+        }
+        .padding(4)
+        .glassEffect(.regular, in: Capsule())
+        .dynamicTypeSize(...DynamicTypeSize.large)
+        .animation(.easeOut(duration: 0.2), value: comingSoon)
+        .sensoryFeedback(.selection, trigger: taps)
+        .task(id: taps) {
+            guard comingSoon != nil else { return }
+            try? await Task.sleep(for: .seconds(2.4))
+            guard !Task.isCancelled else { return }
+            comingSoon = nil
+        }
+    }
+
+    private func current(_ option: CaptureMode, title: String) -> some View {
+        Label(title, systemImage: option.systemImage)
+            .font(.subheadline.weight(.semibold))
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 12)
+            .frame(height: 36)
+            .background(Capsule().fill(.white.opacity(0.22)))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(option.title)
+            .accessibilityAddTraits(.isSelected)
     }
 }
 
@@ -278,6 +378,7 @@ private struct FreeLimitNote: View {
                 .multilineTextAlignment(.center)
             if let upgradeURL {
                 Button {
+                    Usage.track("upgrade_clicked", ["source": "recorder"])
                     UIApplication.shared.open(upgradeURL)
                 } label: {
                     Label("Upgrade in your Cap dashboard", systemImage: "arrow.up.forward")
@@ -383,23 +484,41 @@ private struct RecordPressStyle: ButtonStyle {
 
 private struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
-    /// Switching cameras replaces the layer's connection, which then needs turning upright again.
+    /// Switching cameras or restarting the camera gives the layer a new connection, which then needs turning upright again.
     let position: AVCaptureDevice.Position
+    let isLive: Bool
+    /// The open iPhone Duo turns with the device, so its camera does too. A phone's recorder stays portrait.
+    let followsDevice: Bool
+    let recordingAngle: CGFloat?
+    let onCaptureAngle: (CGFloat) -> Void
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.previewLayer.session = session
         view.previewLayer.videoGravity = .resizeAspectFill
+        NotificationCenter.default.addObserver(view, selector: #selector(PreviewView.sessionStarted), name: AVCaptureSession.didStartRunningNotification, object: session)
         return view
     }
 
     func updateUIView(_ view: PreviewView, context: Context) {
+        view.onCaptureAngle = onCaptureAngle
+        view.recordingAngle = recordingAngle
+        view.update(followsDevice: followsDevice, position: position)
         view.keepUpright()
     }
 
     final class PreviewView: UIView {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+        var onCaptureAngle: ((CGFloat) -> Void)?
+        var recordingAngle: CGFloat?
+
+        private var followsDevice = false
+        private var position: AVCaptureDevice.Position = .unspecified
+        private var previewAngle: CGFloat = 90
+        private var captureAngle: CGFloat = 90
+        private var coordinator: AVCaptureDevice.RotationCoordinator?
+        private var observations: [NSKeyValueObservation] = []
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -413,10 +532,60 @@ private struct CameraPreview: UIViewRepresentable {
             keepUpright()
         }
 
+        @objc nonisolated func sessionStarted() {
+            Task { @MainActor in follow() }
+        }
+
+        func update(followsDevice: Bool, position: AVCaptureDevice.Position) {
+            guard followsDevice != self.followsDevice || position != self.position else { return }
+            self.followsDevice = followsDevice
+            self.position = position
+            follow()
+        }
+
+        /// The coordinator knows where each camera sits on the device, including the Duo's, so it supplies the angles.
+        private func follow() {
+            observations = []
+            coordinator = nil
+            guard followsDevice, let device = videoDevice else {
+                previewAngle = 90
+                captureAngle = 90
+                keepUpright()
+                onCaptureAngle?(90)
+                return
+            }
+            let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+            self.coordinator = coordinator
+            observations = [
+                coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) { @Sendable [weak self] coordinator, _ in
+                    let angle = coordinator.videoRotationAngleForHorizonLevelPreview
+                    Task { @MainActor in
+                        self?.previewAngle = angle
+                        self?.keepUpright()
+                    }
+                },
+                coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) { @Sendable [weak self] coordinator, _ in
+                    let angle = coordinator.videoRotationAngleForHorizonLevelCapture
+                    Task { @MainActor in
+                        self?.captureAngle = angle
+                        self?.onCaptureAngle?(angle)
+                        self?.keepUpright()
+                    }
+                },
+            ]
+        }
+
+        private var videoDevice: AVCaptureDevice? {
+            previewLayer.session?.inputs
+                .compactMap { ($0 as? AVCaptureDeviceInput)?.device }
+                .first { $0.hasMediaType(.video) }
+        }
+
+        /// While recording, the preview turns only as far as the recording can, so it shows what is being saved.
         func keepUpright() {
-            guard let connection = previewLayer.connection, connection.videoRotationAngle != 90, connection.isVideoRotationAngleSupported(90) else { return }
-            connection.videoRotationAngle = 90
+            if let recordingAngle, !CameraCapture.sameShape(captureAngle, recordingAngle) { return }
+            guard let connection = previewLayer.connection, connection.videoRotationAngle != previewAngle, connection.isVideoRotationAngleSupported(previewAngle) else { return }
+            connection.videoRotationAngle = previewAngle
         }
     }
 }
-

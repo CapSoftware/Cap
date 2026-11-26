@@ -2,8 +2,16 @@ import { describe, expect, test } from "bun:test";
 import app from "../app";
 
 describe("GET /", () => {
-	test("returns server metadata and endpoints", async () => {
-		const response = await app.fetch(new Request("http://localhost/"));
+	test("returns server metadata and endpoints to a caller with the secret", async () => {
+		const saved = process.env.MEDIA_SERVER_WEBHOOK_SECRET;
+		process.env.MEDIA_SERVER_WEBHOOK_SECRET = "index-secret";
+		const response = await app.fetch(
+			new Request("http://localhost/", {
+				headers: { "x-media-server-secret": "index-secret" },
+			}),
+		);
+		if (saved === undefined) delete process.env.MEDIA_SERVER_WEBHOOK_SECRET;
+		else process.env.MEDIA_SERVER_WEBHOOK_SECRET = saved;
 
 		expect(response.status).toBe(200);
 		const data = await response.json();
@@ -26,6 +34,8 @@ describe("GET /", () => {
 				"/video/process/:jobId/cancel",
 				"/video/cleanup",
 				"/video/force-cleanup",
+				"/live-transcribe/status",
+				"/live-transcribe/sessions",
 			],
 		});
 	});

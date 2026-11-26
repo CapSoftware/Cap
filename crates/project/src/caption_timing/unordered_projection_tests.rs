@@ -48,6 +48,7 @@ fn fixture(
                         end: start + word as f32 * 0.4 + 0.3,
                     })
                     .collect(),
+                recording_clip: None,
             }
         })
         .collect();
@@ -236,7 +237,8 @@ fn baseline_projection(
             .collect();
     }
 
-    let mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    let mut mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    end_mappings_at_media(&mut mappings, timeline, recording_durations);
     let mappings_ordered = mappings
         .iter()
         .all(|mapping| mapping.source_start.is_finite() && mapping.source_end.is_finite())

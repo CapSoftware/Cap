@@ -1,0 +1,158 @@
+name: Infra Database
+
+on:
+  merge_group:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/web/lib/infra-**"
+      - "apps/web/lib/developer-**"
+      - "apps/web/__tests__/integration/**"
+      - "apps/web/actions/developers/**"
+      - "apps/web/app/(infra)/**"
+      - "apps/web/app/api/developer/**"
+      - "apps/web/app/api/cron/developer-storage/**"
+      - "apps/web/lib/user-preferences-sql.ts"
+      - "apps/web/lib/meetings/trial.ts"
+      - "apps/web/lib/meetings/audio-usage.ts"
+      - "apps/web/lib/media-input-policy-strikes.ts"
+      - "apps/web/lib/organization-member-removal.ts"
+      - "packages/database/organization-pointer.ts"
+      - "packages/web-backend/src/Extension/Extensions.ts"
+      - "packages/web-backend/src/Videos/index.ts"
+      - "packages/web-backend/src/Spaces/**"
+      - "packages/web-backend/src/Folders/FoldersPolicy.ts"
+      - "packages/web-backend/src/Folders/index.ts"
+      - "apps/web/app/(org)/dashboard/dashboard-data.ts"
+      - "apps/web/actions/notifications/**"
+      - "apps/web/actions/analytics/**"
+      - "apps/web/actions/caps/**"
+      - "apps/web/actions/spaces/video-order.ts"
+      - "apps/web/actions/videos/archive.ts"
+      - "apps/web/actions/loom-import-overview.ts"
+      - "apps/web/lib/space-video-order*"
+      - "apps/web/lib/messenger/data.ts"
+      - "apps/web/actions/messenger.ts"
+      - "apps/web/app/api/messenger/**"
+      - "packages/database/schema.ts"
+      - "packages/database/migrations/**"
+      - "packages/database/auth/**"
+      - "apps/web/actions/auth/**"
+      - "apps/web/lib/passkey-prompt.ts"
+      - ".github/workflows/infra-database.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/lib/infra-**"
+      - "apps/web/lib/developer-**"
+      - "apps/web/__tests__/integration/**"
+      - "apps/web/actions/developers/**"
+      - "apps/web/app/(infra)/**"
+      - "apps/web/app/api/developer/**"
+      - "apps/web/app/api/cron/developer-storage/**"
+      - "apps/web/lib/user-preferences-sql.ts"
+      - "apps/web/lib/meetings/trial.ts"
+      - "apps/web/lib/meetings/audio-usage.ts"
+      - "apps/web/lib/media-input-policy-strikes.ts"
+      - "apps/web/lib/organization-member-removal.ts"
+      - "packages/database/organization-pointer.ts"
+      - "packages/web-backend/src/Extension/Extensions.ts"
+      - "packages/web-backend/src/Videos/index.ts"
+      - "packages/web-backend/src/Spaces/**"
+      - "packages/web-backend/src/Folders/FoldersPolicy.ts"
+      - "packages/web-backend/src/Folders/index.ts"
+      - "apps/web/app/(org)/dashboard/dashboard-data.ts"
+      - "apps/web/actions/notifications/**"
+      - "apps/web/actions/analytics/**"
+      - "apps/web/actions/caps/**"
+      - "apps/web/actions/spaces/video-order.ts"
+      - "apps/web/actions/videos/archive.ts"
+      - "apps/web/actions/loom-import-overview.ts"
+      - "apps/web/lib/space-video-order*"
+      - "apps/web/lib/messenger/data.ts"
+      - "apps/web/actions/messenger.ts"
+      - "apps/web/app/api/messenger/**"
+      - "packages/database/schema.ts"
+      - "packages/database/migrations/**"
+      - "packages/database/auth/**"
+      - "apps/web/actions/auth/**"
+      - "apps/web/lib/passkey-prompt.ts"
+      - ".github/workflows/infra-database.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-database-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  # GitHub ignores paths filters in the merge queue, so the queue run applies
+  # this workflow's pull_request paths to the queued change itself.
+  scope:
+    name: Scope
+    if: github.event_name == 'merge_group'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.queue.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          filter: blob:none
+          sparse-checkout: |
+            .github/workflows
+            scripts/ci
+      - name: Merge queue scope
+        id: queue
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.merge_group.head_sha }}
+        run: python3 scripts/ci/merge_queue.py scope --workflow .github/workflows/infra-database.yml --base "$BASE" --head "$HEAD" >> "$GITHUB_OUTPUT"
+
+  infra-database:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run != 'false' }}
+    name: Infra billing and uploads against MySQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_ROOT_HOST: "%"
+          MYSQL_DATABASE: cap_infra_tests
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --host=127.0.0.1 --user=root"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=30
+    env:
+      DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-js
+      - name: Apply migrations
+        working-directory: packages/database
+        run: bun run drizzle-kit migrate --config=drizzle.config.ts
+      # The suites insert billing rows without their parent apps and owners,
+      # so they run on the migrated schema without foreign keys, the same as
+      # the local scratch database they were written against. This job does
+      # not test foreign key behaviour.
+      - name: Drop foreign keys
+        run: |
+          mysql --protocol=TCP -h 127.0.0.1 -u root -N -e \
+            "SELECT CONCAT('ALTER TABLE \`', TABLE_NAME, '\` DROP FOREIGN KEY \`', CONSTRAINT_NAME, '\`;') FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = 'cap_infra_tests'" \
+            | mysql --protocol=TCP -h 127.0.0.1 -u root cap_infra_tests
+      - name: Run Infra database suites
+        working-directory: apps/web
+        env:
+          CAP_INFRA_TEST_DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
+          CAP_INFRA_ROUND_TRIPS_DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
+          CAP_PASSKEYS_TEST_DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
+        run: bun run vitest run __tests__/integration/infra-*-database.test.ts __tests__/integration/user-preferences-database.test.ts __tests__/integration/space-creator-membership-database.test.ts __tests__/integration/organization-pointer-database.test.ts __tests__/integration/dashboard-library-database.test.ts __tests__/integration/messenger-poll-database.test.ts __tests__/integration/passkeys-database.test.ts __tests__/integration/email-change-database.test.ts __tests__/integration/meetings-trial-database.test.ts __tests__/integration/meetings-audio-usage-database.test.ts

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
 	balance: 0,
+	heldMicroCredits: 0,
 	transactions: [] as Record<string, unknown>[],
 	lock: Promise.resolve(),
 }));
@@ -65,6 +66,10 @@ vi.mock("@cap/database", () => ({
 }));
 
 vi.mock("@cap/database/helpers", () => ({ nanoId: () => "txn" }));
+vi.mock("@/lib/infra-balance", () => ({
+	AVAILABLE_AFTER_FIELD: "availableAfterMicroCredits",
+	heldTranscriptMicroCredits: async () => state.heldMicroCredits,
+}));
 vi.mock("@cap/database/schema", () => ({
 	developerCreditAccounts: { id: "id", balanceMicroCredits: "balance" },
 	developerCreditTransactions: {
@@ -93,8 +98,22 @@ const purchase = {
 describe("developer credit purchase idempotency", () => {
 	beforeEach(() => {
 		state.balance = 0;
+		state.heldMicroCredits = 0;
 		state.transactions = [];
 		state.lock = Promise.resolve();
+	});
+
+	it("records the credit available after the purchase, net of held transcript credit", async () => {
+		state.balance = 400_000;
+		state.heldMicroCredits = 150_000;
+
+		await addCreditsToAccount(purchase);
+
+		expect(state.transactions).toHaveLength(1);
+		expect(state.transactions[0]?.metadata).toEqual({
+			amountCents: 2500,
+			availableAfterMicroCredits: 400_000 + 2_500_000 - 150_000,
+		});
 	});
 
 	it("grants a concurrently delivered purchase only once", async () => {

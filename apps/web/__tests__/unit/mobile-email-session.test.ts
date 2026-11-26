@@ -1,3 +1,4 @@
+import type { AuthHooks } from "@cap/database/auth/auth-options";
 import type { DbClient } from "@cap/web-backend/src/Database";
 import type { HttpApi } from "@effect/platform";
 import type { SQL } from "drizzle-orm";
@@ -13,6 +14,12 @@ import {
 	it,
 	vi,
 } from "vitest";
+import { resetRangeListCache } from "@/lib/ip-reputation";
+import {
+	DATACENTER_ADDRESS,
+	listFetch,
+	UNLISTED_ADDRESS,
+} from "../fixtures/ip-reputation-lists";
 
 type TokenRow = { identifier: string; token: string; expires: Date };
 
@@ -33,6 +40,15 @@ const mocks = vi.hoisted(() => ({
 	dispose: async () => {},
 	disposableSignup: vi.fn<(email: string) => Promise<boolean>>(),
 	blockedDomains: undefined as string | undefined,
+	ipReputationLog: "off" as string | undefined,
+	afterTasks: [] as (() => Promise<unknown>)[],
+}));
+
+vi.mock("next/server", async (importOriginal) => ({
+	...(await importOriginal<typeof import("next/server")>()),
+	after: (task: () => Promise<unknown>) => {
+		mocks.afterTasks.push(task);
+	},
 }));
 
 vi.mock("server-only", () => ({}));
@@ -52,6 +68,7 @@ vi.mock("@cap/env", async (importOriginal) => {
 		serverEnv: () => ({
 			...original.serverEnv(),
 			CAP_BLOCKED_SIGNUP_DOMAINS: mocks.blockedDomains,
+			CAP_IP_REPUTATION_LOG: mocks.ipReputationLog,
 		}),
 		buildEnv: {
 			...original.buildEnv,
@@ -73,12 +90,12 @@ vi.mock("@/lib/account-deletion-request", () => ({
 	hasPendingAccountDeletion: vi.fn(async () => false),
 }));
 vi.mock("@cap/database/auth/auth-options", () => ({
-	authOptions: () => ({
+	authOptions: (_sso: unknown, hooks?: AuthHooks) => ({
 		adapter: {
-			createUser: vi.fn(async ({ email }: { email: string }) => ({
-				id: "user-1",
-				email,
-			})),
+			createUser: vi.fn(async ({ email }: { email: string }) => {
+				hooks?.onUserCreated?.();
+				return { id: "user-1", email };
+			}),
 			getUserByEmail: mocks.getUserByEmail,
 			updateUser: vi.fn(async ({ id }: { id: string }) => ({ id })),
 		},
@@ -244,16 +261,25 @@ describe("mobile email sessions", () => {
 		mocks.disposableSignup.mockReset();
 		mocks.disposableSignup.mockResolvedValue(false);
 		mocks.blockedDomains = undefined;
+		mocks.ipReputationLog = "off";
+		mocks.afterTasks = [];
+		mocks.getUserByEmail.mockImplementation(async (email: string) => ({
+			id: "user-1",
+			email,
+		}));
 	});
 
 	afterAll(() => mocks.dispose());
 	afterEach(() => vi.unstubAllEnvs());
 
-	const post = (path: string, body: unknown) =>
+	const post = (path: string, body: unknown, address?: string) =>
 		POST(
 			new Request(`http://localhost/api/mobile/session/email/${path}`, {
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers: {
+					"Content-Type": "application/json",
+					...(address ? { "x-real-ip": address } : {}),
+				},
 				body: JSON.stringify(body),
 			}),
 		);
@@ -328,6 +354,63 @@ describe("mobile email sessions", () => {
 		]);
 	});
 
+	describe("new accounts from a listed range", () => {
+		const newAccountLogs = () =>
+			vi
+				.mocked(console.warn)
+				.mock.calls.filter(
+					([message]) =>
+						message === "[ip-reputation] New account from a listed range",
+				)
+				.map(([, details]) => details);
+
+		beforeEach(() => {
+			resetRangeListCache();
+			mocks.ipReputationLog = "log";
+			vi.stubEnv("VERCEL", "1");
+			vi.stubGlobal("fetch", vi.fn(listFetch));
+			vi.spyOn(console, "warn").mockImplementation(() => {});
+		});
+
+		afterEach(() => vi.unstubAllGlobals());
+
+		const verifyFrom = async (address: string) => {
+			const code = await requestCode();
+			return post("verify", { email: "person@example.com", code }, address);
+		};
+
+		it("logs a new account after the response", async () => {
+			mocks.getUserByEmail.mockResolvedValue(null as never);
+
+			const response = await verifyFrom(DATACENTER_ADDRESS);
+
+			expect(response.status).toBe(200);
+			expect(newAccountLogs()).toEqual([]);
+			await Promise.all(mocks.afterTasks.splice(0).map((task) => task()));
+			expect(newAccountLogs()).toEqual([
+				{
+					surface: "mobile-email-session",
+					label: "datacenter",
+					address: DATACENTER_ADDRESS,
+				},
+			]);
+		});
+
+		it("logs nothing for a new account from another address", async () => {
+			mocks.getUserByEmail.mockResolvedValue(null as never);
+
+			expect((await verifyFrom(UNLISTED_ADDRESS)).status).toBe(200);
+			await Promise.all(mocks.afterTasks.splice(0).map((task) => task()));
+			expect(newAccountLogs()).toEqual([]);
+		});
+
+		it("does nothing when an existing account signs in", async () => {
+			expect((await verifyFrom(DATACENTER_ADDRESS)).status).toBe(200);
+			expect(mocks.afterTasks).toHaveLength(0);
+			expect(fetch).not.toHaveBeenCalled();
+		});
+	});
+
 	it("sends and signs in under the compatibility-normalized email", async () => {
 		const code = await requestCode("Person@\uFF25xample.com");
 		expect(mocks.sendEmail.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -341,6 +424,35 @@ describe("mobile email sessions", () => {
 
 		expect(response.status).toBe(200);
 		expect(mocks.getUserByEmail).toHaveBeenLastCalledWith("person@example.com");
+	});
+
+	it("sends and signs in an accented domain under its punycode form", async () => {
+		const code = await requestCode("person@exámple.com");
+		expect(mocks.sendEmail.mock.calls.at(-1)?.[0]).toMatchObject({
+			email: "person@xn--exmple-qta.com",
+		});
+
+		const response = await post("verify", {
+			email: "person@exámple.com",
+			code,
+		});
+
+		expect(response.status).toBe(200);
+		expect(mocks.getUserByEmail).toHaveBeenLastCalledWith(
+			"person@xn--exmple-qta.com",
+		);
+	});
+
+	it("refuses a non-ASCII local part without sending a code", async () => {
+		const request = await post("request", { email: "pérson@example.com" });
+		const verify = await post("verify", {
+			email: "pérson@example.com",
+			code: "123456",
+		});
+
+		expect(request.status).toBe(400);
+		expect(verify.status).toBe(400);
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
 	});
 
 	it("uses one bucket per normalized email", async () => {

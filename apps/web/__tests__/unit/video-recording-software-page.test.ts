@@ -49,8 +49,9 @@ describe("VideoRecordingSoftwarePage component content", () => {
 		expect(componentSource.toLowerCase()).toContain("video recording software");
 	});
 
-	it("includes comparison table", () => {
-		expect(componentSource).toContain("comparisonTable");
+	it("compares Cap only with Loom", () => {
+		expect(componentSource).not.toContain("comparisonTable");
+		expect(componentSource).toContain("How Cap compares to Loom");
 	});
 
 	it("includes recording modes section", () => {
@@ -61,12 +62,16 @@ describe("VideoRecordingSoftwarePage component content", () => {
 		expect(componentSource).toContain("Loom");
 	});
 
-	it("includes Camtasia as a comparison target", () => {
-		expect(componentSource).toContain("Camtasia");
+	it("does not name Camtasia", () => {
+		expect(componentSource).not.toContain("Camtasia");
 	});
 
-	it("includes OBS as a comparison target", () => {
-		expect(componentSource).toContain("OBS");
+	it("does not name OBS", () => {
+		expect(componentSource).not.toContain("OBS");
+	});
+
+	it("does not compare with built-in OS recorders", () => {
+		expect(componentSource).not.toContain("Built-in OS Recorders");
 	});
 
 	it("references the free-screen-recorder internal link", () => {

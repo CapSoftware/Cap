@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { normalizeAllowedOrigin } from "@/lib/infra-domain";
 
-const urlPattern = /^https?:\/\/[a-z0-9.-]+(:[0-9]+)?$/;
+const origin = (input: string) => {
+	const result = normalizeAllowedOrigin(input);
+	return result.ok ? result.origin : null;
+};
 
-function normalizeDomain(input: string): string {
-	return input.trim().toLowerCase();
-}
-
-describe("developer domain validation regex", () => {
-	describe("valid domains", () => {
-		const validDomains = [
+describe("normalizeAllowedOrigin", () => {
+	describe("origins that are stored as typed", () => {
+		const unchanged = [
 			"https://example.com",
 			"https://myapp.com",
 			"http://localhost:3000",
@@ -17,76 +17,84 @@ describe("developer domain validation regex", () => {
 			"https://api.my-site.io",
 			"https://192.168.1.1",
 			"https://192.168.1.1:8080",
-			"http://localhost:8080",
 			"https://my-app.vercel.app",
 			"https://a.b.c.d.e.com",
-			"https://example.com:443",
-			"http://example.com:80",
 			"https://0.0.0.0:3000",
+			"http://devbox:8080",
 		];
 
-		for (const domain of validDomains) {
-			it(`matches ${domain}`, () => {
-				expect(urlPattern.test(domain)).toBe(true);
+		for (const value of unchanged) {
+			it(`keeps ${value}`, () => {
+				expect(origin(value)).toBe(value);
 			});
 		}
 	});
 
-	describe("invalid domains", () => {
-		const invalidDomains: [string, string][] = [
-			["example.com", "no protocol"],
+	describe("input that is reduced to the origin a browser sends", () => {
+		const reduced: [string, string][] = [
+			["myshop.com", "https://myshop.com"],
+			["  MyShop.com  ", "https://myshop.com"],
+			["www.myshop.com/", "https://www.myshop.com"],
+			["myshop.com/products?id=1", "https://myshop.com"],
+			["myshop.com:8443", "https://myshop.com:8443"],
+			["localhost:3000", "http://localhost:3000"],
+			["localhost", "http://localhost"],
+			["127.0.0.1:5173", "http://127.0.0.1:5173"],
+			["https://EXAMPLE.COM", "https://example.com"],
+			["https://example.com/", "https://example.com"],
+			["https://example.com/some/path?x=1", "https://example.com"],
+			["https://example.com#hash", "https://example.com"],
+			["https://example.com:443", "https://example.com"],
+			["http://example.com:80", "http://example.com"],
+			["http://[::1]:3000", "http://[::1]:3000"],
+		];
+
+		for (const [input, expected] of reduced) {
+			it(`turns ${input.trim()} into ${expected}`, () => {
+				expect(origin(input)).toBe(expected);
+			});
+		}
+	});
+
+	describe("input that is refused with a plain message", () => {
+		const refused: [string, string][] = [
+			["", "empty"],
+			["   ", "only spaces"],
+			["not a domain", "spaces in the host"],
+			["just-hostname", "a bare word"],
 			["ftp://example.com", "wrong protocol"],
-			["https://example.com/", "trailing slash"],
-			["https://example.com/path", "has path"],
-			["https://example.com?query=1", "has query"],
-			["https://example.com#hash", "has hash"],
-			["https://", "no hostname"],
-			["https://EXAMPLE.COM", "uppercase"],
-			["https://example.com:", "port separator but no port"],
+			["https://", "no host"],
 			["https://example.com:abc", "non-numeric port"],
-			["https://exam ple.com", "space in hostname"],
-			["", "empty string"],
-			["javascript:alert(1)", "XSS attempt"],
-			["data:text/html,<script>alert(1)</script>", "data URI"],
+			["https://exam ple.com", "space in the host"],
+			["javascript:alert(1)", "script URL"],
+			["data:text/html,<script>alert(1)</script>", "data URL"],
+			["https://user:pass@example.com", "credentials"],
+			["*.myshop.com", "wildcard"],
+			["https://*.myshop.com", "wildcard with a scheme"],
+			["https://-bad-.com", "label starting with a hyphen"],
+			[`https://${"a".repeat(260)}.com`, "too long to store"],
 		];
 
-		for (const [domain, reason] of invalidDomains) {
-			it(`rejects ${domain || "(empty string)"} — ${reason}`, () => {
-				expect(urlPattern.test(domain)).toBe(false);
+		for (const [input, reason] of refused) {
+			it(`refuses ${input.slice(0, 40) || "(empty)"}: ${reason}`, () => {
+				const result = normalizeAllowedOrigin(input);
+				expect(result.ok).toBe(false);
+				if (!result.ok) {
+					expect(result.message.length).toBeGreaterThan(10);
+					expect(result.message).not.toMatch(/error|invalid url/i);
+				}
 			});
 		}
 	});
 
-	describe("edge case: large port number", () => {
-		it("matches https://example.com:99999 since regex only checks for digits", () => {
-			expect(urlPattern.test("https://example.com:99999")).toBe(true);
+	it("explains wildcards and protocols specifically", () => {
+		expect(normalizeAllowedOrigin("*.myshop.com")).toEqual({
+			ok: false,
+			message: "Wildcards are not supported. Add each subdomain on its own.",
 		});
-	});
-});
-
-describe("domain normalization", () => {
-	it("trims whitespace and lowercases the input", () => {
-		const raw = " https://Example.COM ";
-		const normalized = normalizeDomain(raw);
-		expect(normalized).toBe("https://example.com");
-	});
-
-	it("produces a value that passes the regex after normalization", () => {
-		const raw = " https://Example.COM ";
-		const normalized = normalizeDomain(raw);
-		expect(urlPattern.test(normalized)).toBe(true);
-	});
-
-	it("lowercases mixed-case input before regex test", () => {
-		const raw = "https://MyApp.Vercel.App";
-		const normalized = normalizeDomain(raw);
-		expect(normalized).toBe("https://myapp.vercel.app");
-		expect(urlPattern.test(normalized)).toBe(true);
-	});
-
-	it("uppercase raw input fails regex directly but passes after normalization", () => {
-		const raw = "https://EXAMPLE.COM";
-		expect(urlPattern.test(raw)).toBe(false);
-		expect(urlPattern.test(normalizeDomain(raw))).toBe(true);
+		expect(normalizeAllowedOrigin("ftp://example.com")).toMatchObject({
+			ok: false,
+			message: expect.stringContaining("http and https"),
+		});
 	});
 });

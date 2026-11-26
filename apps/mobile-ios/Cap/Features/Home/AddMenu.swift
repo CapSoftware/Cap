@@ -79,6 +79,7 @@ struct AddMenu: View {
 
     private func enqueuePhoto(_ item: PhotosPickerItem) {
         let isImage = item.supportedContentTypes.contains { $0.conforms(to: .image) } && !item.supportedContentTypes.contains { $0.conforms(to: .movie) }
+        Usage.track("upload_started", ["source": "photos", "kind": isImage ? "image" : "video"])
         session.uploads.enqueue(displayName: isImage ? "Photo" : "Video from Photos", folderId: uploadFolderId, kind: isImage ? .image : .video) {
             guard let media = try await item.loadTransferable(type: PickedMedia.self) else {
                 throw UploadPreparationError.unreadable
@@ -88,6 +89,8 @@ struct AddMenu: View {
     }
 
     private func enqueueFile(_ url: URL) {
+        let isImage = UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) ?? false
+        Usage.track("upload_started", ["source": "files", "kind": isImage ? "image" : "video"])
         session.uploads.enqueue(displayName: url.deletingPathExtension().lastPathComponent, folderId: uploadFolderId) {
             try await UploadCenter.prepareVideo(copying: url, suggestedName: nil, securityScoped: true)
         }

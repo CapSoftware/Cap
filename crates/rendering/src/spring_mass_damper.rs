@@ -7,6 +7,7 @@ pub struct SpringMassDamperSimulationConfig {
     pub friction: f32,
 }
 
+#[derive(Clone)]
 pub struct SpringMassDamperSimulation {
     tension: f32,
     mass: f32,
@@ -243,6 +244,59 @@ impl SpringMassDamperSimulation {
 
         self.position
     }
+
+    /// Advances toward a target that starts at `target_position` and moves at
+    /// `target_velocity` (units per second) for the whole step, then leaves
+    /// the target where it ended. Holding the target still for a step, as
+    /// `run` does, delays the output by up to one step on a moving path; the
+    /// steady-state trail behind a moving target is still friction/tension.
+    pub fn run_toward_moving_target(&mut self, dt_ms: f32, target_velocity: XY<f32>) -> XY<f32> {
+        if dt_ms <= 0.0 {
+            return self.position;
+        }
+        if self.tension <= 0.0 || target_velocity == XY::new(0.0, 0.0) {
+            let end = XY::new(
+                self.target_position.x + target_velocity.x * dt_ms / 1000.0,
+                self.target_position.y + target_velocity.y * dt_ms / 1000.0,
+            );
+            self.target_position = end;
+            return self.run(dt_ms);
+        }
+
+        let step = self.step(dt_ms);
+        let t = dt_ms / 1000.0;
+        let trail = self.friction / self.tension;
+
+        let solve_axis = |position: f32, velocity: f32, start: f32, target_velocity: f32| {
+            let offset = position - start + trail * target_velocity;
+            let (offset, offset_velocity) = step.solve(offset, velocity - target_velocity);
+            (
+                start + target_velocity * t - trail * target_velocity + offset,
+                target_velocity + offset_velocity,
+            )
+        };
+
+        let (x, vx) = solve_axis(
+            self.position.x,
+            self.velocity.x,
+            self.target_position.x,
+            target_velocity.x,
+        );
+        let (y, vy) = solve_axis(
+            self.position.y,
+            self.velocity.y,
+            self.target_position.y,
+            target_velocity.y,
+        );
+
+        self.target_position = XY::new(
+            self.target_position.x + target_velocity.x * t,
+            self.target_position.y + target_velocity.y * t,
+        );
+        self.position = XY::new(x, y);
+        self.velocity = XY::new(vx, vy);
+        self.position
+    }
 }
 
 #[cfg(test)]
@@ -398,6 +452,74 @@ mod tests {
                 .map(f32::to_bits),
                 [position.x, position.y, velocity.x, velocity.y].map(f32::to_bits),
                 "step {step}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_moving_target_is_trailed_by_friction_over_tension() {
+        let config = SpringMassDamperSimulationConfig {
+            tension: 470.0,
+            mass: 3.0,
+            friction: 70.0,
+        };
+        let velocity = XY::new(0.5, -0.25);
+        let mut sim = SpringMassDamperSimulation::new(config);
+        sim.set_position(XY::new(0.2, 0.8));
+        sim.set_target_position(XY::new(0.2, 0.8));
+        for _ in 0..240 {
+            sim.run_toward_moving_target(1000.0 / 60.0, velocity);
+        }
+        let trail = config.friction / config.tension;
+        let expected = XY::new(
+            sim.target_position.x - velocity.x * trail,
+            sim.target_position.y - velocity.y * trail,
+        );
+        assert!(
+            (sim.position.x - expected.x).abs() < 1e-4,
+            "{:?}",
+            sim.position
+        );
+        assert!(
+            (sim.position.y - expected.y).abs() < 1e-4,
+            "{:?}",
+            sim.position
+        );
+        assert!((sim.velocity.x - velocity.x).abs() < 1e-4);
+        assert!((sim.velocity.y - velocity.y).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_still_target_steps_exactly_like_run() {
+        let config = SpringMassDamperSimulationConfig {
+            tension: 470.0,
+            mass: 3.0,
+            friction: 70.0,
+        };
+        let mut moving = SpringMassDamperSimulation::new(config);
+        let mut held = SpringMassDamperSimulation::new(config);
+        for sim in [&mut moving, &mut held] {
+            sim.set_position(XY::new(0.1, 0.9));
+            sim.set_target_position(XY::new(0.6, 0.4));
+        }
+        for _ in 0..120 {
+            moving.run_toward_moving_target(1000.0 / 60.0, XY::new(0.0, 0.0));
+            held.run(1000.0 / 60.0);
+            assert_eq!(
+                [
+                    moving.position.x,
+                    moving.position.y,
+                    moving.velocity.x,
+                    moving.velocity.y
+                ]
+                .map(f32::to_bits),
+                [
+                    held.position.x,
+                    held.position.y,
+                    held.velocity.x,
+                    held.velocity.y
+                ]
+                .map(f32::to_bits)
             );
         }
     }

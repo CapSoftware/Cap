@@ -51,20 +51,20 @@ describe("OpenSourceScreenRecorderPage component content", () => {
 		);
 	});
 
-	it("includes comparison table", () => {
-		expect(componentSource).toContain("comparisonTable");
+	it("no longer includes the multi-product comparison table", () => {
+		expect(componentSource).not.toContain("comparisonTable");
 	});
 
 	it("includes recording modes section", () => {
 		expect(componentSource).toContain("recordingModes");
 	});
 
-	it("includes Loom as a comparison target", () => {
-		expect(componentSource).toContain("Loom");
+	it("no longer includes the comparison cards section", () => {
+		expect(componentSource).not.toContain("comparisonTitle");
 	});
 
-	it("includes OBS as a comparison target", () => {
-		expect(componentSource).toContain("OBS");
+	it("no longer names OBS as a comparison target", () => {
+		expect(componentSource).not.toContain("OBS");
 	});
 
 	it("mentions AGPLv3 and specified MIT crates", () => {
@@ -75,10 +75,6 @@ describe("OpenSourceScreenRecorderPage component content", () => {
 
 	it("mentions self-hosting capability", () => {
 		expect(componentSource.toLowerCase()).toContain("self-host");
-	});
-
-	it("references the loom-alternative internal link", () => {
-		expect(componentSource).toContain("/loom-alternative");
 	});
 
 	it("references the screen-recorder-mac internal link", () => {
@@ -103,20 +99,9 @@ describe("OpenSourceScreenRecorderPage FAQ schema", () => {
 				"Yes. Cap supports any S3-compatible storage provider, including AWS S3, Cloudflare R2, and self-hosted MinIO.",
 		},
 		{
-			question: "What is the best open source screen recorder?",
-			answer:
-				"Cap is the best open source screen recorder for most users because it combines full transparency with practical features.",
-		},
-		{
 			question: "Is Cap's open source version free?",
 			answer:
 				"Yes. Cap's Studio Mode is completely free for personal use with no time limits and no watermarks.",
-		},
-		{
-			question:
-				"How does Cap compare to OBS Studio as an open source recorder?",
-			answer:
-				"Both Cap and OBS Studio are open source, but OBS is built for live streaming while Cap is designed for async screen sharing.",
 		},
 		{
 			question: "Can I contribute to Cap's development?",
@@ -135,12 +120,12 @@ describe("OpenSourceScreenRecorderPage FAQ schema", () => {
 		},
 	];
 
-	it("produces valid FAQPage schema with 8 questions", () => {
+	it("produces valid FAQPage schema with 6 questions", () => {
 		const schema = createFAQSchema(faqs);
 
 		expect(schema["@context"]).toBe("https://schema.org");
 		expect(schema["@type"]).toBe("FAQPage");
-		expect(schema.mainEntity).toHaveLength(8);
+		expect(schema.mainEntity).toHaveLength(6);
 	});
 
 	it("maps each FAQ to a Question entity with acceptedAnswer", () => {
@@ -161,7 +146,7 @@ describe("OpenSourceScreenRecorderPage FAQ schema", () => {
 		expect(() => JSON.stringify(schema)).not.toThrow();
 		const parsed = JSON.parse(JSON.stringify(schema));
 		expect(parsed["@type"]).toBe("FAQPage");
-		expect(parsed.mainEntity).toHaveLength(8);
+		expect(parsed.mainEntity).toHaveLength(6);
 	});
 });
 

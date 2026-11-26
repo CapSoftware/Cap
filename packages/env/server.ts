@@ -9,6 +9,9 @@ const boolString = (_default = false) =>
 		.transform((v) => v === "true")
 		.pipe(z.boolean());
 
+const mergeCommaLists = (...lists: Array<string | undefined>) =>
+	lists.filter((list) => list?.trim()).join(",") || undefined;
+
 function createServerEnv() {
 	return createEnv({
 		server: {
@@ -30,9 +33,17 @@ function createServerEnv() {
 					"32 byte hex string for encrypting values like AWS access keys",
 				),
 
+			// Push notifications for the iOS app. Push is off when any of these are unset.
+			APNS_KEY_ID: z.string().optional(),
+			APNS_TEAM_ID: z.string().optional(),
+			APNS_PRIVATE_KEY: z.string().optional(),
+
 			// Cap uses Resend for email sending, including sending login code emails
 			RESEND_API_KEY: z.string().optional(),
 			RESEND_FROM_DOMAIN: z.string().optional(),
+			CAP_INFRA_BILLING_EMAILS: boolString(false).describe(
+				"Sends the Cap Infra out of credit and failed auto top-up emails when set to 'true'",
+			),
 
 			/// S3 configuration
 			// Though they are prefixed with `CAP_AWS`, these don't have to be
@@ -128,6 +139,24 @@ function createServerEnv() {
 				.describe(
 					"Comma-separated domains or full email addresses refused at sign-in",
 				),
+			CAP_BLOCKED_SIGNUP_DOMAINS_EXTRA: z
+				.string()
+				.optional()
+				.describe(
+					"More entries for CAP_BLOCKED_SIGNUP_DOMAINS, merged with it",
+				),
+			CAP_TOR_EXIT_GATE: z
+				.string()
+				.optional()
+				.describe(
+					"off, log or deny: how sign-in and key creation treat Tor exit addresses. Defaults to log on cap.so and off elsewhere",
+				),
+			CAP_IP_REPUTATION_LOG: z
+				.string()
+				.optional()
+				.describe(
+					"off or log: whether new accounts from listed datacenter or VPN ranges are logged. Defaults to log on cap.so and off elsewhere",
+				),
 
 			/// AI providers
 			ASSEMBLY_API_KEY: z.string().optional().describe("Audio transcription"),
@@ -188,6 +217,22 @@ function createServerEnv() {
 				.string()
 				.optional()
 				.describe("API key for the 'openai-compatible' provider"),
+			AI_GATEWAY_API_KEY: z
+				.string()
+				.optional()
+				.describe(
+					"Vercel AI Gateway key. Not needed on Vercel deployments, which authenticate to the gateway with their OIDC token.",
+				),
+			MEETINGS_AI_CONFIG: z
+				.string()
+				.optional()
+				.describe(
+					"JSON overrides for desktop meeting AI (models, limits, kill switches). An Edge Config item named meetingsAi, when EDGE_CONFIG is set, takes precedence and applies without a redeploy.",
+				),
+			EDGE_CONFIG: z
+				.string()
+				.optional()
+				.describe("Vercel Edge Config connection string"),
 			REPLICATE_API_TOKEN: z
 				.string()
 				.optional()
@@ -248,6 +293,18 @@ function createServerEnv() {
 				.describe(
 					"Base URL for media server webhooks (use host.docker.internal for Docker setups)",
 				),
+			INFRA_PLAYBACK_URL: z
+				.string()
+				.optional()
+				.describe(
+					"Base URL for developer video playback links. Defaults to WEB_URL/api/developer/playback; set it to a hostname that forwards to that path",
+				),
+			INFRA_SLICED_HLS: z
+				.string()
+				.optional()
+				.describe(
+					"Set to off to encode every developer video's adaptive stream as one job instead of in slices",
+				),
 			LOOM_IMPORTER_URL: z
 				.string()
 				.optional()
@@ -262,6 +319,10 @@ function createServerEnv() {
 			S3_PUBLIC_ENDPOINT: process.env.CAP_AWS_ENDPOINT,
 			S3_INTERNAL_ENDPOINT: process.env.CAP_AWS_ENDPOINT,
 			...process.env,
+			CAP_BLOCKED_SIGNUP_DOMAINS: mergeCommaLists(
+				process.env.CAP_BLOCKED_SIGNUP_DOMAINS,
+				process.env.CAP_BLOCKED_SIGNUP_DOMAINS_EXTRA,
+			),
 			NODE_ENV: process.env.NODE_ENV ?? "production",
 			VERCEL_URL_HOST: process.env.VERCEL_URL,
 			VERCEL_BRANCH_URL_HOST: process.env.VERCEL_BRANCH_URL,

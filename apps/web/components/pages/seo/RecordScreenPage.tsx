@@ -1,5 +1,4 @@
 import { Clapperboard, Zap } from "lucide-react";
-import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -81,85 +80,20 @@ export const recordScreenContent: SeoPageContent = {
 		],
 	},
 
-	comparisonTable: {
-		title: "Screen Recording Software Compared",
-		headers: ["Feature", "Cap", "Loom", "OBS Studio", "Windows Game Bar"],
-		rows: [
-			[
-				"Free to record",
-				{ text: "Yes", status: "positive" },
-				{ text: "Limited", status: "warning" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"No watermark",
-				{ text: "Yes", status: "positive" },
-				{ text: "Free plan adds watermark", status: "negative" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"Instant share link",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Webcam overlay",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"System audio",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Limited", status: "warning" },
-			],
-			[
-				"4K recording",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Open source",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-			],
-		],
-	},
-
 	comparisonTitle: "How Cap Compares for Recording Your Screen",
 	comparisonDescription:
 		"Cap is built for the full screen recording workflow — from capture to sharing — without setup overhead",
 
 	comparison: [
 		{
-			title: "Cap vs Loom",
-			description: `Both Cap and Loom let you record your screen and share with a link, but Cap is significantly more affordable — starting at $${PRICING.pro.annualPerMonth}/month versus Loom's $18/month. Cap's Studio Mode is completely free for personal use with no watermarks, and Cap is fully open-source. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
+			title: "Cap vs Loom on the free plan",
+			description:
+				"Cap's free plan includes Studio Mode with the full editor and 4K export at 60 fps. Loom's free Starter plan records at up to 720p. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.",
 		},
 		{
-			title: "Cap vs OBS Studio",
+			title: "Cap vs Loom on desktop",
 			description:
-				"OBS is a powerful free tool but is designed primarily for live streaming and requires significant configuration to simply record your screen. Cap is purpose-built for screen recording and instant sharing — start recording in under 60 seconds with zero setup.",
-		},
-		{
-			title: "Cap vs macOS Built-in Recorder",
-			description:
-				"macOS Cmd+Shift+5 lets you record your screen but doesn't capture system audio, lacks webcam overlay, and provides no sharing features. Cap adds all of this natively. <a href='/screen-recorder-mac'>Learn more about screen recording on Mac</a>.",
-		},
-		{
-			title: "Cap vs Windows Game Bar",
-			description:
-				"Windows Game Bar only records the active window and cannot capture your full desktop. Cap records any region, any window, or your entire screen with full audio. <a href='/screen-recorder-windows'>Learn more about screen recording on Windows</a>.",
+				"Cap Desktop is a native app for macOS, Windows and Linux. Loom's desktop app is available for Windows and Mac only.",
 		},
 	],
 
@@ -225,12 +159,12 @@ export const recordScreenContent: SeoPageContent = {
 		{
 			question: "How do I record my screen on Mac?",
 			answer:
-				"Download Cap for macOS and click the Cap icon in your menu bar to start recording your screen. Choose your region and hit Record. Alternatively, macOS has a built-in screen recorder accessible with Cmd+Shift+5, but it lacks system audio and instant sharing. <a href='/screen-recorder-mac'>Learn more about screen recording on Mac</a>.",
+				"Download Cap for macOS and click the Cap icon in your menu bar to start recording your screen. Choose your region and hit Record. <a href='/screen-recorder-mac'>Learn more about screen recording on Mac</a>.",
 		},
 		{
 			question: "How do I record my screen on Windows?",
 			answer:
-				"Download Cap for Windows and launch it from the system tray. Select your recording region and click Record. Windows also has Xbox Game Bar (Win+G) but it only captures the active window. Cap records any region of your screen with full audio support. <a href='/screen-recorder-windows'>Learn more about screen recording on Windows</a>.",
+				"Download Cap for Windows and launch it from the system tray. Select your recording region and click Record. <a href='/screen-recorder-windows'>Learn more about screen recording on Windows</a>.",
 		},
 		{
 			question: "Is there a time limit when recording your screen with Cap?",

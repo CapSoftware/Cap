@@ -38,7 +38,7 @@ interface CustomLinkProps {
 	[key: string]: any;
 }
 
-function CustomLink({ href, ...rest }: CustomLinkProps) {
+export function CustomLink({ href, ...rest }: CustomLinkProps) {
 	if (href.startsWith("/")) {
 		return (
 			<Link href={href} {...rest}>
@@ -48,10 +48,10 @@ function CustomLink({ href, ...rest }: CustomLinkProps) {
 	}
 
 	if (href.startsWith("#")) {
-		return <a {...rest} />;
+		return <a href={href} {...rest} />;
 	}
 
-	return <a target="_blank" rel="noopener noreferrer" {...rest} />;
+	return <a href={href} target="_blank" rel="noopener noreferrer" {...rest} />;
 }
 
 interface RoundedImageProps {

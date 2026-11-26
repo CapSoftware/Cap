@@ -187,15 +187,13 @@ describe("mediaAudio integration tests", () => {
 			}
 		});
 
-		test("still rejects audio-only inputs without leaking an operation", async () => {
+		test("reads audio-only inputs without leaking an operation", async () => {
 			const beforeCount = getActiveProcessCount();
 			const dirPath = await mkdtemp(join(tmpdir(), "cap-audio-only-"));
 			const outputPath = join(dirPath, "audio.mp3");
 			try {
 				await Bun.write(outputPath, await extractAudio(TEST_VIDEO_WITH_AUDIO));
-				await expect(
-					checkHasAudioTrack(`file://${outputPath}`),
-				).rejects.toThrow("No video stream found");
+				expect(await checkHasAudioTrack(`file://${outputPath}`)).toBe(true);
 				await waitForAudioOperations(beforeCount);
 			} finally {
 				await rm(dirPath, { recursive: true, force: true });

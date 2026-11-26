@@ -821,7 +821,15 @@ fn compute_cursor_idle_opacity(
         return 1.0;
     };
 
-    let time_since_move = (current_time_ms - cursor.moves[last_index].time_ms).max(0.0);
+    // A move to the position the pointer already had is a shape change under
+    // a still pointer, not movement, so idleness counts from the move that
+    // brought the pointer there and resumes at the next one that leaves it.
+    // Both scans stop where the answer can no longer change: a cursor at rest
+    // since before the fade horizon is fully hidden whenever it arrived, and
+    // only moves inside the resume lookahead can fade it back in.
+    let fade_horizon_ms = current_time_ms - hide_delay_ms - CURSOR_IDLE_FADE_OUT_MS;
+    let at_rest_since = moves_at_same_position_before(&cursor.moves, last_index, fade_horizon_ms);
+    let time_since_move = (current_time_ms - cursor.moves[at_rest_since].time_ms).max(0.0);
     let fade_out = if time_since_move <= hide_delay_ms {
         1.0
     } else {
@@ -834,9 +842,18 @@ fn compute_cursor_idle_opacity(
 
     // Fade in ahead of the next move so a resuming cursor is already fully
     // visible when it starts moving, instead of fading in again after it.
+    let resting = &cursor.moves[last_index];
     let fade_in = cursor
         .moves
-        .get(idx)
+        .get(idx..)
+        .and_then(|later| {
+            later
+                .iter()
+                .take_while(|next| {
+                    next.time_ms - current_time_ms <= CURSOR_IDLE_RESUME_LOOKAHEAD_MS
+                })
+                .find(|next| !same_position(next, resting))
+        })
         .map(|next| next.time_ms - current_time_ms)
         .filter(|until_move| *until_move <= CURSOR_IDLE_RESUME_LOOKAHEAD_MS)
         .map_or(0.0, |until_move| {
@@ -844,6 +861,27 @@ fn compute_cursor_idle_opacity(
         });
 
     (fade_out + (1.0 - fade_out) * fade_in).clamp(0.0, 1.0) as f32
+}
+
+fn same_position(a: &CursorMoveEvent, b: &CursorMoveEvent) -> bool {
+    a.x == b.x && a.y == b.y
+}
+
+/// The first index of the run of moves ending at `index` that all share its
+/// position, or the first one in that run at or before `horizon_ms`.
+fn moves_at_same_position_before(
+    moves: &[CursorMoveEvent],
+    index: usize,
+    horizon_ms: f64,
+) -> usize {
+    let mut start = index;
+    while start > 0
+        && moves[start].time_ms > horizon_ms
+        && same_position(&moves[start - 1], &moves[index])
+    {
+        start -= 1;
+    }
+    start
 }
 
 fn smoothstep64(edge0: f64, edge1: f64, x: f64) -> f64 {
@@ -1472,6 +1510,51 @@ mod tests {
             assert_eq!(idle_opacity_both_paths(&cursor, time, 1000.0), expected);
         }
         assert!(idle_opacity_both_paths(&cursor, 1399.999, 1000.0) > 0.0);
+    }
+
+    #[test]
+    fn a_shape_change_under_a_still_pointer_does_not_wake_an_idle_cursor() {
+        let mut shape_changed = cursor_events(&[(0.0, 0.2, 0.2), (3000.0, 0.2, 0.2)]);
+        shape_changed.moves[1].cursor_id = "ibeam".into();
+        let unchanged = cursor_events(&[(0.0, 0.2, 0.2)]);
+        for time in [1000.0, 1200.0, 1400.0, 2500.0, 3000.0, 3100.0, 6000.0] {
+            assert_eq!(
+                idle_opacity_both_paths(&shape_changed, time, 1000.0),
+                idle_opacity_both_paths(&unchanged, time, 1000.0),
+                "at {time}ms"
+            );
+        }
+
+        // Moving away afterwards still fades the cursor back in ahead of it.
+        shape_changed.moves.push(move_event(5000.0, 0.5, 0.5));
+        for (time, expected) in [(4749.999, 0.0), (4875.0, 0.5), (5000.0, 1.0)] {
+            assert_eq!(
+                idle_opacity_both_paths(&shape_changed, time, 1000.0),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn long_runs_of_shape_changes_fade_like_a_single_rest() {
+        // An animated cursor under a still pointer for ten minutes: a shape
+        // event every 33 ms at the same position.
+        let mut animated = cursor_events(&[(0.0, 0.2, 0.2)]);
+        animated.moves.extend((1..18_000).map(|i| {
+            let mut event = move_event(f64::from(i) * 33.0, 0.2, 0.2);
+            event.cursor_id = format!("frame-{}", i % 8);
+            event
+        }));
+        let resting = cursor_events(&[(0.0, 0.2, 0.2)]);
+        for time in [
+            0.0, 900.0, 1000.0, 1200.0, 1400.0, 5000.0, 300_000.0, 593_000.0,
+        ] {
+            assert_eq!(
+                idle_opacity_both_paths(&animated, time, 1000.0),
+                idle_opacity_both_paths(&resting, time, 1000.0),
+                "at {time}ms"
+            );
+        }
     }
 
     #[test]

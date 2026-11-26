@@ -37,6 +37,7 @@ const AUTH_HEADERS = {
 let app: typeof appType;
 let getJob: typeof import("../../lib/job-manager").getJob;
 let deleteJob: typeof import("../../lib/job-manager").deleteJob;
+let cleanupExpiredJobs: typeof import("../../lib/job-manager").cleanupExpiredJobs;
 let server: ReturnType<typeof Bun.serve>;
 let baseUrl = "";
 let tempDir = "";
@@ -217,6 +218,7 @@ beforeAll(async () => {
 	app = appModule.default;
 	getJob = jobManager.getJob;
 	deleteJob = jobManager.deleteJob;
+	cleanupExpiredJobs = jobManager.cleanupExpiredJobs;
 	tempDir = mkdtempSync(join(tmpdir(), "cap-real-world-routes-"));
 	execFileSync("ffmpeg", [
 		"-v",
@@ -1296,6 +1298,67 @@ describe("media routes real-world integration tests", () => {
 			expect(metadata.height).toBeLessThanOrEqual(120);
 		} finally {
 			deleteJob(data.jobId);
+		}
+	}, 90000);
+
+	test("keeps a finished job answerable while its completion webhook is undelivered", async () => {
+		const response = await app.fetch(
+			mediaPostRequest("/video/process", {
+				videoId: "undelivered-completion",
+				userId: "real-process-user",
+				videoUrl: fixtureUrl(),
+				outputPresignedUrl: uploadUrl("undelivered-output.mp4"),
+				webhookUrl: `${baseUrl}/unreachable-webhook`,
+				inputExtension: ".mp4",
+				maxWidth: 160,
+				maxHeight: 120,
+				crf: 30,
+				preset: "ultrafast",
+			}),
+		);
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		const job = await waitForTerminalJob(jobId);
+		// Timers set once the job has finished are collected and run at once,
+		// standing in for the five minutes after which it used to be deleted.
+		const afterFiveMinutes: (() => void)[] = [];
+		const realSetTimeout = globalThis.setTimeout;
+		const timers = spyOn(globalThis, "setTimeout").mockImplementation(((
+			handler: (...args: unknown[]) => void,
+			delay?: number,
+			...args: unknown[]
+		) => {
+			if (delay === 5 * 60 * 1000)
+				afterFiveMinutes.push(() => handler(...args));
+			return realSetTimeout(handler, delay, ...args);
+		}) as typeof setTimeout);
+		try {
+			expect(job.phase).toBe("complete");
+			await job.webhookPromise;
+			await Bun.sleep(100);
+			expect(job.terminalWebhookAcknowledgedAt).toBeUndefined();
+			for (const fire of afterFiveMinutes) fire();
+
+			const readStatus = () =>
+				app.fetch(
+					new Request(`http://localhost/video/process/${jobId}/status`, {
+						headers: AUTH_HEADERS,
+					}),
+				);
+			const status = await readStatus();
+			expect(status.status).toBe(200);
+			expect(await status.json()).toMatchObject({
+				jobId,
+				phase: "complete",
+				progress: 100,
+			});
+
+			job.terminalAt = Date.now() - 2 * 60 * 60 * 1000;
+			cleanupExpiredJobs();
+			expect((await readStatus()).status).toBe(200);
+		} finally {
+			timers.mockRestore();
+			deleteJob(jobId);
 		}
 	}, 90000);
 

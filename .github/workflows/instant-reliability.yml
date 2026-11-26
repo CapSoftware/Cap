@@ -10,11 +10,15 @@ name: Instant reliability (real app)
 # Instant with a virtual camera drawn into the video.
 
 on:
+  merge_group:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "apps/desktop-gpui/src/upload.rs"
       - "apps/desktop-gpui/src/upload/**"
+      - "apps/desktop-gpui/src/automation.rs"
+      - "apps/desktop-gpui/src/automation/**"
+      - "crates/automation/**"
       - "apps/desktop-gpui/src/recording.rs"
       - "apps/desktop-gpui/src/session.rs"
       - "apps/desktop-gpui/src/library.rs"
@@ -55,10 +59,27 @@ jobs:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
-      run: ${{ steps.scope.outputs.run }}
+      run: ${{ steps.queue.outputs.run || steps.scope.outputs.run }}
     steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'merge_group'
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          filter: blob:none
+          sparse-checkout: |
+            .github/workflows
+            scripts/ci
+      - name: Merge queue scope
+        id: queue
+        if: github.event_name == 'merge_group'
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.merge_group.head_sha }}
+        run: python3 scripts/ci/merge_queue.py scope --workflow .github/workflows/instant-reliability.yml --base "$BASE" --head "$HEAD" >> "$GITHUB_OUTPUT"
       - name: Scope
         id: scope
+        if: github.event_name != 'merge_group'
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
@@ -314,7 +335,8 @@ jobs:
       - name: Install Linux desktop dependencies
         uses: ./.github/actions/install-desktop-deps
 
-      - name: Instant with a camera on Xvfb
+      - name: Install camera test dependencies
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           sudo apt-get update -qq
@@ -324,6 +346,10 @@ jobs:
           fi
           sudo apt-get install -y -qq "linux-headers-$(uname -r)" v4l2loopback-dkms xvfb x11-utils xdotool \
             dbus ffmpeg pulseaudio pulseaudio-utils libasound2-plugins >/dev/null
+
+      - name: Instant with a camera on Xvfb
+        run: |
+          set -euo pipefail
           chmod +x "$RUNNER_TEMP/build/cap-gpui" "$RUNNER_TEMP/build/real-app-tests"
           sudo modprobe v4l2loopback video_nr=42 card_label="Cap Test Camera" exclusive_caps=1
           sudo udevadm settle --timeout=10
@@ -348,7 +374,8 @@ jobs:
             CAP_GPUI_REAL_APP_ARTIFACTS="$RUNNER_TEMP/real-app" CAP_GPUI_REAL_APP_CAMERA=1 \
             CAP_GPUI_AUTO_OVERLAY=window CAP_GPUI_AUTO_WINDOW=xmessage \
             dbus-run-session -- "$RUNNER_TEMP/build/real-app-tests" --ignored --test-threads=1 --nocapture \
-            real_app_instant_recording_with_camera_uploads_and_verifies
+            real_app_instant_recording_with_camera_uploads_and_verifies \
+            real_app_camera_only_instant_recording_uploads_once_and_verifies
 
       # The recorded window is grey and the test pattern is saturated colour,
       # so a frame without colour is a frame without the camera.

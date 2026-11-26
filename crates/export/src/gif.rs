@@ -8,6 +8,8 @@ use tracing::trace;
 
 use crate::{ExportError, ExporterBase, prepare_new_output};
 
+pub const DEFAULT_GIF_QUALITY: u8 = 90;
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Type)]
 pub struct GifQuality {
     /// Encoding quality from 1-100 (default: 90)
@@ -39,6 +41,7 @@ impl GifExportSettings {
         base: ExporterBase,
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
+        let _export_activity = cap_rendering::ExportActivity::begin();
         use cap_utils::operation_diagnostics::{Field, observe};
         observe(
             "export_gif",
@@ -104,7 +107,7 @@ impl GifExportSettings {
         let quality = self
             .quality
             .map(|q| cap_enc_gif::GifQuality {
-                quality: q.quality.unwrap_or(90),
+                quality: q.quality.unwrap_or(DEFAULT_GIF_QUALITY),
                 fast: q.fast.unwrap_or(false),
             })
             .unwrap_or_default();
@@ -177,6 +180,7 @@ impl GifExportSettings {
                 .iter()
                 .map(|s| RenderSegment {
                     cursor: s.cursor.clone(),
+                    hover_changes: s.hover_changes.clone(),
                     keyboard: s.keyboard.clone(),
                     decoders: s.decoders.clone(),
                     render_display: true,

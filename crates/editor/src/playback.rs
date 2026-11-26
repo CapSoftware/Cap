@@ -65,6 +65,7 @@ fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfigurati
             segment.timescale,
             segment.speed_audio_mode,
             segment.volume(),
+            segment.active_voice_eq(),
             offsets.mic,
             offsets.system_audio,
         )
@@ -1207,14 +1208,22 @@ impl Playback {
                     self.segment_medias
                         .iter()
                         .map(|seg| {
-                            Arc::new(PrecomputedCursorTimeline::new(
+                            Arc::new(PrecomputedCursorTimeline::new_with_anchors(
                                 &seg.cursor,
                                 cursor_smoothing,
                                 Some(click_spring),
+                                cap_rendering::CursorAnchors::from_config(&project.cursor),
+                                &seg.hover_changes.times_ms(),
                             ))
                         })
                         .collect()
                 };
+            let hover_generation = || {
+                self.segment_medias
+                    .iter()
+                    .map(|seg| seg.hover_changes.generation())
+                    .sum::<u64>()
+            };
 
             let build_zoom_timelines =
                 |project: &ProjectConfiguration| -> Vec<ZoomTransformTimeline> {
@@ -1256,6 +1265,7 @@ impl Playback {
                         .collect()
                 };
 
+            let mut cursor_hover_generation = hover_generation();
             let mut cursor_timelines = build_cursor_timelines(&cached_project);
             let mut zoom_timelines = build_zoom_timelines(&cached_project);
             let mut outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
@@ -1598,6 +1608,10 @@ impl Playback {
                         zoom_timelines = build_zoom_timelines(&cached_project);
                         outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
                     }
+                }
+                if hover_generation() != cursor_hover_generation {
+                    cursor_hover_generation = hover_generation();
+                    cursor_timelines = build_cursor_timelines(&cached_project);
                 }
 
                 let requested_speed = if adopted.is_some() {
@@ -2375,6 +2389,19 @@ mod tests {
         next.timeline.as_mut().unwrap().segments[0].name = Some("Renamed".into());
         next.timeline.as_mut().unwrap().segments[0].volume = Some(1.0);
         assert!(!clip_audio_changed(&project, &next));
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = Some(cap_project::VoiceEq {
+            enabled: false,
+            ..Default::default()
+        });
+        assert!(!clip_audio_changed(&project, &next));
+        let mut voice_eq = cap_project::VoiceEq::default();
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = Some(voice_eq);
+        assert!(clip_audio_changed(&project, &next));
+        let equalized = next.clone();
+        voice_eq.high_mid.gain_db += 1.0;
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = Some(voice_eq);
+        assert!(clip_audio_changed(&equalized, &next));
+        next.timeline.as_mut().unwrap().segments[0].voice_eq = None;
         next.timeline.as_mut().unwrap().segments[0].volume = Some(0.5);
         assert!(clip_audio_changed(&project, &next));
         next.timeline.as_mut().unwrap().segments[0].volume = None;

@@ -126,6 +126,7 @@ function reply(sql: string, params: unknown[] = []) {
 						: ["space", "Space", password],
 				),
 			);
+		if (sql.includes("from `videos` inner join `organizations`")) return [];
 		if (sql.includes("from `organizations`"))
 			return mocks.fixtures
 				.filter((fixture) => params.includes(`org-${fixture.id}`))

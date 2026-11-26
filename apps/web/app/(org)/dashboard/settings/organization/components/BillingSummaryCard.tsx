@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
+import { Button } from "@cap/ui";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { useRouter } from "next/navigation";
@@ -13,6 +13,8 @@ import {
 import { manageBilling } from "@/actions/organization/manage-billing";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { formatAmount } from "@/utils/currency";
+import { PlanDoodle } from "../_components/doodles";
+import { SettingsRow, StatusChip } from "../_components/settings-ui";
 
 export function BillingSummaryCard() {
 	const { activeOrganization, setUpgradeModalOpen } = useDashboardContext();
@@ -46,46 +48,46 @@ export function BillingSummaryCard() {
 		}
 	}, [router]);
 
+	const icon = <PlanDoodle />;
+
 	if (isLoading) {
 		return (
-			<Card>
-				<div className="flex flex-col gap-3 animate-pulse">
-					<div className="h-5 w-32 bg-gray-4 rounded" />
-					<div className="h-4 w-48 bg-gray-4 rounded" />
-					<div className="h-4 w-40 bg-gray-4 rounded" />
-				</div>
-			</Card>
+			<SettingsRow
+				icon={icon}
+				title="Cap Pro"
+				description="Loading your plan..."
+			/>
 		);
 	}
 
 	if (isError) {
 		return (
-			<Card>
-				<p className="text-sm text-gray-10">
-					Unable to load billing details. Please try again later.
-				</p>
-			</Card>
+			<SettingsRow
+				icon={icon}
+				title="Plan"
+				description="Unable to load billing details. Please try again later."
+			/>
 		);
 	}
 
 	if (!subscription) {
 		return (
-			<Card className="flex flex-wrap gap-6 justify-between items-center w-full">
-				<CardHeader>
-					<CardTitle>Upgrade to Cap Pro</CardTitle>
-					<CardDescription>
-						Get unlimited sharing, custom domains, Cap AI, and more.
-					</CardDescription>
-				</CardHeader>
-				<Button
-					type="button"
-					size="sm"
-					variant="primary"
-					onClick={() => setUpgradeModalOpen(true)}
-				>
-					Upgrade to Pro
-				</Button>
-			</Card>
+			<SettingsRow
+				icon={icon}
+				title="Upgrade to Cap Pro"
+				description="Get unlimited sharing, custom domains, Cap AI, and more."
+				control={
+					<Button
+						type="button"
+						size="xs"
+						variant="dark"
+						className="px-4"
+						onClick={() => setUpgradeModalOpen(true)}
+					>
+						Upgrade to Pro
+					</Button>
+				}
+			/>
 		);
 	}
 
@@ -112,57 +114,50 @@ export function BillingSummaryCard() {
 	);
 
 	return (
-		<Card>
-			<div className="flex flex-wrap gap-6 justify-between items-center w-full">
-				<div className="flex flex-col gap-3">
-					<div className="flex items-center gap-3">
-						<h3 className="text-lg font-semibold text-gray-12">
-							{subscription.planName}
-						</h3>
-						<span
-							className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-								pastDue
-									? "bg-red-100 text-red-700"
-									: canceling
-										? "bg-amber-100 text-amber-700"
-										: "bg-gray-4 text-gray-11"
-							}`}
-						>
-							{statusLabel}
+		<SettingsRow
+			icon={icon}
+			title={subscription.planName}
+			meta={
+				<StatusChip
+					tone={pastDue ? "danger" : canceling ? "warning" : "positive"}
+				>
+					{statusLabel}
+				</StatusChip>
+			}
+			description={
+				<>
+					{seatAmountLabel}/seat/mo · {subscription.currentQuantity}{" "}
+					{subscription.currentQuantity === 1 ? "seat" : "seats"} ·{" "}
+					{totalAmountLabel}/mo, billed {intervalLabel}
+					<br />
+					{pastDue ? (
+						<span className="text-red-700">
+							Your last payment failed. Update your payment method to keep Pro
+							active; we'll keep retrying in the meantime.
 						</span>
-					</div>
-					<div className="flex flex-col gap-1 text-sm text-gray-11">
-						<p>
-							{seatAmountLabel}/seat/mo ({subscription.currentQuantity}{" "}
-							{subscription.currentQuantity === 1 ? "seat" : "seats"} ={" "}
-							{totalAmountLabel}/mo, billed {intervalLabel})
-						</p>
-						{pastDue ? (
-							<p className="text-red-700">
-								Your last payment failed. Update your payment method to keep Pro
-								active; we'll keep retrying in the meantime.
-							</p>
-						) : canceling ? (
-							<p className="text-amber-700">
-								Your subscription ends on {nextBillingDate}. You keep Pro until
-								then; add seats or use Manage Billing to resume.
-							</p>
-						) : (
-							<p>Next billing date: {nextBillingDate}</p>
-						)}
-					</div>
-				</div>
+					) : canceling ? (
+						<span className="text-amber-700">
+							Your subscription ends on {nextBillingDate}. You keep Pro until
+							then; add seats or use Manage billing to resume.
+						</span>
+					) : (
+						<>Next billing date: {nextBillingDate}</>
+					)}
+				</>
+			}
+			control={
 				<Button
 					type="button"
-					size="sm"
-					variant="dark"
+					size="xs"
+					variant="outline"
+					className="px-4"
 					spinner={billingLoading}
 					onClick={handleManageBilling}
 					disabled={billingLoading}
 				>
-					{billingLoading ? "Loading..." : "Manage Billing"}
+					{billingLoading ? "Loading..." : "Manage billing"}
 				</Button>
-			</div>
-		</Card>
+			}
+		/>
 	);
 }

@@ -23,6 +23,7 @@ import {
 } from "@/app/s/[videoId]/_components/RecordingInProgress";
 import type { UploadProgress } from "@/app/s/[videoId]/_components/upload-progress";
 import { formatChaptersAsVTT } from "@/app/s/[videoId]/_components/utils/transcript-utils";
+import { type PlayerBrand, playerBrandAttributes } from "@/lib/player-brand";
 import { formatPlayerTime } from "@/lib/player-time";
 import type { SharePageBranding } from "@/lib/share-branding";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
@@ -56,16 +57,21 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 export const EmbedVideo = forwardRef<
 	HTMLVideoElement,
 	{
-		data: Omit<typeof videos.$inferSelect, "password"> & {
+		data: Omit<typeof videos.$inferSelect, "password" | "archivedAt"> & {
 			hasActiveUpload: boolean | undefined;
 		};
 		branding: SharePageBranding | null;
+		posterUrl?: string | null;
+		playerBrand?: PlayerBrand | null;
 		user: typeof userSelectProps | null;
 		comments: CommentWithAuthor[];
 		chapters?: { title: string; start: number }[];
 		ownerName?: string | null;
 		ownerImageUrl?: string | null;
 		autoplay?: boolean;
+		muted?: boolean;
+		showTitle?: boolean;
+		showOwner?: boolean;
 		/** Seconds to open at, from the embed URL's `?t=`. */
 		startTime?: number | null;
 		minimal?: boolean;
@@ -79,12 +85,17 @@ export const EmbedVideo = forwardRef<
 		{
 			data,
 			branding,
+			posterUrl = null,
+			playerBrand = null,
 			user: _user,
 			comments: _comments,
 			chapters = [],
 			ownerName,
 			ownerImageUrl,
 			autoplay = false,
+			muted = false,
+			showTitle = true,
+			showOwner = true,
 			startTime = null,
 			minimal = false,
 			defaultPlaybackSpeed,
@@ -265,6 +276,7 @@ export const EmbedVideo = forwardRef<
 			<>
 				<div
 					ref={playerContainerRef}
+					{...playerBrandAttributes(playerBrand)}
 					className="relative w-screen h-screen rounded-xl"
 					onPlayCapture={() => setIsPlaying(true)}
 					onPauseCapture={() => setIsPlaying(false)}
@@ -295,10 +307,12 @@ export const EmbedVideo = forwardRef<
 							captionsSrc={captionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
 							autoplay={autoplay}
+							muted={muted}
 							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							enableCrossOrigin={enableCrossOrigin}
 							hasActiveUpload={data.hasActiveUpload}
 							callToAction={callToAction}
+							posterUrl={posterUrl}
 						/>
 					) : (
 						<HLSVideoPlayer
@@ -311,10 +325,12 @@ export const EmbedVideo = forwardRef<
 							captionsSrc={captionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
 							autoplay={autoplay}
+							muted={muted}
 							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							hasActiveUpload={data.hasActiveUpload}
 							isLiveSegments={isSegmentsSource}
 							callToAction={callToAction}
+							posterUrl={posterUrl}
 						/>
 					)}
 				</div>
@@ -323,52 +339,67 @@ export const EmbedVideo = forwardRef<
 					<AnimatePresence>
 						{!isPlaying && (
 							<div className="absolute top-3 left-3 z-10 space-y-2">
-								<motion.div
-									initial={{ opacity: 0, y: 10 }}
-									animate={{ opacity: 1, y: 0 }}
-									exit={{ opacity: 0, y: 10 }}
-									transition={{ duration: 0.3, delay: 0.2 }}
-									className="z-10 bg-black/50 backdrop-blur-md rounded-lg sm:rounded-xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/10 shadow-2xl"
-								>
-									<div className="flex gap-2 items-center sm:gap-3">
-										{ownerName && (
-											<Avatar
-												name={ownerName}
-												imageUrl={ownerImageUrl}
-												className="hidden flex-shrink-0 xs:flex xs:size-10"
-												letterClass="xs:text-base font-medium"
-											/>
-										)}
-										<div className="flex-1 min-w-0">
-											<a
-												href={`/s/${data.id}`}
-												target="_blank"
-												rel="noopener noreferrer"
-												className="block"
-												onClick={(e) => e.stopPropagation()}
-											>
-												<h1 className="text-xs max-w-[175px] xs:max-w-[300px] sm:max-w-[400px] font-semibold md:max-w-[500px] leading-tight text-white truncate transition-all duration-200 cursor-pointer sm:text-xl md:text-2xl hover:underline">
-													{data.name}
-												</h1>
-											</a>
-											<div className="flex items-center gap-1 sm:gap-2 mt-0.5 sm:mt-1">
-												{ownerName && (
-													<p className="text-xs font-medium text-gray-300 truncate sm:text-sm">
-														{ownerName}
-													</p>
+								{(showTitle || (showOwner && ownerName)) && (
+									<motion.div
+										initial={{ opacity: 0, y: 10 }}
+										animate={{ opacity: 1, y: 0 }}
+										exit={{ opacity: 0, y: 10 }}
+										transition={{ duration: 0.3, delay: 0.2 }}
+										className="z-10 bg-black/50 backdrop-blur-md rounded-lg sm:rounded-xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/10 shadow-2xl"
+									>
+										<div className="flex gap-2 items-center sm:gap-3">
+											{showOwner && ownerName && (
+												<Avatar
+													name={ownerName}
+													imageUrl={ownerImageUrl}
+													className="hidden flex-shrink-0 xs:flex xs:size-10"
+													letterClass="xs:text-base font-medium"
+												/>
+											)}
+											<div className="flex-1 min-w-0">
+												{showTitle && (
+													<a
+														href={`/s/${data.id}`}
+														target="_blank"
+														rel="noopener noreferrer"
+														className="block"
+														onClick={(e) => e.stopPropagation()}
+													>
+														<h1 className="text-xs max-w-[175px] xs:max-w-[300px] sm:max-w-[400px] font-semibold md:max-w-[500px] leading-tight text-white truncate transition-all duration-200 cursor-pointer sm:text-xl md:text-2xl hover:underline">
+															{data.name}
+														</h1>
+													</a>
 												)}
-												{ownerName && longestDuration > 0 && (
-													<>
-														<span className="text-xs text-gray-400">•</span>
-														<p className="text-xs text-gray-300 sm:text-sm">
-															{formatPlayerTime(longestDuration)}
+												<div
+													className={
+														showTitle
+															? "flex items-center gap-1 sm:gap-2 mt-0.5 sm:mt-1"
+															: "flex items-center gap-1 sm:gap-2"
+													}
+												>
+													{showOwner && ownerName && (
+														<p className="text-xs font-medium text-gray-300 truncate sm:text-sm">
+															{ownerName}
 														</p>
-													</>
-												)}
+													)}
+													{(showOwner ? Boolean(ownerName) : showTitle) &&
+														longestDuration > 0 && (
+															<>
+																{showOwner && (
+																	<span className="text-xs text-gray-400">
+																		•
+																	</span>
+																)}
+																<p className="text-xs text-gray-300 sm:text-sm">
+																	{formatPlayerTime(longestDuration)}
+																</p>
+															</>
+														)}
+												</div>
 											</div>
 										</div>
-									</div>
-								</motion.div>
+									</motion.div>
+								)}
 								{branding?.type === "custom" ? (
 									<motion.div
 										initial={{ opacity: 0, y: 10 }}

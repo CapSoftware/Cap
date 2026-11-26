@@ -10,7 +10,22 @@ import { getRuntimeReport } from "../lib/runtime-report";
 const health = new Hono();
 
 health.get("/", async (c) => {
-	const mediaEngine = getMediaEngineStatus();
+	const { version, ...mediaEngine } = getMediaEngineStatus();
+	const resources = getSystemResources();
+	const draining = isDraining();
+	const status = draining
+		? "draining"
+		: mediaEngine.available && resources.effectiveMax > 0
+			? "ok"
+			: "degraded";
+
+	// A caller without the secret (a load balancer) learns only whether this
+	// instance is up. Engine versions, load, memory and slot figures are for
+	// callers that hold the secret.
+	if (!hasMediaServerSecret(c)) {
+		return c.json({ status }, draining ? 503 : 200);
+	}
+
 	const [, loadAvg5m, loadAvg15m] = os.loadavg();
 	const totalMemoryBytes = os.totalmem();
 	const freeMemoryBytes = os.freemem();
@@ -19,23 +34,13 @@ health.get("/", async (c) => {
 	const memoryUsagePercent = Math.round(
 		(1 - freeMemoryBytes / totalMemoryBytes) * 100,
 	);
-	const resources = getSystemResources();
-	const draining = isDraining();
-	const authenticated = hasMediaServerSecret(c);
 
 	return c.json(
 		{
-			status: draining
-				? "draining"
-				: mediaEngine.available && resources.effectiveMax > 0
-					? "ok"
-					: "degraded",
-			mediaEngine,
-			["ff" + "mpeg"]: {
-				available: mediaEngine.available,
-				version: mediaEngine.version,
-			},
-			videoEncoder: getVideoEncoderStatus(process.env, authenticated),
+			status,
+			mediaEngine: { ...mediaEngine, version },
+			["ff" + "mpeg"]: { available: mediaEngine.available, version },
+			videoEncoder: getVideoEncoderStatus(process.env, true),
 			system: {
 				...resources,
 				loadAvg5m,
@@ -46,7 +51,7 @@ health.get("/", async (c) => {
 				uptimeSeconds: Math.round(os.uptime()),
 				processUptimeSeconds: Math.round(process.uptime()),
 			},
-			...(authenticated && { runtime: await getRuntimeReport() }),
+			runtime: await getRuntimeReport(),
 		},
 		draining ? 503 : 200,
 	);

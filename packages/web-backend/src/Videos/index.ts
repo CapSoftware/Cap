@@ -1,4 +1,8 @@
 import { nanoId } from "@cap/database/helpers";
+import {
+	findAccessibleOrganization,
+	resolveOrCreateActiveOrganization,
+} from "@cap/database/organization-pointer";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
@@ -7,6 +11,7 @@ import {
 	CurrentUser,
 	DatabaseError,
 	type Folder,
+	type Organisation,
 	Policy,
 	Storage as StorageDomain,
 	Video,
@@ -16,6 +21,7 @@ import { Array as Arr, Cause, Effect, Exit, Option } from "effect";
 import type { Schema } from "effect/Schema";
 
 import { Database } from "../Database.ts";
+import { getCustomThumbnailKey } from "../Storage/custom-thumbnail.ts";
 import { Storage as StorageService } from "../Storage/index.ts";
 import { getPublishedRecordingThumbnailKey } from "../Storage/recording-output.ts";
 import { Tinybird } from "../Tinybird/index.ts";
@@ -25,7 +31,8 @@ import type { CreateVideoInput as RepoCreateVideoInput } from "./VideosRepo.ts";
 import { VideosRepo } from "./VideosRepo.ts";
 
 const DEFAULT_ANALYTICS_RANGE_DAYS = 90;
-const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
+const escapeSqlLiteral = (value: string) =>
+	value.replace(/\\/g, "\\\\").replace(/'/g, "''");
 const formatDate = (date: Date) => date.toISOString().slice(0, 10);
 const formatDateTime = (date: Date) =>
 	date.toISOString().slice(0, 19).replace("T", " ");
@@ -258,6 +265,14 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		const getThumbnailURLForVideo = Effect.fn("Videos.getThumbnailURLForVideo")(
 			function* (video: Video.Video) {
 				const [bucket] = yield* storage.getAccessForVideo(video);
+				const customThumbnail = getCustomThumbnailKey({
+					id: video.id,
+					ownerId: video.ownerId,
+					metadata: Option.getOrNull(video.metadata),
+				});
+				if (customThumbnail) {
+					return Option.some(yield* bucket.getSignedObjectUrl(customThumbnail));
+				}
 				const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
 				if (publishedThumbnail) {
 					return Option.some(
@@ -650,8 +665,46 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				function* (input: InstantRecordingCreateInput) {
 					const user = yield* CurrentUser;
 
-					if (user.activeOrganizationId !== input.orgId)
-						return yield* Effect.fail(new Policy.PolicyDeniedError());
+					// Clients keep sending an organization they were removed from
+					// (the extension caches it), so that records into the user's
+					// usable active organization instead, creating a personal one
+					// when none is left. A usable pointer must still match a
+					// requested organization the user can use.
+					const requested = yield* db.use((db) =>
+						findAccessibleOrganization(db, user.id, input.orgId),
+					);
+					const active = yield* db.use((db) =>
+						findAccessibleOrganization(db, user.id, user.activeOrganizationId),
+					);
+					let orgId: Organisation.OrganisationId;
+					if (active) {
+						if (requested && active.id !== requested.id)
+							return yield* Effect.fail(new Policy.PolicyDeniedError());
+						orgId = active.id;
+					} else if (requested) {
+						orgId = requested.id;
+						yield* db.use((db) =>
+							db
+								.update(Db.users)
+								.set({ activeOrganizationId: requested.id })
+								.where(
+									Dz.and(
+										Dz.eq(Db.users.id, user.id),
+										Dz.eq(
+											Db.users.activeOrganizationId,
+											user.activeOrganizationId,
+										),
+									),
+								),
+						);
+					} else {
+						const resolved = yield* db.use((db) =>
+							resolveOrCreateActiveOrganization(db, user),
+						);
+						if (!resolved)
+							return yield* Effect.fail(new Policy.PolicyDeniedError());
+						orgId = resolved.id;
+					}
 
 					const folderId: RepoCreateVideoInput["folderId"] =
 						input.folderId ?? Option.none<Folder.FolderId>();
@@ -664,7 +717,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 								.where(
 									Dz.and(
 										Dz.eq(Db.folders.id, requestedFolderId),
-										Dz.eq(Db.folders.organizationId, input.orgId),
+										Dz.eq(Db.folders.organizationId, orgId),
 										Dz.eq(Db.folders.createdById, user.id),
 										Dz.isNull(Db.folders.spaceId),
 									),
@@ -677,7 +730,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 					const writable = yield* storage.getWritableAccessForUser(
 						user.id,
-						input.orgId,
+						orgId,
 					);
 					const bucketId: RepoCreateVideoInput["bucketId"] = writable.bucketId;
 					const storageIntegrationId: RepoCreateVideoInput["storageIntegrationId"] =
@@ -701,10 +754,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 					const createData: RepoCreateVideoInput = {
 						ownerId: user.id,
-						orgId: input.orgId,
+						orgId,
 						name: `Cap Recording - ${formattedDate}`,
 						public: yield* Effect.tryPromise({
-							try: () => getNewVideoPublic(input.orgId),
+							try: () => getNewVideoPublic(orgId),
 							catch: (cause) => new DatabaseError({ cause }),
 						}),
 						source: { type: "webMP4" },
@@ -747,7 +800,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 									domainVerified: Db.organizations.domainVerified,
 								})
 								.from(Db.organizations)
-								.where(Dz.eq(Db.organizations.id, input.orgId))
+								.where(Dz.eq(Db.organizations.id, orgId))
 								.limit(1),
 						)
 						.pipe(
@@ -791,6 +844,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 			getDownloadInfo: Effect.fn("Videos.getDownloadInfo")(function* (
 				videoId: Video.VideoId,
+				options?: { publishedOnly?: boolean },
 			) {
 				const maybeVideo = yield* policy.getViewableById(videoId);
 				if (Option.isNone(maybeVideo))
@@ -805,6 +859,35 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						.where(Dz.eq(Db.videos.id, videoId)),
 				);
 
+				// Viewers who are not members only ever get the finished MP4: never a
+				// screenshot object, and nothing while an upload or processing is still
+				// running, when result.mp4 can hold the raw recording.
+				if (options?.publishedOnly) {
+					if (videoRow?.isScreenshot) return Option.none();
+					const [activeUpload] = yield* db.use((db) =>
+						db
+							.select({ phase: Db.videoUploads.phase })
+							.from(Db.videoUploads)
+							.where(Dz.eq(Db.videoUploads.videoId, videoId)),
+					);
+					if (activeUpload && activeUpload.phase !== "complete") {
+						return Option.none();
+					}
+					const published = Video.Video.getSource(video);
+					if (!(published instanceof Video.Mp4Source)) return Option.none();
+					const exists = yield* bucket.headObject(published.getFileKey()).pipe(
+						Effect.map((head) => (head.ContentLength ?? 0) > 0),
+						Effect.catchAll(() => Effect.succeed(false)),
+					);
+					if (!exists) return Option.none();
+					const fileName = `${video.name}.mp4`;
+					const downloadUrl = yield* bucket.getSignedDownloadUrl(
+						published.getFileKey(),
+						fileName,
+					);
+					return Option.some({ fileName, downloadUrl });
+				}
+
 				if (videoRow?.isScreenshot) {
 					const listResponse = yield* bucket.listObjects({
 						prefix: `${video.ownerId}/${video.id}/`,
@@ -814,11 +897,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					);
 					if (!screenshotKey) return Option.none();
 					const extension = getFileExtensionFromKey(screenshotKey) ?? "jpg";
-					const downloadUrl = yield* bucket.getSignedObjectUrl(screenshotKey);
-					return Option.some({
-						fileName: `${video.name}.${extension}`,
-						downloadUrl,
-					});
+					const fileName = `${video.name}.${extension}`;
+					const downloadUrl = yield* bucket.getSignedDownloadUrl(
+						screenshotKey,
+						fileName,
+					);
+					return Option.some({ fileName, downloadUrl });
 				}
 
 				const src = Video.Video.getSource(video);
@@ -832,14 +916,13 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						Option.isSome(mp4Head) &&
 						(mp4Head.value.ContentLength ?? 0) > 0
 					) {
-						const downloadUrl = yield* bucket.getSignedObjectUrl(
+						const fileName = `${video.name}.mp4`;
+						const downloadUrl = yield* bucket.getSignedDownloadUrl(
 							src.getFileKey(),
+							fileName,
 						);
 
-						return Option.some({
-							fileName: `${video.name}.mp4`,
-							downloadUrl,
-						});
+						return Option.some({ fileName, downloadUrl });
 					}
 
 					const [upload] = yield* db.use((db) =>
@@ -850,24 +933,27 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					);
 
 					if (upload?.rawFileKey) {
-						const downloadUrl = yield* bucket.getSignedObjectUrl(
-							upload.rawFileKey,
-						);
 						const extension =
 							getFileExtensionFromKey(upload.rawFileKey) ?? "mp4";
+						const fileName = `${video.name}.${extension}`;
+						const downloadUrl = yield* bucket.getSignedDownloadUrl(
+							upload.rawFileKey,
+							fileName,
+						);
 
-						return Option.some({
-							fileName: `${video.name}.${extension}`,
-							downloadUrl,
-						});
+						return Option.some({ fileName, downloadUrl });
 					}
 				}
 
 				if (!src) return Option.none();
 				if (!(src instanceof Video.Mp4Source)) return Option.none();
 
-				const downloadUrl = yield* bucket.getSignedObjectUrl(src.getFileKey());
-				return Option.some({ fileName: `${video.name}.mp4`, downloadUrl });
+				const fileName = `${video.name}.mp4`;
+				const downloadUrl = yield* bucket.getSignedDownloadUrl(
+					src.getFileKey(),
+					fileName,
+				);
+				return Option.some({ fileName, downloadUrl });
 			}),
 
 			getThumbnailURL: Effect.fn("Videos.getThumbnailURL")(function* (

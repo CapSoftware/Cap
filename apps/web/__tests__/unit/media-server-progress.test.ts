@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 	audio: vi.fn(),
 	signal: vi.fn(),
 	strike: vi.fn(),
+	developerVideo: vi.fn(),
 	tables: {
 		videos: {
 			id: "videos.id",
@@ -31,6 +32,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@cap/database", () => ({ db: mocks.db }));
+vi.mock("@/lib/developer-video-processing", () => ({
+	applyDeveloperVideoProgress: mocks.developerVideo,
+}));
 vi.mock("@/lib/audio-level-publication", () => ({
 	handleAudioLevelPublication: mocks.audio,
 }));
@@ -346,6 +350,29 @@ describe("media-server recording progress webhook", () => {
 			expect(mocks.transcribe).not.toHaveBeenCalled();
 		},
 	);
+
+	it("hands developer video callbacks to their own handler after authenticating", async () => {
+		mocks.developerVideo
+			.mockReset()
+			.mockResolvedValue({ success: true, applied: true });
+		const body = { videoId: "developer-video", phase: "complete" };
+		const search = "?developerVideo=hls&token=attempt-1";
+
+		expect((await request(body, "wrong-secret", search)).status).toBe(401);
+		expect(mocks.developerVideo).not.toHaveBeenCalled();
+
+		const response = await request(body, "media-secret", search);
+
+		expect(await response.json()).toEqual({ success: true, applied: true });
+		expect(mocks.developerVideo).toHaveBeenCalledExactlyOnceWith(
+			body,
+			"hls",
+			"attempt-1",
+		);
+		expect(mocks.db).not.toHaveBeenCalled();
+		expect(mocks.getState).not.toHaveBeenCalled();
+		expect(mocks.strike).not.toHaveBeenCalled();
+	});
 
 	it("refuses callbacks when the webhook secret is not configured", async () => {
 		databaseFixture();

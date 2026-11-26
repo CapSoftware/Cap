@@ -52,6 +52,7 @@ function makeDeps(config: {
 	spaceMembership?: boolean;
 	allowedEmailDomain?: Option.Option<string>;
 	viewerGrantEmail?: string;
+	linkOpenToAnyone?: boolean;
 }): VideosPolicyDeps {
 	const {
 		video,
@@ -61,6 +62,7 @@ function makeDeps(config: {
 		spaceMembership = false,
 		allowedEmailDomain = Option.none<string>(),
 		viewerGrantEmail,
+		linkOpenToAnyone = false,
 	} = config;
 
 	return {
@@ -70,6 +72,7 @@ function makeDeps(config: {
 					video ? Option.some([video, password] as const) : Option.none(),
 				),
 			hasViewerGrant: (_, email) => Effect.succeed(email === viewerGrantEmail),
+			isLinkOpenToAnyone: () => Effect.succeed(linkOpenToAnyone),
 		},
 		orgsRepo: {
 			membershipForVideo: () =>
@@ -786,5 +789,113 @@ describe("VideosPolicy.canViewLoaded", () => {
 			),
 		).toBe("denied");
 		expect(getByIdCalls).toBe(0);
+	});
+});
+
+describe("VideosPolicy.canView with a link opened to anyone", () => {
+	const restricted = Option.some("company.com");
+
+	it("lets an anonymous viewer through the email restriction", async () => {
+		const deps = makeDeps({
+			video: makeVideo({ public: true }),
+			allowedEmailDomain: restricted,
+			linkOpenToAnyone: true,
+		});
+
+		expect(await runCanView(deps, noUser)).toBe("allowed");
+	});
+
+	it("lets a signed-in viewer outside the restriction through", async () => {
+		const deps = makeDeps({
+			video: makeVideo({ public: true }),
+			allowedEmailDomain: restricted,
+			linkOpenToAnyone: true,
+		});
+
+		expect(await runCanView(deps, makeUser("alice@other.com"))).toBe("allowed");
+	});
+
+	it("still requires the password", async () => {
+		const deps = makeDeps({
+			video: makeVideo({ public: true }),
+			password: Option.some("video-hash"),
+			allowedEmailDomain: restricted,
+			linkOpenToAnyone: true,
+		});
+
+		expect(await runCanView(deps, noUser)).toBe("password");
+		expect(await runCanView(deps, noUser, ["video-hash"])).toBe("allowed");
+	});
+
+	it("never opens a private video", async () => {
+		const deps = makeDeps({
+			video: makeVideo({ public: false }),
+			allowedEmailDomain: restricted,
+			linkOpenToAnyone: true,
+		});
+
+		expect(await runCanView(deps, noUser)).toBe("denied");
+		expect(await runCanView(deps, makeUser("alice@other.com"))).toBe("denied");
+	});
+
+	it("keeps the restriction when the link is not opened", async () => {
+		const deps = makeDeps({
+			video: makeVideo({ public: true }),
+			allowedEmailDomain: restricted,
+		});
+
+		expect(await runCanView(deps, noUser)).toBe("denied");
+		expect(await runCanView(deps, makeUser("alice@other.com"))).toBe("denied");
+		expect(await runCanView(deps, makeUser("bob@company.com"))).toBe("allowed");
+	});
+
+	it("only looks the override up for viewers the restriction would turn away", async () => {
+		let lookups = 0;
+		const base = makeDeps({
+			video: makeVideo({ public: true }),
+			allowedEmailDomain: restricted,
+			viewerGrantEmail: "guest@other.com",
+		});
+		const deps: VideosPolicyDeps = {
+			...base,
+			repo: {
+				...base.repo,
+				isLinkOpenToAnyone: () => {
+					lookups += 1;
+					return Effect.succeed(false);
+				},
+			},
+		};
+		const unrestricted: VideosPolicyDeps = {
+			...deps,
+			orgsRepo: {
+				...deps.orgsRepo,
+				allowedEmailDomain: () => Effect.succeed(Option.none()),
+			},
+		};
+
+		await runCanView(deps, makeUser("bob@company.com"));
+		await runCanView(deps, makeUser("guest@other.com"));
+		await runCanView(deps, makeUser("owner@company.com", TEST_OWNER_ID));
+		await runCanView(unrestricted, noUser);
+		expect(lookups).toBe(0);
+
+		await runCanView(deps, noUser);
+		await runCanView(deps, makeUser("alice@other.com"));
+		expect(lookups).toBe(2);
+	});
+});
+
+describe("Video.isLinkOpenToAnyone", () => {
+	it.each([
+		[{ linkAccess: "anyone" }, { allowPublicLinkOverride: true }, true],
+		[{ linkAccess: "anyone" }, { allowPublicLinkOverride: false }, false],
+		[{ linkAccess: "anyone" }, {}, false],
+		[{ linkAccess: "anyone" }, null, false],
+		[{}, { allowPublicLinkOverride: true }, false],
+		[null, { allowPublicLinkOverride: true }, false],
+		[{ linkAccess: "restricted" }, { allowPublicLinkOverride: true }, false],
+	])("video %j in organization %j is %s", (video, organization, expected) => {
+		expect(Video.isLinkOpenToAnyone(video, organization)).toBe(expected);
 	});
 });

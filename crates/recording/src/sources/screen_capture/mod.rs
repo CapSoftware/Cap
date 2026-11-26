@@ -9,6 +9,7 @@ use std::time::SystemTime;
 use tracing::*;
 
 pub mod cadence;
+pub mod frame_accounting;
 
 #[cfg(target_os = "windows")]
 mod windows;
@@ -74,6 +75,7 @@ pub enum ScreenCaptureTarget {
         bounds: LogicalBounds,
     },
     CameraOnly,
+    AudioOnly,
 }
 
 #[cfg(target_os = "linux")]
@@ -90,18 +92,24 @@ impl LinuxCaptureSource {
         match target {
             ScreenCaptureTarget::Window { id } => Self::Window { id: id.clone() },
             ScreenCaptureTarget::Area { .. } => Self::Area,
-            ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::CameraOnly => Self::Display,
+            ScreenCaptureTarget::Display { .. }
+            | ScreenCaptureTarget::CameraOnly
+            | ScreenCaptureTarget::AudioOnly => Self::Display,
         }
     }
 }
 
 impl ScreenCaptureTarget {
+    pub fn is_audio_only(&self) -> bool {
+        matches!(self, Self::AudioOnly)
+    }
+
     pub fn display(&self) -> Option<Display> {
         match self {
             Self::Display { id } => Display::from_id(id),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.display()),
             Self::Area { screen, .. } => Display::from_id(screen),
-            Self::CameraOnly => None,
+            Self::CameraOnly | Self::AudioOnly => None,
         }
     }
 
@@ -236,7 +244,7 @@ impl ScreenCaptureTarget {
                     return Some(CursorCropBounds::new_linux(bounds));
                 }
             }
-            Self::CameraOnly => None,
+            Self::CameraOnly | Self::AudioOnly => None,
         }
     }
 
@@ -270,7 +278,7 @@ impl ScreenCaptureTarget {
                     )
                 }
             }
-            Self::CameraOnly => None,
+            Self::CameraOnly | Self::AudioOnly => None,
         }
     }
 
@@ -280,6 +288,7 @@ impl ScreenCaptureTarget {
             Self::Window { id } => Window::from_id(id).and_then(|w| w.name()),
             Self::Area { screen, .. } => Display::from_id(screen).and_then(|d| d.name()),
             Self::CameraOnly => Some("Camera".to_string()),
+            Self::AudioOnly => Some("Audio".to_string()),
         }
     }
 
@@ -289,6 +298,7 @@ impl ScreenCaptureTarget {
             ScreenCaptureTarget::Window { .. } => "Window",
             ScreenCaptureTarget::Area { .. } => "Area",
             ScreenCaptureTarget::CameraOnly => "Camera",
+            ScreenCaptureTarget::AudioOnly => "Audio",
         }
     }
 }
@@ -393,13 +403,6 @@ pub struct Config {
 #[cfg(target_os = "macos")]
 pub type CropBounds = LogicalBounds;
 
-/// macOS hands a single window over with its rounded corners transparent,
-/// which the encoder fills with black. Window-only capture reads this many
-/// points in from every edge: a corner's curve clears 0.29 of its radius in,
-/// and this covers radii up to 27 pt.
-#[cfg(target_os = "macos")]
-pub const WINDOW_CORNER_TRIM: f64 = 8.0;
-
 /// `bounds` shrunk to whole, even pixel dimensions at `scale`. The encoder
 /// needs even frames; a region an odd number of pixels across would be read
 /// whole and squeezed a pixel smaller, resampling, and so softening, every
@@ -411,22 +414,6 @@ pub fn even_pixel_crop(bounds: CropBounds, scale: f64) -> CropBounds {
     LogicalBounds::new(
         bounds.position(),
         LogicalSize::new(pixels(size.width()), pixels(size.height())),
-    )
-}
-
-/// `bounds` with [`WINDOW_CORNER_TRIM`] taken off every side, or as it was
-/// when the window is too small to trim.
-#[cfg(target_os = "macos")]
-pub fn trim_window_corners(bounds: CropBounds) -> CropBounds {
-    let size = bounds.size();
-    let trim = WINDOW_CORNER_TRIM;
-    if size.width() <= trim * 4. || size.height() <= trim * 4. {
-        return bounds;
-    }
-    let position = bounds.position();
-    LogicalBounds::new(
-        LogicalPosition::new(position.x() + trim, position.y() + trim),
-        LogicalSize::new(size.width() - 2. * trim, size.height() - 2. * trim),
     )
 }
 
@@ -556,16 +543,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
-        let target_refresh = validated_refresh_rate(display.refresh_rate());
-        let fps = std::cmp::max(1, std::cmp::min(max_fps, target_refresh));
+        let fps = capture_fps(max_fps, display.refresh_rate());
 
-        // The capture reads the window inside its corners (see
-        // `WINDOW_CORNER_TRIM`), so the output and the cursor crop match that.
-        #[cfg(target_os = "macos")]
-        let crop_bounds = match window {
-            Some(_) => crop_bounds.map(trim_window_corners),
-            None => crop_bounds,
-        };
         // Read exactly as many pixels as the frame holds (see `even_pixel_crop`).
         #[cfg(target_os = "macos")]
         let crop_bounds = crop_bounds
@@ -663,6 +642,16 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     pub fn audio_info(&self) -> AudioInfo {
         TCaptureFormat::audio_info()
     }
+}
+
+pub fn capture_fps<T>(max_fps: u32, reported_refresh_rate: T) -> u32
+where
+    T: Into<f64>,
+{
+    std::cmp::max(
+        1,
+        std::cmp::min(max_fps, validated_refresh_rate(reported_refresh_rate)),
+    )
 }
 
 fn validated_refresh_rate<T>(reported_refresh_rate: T) -> u32
@@ -821,6 +810,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn capture_rate_follows_the_display_up_to_the_studio_ceiling() {
+        let ceiling = crate::defaults::MAX_STUDIO_FPS;
+        for (refresh, expected) in [
+            (60.0, 60),
+            (59.94, 60),
+            (120.0, 120),
+            (144.0, 144),
+            (165.0, 165),
+            (240.0, 240),
+            (360.0, 240),
+            (0.0, 60),
+            (f64::NAN, 60),
+        ] {
+            assert_eq!(
+                capture_fps(ceiling, refresh),
+                expected.min(ceiling),
+                "{refresh} Hz"
+            );
+        }
+        for (max_fps, refresh, expected) in [
+            (60, 144.0, 60),
+            (144, 60.0, 60),
+            (144, 165.0, 144),
+            (24, 60.0, 24),
+            (0, 60.0, 1),
+        ] {
+            assert_eq!(
+                capture_fps(max_fps, refresh),
+                expected,
+                "{max_fps} fps on {refresh} Hz"
+            );
+        }
+    }
+
+    #[test]
     fn h264_bounded_capture_matches_the_encoder_downscale() {
         for (width, height) in [
             (5120, 2880),
@@ -841,6 +865,50 @@ mod tests {
                 encoder_size,
                 "{width}x{height}"
             );
+        }
+    }
+
+    #[test]
+    fn studio_display_recording_size_matches_the_capture_and_encoder_path() {
+        for ((width, height), expected) in [
+            ((1280, 720), (1280, 720)),
+            ((1366, 768), (1366, 768)),
+            ((1365, 767), (1364, 766)),
+            ((1920, 1080), (1920, 1080)),
+            ((2560, 1440), (2560, 1440)),
+            ((3440, 1440), (3440, 1440)),
+            ((3024, 1964), (3024, 1964)),
+            ((3456, 2234), (3456, 2234)),
+            ((3840, 2160), (3840, 2160)),
+            ((4096, 2160), (4096, 2160)),
+            ((5120, 2880), (4096, 2304)),
+            ((6016, 3384), (4096, 2304)),
+            ((7680, 4320), (4096, 2304)),
+            ((5120, 1440), (4096, 1152)),
+            ((2160, 3840), (2160, 3840)),
+            ((2880, 5120), (2304, 4096)),
+        ] {
+            let recorded = crate::studio_recording::studio_display_recording_size(width, height);
+            assert_eq!(recorded, expected, "{width}x{height}");
+
+            for max_capture_size in [
+                None,
+                Some((crate::H264_MAX_DIMENSION, crate::H264_MAX_DIMENSION)),
+            ] {
+                let captured = constrain_capture_size(
+                    PhysicalSize::new(width as f64, height as f64),
+                    max_capture_size,
+                );
+                let (captured_width, captured_height) =
+                    (captured.width() as u32, captured.height() as u32);
+                let encoded = crate::calculate_gpu_compatible_size(
+                    captured_width,
+                    captured_height,
+                    crate::H264_MAX_DIMENSION,
+                )
+                .unwrap_or((captured_width, captured_height));
+                assert_eq!(encoded, recorded, "{width}x{height} {max_capture_size:?}");
+            }
         }
     }
 
@@ -1240,21 +1308,8 @@ mod tests {
 }
 
 #[cfg(all(test, target_os = "macos"))]
-mod window_corner_tests {
+mod even_pixel_crop_tests {
     use super::*;
-
-    #[test]
-    fn window_capture_reads_inside_the_rounded_corners() {
-        let window = LogicalBounds::new(
-            LogicalPosition::new(100., 50.),
-            LogicalSize::new(920., 436.),
-        );
-        let trimmed = trim_window_corners(window);
-        assert_eq!(trimmed.position().x(), 108.);
-        assert_eq!(trimmed.position().y(), 58.);
-        assert_eq!(trimmed.size().width(), 904.);
-        assert_eq!(trimmed.size().height(), 420.);
-    }
 
     #[test]
     fn crops_read_whole_even_pixels() {
@@ -1270,14 +1325,5 @@ mod window_corner_tests {
         );
         assert_eq!(retina.size().width() * 2.0, 1690.);
         assert_eq!(retina.size().height() * 2.0, 1506.);
-    }
-
-    #[test]
-    fn a_tiny_window_is_left_whole() {
-        let window = LogicalBounds::new(LogicalPosition::new(0., 0.), LogicalSize::new(30., 200.));
-        let kept = trim_window_corners(window);
-        assert_eq!(kept.position().x(), 0.);
-        assert_eq!(kept.size().width(), 30.);
-        assert_eq!(kept.size().height(), 200.);
     }
 }

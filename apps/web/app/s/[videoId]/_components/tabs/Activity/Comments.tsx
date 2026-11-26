@@ -2,8 +2,7 @@
 // effect runtime (~250 KB gz) into the share page's entry chunk. The branded
 // ids carry no constraints, so plain casts replace `.make()` losslessly.
 import type { Comment, User, Video } from "@cap/web-domain";
-import { faCommentSlash } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCommentSlash } from "@fortawesome/free-solid-svg-icons/faCommentSlash";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
 import {
@@ -17,9 +16,11 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { deleteComment } from "@/actions/videos/delete-comment";
 import { newComment } from "@/actions/videos/new-comment";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import type { CommentType } from "../../../Share";
 import { ActivityComposer } from "./ActivityComposer";
 import CommentComponent from "./Comment";
@@ -238,6 +239,7 @@ export const Comments = Object.assign(
 					setComments((prev) => prev.filter((c) => c.id !== commentId));
 				} catch (error) {
 					console.error("Failed to delete comment:", error);
+					toast.error("Couldn't delete the comment. Please try again.");
 				}
 			},
 			[videoId, setComments],

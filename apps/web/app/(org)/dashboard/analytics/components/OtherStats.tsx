@@ -1,14 +1,11 @@
 "use client";
 
-import {
-	faAndroid,
-	faApple,
-	faEdge,
-	faLinux,
-	faUbuntu,
-	faWindows,
-} from "@fortawesome/free-brands-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faAndroid } from "@fortawesome/free-brands-svg-icons/faAndroid";
+import { faApple } from "@fortawesome/free-brands-svg-icons/faApple";
+import { faEdge } from "@fortawesome/free-brands-svg-icons/faEdge";
+import { faLinux } from "@fortawesome/free-brands-svg-icons/faLinux";
+import { faUbuntu } from "@fortawesome/free-brands-svg-icons/faUbuntu";
+import { faWindows } from "@fortawesome/free-brands-svg-icons/faWindows";
 import clsx from "clsx";
 import getUnicodeFlagIcon from "country-flag-icons/unicode";
 import { motion } from "framer-motion";
@@ -23,6 +20,7 @@ import {
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useId, useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import type { BreakdownRow } from "../types";
 import { GlobeDoodle, LaptopDoodle, StackDoodle } from "./Doodles";
 import { countryName, formatCompact, formatPercent } from "./format";
@@ -264,7 +262,7 @@ function BreakdownCard({
 	return (
 		<section
 			className={clsx(
-				"flex flex-col w-full rounded-2xl border shadow-[0_1px_2px_rgba(0,0,0,0.04)] bg-gray-1 border-gray-4",
+				"flex flex-col w-full rounded-xl border shadow-[0_1px_2px_rgba(0,0,0,0.04)] bg-gray-1 border-gray-3",
 				tabs.length > 1 && "min-h-[460px]",
 				className,
 			)}

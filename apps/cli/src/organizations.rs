@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     OutputFormat, agent_client,
-    caps::{AgentClient, opaque_id},
+    caps::{AgentApiError, AgentClient, opaque_id},
     confirmation, resolve_format,
 };
 
@@ -492,25 +492,25 @@ async fn run_operation(
     timeout: u64,
     format: OutputFormat,
     global_json: bool,
-) -> Result<(), String> {
+) -> Result<(), AgentApiError> {
     if wait {
-        crate::jobs::validate_wait_timeout(timeout).map_err(|error| error.to_string())?;
+        crate::jobs::validate_wait_timeout(timeout)?;
     }
-    let client = AgentClient::from_credentials().map_err(|error| error.to_string())?;
+    let client = AgentClient::from_credentials()?;
     let mut value = client
         .mutate_json_confirmed(method, path, &json!({}))
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
     if wait {
         let operation_id = value
             .get("id")
             .and_then(Value::as_str)
             .ok_or_else(|| "Cap returned an invalid operation".to_string())?;
-        value = crate::jobs::wait_operation(&client, operation_id, timeout)
-            .await
-            .map_err(|error| error.to_string())?;
+        value = crate::jobs::wait_operation(&client, operation_id, timeout).await?;
     }
-    agent_client::print_value(&value, resolve_format(global_json, format))
+    Ok(agent_client::print_value(
+        &value,
+        resolve_format(global_json, format),
+    )?)
 }
 
 fn read_s3_credentials(reuse: bool, credentials_stdin: bool) -> Result<(String, String), String> {
@@ -563,7 +563,7 @@ fn s3_config_body(args: &OrganizationS3ConfigArgs) -> Result<Value, String> {
 }
 
 impl OrganizationsArgs {
-    pub async fn run(self, global_json: bool) -> Result<(), String> {
+    pub async fn run(self, global_json: bool) -> Result<(), AgentApiError> {
         match self.command {
             OrganizationCommands::List(args) => {
                 agent_client::read("/organizations", global_json, args.format).await
@@ -580,13 +580,11 @@ impl OrganizationsArgs {
                 .await
             }
             OrganizationCommands::Get(args) => {
-                let id = opaque_id(&args.organization, "Organization ID")
-                    .map_err(|error| error.to_string())?;
+                let id = opaque_id(&args.organization, "Organization ID")?;
                 agent_client::read(&format!("/organizations/{id}"), global_json, args.format).await
             }
             OrganizationCommands::Members(args) => {
-                let id = opaque_id(&args.organization, "Organization ID")
-                    .map_err(|error| error.to_string())?;
+                let id = opaque_id(&args.organization, "Organization ID")?;
                 agent_client::read(
                     &format!("/organizations/{id}/members"),
                     global_json,
@@ -595,8 +593,7 @@ impl OrganizationsArgs {
                 .await
             }
             OrganizationCommands::Invites(args) => {
-                let id = opaque_id(&args.organization, "Organization ID")
-                    .map_err(|error| error.to_string())?;
+                let id = opaque_id(&args.organization, "Organization ID")?;
                 agent_client::read(
                     &format!("/organizations/{id}/invites"),
                     global_json,
@@ -606,8 +603,7 @@ impl OrganizationsArgs {
             }
             OrganizationCommands::Billing(args) => match args.command {
                 OrganizationBillingCommands::Get(args) => {
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
                     agent_client::read(
                         &format!("/organizations/{id}/billing"),
                         global_json,
@@ -617,10 +613,8 @@ impl OrganizationsArgs {
                 }
                 OrganizationBillingCommands::Checkout(args) => {
                     confirmation::require(args.yes, "Create the Cap Pro checkout")?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
-                    let client =
-                        AgentClient::from_credentials().map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
+                    let client = AgentClient::from_credentials()?;
                     let mut body = Map::from_iter([(
                         "interval".to_string(),
                         Value::String(args.interval.as_str().to_string()),
@@ -634,33 +628,34 @@ impl OrganizationsArgs {
                             &format!("/organizations/{id}/billing/checkout"),
                             &Value::Object(body),
                         )
-                        .await
-                        .map_err(|error| error.to_string())?;
+                        .await?;
                     agent_client::open_browser_action(&value, args.no_open);
-                    agent_client::print_value(&value, resolve_format(global_json, args.format))
+                    Ok(agent_client::print_value(
+                        &value,
+                        resolve_format(global_json, args.format),
+                    )?)
                 }
                 OrganizationBillingCommands::Portal(args) => {
                     confirmation::require(args.yes, "Open the Cap billing portal")?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
-                    let client =
-                        AgentClient::from_credentials().map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
+                    let client = AgentClient::from_credentials()?;
                     let value = client
                         .mutate_json_confirmed(
                             Method::POST,
                             &format!("/organizations/{id}/billing/portal"),
                             &json!({}),
                         )
-                        .await
-                        .map_err(|error| error.to_string())?;
+                        .await?;
                     agent_client::open_browser_action(&value, args.no_open);
-                    agent_client::print_value(&value, resolve_format(global_json, args.format))
+                    Ok(agent_client::print_value(
+                        &value,
+                        resolve_format(global_json, args.format),
+                    )?)
                 }
             },
             OrganizationCommands::Storage(args) => match args.command {
                 OrganizationStorageCommands::List(args) => {
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
                     agent_client::read(
                         &format!("/organizations/{id}/storage-integrations"),
                         global_json,
@@ -671,8 +666,7 @@ impl OrganizationsArgs {
                 OrganizationStorageCommands::S3(args) => match args.command {
                     OrganizationS3Commands::Set(args) => {
                         confirmation::require(args.yes, "Configure organization S3 storage")?;
-                        let id = opaque_id(&args.organization, "Organization ID")
-                            .map_err(|error| error.to_string())?;
+                        let id = opaque_id(&args.organization, "Organization ID")?;
                         let body = s3_config_body(&args)?;
                         agent_client::mutate_confirmed(
                             Method::PUT,
@@ -685,8 +679,7 @@ impl OrganizationsArgs {
                     }
                     OrganizationS3Commands::Test(args) => {
                         confirmation::require(args.yes, "Test organization S3 storage")?;
-                        let id = opaque_id(&args.organization, "Organization ID")
-                            .map_err(|error| error.to_string())?;
+                        let id = opaque_id(&args.organization, "Organization ID")?;
                         let body = s3_config_body(&args)?;
                         agent_client::mutate_confirmed(
                             Method::POST,
@@ -699,8 +692,7 @@ impl OrganizationsArgs {
                     }
                     OrganizationS3Commands::Remove(args) => {
                         confirmation::require(args.yes, "Remove organization S3 storage")?;
-                        let id = opaque_id(&args.organization, "Organization ID")
-                            .map_err(|error| error.to_string())?;
+                        let id = opaque_id(&args.organization, "Organization ID")?;
                         agent_client::mutate_confirmed(
                             Method::DELETE,
                             &format!("/organizations/{id}/storage/s3"),
@@ -713,8 +705,7 @@ impl OrganizationsArgs {
                 },
                 OrganizationStorageCommands::Provider(args) => {
                     confirmation::require(args.yes, "Change the organization storage provider")?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
                     agent_client::mutate_confirmed(
                         Method::PATCH,
                         &format!("/organizations/{id}/storage/provider"),
@@ -727,24 +718,23 @@ impl OrganizationsArgs {
                 OrganizationStorageCommands::GoogleDrive(args) => match args.command {
                     OrganizationGoogleDriveCommands::Connect(args) => {
                         confirmation::require(args.yes, "Connect organization Google Drive")?;
-                        let id = opaque_id(&args.organization, "Organization ID")
-                            .map_err(|error| error.to_string())?;
-                        let client =
-                            AgentClient::from_credentials().map_err(|error| error.to_string())?;
+                        let id = opaque_id(&args.organization, "Organization ID")?;
+                        let client = AgentClient::from_credentials()?;
                         let value = client
                             .mutate_json_confirmed(
                                 Method::POST,
                                 &format!("/organizations/{id}/storage/google-drive/connect"),
                                 &json!({}),
                             )
-                            .await
-                            .map_err(|error| error.to_string())?;
+                            .await?;
                         agent_client::open_browser_action(&value, args.no_open);
-                        agent_client::print_value(&value, resolve_format(global_json, args.format))
+                        Ok(agent_client::print_value(
+                            &value,
+                            resolve_format(global_json, args.format),
+                        )?)
                     }
                     OrganizationGoogleDriveCommands::Folders(args) => {
-                        let id = opaque_id(&args.organization, "Organization ID")
-                            .map_err(|error| error.to_string())?;
+                        let id = opaque_id(&args.organization, "Organization ID")?;
                         let query = agent_client::query(&[("parentId", args.parent_id)]);
                         let path = if query.is_empty() {
                             format!("/organizations/{id}/storage/google-drive/folders")
@@ -758,8 +748,7 @@ impl OrganizationsArgs {
                             args.yes,
                             "Change the organization Google Drive location",
                         )?;
-                        let id = opaque_id(&args.organization, "Organization ID")
-                            .map_err(|error| error.to_string())?;
+                        let id = opaque_id(&args.organization, "Organization ID")?;
                         agent_client::mutate_confirmed(
                             Method::PUT,
                             &format!("/organizations/{id}/storage/google-drive/location"),
@@ -776,8 +765,7 @@ impl OrganizationsArgs {
                     }
                     OrganizationGoogleDriveCommands::Disconnect(args) => {
                         confirmation::require(args.yes, "Disconnect organization Google Drive")?;
-                        let id = opaque_id(&args.organization, "Organization ID")
-                            .map_err(|error| error.to_string())?;
+                        let id = opaque_id(&args.organization, "Organization ID")?;
                         agent_client::mutate_confirmed(
                             Method::DELETE,
                             &format!("/organizations/{id}/storage/google-drive"),
@@ -791,8 +779,7 @@ impl OrganizationsArgs {
             },
             OrganizationCommands::Update(args) => {
                 confirmation::require(args.yes, "Update the organization")?;
-                let id = opaque_id(&args.organization, "Organization ID")
-                    .map_err(|error| error.to_string())?;
+                let id = opaque_id(&args.organization, "Organization ID")?;
                 let mut body = Map::new();
                 if let Some(name) = args.name {
                     body.insert("name".to_string(), Value::String(name));
@@ -805,7 +792,8 @@ impl OrganizationsArgs {
                 if body.is_empty() {
                     return Err(
                         "Provide --name, --allowed-email-domain, or --clear-allowed-email-domain"
-                            .to_string(),
+                            .to_string()
+                            .into(),
                     );
                 }
                 agent_client::mutate_confirmed(
@@ -820,8 +808,7 @@ impl OrganizationsArgs {
             OrganizationCommands::Icon(args) => match args.command {
                 OrganizationIconCommands::Set(args) => {
                     confirmation::require(args.yes, "Update the organization icon")?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
                     let body = agent_client::image_payload(&args.image)?;
                     agent_client::mutate_confirmed(
                         Method::PUT,
@@ -834,8 +821,7 @@ impl OrganizationsArgs {
                 }
                 OrganizationIconCommands::Remove(args) => {
                     confirmation::require(args.yes, "Remove the organization icon")?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
                     agent_client::mutate_confirmed(
                         Method::DELETE,
                         &format!("/organizations/{id}/icon"),
@@ -849,8 +835,7 @@ impl OrganizationsArgs {
             OrganizationCommands::ShareableIcon(args) => match args.command {
                 OrganizationIconCommands::Set(args) => {
                     confirmation::require(args.yes, "Update the shareable link icon")?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
                     let body = agent_client::image_payload(&args.image)?;
                     agent_client::mutate_confirmed(
                         Method::PUT,
@@ -863,8 +848,7 @@ impl OrganizationsArgs {
                 }
                 OrganizationIconCommands::Remove(args) => {
                     confirmation::require(args.yes, "Remove the shareable link icon")?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
                     agent_client::mutate_confirmed(
                         Method::DELETE,
                         &format!("/organizations/{id}/shareable-link-icon"),
@@ -877,8 +861,7 @@ impl OrganizationsArgs {
             },
             OrganizationCommands::Settings(args) => {
                 confirmation::require(args.yes, "Update organization preferences")?;
-                let id = opaque_id(&args.organization, "Organization ID")
-                    .map_err(|error| error.to_string())?;
+                let id = opaque_id(&args.organization, "Organization ID")?;
                 let mut body = Map::new();
                 for (key, value) in [
                     ("disableSummary", args.disable_summary),
@@ -909,7 +892,9 @@ impl OrganizationsArgs {
                     body.insert("defaultPlaybackSpeed".to_string(), Value::Number(speed));
                 }
                 if body.is_empty() {
-                    return Err("Provide at least one organization preference".to_string());
+                    return Err("Provide at least one organization preference"
+                        .to_string()
+                        .into());
                 }
                 agent_client::mutate_confirmed(
                     Method::PATCH,
@@ -930,8 +915,7 @@ impl OrganizationsArgs {
                             "Create and email the organization invite"
                         },
                     )?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
                     agent_client::mutate_confirmed(
                         Method::POST,
                         &format!("/organizations/{id}/invites"),
@@ -947,10 +931,8 @@ impl OrganizationsArgs {
                 }
                 OrganizationInviteCommands::Remove(args) => {
                     confirmation::require(args.yes, "Remove the organization invite")?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
-                    let invite_id = opaque_id(&args.invite_id, "Invite ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
+                    let invite_id = opaque_id(&args.invite_id, "Invite ID")?;
                     agent_client::mutate_confirmed(
                         Method::DELETE,
                         &format!("/organizations/{id}/invites/{invite_id}"),
@@ -964,10 +946,8 @@ impl OrganizationsArgs {
             OrganizationCommands::Member(args) => match args.command {
                 OrganizationMemberCommands::Role(args) => {
                     confirmation::require(args.yes, "Change the organization member role")?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
-                    let member_id = opaque_id(&args.member_id, "Member ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
+                    let member_id = opaque_id(&args.member_id, "Member ID")?;
                     agent_client::mutate_confirmed(
                         Method::PATCH,
                         &format!("/organizations/{id}/members/{member_id}"),
@@ -980,12 +960,12 @@ impl OrganizationsArgs {
                 OrganizationMemberCommands::Seat(args) => {
                     confirmation::require(args.yes, "Change the organization member Pro seat")?;
                     if args.enable == args.disable {
-                        return Err("Provide exactly one of --enable or --disable".to_string());
+                        return Err("Provide exactly one of --enable or --disable"
+                            .to_string()
+                            .into());
                     }
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
-                    let member_id = opaque_id(&args.member_id, "Member ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
+                    let member_id = opaque_id(&args.member_id, "Member ID")?;
                     agent_client::mutate_confirmed(
                         Method::PATCH,
                         &format!("/organizations/{id}/members/{member_id}/seat"),
@@ -997,10 +977,8 @@ impl OrganizationsArgs {
                 }
                 OrganizationMemberCommands::Remove(args) => {
                     confirmation::require(args.yes, "Remove the organization member")?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
-                    let member_id = opaque_id(&args.member_id, "Member ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
+                    let member_id = opaque_id(&args.member_id, "Member ID")?;
                     agent_client::mutate_confirmed(
                         Method::DELETE,
                         &format!("/organizations/{id}/members/{member_id}"),
@@ -1016,8 +994,7 @@ impl OrganizationsArgs {
                     args.yes,
                     "Permanently delete the organization and all of its Caps",
                 )?;
-                let id = opaque_id(&args.organization, "Organization ID")
-                    .map_err(|error| error.to_string())?;
+                let id = opaque_id(&args.organization, "Organization ID")?;
                 run_operation(
                     Method::DELETE,
                     &format!("/organizations/{id}"),
@@ -1031,37 +1008,34 @@ impl OrganizationsArgs {
             OrganizationCommands::Domain(args) => match args.command {
                 OrganizationDomainCommands::Set(args) => {
                     confirmation::require(args.yes, "Set the organization custom domain")?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
                     if args.wait {
-                        crate::jobs::validate_wait_timeout(args.timeout)
-                            .map_err(|error| error.to_string())?;
+                        crate::jobs::validate_wait_timeout(args.timeout)?;
                     }
-                    let client =
-                        AgentClient::from_credentials().map_err(|error| error.to_string())?;
+                    let client = AgentClient::from_credentials()?;
                     let mut value = client
                         .mutate_json_confirmed(
                             Method::PUT,
                             &format!("/organizations/{id}/domain"),
                             &json!({ "domain": args.domain }),
                         )
-                        .await
-                        .map_err(|error| error.to_string())?;
+                        .await?;
                     if args.wait {
                         let operation_id = value
                             .get("id")
                             .and_then(Value::as_str)
                             .ok_or_else(|| "Cap returned an invalid operation".to_string())?;
                         value = crate::jobs::wait_operation(&client, operation_id, args.timeout)
-                            .await
-                            .map_err(|error| error.to_string())?;
+                            .await?;
                     }
-                    agent_client::print_value(&value, resolve_format(global_json, args.format))
+                    Ok(agent_client::print_value(
+                        &value,
+                        resolve_format(global_json, args.format),
+                    )?)
                 }
                 OrganizationDomainCommands::Remove(args) => {
                     confirmation::require(args.yes, "Remove the organization custom domain")?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
                     run_operation(
                         Method::DELETE,
                         &format!("/organizations/{id}/domain"),
@@ -1074,8 +1048,7 @@ impl OrganizationsArgs {
                 }
                 OrganizationDomainCommands::Verify(args) => {
                     confirmation::require(args.yes, "Verify the organization custom domain")?;
-                    let id = opaque_id(&args.organization, "Organization ID")
-                        .map_err(|error| error.to_string())?;
+                    let id = opaque_id(&args.organization, "Organization ID")?;
                     run_operation(
                         Method::POST,
                         &format!("/organizations/{id}/domain/verify"),

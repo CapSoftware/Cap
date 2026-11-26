@@ -23,6 +23,7 @@ async fn run() {
         resolution_base: XY::new(640, 360),
         compression_bpp: 0.2,
         cursor_only: false,
+        gif_quality: None,
     };
     let start = Instant::now();
     let result = if with_config {

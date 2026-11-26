@@ -2,7 +2,8 @@
 
 import { Comment, type Video } from "@cap/web-domain";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { newComment } from "@/actions/videos/new-comment";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { CommentType } from "../../Share";
@@ -68,7 +69,7 @@ export function TimelineComposer({
 	onRecordIntent,
 }: TimelineComposerProps) {
 	const { composerAnchor } = useTimelineState();
-	const { closeComposer } = useTimelineActions();
+	const { openComposer, closeComposer } = useTimelineActions();
 	const user = useCurrentUser();
 	const reduceMotion = useReducedMotion() ?? false;
 	const [value, setValue] = useState("");
@@ -82,6 +83,9 @@ export function TimelineComposer({
 	useEffect(() => {
 		if (!composerAnchor) setValue("");
 	}, [composerAnchor]);
+
+	const anchorRef = useRef(composerAnchor);
+	anchorRef.current = composerAnchor;
 
 	const requestAuth = () => {
 		if (onRequestAuth) onRequestAuth();
@@ -128,6 +132,12 @@ export function TimelineComposer({
 			});
 		} catch (error) {
 			console.error("Error posting comment:", error);
+			toast.error("Couldn't post your comment. Please try again.");
+			// Bring the draft back unless the viewer has started another one.
+			if (!anchorRef.current) {
+				openComposer(anchorTime);
+				setValue(content);
+			}
 		}
 	};
 

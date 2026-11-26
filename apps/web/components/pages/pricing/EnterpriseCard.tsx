@@ -17,6 +17,11 @@ const ADD_ONS = [
 		detail: "Flat rate, unlimited users",
 		price: "$199/mo",
 	},
+	{
+		label: "SCIM directory sync",
+		detail: "Requires SAML SSO",
+		price: "$200/mo",
+	},
 	{ label: "Signed BAA", detail: "Per organization", price: "$99/mo" },
 ];
 
@@ -24,7 +29,6 @@ const FEATURES = [
 	"SOC 2 Type II compliant",
 	"ISO 27001 compliant",
 	"HIPAA compliant",
-	"SCIM directory sync add-on",
 	"Custom S3 & Google Drive storage",
 	"Volume discounts available",
 ];
@@ -44,8 +48,8 @@ export const EnterpriseCard = ({ collapsed, onToggle }: PlanToggle) => {
 					Everything in Cap Pro, at the Cap Pro price.
 					<span className="text-[rgba(17,17,17,0.55)]">
 						{" "}
-						Add SAML SSO for your whole organization, or a signed BAA, only if
-						you need them.
+						Add SAML SSO, SCIM directory sync or a signed BAA, only if you need
+						them.
 					</span>
 				</p>
 			}
@@ -73,14 +77,14 @@ export const EnterpriseCard = ({ collapsed, onToggle }: PlanToggle) => {
 						))}
 					</dl>
 					<p className="text-[13.5px] leading-[1.5] text-[rgba(17,17,17,0.5)]">
-						Fully self-serve. Turn either one on from your dashboard whenever
-						you need it, no enterprise contract required.
+						Turn SAML SSO or a signed BAA on from your dashboard whenever you
+						need it. Email us to add SCIM. No enterprise contract required.
 					</p>
 				</>
 			}
 			cta={
 				<Link
-					href="/dashboard/settings/organization"
+					href="/dashboard/settings/organization/security"
 					onClick={() =>
 						trackEvent("pricing_cta_clicked", {
 							source_page: "pricing_cards",

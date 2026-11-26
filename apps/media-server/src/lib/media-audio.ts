@@ -231,8 +231,10 @@ async function probeAudioTracks(
 			if (exitCode === 0) {
 				const { streams } = AUDIO_PROBE_SCHEMA.parse(JSON.parse(stdoutText));
 				const trackTypes = streams.map((stream) => stream.codec_type);
-				if (!trackTypes.includes("video")) {
-					throw new Error("No video stream found");
+				// Only the audio matters here: extraction drops any video (-vn),
+				// so an audio-only source is read like any other.
+				if (trackTypes.length === 0) {
+					throw new Error("No media stream found");
 				}
 				return trackTypes.includes("audio");
 			}

@@ -1,75 +1,39 @@
-"use client";
-
 import { buildEnv } from "@cap/env";
-import { Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
-import Link from "next/link";
-import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-import {
-	canManageOrganizationBilling,
-	getEffectiveOrganizationRole,
-} from "@/lib/permissions/roles";
-import { BillingSummaryCard } from "../components/BillingSummaryCard";
-import { MembersCard } from "../components/MembersCard";
-import { SeatManagementCard } from "../components/SeatManagementCard";
-import { SignedBaaCard } from "../components/SignedBaaCard";
+import { redirect } from "next/navigation";
+import { Suspense } from "react";
+import { AddOnsSummary } from "../components/AddOnsSummary";
+import { AddOnsStatus } from "./AddOnsStatus";
+import { BillingContent } from "./BillingContent";
 
-export default function BillingAndMembersPage() {
-	const { activeOrganization, user, setInviteDialogOpen } =
-		useDashboardContext();
-	const currentMember = activeOrganization?.members.find(
-		(member) => member.userId === user.id,
-	);
-	const currentRole = getEffectiveOrganizationRole({
-		userId: user.id,
-		ownerId: activeOrganization?.organization.ownerId,
-		memberRole: currentMember?.role,
-	});
-	const canManageBilling = canManageOrganizationBilling(currentRole);
+export default async function BillingPage({
+	searchParams,
+}: {
+	searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+	if (!buildEnv.NEXT_PUBLIC_IS_CAP) {
+		redirect("/dashboard/settings/organization/members");
+	}
+
+	const query = await searchParams;
+	if (query.baaRedirect === "true") {
+		const params = new URLSearchParams();
+		for (const [key, value] of Object.entries(query)) {
+			for (const entry of Array.isArray(value) ? value : [value]) {
+				if (entry !== undefined) params.append(key, entry);
+			}
+		}
+		redirect(
+			`/dashboard/settings/organization/security?${params.toString()}#signed-baa`,
+		);
+	}
 
 	return (
-		<div className="flex flex-col gap-6">
-			{buildEnv.NEXT_PUBLIC_IS_CAP &&
-				(canManageBilling ? (
-					<>
-						<BillingSummaryCard />
-						{activeOrganization && (
-							<Card>
-								<CardHeader>
-									<CardTitle>SAML SSO invoices</CardTitle>
-									<CardDescription>
-										If your organization has an SSO subscription, open its
-										invoices from Security settings.
-									</CardDescription>
-								</CardHeader>
-								<Link
-									href={`/dashboard/settings/organization/security?organizationId=${encodeURIComponent(activeOrganization.organization.id)}`}
-									className="mt-3 inline-block text-sm font-medium underline"
-									prefetch={false}
-								>
-									Open SSO invoices in Security settings
-								</Link>
-							</Card>
-						)}
-						{activeOrganization?.hasActiveProSeatProvider ? (
-							<div className="grid gap-6 items-stretch md:grid-cols-2">
-								<SeatManagementCard />
-								<SignedBaaCard />
-							</div>
-						) : (
-							<SignedBaaCard />
-						)}
-					</>
-				) : (
-					<Card>
-						<CardHeader>
-							<CardTitle>Billing</CardTitle>
-							<CardDescription>
-								Billing is managed by the organization owner.
-							</CardDescription>
-						</CardHeader>
-					</Card>
-				))}
-			<MembersCard setIsInviteDialogOpen={setInviteDialogOpen} />
-		</div>
+		<BillingContent
+			addOns={
+				<Suspense fallback={<AddOnsSummary />}>
+					<AddOnsStatus />
+				</Suspense>
+			}
+		/>
 	);
 }

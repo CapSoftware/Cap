@@ -14,8 +14,10 @@ import {
 	recordingVerificationSchema,
 } from "@/lib/desktop-recording-verification";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
+import { applyDeveloperVideoProgress } from "@/lib/developer-video-processing";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { signalLoomImportFinished } from "@/lib/loom-import-signal";
+import { MEDIA_SERVER_SHUTDOWN_MESSAGE } from "@/lib/media-client";
 import { recordMediaInputPolicyStrike } from "@/lib/media-input-policy-strikes";
 import {
 	MEDIA_INPUT_POLICY_ERROR_CODE,
@@ -65,8 +67,6 @@ interface ProgressWebhookPayload {
 	};
 	deferredSourceKey?: string;
 }
-
-const MEDIA_SERVER_SHUTDOWN_MESSAGE = "Server shutting down";
 
 function getValidDuration(duration: number) {
 	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
@@ -120,6 +120,16 @@ export async function POST(request: NextRequest) {
 			body.kind === "audio-levels"
 		)
 			return NextResponse.json(await handleAudioLevelPublication(body));
+		const developerVideoPart =
+			request.nextUrl.searchParams.get("developerVideo");
+		if (developerVideoPart && body && typeof body === "object")
+			return NextResponse.json(
+				await applyDeveloperVideoProgress(
+					body,
+					developerVideoPart,
+					request.nextUrl.searchParams.get("token"),
+				),
+			);
 		const payload = body as ProgressWebhookPayload;
 		const isInputPolicyViolation =
 			payload.phase === "error" &&

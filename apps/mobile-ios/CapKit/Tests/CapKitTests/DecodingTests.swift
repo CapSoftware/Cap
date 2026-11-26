@@ -38,6 +38,24 @@ func fixture(_ name: String) throws -> Data {
         #expect(second.isProcessing)
     }
 
+    @Test func capLinkAccessIsOptionalAndToleratesUnknownValues() throws {
+        func cap(_ extra: String) throws -> CapSummary {
+            let json = #"{"id":"cap_1","shareUrl":"https://cap.so/s/cap_1","title":"Demo","createdAt":"2026-11-01T00:00:00.000Z","updatedAt":"2026-11-01T00:00:00.000Z","ownerName":"Owner","durationSeconds":null,"thumbnailUrl":null,"folderId":null,"public":true,"protected":false,"viewCount":0,"commentCount":0,"reactionCount":0,"upload":null"# + extra + "}"
+            return try CapJSON.decoder().decode(CapSummary.self, from: Data(json.utf8))
+        }
+        #expect(try cap("").linkAccess == nil)
+        #expect(try cap(#","linkAccess":"restricted""#).linkAccess == .restricted)
+        #expect(try cap(#","linkAccess":"anyone""#).linkAccess == .anyone)
+        #expect(try cap(#","linkAccess":"something-new""#).linkAccess == nil)
+        #expect(try cap(#","linkAccess":null"#).linkAccess == nil)
+        #expect(try cap("").linkRestricted == nil)
+        #expect(try cap(#","linkRestricted":true"#).linkRestricted == true)
+        #expect(try cap(#","linkRestricted":false,"linkAccess":"anyone""#).linkRestricted == false)
+        #expect(try cap(#","linkRestricted":"yes""#).linkRestricted == nil)
+        let page = try CapJSON.decoder().decode(CapsPage.self, from: fixture("caps"))
+        #expect(page.caps.allSatisfy { $0.linkAccess == nil })
+    }
+
     @Test func capDetailDecodesChaptersAndComments() throws {
         let detail = try CapJSON.decoder().decode(CapDetail.self, from: fixture("cap-detail"))
         #expect(detail.chapters.count == 2)

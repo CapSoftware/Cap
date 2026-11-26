@@ -41,6 +41,11 @@ import Testing
         #expect(timeline.outputTime(forSource: 35) == 15)
         #expect(timeline.outputTime(forSource: 20) == 10)
         #expect(timeline.outputStarts == [0, 10])
+        #expect(timeline.clipIndex(containingSource: 35) == 1)
+        #expect(timeline.clipIndex(containingSource: 20) == nil)
+        #expect(timeline.removedRanges == [EditRange(start: 10, end: 30)])
+        #expect(EditTimeline(sourceDuration: 60).removedRanges.isEmpty)
+        #expect(timeline.trimming(clipAt: 1, end: 50).removedRanges == [EditRange(start: 10, end: 30), EditRange(start: 50, end: 60)])
     }
 
     @Test func trimsStayInsideTheirNeighboursAndKeepAMinimumLength() throws {

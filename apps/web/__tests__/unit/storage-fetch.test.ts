@@ -135,6 +135,29 @@ describe("requestPublicOnly", () => {
 		}
 	});
 
+	it("still refuses a body that is not text", async () => {
+		await expect(
+			requestPublicOnly(`http://localhost:${port}/`, {
+				method: "PUT",
+				body: new Blob(["x"]),
+			}),
+		).rejects.toThrow("only send a text request body");
+	});
+
+	it("refuses a private address written as a literal before connecting", async () => {
+		lookupState.allowLoopback = true;
+		try {
+			await expect(
+				requestPublicOnly(`http://127.0.0.1:${port}/`),
+			).rejects.toBeInstanceOf(StorageFetchRefusedError);
+			await expect(
+				requestPublicOnly(`http://[::1]:${port}/`),
+			).rejects.toBeInstanceOf(StorageFetchRefusedError);
+		} finally {
+			lookupState.allowLoopback = false;
+		}
+	});
+
 	it("refuses non-http schemes", async () => {
 		await expect(requestPublicOnly("file:///etc/hosts")).rejects.toBeInstanceOf(
 			StorageFetchRefusedError,

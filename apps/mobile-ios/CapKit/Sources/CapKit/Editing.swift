@@ -109,6 +109,21 @@ public struct EditTimeline: Sendable, Hashable {
         return total
     }
 
+    public func clipIndex(containingSource time: Double) -> Int? {
+        clips.firstIndex { time >= $0.start && time <= $0.end }
+    }
+
+    public var removedRanges: [EditRange] {
+        var removed: [EditRange] = []
+        var cursor = 0.0
+        for clip in clips {
+            if clip.start - cursor > 1e-6 { removed.append(EditRange(start: cursor, end: clip.start)) }
+            cursor = clip.end
+        }
+        if sourceDuration - cursor > 1e-6 { removed.append(EditRange(start: cursor, end: sourceDuration)) }
+        return removed
+    }
+
     public func splitting(atOutput time: Double) -> EditTimeline? {
         guard let (index, offset) = locate(output: time) else { return nil }
         let clip = clips[index]

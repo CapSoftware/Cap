@@ -88,7 +88,7 @@ export const Avatar: React.FC<AvatarProps> = ({
 		);
 	}
 
-	const initial = name?.[0]?.toUpperCase() || "A";
+	const initial = Array.from(name?.trim() ?? "")[0]?.toUpperCase() || "A";
 	const charCode = initial.charCodeAt(0);
 	const isAlpha = charCode >= 65 && charCode <= 90;
 	const colorIndex = isAlpha ? charCode - 65 : 25; // fallback to last color for non-alpha

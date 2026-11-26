@@ -38,8 +38,8 @@ use crate::{
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, RECORDING_START_SAFETY,
-        SettingsEnum, StudioQuality, UpdateChannel, UpdateDownloadPolicy, WindowCaptureStyle,
-        WindowExclusion,
+        SettingsEnum, StudioFrameRate, StudioQuality, StudioQualityChoice, UpdateChannel,
+        UpdateDownloadPolicy, WindowCaptureStyle, WindowExclusion,
     },
     theme::Theme,
     ui,
@@ -94,6 +94,7 @@ pub enum Page {
     Cli,
     Recordings,
     Screenshots,
+    Meetings,
     Automations,
     Transcription,
     Integrations,
@@ -111,6 +112,7 @@ impl Page {
         Page::Cli,
         Page::Recordings,
         Page::Screenshots,
+        Page::Meetings,
         Page::Automations,
         Page::Transcription,
         Page::Integrations,
@@ -130,6 +132,7 @@ impl Page {
             Self::Cli => tr::settings::nav::cli(),
             Self::Recordings => tr::settings::nav::recordings(),
             Self::Screenshots => tr::settings::nav::screenshots(),
+            Self::Meetings => tr::settings::meetings::nav(),
             Self::Automations => tr::settings::nav::automations(),
             Self::Transcription => tr::settings::nav::transcription(),
             Self::Integrations => tr::settings::nav::integrations(),
@@ -149,6 +152,7 @@ impl Page {
             Self::Cli => "cli",
             Self::Recordings => "recordings",
             Self::Screenshots => "screenshots",
+            Self::Meetings => "meetings",
             Self::Automations => "automations",
             Self::Transcription => "transcription",
             Self::Integrations => "integrations",
@@ -172,6 +176,7 @@ impl Page {
             Self::Quality => "icons/gauge.svg",
             Self::Recordings => "icons/square-play.svg",
             Self::Screenshots => "icons/image.svg",
+            Self::Meetings => "icons/users.svg",
             Self::Automations => "icons/zap.svg",
             Self::Transcription => "icons/captions.svg",
             Self::Integrations => "icons/unplug.svg",
@@ -218,6 +223,7 @@ pub(crate) enum MenuKind {
     AutomationExportFps(usize, usize),
     AutomationExportCompression(usize, usize),
     AutomationPreset(usize, usize),
+    Meetings(crate::meetings_ui::settings::MeetingsMenu),
 }
 
 struct OpenMenu {
@@ -229,14 +235,101 @@ struct OpenMenu {
     state: ui::MenuState,
 }
 
-/// `MAX_FPS_OPTIONS` in general.tsx.
-const MAX_FPS_OPTIONS: &[(u32, fn() -> &'static str)] = &[
-    (24, tr::settings::general::recording::max_fps::fps_24),
-    (25, tr::settings::general::recording::max_fps::fps_25),
-    (30, tr::settings::general::recording::max_fps::fps_30),
-    (60, tr::settings::general::recording::max_fps::fps_60),
-    (120, tr::settings::general::recording::max_fps::fps_120),
+const FRAME_RATE_OPTIONS: &[(StudioFrameRate, Label)] = &[
+    (
+        StudioFrameRate::Fixed(24),
+        tr::settings::quality::studio::frame_rate::fps_24,
+    ),
+    (
+        StudioFrameRate::Fixed(25),
+        tr::settings::quality::studio::frame_rate::fps_25,
+    ),
+    (
+        StudioFrameRate::Fixed(30),
+        tr::settings::quality::studio::frame_rate::fps_30,
+    ),
+    (
+        StudioFrameRate::Fixed(60),
+        tr::settings::quality::studio::frame_rate::fps_60,
+    ),
+    (
+        StudioFrameRate::Fixed(120),
+        tr::settings::quality::studio::frame_rate::fps_120,
+    ),
+    (
+        StudioFrameRate::Fixed(144),
+        tr::settings::quality::studio::frame_rate::fps_144,
+    ),
+    (
+        StudioFrameRate::Fixed(165),
+        tr::settings::quality::studio::frame_rate::fps_165,
+    ),
+    (
+        StudioFrameRate::Fixed(240),
+        tr::settings::quality::studio::frame_rate::fps_240,
+    ),
+    (
+        StudioFrameRate::MatchDisplay,
+        tr::settings::quality::studio::frame_rate::match_display,
+    ),
 ];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FrameRateCeiling {
+    max_fps: u32,
+    match_display: bool,
+}
+
+fn frame_rate_ceiling_for(studio_max_fps: u32, x11_session: bool) -> FrameRateCeiling {
+    if x11_session {
+        FrameRateCeiling {
+            max_fps: 60,
+            match_display: false,
+        }
+    } else {
+        FrameRateCeiling {
+            max_fps: studio_max_fps,
+            match_display: true,
+        }
+    }
+}
+
+fn frame_rate_ceiling() -> FrameRateCeiling {
+    #[cfg(target_os = "linux")]
+    {
+        frame_rate_ceiling_for(
+            cap_recording::MAX_STUDIO_FPS,
+            !crate::app_windows::uses_wayland(),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        frame_rate_ceiling_for(cap_recording::MAX_STUDIO_FPS, false)
+    }
+}
+
+fn frame_rate_options(
+    ceiling: FrameRateCeiling,
+) -> impl Iterator<Item = &'static (StudioFrameRate, Label)> {
+    FRAME_RATE_OPTIONS
+        .iter()
+        .filter(move |(rate, _)| match rate {
+            StudioFrameRate::Fixed(fps) => *fps <= ceiling.max_fps,
+            StudioFrameRate::MatchDisplay => ceiling.match_display,
+        })
+}
+
+fn shown_frame_rate(current: StudioFrameRate, ceiling: FrameRateCeiling) -> StudioFrameRate {
+    match current {
+        StudioFrameRate::MatchDisplay if !ceiling.match_display => {
+            StudioFrameRate::Fixed(ceiling.max_fps)
+        }
+        StudioFrameRate::Fixed(fps) if fps > ceiling.max_fps => {
+            StudioFrameRate::Fixed(ceiling.max_fps)
+        }
+        _ => current,
+    }
+}
 
 /// The Countdown select's options.
 const COUNTDOWN_OPTIONS: &[(u32, fn() -> &'static str)] = &[
@@ -275,6 +368,77 @@ const INSTANT_RESOLUTION_TIERS: &[(u32, &str, Label)] = &[
 
 /// `FREE_INSTANT_MODE_MAX_RESOLUTION`.
 const FREE_INSTANT_MODE_MAX_RESOLUTION: u32 = 1280;
+
+const RESOLUTION_NAMES: &[(u32, &str)] = &[
+    (1280, "720p"),
+    (1920, "1080p"),
+    (2560, "1440p"),
+    (3840, "4K"),
+    (4096, "4K"),
+    (5120, "5K"),
+    (6016, "6K"),
+    (6144, "6K"),
+    (7680, "8K"),
+];
+
+fn resolution_name(width: u32, height: u32) -> Option<&'static str> {
+    let (long, short) = (width.max(height), width.min(height));
+    let sixteen_by_nine = (u64::from(long) * 9).abs_diff(u64::from(short) * 16) <= 16;
+    if !sixteen_by_nine && (long, short) != (4096, 2160) {
+        return None;
+    }
+    RESOLUTION_NAMES
+        .iter()
+        .find(|(named, _)| *named == long)
+        .map(|(_, name)| *name)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StudioResolution {
+    width: u32,
+    height: u32,
+    several_displays: bool,
+}
+
+fn studio_resolution(display_sizes: &[Option<(u32, u32)>]) -> Option<StudioResolution> {
+    display_sizes
+        .iter()
+        .flatten()
+        .filter(|(width, height)| *width > 0 && *height > 0)
+        .map(|&(width, height)| {
+            cap_recording::studio_recording::studio_display_recording_size(width, height)
+        })
+        .max_by_key(|&(width, height)| u64::from(width) * u64::from(height))
+        .map(|(width, height)| StudioResolution {
+            width,
+            height,
+            several_displays: display_sizes.len() > 1,
+        })
+}
+
+fn read_studio_resolution() -> Option<StudioResolution> {
+    let sizes: Vec<_> = scap_targets::Display::list()
+        .iter()
+        .map(|display| {
+            display
+                .physical_size()
+                .map(|size| (size.width() as u32, size.height() as u32))
+        })
+        .collect();
+    studio_resolution(&sizes)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn apply_studio_resolution(
+    current: &mut Option<StudioResolution>,
+    read: Option<StudioResolution>,
+) -> bool {
+    if *current == read {
+        return false;
+    }
+    *current = read;
+    true
+}
 
 #[derive(Clone, Copy)]
 enum InstantQualityNotice {
@@ -716,7 +880,7 @@ pub struct SettingsWindow {
     pub(crate) page: Page,
     pub(crate) settings: GeneralSettings,
     menu: Option<OpenMenu>,
-    page_scroll: ScrollHandle,
+    pub(crate) page_scroll: ScrollHandle,
     instant_quality_anchor: ScrollAnchor,
     studio_quality_anchor: ScrollAnchor,
     quality_scroll_request: Option<Mode>,
@@ -725,6 +889,9 @@ pub struct SettingsWindow {
     pub(crate) plan_refresh_failed: bool,
     instant_quality_notice: Option<InstantQualityNotice>,
     studio_quality_save_failed: bool,
+    studio_resolution: Option<StudioResolution>,
+    #[cfg(target_os = "linux")]
+    studio_resolution_task: Option<gpui::Task<()>>,
     /// Everything the pages in `settings_pages.rs` own -- their fetch state,
     /// drafts and text-input entities.
     pub(crate) pages: crate::settings_pages::PagesState,
@@ -752,6 +919,8 @@ pub struct SettingsWindow {
     /// inside a resizable pane, so it cannot be computed.
     slider_track: Rc<Cell<Option<Bounds<Pixels>>>>,
     slider_dragging: bool,
+    bitrate_slider_track: Rc<Cell<Option<Bounds<Pixels>>>>,
+    bitrate_slider_dragging: bool,
     /// `commands.listCaptureWindows()`, for the excluded-windows menu.
     windows: Vec<WindowOption>,
     /// Key handling for Cmd-W lives on the root, which needs a focus handle of
@@ -886,6 +1055,12 @@ impl SettingsWindow {
             plan_refresh_failed: false,
             instant_quality_notice: None,
             studio_quality_save_failed: false,
+            #[cfg(not(target_os = "linux"))]
+            studio_resolution: read_studio_resolution(),
+            #[cfg(target_os = "linux")]
+            studio_resolution: None,
+            #[cfg(target_os = "linux")]
+            studio_resolution_task: None,
             project_name_input,
             server_url_input,
             _field_events: field_events,
@@ -895,6 +1070,8 @@ impl SettingsWindow {
             placeholders_task: None,
             slider_track: Rc::new(Cell::new(None)),
             slider_dragging: false,
+            bitrate_slider_track: Rc::new(Cell::new(None)),
+            bitrate_slider_dragging: false,
             windows: Vec::new(),
             focus: cx.focus_handle(),
             _sign_in_subscriptions: sign_in_subscriptions,
@@ -941,6 +1118,10 @@ impl SettingsWindow {
         self.quality_scroll_request = None;
         self.instant_quality_notice = None;
         self.studio_quality_save_failed = false;
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.studio_resolution = read_studio_resolution();
+        }
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
         self.shortcuts_cancel(cx);
         self.page = page;
@@ -983,6 +1164,10 @@ impl SettingsWindow {
     /// scheduling a frame.
     pub fn page_shown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pages_shown(window, cx);
+        #[cfg(target_os = "linux")]
+        if self.page == Page::Quality {
+            self.refresh_studio_resolution(cx);
+        }
         if matches!(self.page, Page::Quality | Page::License) {
             self.refresh_plan(window, cx);
         }
@@ -1004,6 +1189,22 @@ impl SettingsWindow {
         self.recordings.tick = None;
         self.screenshots.scan = None;
         self.screenshots.decode = None;
+    }
+
+    #[cfg(target_os = "linux")]
+    fn refresh_studio_resolution(&mut self, cx: &mut Context<Self>) {
+        self.studio_resolution_task = Some(cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async { read_studio_resolution() })
+                .await;
+            this.update(cx, |this, cx| {
+                if apply_studio_resolution(&mut this.studio_resolution, read) {
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
     }
 
     /// The `recordings` query: scan the library on the background executor,
@@ -1201,6 +1402,14 @@ impl SettingsWindow {
             if !confirmed {
                 return;
             }
+            let Ok(editor_closing) =
+                cx.update(|_, cx| crate::app_windows::delete_closing_open_editor(&path, cx))
+            else {
+                return;
+            };
+            if editor_closing {
+                return;
+            }
 
             let Ok(task) = cx.update(|_, cx| {
                 gpui_tokio::Tokio::spawn(cx, crate::upload::queue::delete_recording(path.clone()))
@@ -1210,6 +1419,7 @@ impl SettingsWindow {
             let deleted = task.await.unwrap_or_else(|error| Err(error.to_string()));
             if let Err(error) = deleted {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
+                crate::platform::alert_dialog(tr::dialog::delete_recording::failed_title(), &error);
                 return;
             }
             tracing::info!(path = %path.display(), "deleted a recording");
@@ -1324,7 +1534,8 @@ impl SettingsWindow {
     }
 
     fn delete_screenshot(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        cx.spawn_in(window, async move |this, cx| {
+        let key = crate::app_windows::screenshot_editor_key(&path);
+        cx.spawn_in(window, async move |_this, cx| {
             let confirmed = crate::platform::confirm_dialog(
                 "Cap",
                 tr::main::delete_screenshot_confirm(),
@@ -1347,8 +1558,7 @@ impl SettingsWindow {
                 tracing::error!(path = %path.display(), "deleting the screenshot failed: {error}");
                 return;
             }
-            this.update_in(cx, |this, window, cx| this.refresh_screenshots(window, cx))
-                .ok();
+            crate::app_windows::finish_library_screenshot_delete(key, cx);
         })
         .detach();
     }
@@ -1554,10 +1764,13 @@ impl SettingsWindow {
                     .map(|(value, label)| ui::MenuItem::new(label(), *value == current))
                     .collect()
             }
-            MenuKind::MaxFps => MAX_FPS_OPTIONS
-                .iter()
-                .map(|(value, label)| ui::MenuItem::new(label(), *value == self.settings.max_fps))
-                .collect(),
+            MenuKind::MaxFps => {
+                let current =
+                    shown_frame_rate(self.settings.studio_frame_rate(), frame_rate_ceiling());
+                frame_rate_options(frame_rate_ceiling())
+                    .map(|(rate, label)| ui::MenuItem::new(label(), *rate == current))
+                    .collect()
+            }
             MenuKind::Language => {
                 let current = self.language_preference();
                 i18n::Preference::options()
@@ -1574,6 +1787,7 @@ impl SettingsWindow {
                 .into_iter()
                 .map(|window| ui::MenuItem::new(window_option_label(&window), false))
                 .collect(),
+            MenuKind::Meetings(menu) => self.meetings_menu_items(menu),
             kind => self.pages_menu_items(kind),
         }
     }
@@ -1594,9 +1808,8 @@ impl SettingsWindow {
                 }
             }
             MenuKind::MaxFps => {
-                if let Some((value, _)) = MAX_FPS_OPTIONS.get(index) {
-                    self.settings.max_fps = *value;
-                    self.write_u32("maxFps", *value, cx);
+                if let Some((rate, _)) = frame_rate_options(frame_rate_ceiling()).nth(index) {
+                    self.select_studio_frame_rate(*rate, cx);
                 }
             }
             MenuKind::Language => {
@@ -1639,6 +1852,7 @@ impl SettingsWindow {
                 });
                 self.write_excluded(next, cx);
             }
+            MenuKind::Meetings(menu) => self.meetings_choose(menu, index, window, cx),
             kind => self.pages_choose(kind, index, window, cx),
         }
         cx.notify();
@@ -1858,6 +2072,8 @@ impl Render for SettingsWindow {
             // the drag layer the zoom slider needs while the button is held.
             .children(self.render_menu(cx))
             .children(self.render_slider_drag_layer(cx))
+            .children(self.render_bitrate_drag_layer(cx))
+            .children(crate::keylat::probe())
     }
 }
 
@@ -2377,6 +2593,7 @@ impl SettingsWindow {
                         Page::Quality => self.render_recording_quality(cx),
                         Page::Recordings => self.render_recordings(cx),
                         Page::Screenshots => self.render_screenshots(cx),
+                        Page::Meetings => self.render_meetings(window, cx),
                         Page::Shortcuts => self.render_shortcuts(cx),
                         Page::Cli => self.render_cli(cx),
                         Page::Automations => self.render_automations(cx),
@@ -2917,6 +3134,14 @@ impl SettingsWindow {
                 .flex_shrink_0()
                 .rounded(px(4.))
                 .bg(theme.gray_10)
+                .when(row.item.audio_only, |this| {
+                    this.flex().items_center().justify_center().child(
+                        gpui::svg()
+                            .path("icons/microphone.svg")
+                            .size(px(18.))
+                            .text_color(theme.gray_1),
+                    )
+                })
                 .into_any_element(),
         };
 
@@ -3169,7 +3394,8 @@ impl SettingsWindow {
             "recording-delete",
             "icons/trash.svg",
             tr::settings::recordings::delete(),
-            false,
+            // The recording being captured or finalized owns its folder.
+            library::is_recording_in_progress(&path),
             cx,
             move |this, window, cx| this.delete_recording(path.clone(), window, cx),
         ))
@@ -3596,16 +3822,276 @@ impl SettingsWindow {
         )
     }
 
-    fn select_studio_quality(&mut self, quality: StudioQuality, cx: &mut Context<Self>) {
-        self.studio_quality_save_failed = !store::set_store_setting(
-            GENERAL_SETTINGS,
-            "studioRecordingQuality",
-            Value::String(quality.as_json().to_string()),
-        );
+    fn select_studio_quality(&mut self, choice: StudioQualityChoice, cx: &mut Context<Self>) {
+        self.studio_quality_save_failed = !store::set_studio_quality_choice(choice);
         if !self.studio_quality_save_failed {
-            self.settings.studio_recording_quality = quality;
+            match choice {
+                StudioQualityChoice::Tier(quality) => {
+                    self.settings.studio_recording_quality = quality;
+                    self.settings.studio_custom_video_bitrate = false;
+                }
+                StudioQualityChoice::Custom { mbps } => {
+                    self.settings.studio_recording_quality = StudioQuality::Balanced;
+                    self.settings.studio_custom_video_bitrate = true;
+                    self.settings.studio_video_bitrate_mbps = Some(mbps);
+                }
+            }
         }
         cx.notify();
+    }
+
+    fn select_studio_frame_rate(&mut self, rate: StudioFrameRate, cx: &mut Context<Self>) {
+        if store::set_studio_frame_rate(rate) {
+            let (max_fps, match_display) = match rate {
+                StudioFrameRate::Fixed(fps) => (fps, false),
+                StudioFrameRate::MatchDisplay => (store::MATCH_DISPLAY_STORED_FPS, true),
+            };
+            self.settings.max_fps = max_fps;
+            self.settings.max_fps_match_display = match_display;
+        } else {
+            self.settings = GeneralSettings::load();
+        }
+        cx.notify();
+    }
+
+    fn render_studio_frame_rate(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let ceiling = frame_rate_ceiling();
+        let current = shown_frame_rate(self.settings.studio_frame_rate(), ceiling);
+        let label = frame_rate_options(ceiling)
+            .find(|(rate, _)| *rate == current)
+            .map(|(_, label)| label().to_string())
+            .unwrap_or_else(|| self.settings.max_fps.to_string());
+        let description: SharedString = match current {
+            StudioFrameRate::MatchDisplay => {
+                tr::settings::quality::studio::frame_rate::description_match(ceiling.max_fps).into()
+            }
+            StudioFrameRate::Fixed(fps) if fps > 60 => {
+                tr::settings::quality::studio::frame_rate::description_high().into()
+            }
+            StudioFrameRate::Fixed(_) => {
+                tr::settings::quality::studio::frame_rate::description().into()
+            }
+        };
+        ui::SettingRow::settings(
+            &self.theme,
+            tr::settings::quality::studio::frame_rate::label(),
+            None,
+            self.select("max-fps", label, MenuKind::MaxFps, cx)
+                .into_any_element(),
+        )
+        .description(description)
+        .into_any_element()
+    }
+
+    fn custom_bitrate_choice(&self) -> StudioQualityChoice {
+        StudioQualityChoice::Custom {
+            mbps: self.settings.studio_video_bitrate_mbps.unwrap_or_else(|| {
+                cap_recording::balanced_studio_video_bitrate_for_display(
+                    &scap_targets::Display::primary(),
+                    self.settings.max_fps,
+                ) / 1_000_000
+            }),
+        }
+    }
+
+    fn set_custom_bitrate(&mut self, mbps: u32, cx: &mut Context<Self>) {
+        let mbps = mbps.clamp(
+            store::MIN_STUDIO_VIDEO_BITRATE_MBPS,
+            store::MAX_STUDIO_VIDEO_BITRATE_MBPS,
+        );
+        if self.settings.studio_video_bitrate_mbps != Some(mbps) {
+            self.settings.studio_video_bitrate_mbps = Some(mbps);
+            cx.notify();
+        }
+    }
+
+    fn save_custom_bitrate(&mut self, cx: &mut Context<Self>) {
+        if let StudioQualityChoice::Custom { mbps } = self.settings.studio_quality_choice() {
+            self.select_studio_quality(StudioQualityChoice::Custom { mbps }, cx);
+        }
+    }
+
+    fn set_custom_bitrate_from(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(fraction) = self
+            .bitrate_slider_track
+            .get()
+            .and_then(|track| ui::fraction_from_x(position.x, track))
+        else {
+            return;
+        };
+        self.set_custom_bitrate(bitrate_mbps_at(fraction), cx);
+    }
+
+    fn render_bitrate_drag_layer(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if !self.bitrate_slider_dragging {
+            return None;
+        }
+        Some(
+            ui::Slider::drag_layer(
+                "bitrate-slider-drag",
+                cx.listener(|this, event: &gpui::MouseMoveEvent, _window, cx| {
+                    this.set_custom_bitrate_from(event.position, cx);
+                }),
+                cx.listener(|this, _, _window, cx| {
+                    this.bitrate_slider_dragging = false;
+                    this.save_custom_bitrate(cx);
+                }),
+            )
+            .into_any_element(),
+        )
+    }
+
+    fn render_studio_bitrate(&self, mbps: u32, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = self.theme;
+        let slider = ui::Slider::new(
+            "bitrate-slider",
+            bitrate_fraction(mbps),
+            self.bitrate_slider_track.clone(),
+        )
+        .flex()
+        .track(px(5.), theme.settings_fill())
+        .fill(Hsla::from(theme.blue_9))
+        .thumb(
+            px(16.),
+            if theme.is_dark() {
+                Hsla::from(theme.gray_12)
+            } else {
+                Hsla::from(theme.gray_1)
+            },
+            Some(theme.settings_border()),
+        )
+        .thumb_top(px(-6.))
+        .on_drag_start(
+            cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                this.bitrate_slider_dragging = true;
+                this.set_custom_bitrate_from(event.position, cx);
+            }),
+        );
+
+        self.setting_row(
+            tr::settings::quality::studio::bitrate(),
+            Some(tr::settings::quality::studio::bitrate_description()),
+            div()
+                .id("studio-bitrate")
+                .tab_index(0)
+                .aria_label(tr::settings::quality::studio::bitrate())
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.))
+                .w(px(220.))
+                .child(slider)
+                .child(
+                    div()
+                        .w(px(64.))
+                        .flex_none()
+                        .flex()
+                        .justify_end()
+                        .text_size(px(12.))
+                        .text_color(theme.settings_muted())
+                        .child(tr::settings::quality::studio::bitrate_value(mbps)),
+                )
+                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                    let step: i64 = if event.keystroke.modifiers.shift {
+                        10
+                    } else {
+                        1
+                    };
+                    let delta = match event.keystroke.key.as_str() {
+                        "left" | "down" => -step,
+                        "right" | "up" => step,
+                        _ => return,
+                    };
+                    if let StudioQualityChoice::Custom { mbps } =
+                        this.settings.studio_quality_choice()
+                    {
+                        let next = (i64::from(mbps) + delta).clamp(
+                            i64::from(store::MIN_STUDIO_VIDEO_BITRATE_MBPS),
+                            i64::from(store::MAX_STUDIO_VIDEO_BITRATE_MBPS),
+                        ) as u32;
+                        this.set_custom_bitrate(next, cx);
+                        this.save_custom_bitrate(cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .into_any_element(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_studio_quality_option(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        description: &'static str,
+        selected: bool,
+        recommended: bool,
+        choose: impl Fn(&Self) -> StudioQualityChoice + Clone + 'static,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = self.theme;
+        let choose_on_key = choose.clone();
+        div()
+            .id(SharedString::from(format!("studio-quality-{id}")))
+            .tab_index(0)
+            .aria_label(label)
+            .aria_description(description)
+            .aria_selected(selected)
+            .cursor_pointer()
+            .flex()
+            .items_start()
+            .gap(px(10.))
+            .p(px(12.))
+            .group("studio-quality-option")
+            .child(div().mt(px(1.)).child(self.radio_dot(selected)))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(div().text_size(px(13.)).child(label))
+                            .when(recommended, |this| {
+                                this.child(
+                                    div()
+                                        .px(px(6.))
+                                        .py(px(1.))
+                                        .rounded(px(4.))
+                                        .bg(theme.settings_fill())
+                                        .text_size(px(11.))
+                                        .text_color(theme.settings_muted())
+                                        .child(tr::settings::quality::studio::recommended()),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(theme.settings_muted())
+                            .child(description),
+                    ),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let choice = choose(&*this);
+                this.select_studio_quality(choice, cx);
+            }))
+            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                if event.keystroke.modifiers == Default::default()
+                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                {
+                    let choice = choose_on_key(&*this);
+                    this.select_studio_quality(choice, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .into_any_element()
     }
 
     fn radio_dot(&self, checked: bool) -> gpui::Div {
@@ -3643,83 +4129,81 @@ impl SettingsWindow {
             })
     }
 
+    fn render_studio_resolution(&self) -> gpui::AnyElement {
+        let theme = self.theme;
+        let resolution = self.studio_resolution;
+        let description = if self.settings.studio_recording_quality == StudioQuality::Compatibility
+        {
+            tr::settings::quality::studio::resolution_description_compatibility()
+        } else if resolution.is_some_and(|resolution| resolution.several_displays) {
+            tr::settings::quality::studio::resolution_description_several()
+        } else {
+            tr::settings::quality::studio::resolution_description()
+        };
+        let value = resolution.map(|resolution| {
+            let pixels = format!("{} × {}", resolution.width, resolution.height);
+            let (headline, detail) = match resolution_name(resolution.width, resolution.height) {
+                Some(name) => (name.to_string(), Some(pixels)),
+                None => (pixels, None),
+            };
+            let headline = if resolution.several_displays {
+                tr::settings::quality::studio::resolution_up_to(&headline)
+            } else {
+                headline
+            };
+            div()
+                .flex()
+                .items_baseline()
+                .gap(px(6.))
+                .child(div().text_size(px(13.)).child(headline))
+                .children(detail.map(|detail| {
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.settings_muted())
+                        .child(detail)
+                }))
+        });
+        self.setting_row(
+            tr::settings::quality::studio::resolution(),
+            Some(description),
+            value.map_or_else(|| div().into_any_element(), IntoElement::into_any_element),
+        )
+    }
+
     fn render_studio_quality(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let current = self.settings.studio_recording_quality;
+        let choice = self.settings.studio_quality_choice();
 
         let mut rows: Vec<gpui::AnyElement> = STUDIO_QUALITY_TIERS
             .iter()
             .copied()
             .map(|(quality, label, description)| {
-                let (label, description) = (label(), description());
-                let selected = current == quality;
-                div()
-                    .id(SharedString::from(format!(
-                        "studio-quality-{}",
-                        quality.as_json()
-                    )))
-                    .tab_index(0)
-                    .aria_label(label)
-                    .aria_description(description)
-                    .aria_selected(selected)
-                    .cursor_pointer()
-                    .flex()
-                    .items_start()
-                    .gap(px(10.))
-                    .p(px(12.))
-                    .group("studio-quality-option")
-                    .child(div().mt(px(1.)).child(self.radio_dot(selected)))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .child(div().text_size(px(13.)).child(label))
-                                    .when(quality == StudioQuality::Balanced, |this| {
-                                        this.child(
-                                                div()
-                                                    .px(px(6.))
-                                                    .py(px(1.))
-                                                    .rounded(px(4.))
-                                                    .bg(theme.settings_fill())
-                                                    .text_size(px(11.))
-                                                    .text_color(theme.settings_muted())
-                                                    .child(
-                                                        tr::settings::quality::studio::recommended(
-                                                        ),
-                                                    ),
-                                            )
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .line_height(px(16.))
-                                    .text_color(theme.settings_muted())
-                                    .child(description),
-                            ),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select_studio_quality(quality, cx);
-                    }))
-                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                        if event.keystroke.modifiers == Default::default()
-                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                        {
-                            this.select_studio_quality(quality, cx);
-                            cx.stop_propagation();
-                        }
-                    }))
-                    .into_any_element()
+                self.render_studio_quality_option(
+                    quality.as_json(),
+                    label(),
+                    description(),
+                    choice == StudioQualityChoice::Tier(quality),
+                    quality == StudioQuality::Balanced,
+                    move |_| StudioQualityChoice::Tier(quality),
+                    cx,
+                )
             })
             .collect();
+        rows.push(self.render_studio_quality_option(
+            "custom",
+            tr::settings::quality::studio::custom(),
+            tr::settings::quality::studio::custom_description(),
+            matches!(choice, StudioQualityChoice::Custom { .. }),
+            false,
+            Self::custom_bitrate_choice,
+            cx,
+        ));
+        if let StudioQualityChoice::Custom { mbps } = choice {
+            rows.push(self.render_studio_bitrate(mbps, cx));
+        }
+        rows.push(self.render_studio_frame_rate(cx));
+
+        rows.insert(0, self.render_studio_resolution());
 
         if self.studio_quality_save_failed {
             rows.push(
@@ -3756,12 +4240,25 @@ impl SettingsWindow {
             .find(|(value, _)| *value == settings.recording_countdown.unwrap_or(0))
             .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| settings.recording_countdown.unwrap_or(0).to_string());
-        let fps_label = MAX_FPS_OPTIONS
-            .iter()
-            .find(|(value, _)| *value == settings.max_fps)
-            .map(|(_, label)| label().to_string())
-            .unwrap_or_else(|| settings.max_fps.to_string());
         let zoom = settings.new_zoom_amount();
+        let keep_drawings = crate::live_draw::SUPPORTED.then(|| {
+            self.setting_row(
+                tr::settings::general::recording::keep_drawings::label(),
+                Some(tr::settings::general::recording::keep_drawings::description()),
+                self.toggle(
+                    "keep-drawings",
+                    tr::settings::general::recording::keep_drawings::label(),
+                    settings.keep_drawings,
+                    cx,
+                    |this, cx| {
+                        this.settings.keep_drawings = !this.settings.keep_drawings;
+                        let value = this.settings.keep_drawings;
+                        this.write_bool(store::KEEP_DRAWINGS_KEY, value, cx);
+                    },
+                )
+                .into_any_element(),
+            )
+        });
 
         self.section(
             tr::settings::general::recording::title(),
@@ -3840,10 +4337,7 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     // "After a Studio recording" lives on the Shortcuts page,
-                    // next to the shortcuts it shapes. There is no
-                    // post-capture overlay in this app, so a stored
-                    // `showOverlay` means "reshow the main window"
-                    // (`app_windows.rs`) and is labelled "Show Cap".
+                    // next to the shortcuts it shapes.
                     self.setting_row(
                         tr::settings::general::recording::post_deletion::label(),
                         Some(tr::settings::general::recording::post_deletion::description()),
@@ -3995,17 +4489,11 @@ impl SettingsWindow {
                         )
                         .into_any_element(),
                     ),
-                    self.setting_row(
-                        tr::settings::general::recording::max_fps::label(),
-                        Some(if settings.max_fps > 60 {
-                            tr::settings::general::recording::max_fps::description_high()
-                        } else {
-                            tr::settings::general::recording::max_fps::description()
-                        }),
-                        self.select("max-fps", fps_label, MenuKind::MaxFps, cx)
-                            .into_any_element(),
-                    ),
                 ])
+                .when_some(keep_drawings, |card, row| {
+                    card.child(ui::Card::settings_divider(&self.theme))
+                        .child(row)
+                })
                 .into_any_element(),
             ],
         )
@@ -5136,9 +5624,143 @@ fn format_project_name(template: &str) -> String {
 #[cfg(test)]
 mod server_change_tests;
 
+const BITRATE_SLIDER_MIN: f32 = store::MIN_STUDIO_VIDEO_BITRATE_MBPS as f32;
+const BITRATE_SLIDER_MAX: f32 = store::MAX_STUDIO_VIDEO_BITRATE_MBPS as f32;
+
+fn bitrate_fraction(mbps: u32) -> f32 {
+    ((mbps as f32 / BITRATE_SLIDER_MIN).ln() / (BITRATE_SLIDER_MAX / BITRATE_SLIDER_MIN).ln())
+        .clamp(0., 1.)
+}
+
+fn bitrate_mbps_at(fraction: f32) -> u32 {
+    let mbps = BITRATE_SLIDER_MIN * (BITRATE_SLIDER_MAX / BITRATE_SLIDER_MIN).powf(fraction);
+    (mbps.round() as u32).clamp(
+        store::MIN_STUDIO_VIDEO_BITRATE_MBPS,
+        store::MAX_STUDIO_VIDEO_BITRATE_MBPS,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn offered(ceiling: FrameRateCeiling) -> Vec<StudioFrameRate> {
+        frame_rate_options(ceiling).map(|(rate, _)| *rate).collect()
+    }
+
+    const MACOS: FrameRateCeiling = FrameRateCeiling {
+        max_fps: 240,
+        match_display: true,
+    };
+    const WINDOWS_AND_WAYLAND: FrameRateCeiling = FrameRateCeiling {
+        max_fps: 120,
+        match_display: true,
+    };
+    const X11: FrameRateCeiling = FrameRateCeiling {
+        max_fps: 60,
+        match_display: false,
+    };
+
+    #[test]
+    fn each_platform_offers_only_the_rates_it_records() {
+        use StudioFrameRate::{Fixed, MatchDisplay};
+        assert_eq!(frame_rate_ceiling_for(240, false), MACOS);
+        assert_eq!(frame_rate_ceiling_for(120, false), WINDOWS_AND_WAYLAND);
+        assert_eq!(frame_rate_ceiling_for(120, true), X11);
+        assert_eq!(
+            offered(MACOS),
+            vec![
+                Fixed(24),
+                Fixed(25),
+                Fixed(30),
+                Fixed(60),
+                Fixed(120),
+                Fixed(144),
+                Fixed(165),
+                Fixed(240),
+                MatchDisplay,
+            ]
+        );
+        assert_eq!(
+            offered(WINDOWS_AND_WAYLAND),
+            vec![
+                Fixed(24),
+                Fixed(25),
+                Fixed(30),
+                Fixed(60),
+                Fixed(120),
+                MatchDisplay
+            ]
+        );
+        assert_eq!(
+            offered(X11),
+            vec![Fixed(24), Fixed(25), Fixed(30), Fixed(60)]
+        );
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(
+            frame_rate_ceiling(),
+            if cfg!(target_os = "macos") {
+                MACOS
+            } else {
+                WINDOWS_AND_WAYLAND
+            }
+        );
+    }
+
+    #[test]
+    fn stored_rates_above_the_ceiling_show_as_the_ceiling() {
+        use StudioFrameRate::{Fixed, MatchDisplay};
+        for (stored, macos, windows_and_wayland, x11) in [
+            (MatchDisplay, MatchDisplay, MatchDisplay, Fixed(60)),
+            (Fixed(240), Fixed(240), Fixed(120), Fixed(60)),
+            (Fixed(165), Fixed(165), Fixed(120), Fixed(60)),
+            (Fixed(144), Fixed(144), Fixed(120), Fixed(60)),
+            (Fixed(120), Fixed(120), Fixed(120), Fixed(60)),
+            (Fixed(60), Fixed(60), Fixed(60), Fixed(60)),
+            (Fixed(30), Fixed(30), Fixed(30), Fixed(30)),
+        ] {
+            for (ceiling, shown) in [
+                (MACOS, macos),
+                (WINDOWS_AND_WAYLAND, windows_and_wayland),
+                (X11, x11),
+            ] {
+                assert_eq!(shown_frame_rate(stored, ceiling), shown, "{stored:?}");
+                assert!(offered(ceiling).contains(&shown));
+            }
+        }
+    }
+
+    #[test]
+    fn showing_a_stored_match_display_leaves_the_store_untouched() {
+        let path = std::env::temp_dir().join(format!("cap-frame-rate-{}", store::new_uuid_v4()));
+        let contents = r#"{"general_settings":{"maxFps":240,"maxFpsMatchDisplay":true}}"#;
+        std::fs::write(&path, contents).unwrap();
+        store::set_test_tauri_store_path(Some(path.clone()));
+        let settings = GeneralSettings::load();
+        assert_eq!(settings.studio_frame_rate(), StudioFrameRate::MatchDisplay);
+        assert_eq!(
+            shown_frame_rate(settings.studio_frame_rate(), X11),
+            StudioFrameRate::Fixed(60)
+        );
+        assert_eq!(
+            shown_frame_rate(settings.studio_frame_rate(), WINDOWS_AND_WAYLAND),
+            StudioFrameRate::MatchDisplay
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
+        store::set_test_tauri_store_path(None);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn bitrate_slider_reaches_every_whole_mbps_and_both_ends() {
+        for mbps in store::MIN_STUDIO_VIDEO_BITRATE_MBPS..=store::MAX_STUDIO_VIDEO_BITRATE_MBPS {
+            assert_eq!(bitrate_mbps_at(bitrate_fraction(mbps)), mbps);
+        }
+        assert_eq!(bitrate_mbps_at(0.), store::MIN_STUDIO_VIDEO_BITRATE_MBPS);
+        assert_eq!(bitrate_mbps_at(1.), store::MAX_STUDIO_VIDEO_BITRATE_MBPS);
+        assert_eq!(bitrate_fraction(0), 0.);
+        assert_eq!(bitrate_fraction(9_999), 1.);
+    }
 
     #[test]
     fn profile_request_identity_changes_when_same_user_signs_in_again() {
@@ -5170,7 +5792,7 @@ mod tests {
     /// addresses by slug.
     #[test]
     fn every_page_round_trips_through_its_slug() {
-        assert_eq!(Page::ALL.len(), 13);
+        assert_eq!(Page::ALL.len(), 14);
         for page in Page::ALL {
             assert_eq!(Page::from_slug(page.slug()), Some(*page));
         }
@@ -5325,6 +5947,7 @@ mod tests {
             sharing: None,
             sort_time_millis: 0.,
             thumbnail: None,
+            audio_only: false,
         }
     }
 
@@ -5488,6 +6111,111 @@ mod tests {
         );
     }
 
+    #[test]
+    fn standard_sizes_get_a_name_and_other_panels_do_not() {
+        for ((width, height), name) in [
+            ((1280, 720), Some("720p")),
+            ((1920, 1080), Some("1080p")),
+            ((2560, 1440), Some("1440p")),
+            ((3840, 2160), Some("4K")),
+            ((4096, 2160), Some("4K")),
+            ((4096, 2304), Some("4K")),
+            ((5120, 2880), Some("5K")),
+            ((6016, 3384), Some("6K")),
+            ((6144, 3456), Some("6K")),
+            ((7680, 4320), Some("8K")),
+            ((2160, 3840), Some("4K")),
+            ((1080, 1920), Some("1080p")),
+            ((3456, 2234), None),
+            ((3024, 1964), None),
+            ((2880, 1864), None),
+            ((2560, 1664), None),
+            ((1366, 768), None),
+            ((1364, 766), None),
+            ((1920, 1200), None),
+            ((2560, 1600), None),
+            ((3440, 1440), None),
+            ((2560, 1080), None),
+            ((5120, 1440), None),
+            ((4096, 1152), None),
+            ((3840, 1600), None),
+            ((1600, 900), None),
+            ((0, 0), None),
+        ] {
+            assert_eq!(resolution_name(width, height), name, "{width}x{height}");
+        }
+    }
+
+    #[test]
+    fn a_resolution_read_only_counts_as_a_change_when_the_value_differs() {
+        let uhd = StudioResolution {
+            width: 3840,
+            height: 2160,
+            several_displays: false,
+        };
+        let mut current = None;
+        assert!(apply_studio_resolution(&mut current, Some(uhd)));
+        assert_eq!(current, Some(uhd));
+        assert!(!apply_studio_resolution(&mut current, Some(uhd)));
+        assert_eq!(current, Some(uhd));
+        let several = StudioResolution {
+            several_displays: true,
+            ..uhd
+        };
+        assert!(apply_studio_resolution(&mut current, Some(several)));
+        assert_eq!(current, Some(several));
+        assert!(apply_studio_resolution(&mut current, None));
+        assert_eq!(current, None);
+        assert!(!apply_studio_resolution(&mut current, None));
+    }
+
+    #[test]
+    fn studio_resolution_shows_what_the_largest_display_records() {
+        assert_eq!(studio_resolution(&[]), None);
+        assert_eq!(studio_resolution(&[None]), None);
+        assert_eq!(studio_resolution(&[Some((0, 0))]), None);
+        assert_eq!(
+            studio_resolution(&[Some((3456, 2234))]),
+            Some(StudioResolution {
+                width: 3456,
+                height: 2234,
+                several_displays: false,
+            })
+        );
+        assert_eq!(
+            studio_resolution(&[Some((5120, 2880))]),
+            Some(StudioResolution {
+                width: 4096,
+                height: 2304,
+                several_displays: false,
+            })
+        );
+        assert_eq!(
+            studio_resolution(&[Some((3024, 1964)), Some((3840, 2160)), None]),
+            Some(StudioResolution {
+                width: 3840,
+                height: 2160,
+                several_displays: true,
+            })
+        );
+        assert_eq!(
+            studio_resolution(&[None, Some((1920, 1080))]),
+            Some(StudioResolution {
+                width: 1920,
+                height: 1080,
+                several_displays: true,
+            })
+        );
+        assert_eq!(
+            studio_resolution(&[Some((3440, 1440)), Some((2560, 1440))]),
+            Some(StudioResolution {
+                width: 3440,
+                height: 1440,
+                several_displays: true,
+            })
+        );
+    }
+
     /// `emptyMessage()`.
     #[test]
     fn the_empty_message_names_the_tab_and_the_search() {
@@ -5536,4 +6264,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod recording_action_tests;
+pub(crate) mod recording_action_tests;

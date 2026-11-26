@@ -54,6 +54,16 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	const [isCopying, setIsCopying] = useState(false);
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [downloadPressed, setDownloadPressed] = useState(false);
+	const downloadPressedTimer = useRef<ReturnType<typeof setTimeout> | null>(
+		null,
+	);
+	useEffect(
+		() => () => {
+			if (downloadPressedTimer.current)
+				clearTimeout(downloadPressedTimer.current);
+		},
+		[],
+	);
 	const [showLanguageMenu, setShowLanguageMenu] = useState(false);
 	const [showDownloadMenu, setShowDownloadMenu] = useState(false);
 	const [showCopyMenu, setShowCopyMenu] = useState(false);
@@ -379,7 +389,10 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		URL.revokeObjectURL(url);
 
 		setDownloadPressed(true);
-		setTimeout(() => {
+		if (downloadPressedTimer.current)
+			clearTimeout(downloadPressedTimer.current);
+		downloadPressedTimer.current = setTimeout(() => {
+			downloadPressedTimer.current = null;
 			setDownloadPressed(false);
 		}, 2000);
 	};

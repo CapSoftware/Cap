@@ -240,8 +240,18 @@ fn probe_payload() -> Vec<u8> {
 }
 
 fn current_identity() -> Option<ProbeIdentity> {
+    // The probe is stored and validated per account, so both halves of the
+    // key have to come from the same place the rest of the app reads them:
+    // `auth::server_url()` for the origin, and the `auth` store section for
+    // the account id. `store::auth_snapshot()` deliberately exposes only what
+    // the settings pages need (token and the two plan flags) and has no
+    // `user_id`, so reading the section directly is the same access path
+    // `auth::update_auth_plan` uses when it compares identities.
     let server_url = crate::auth::server_url();
-    let owner_id = crate::store::auth_snapshot().user_id?;
+    let owner_id = crate::store::store_section("auth")
+        .get("user_id")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)?;
     if server_url.is_empty() || owner_id.is_empty() {
         return None;
     }

@@ -5,6 +5,7 @@ import {
 	getPublicShareVideo,
 	type PublicShareVideo,
 } from "@/lib/public-share-video";
+import { buildVideoOgImageUrl } from "@/lib/share-video-metadata";
 import { sendSlackUnfurl } from "./client";
 import {
 	deleteSlackInstallationByTeamId,
@@ -58,8 +59,11 @@ export const buildSlackVideoBlock = ({
 	const embedUrl = new URL(`/embed/${video.id}`, webUrl);
 	embedUrl.searchParams.set("autoplay", "true");
 	embedUrl.searchParams.set("slack", "true");
-	const thumbnailUrl = new URL("/api/video/og", webUrl);
-	thumbnailUrl.searchParams.set("videoId", video.id);
+	const thumbnailUrl = buildVideoOgImageUrl({
+		videoId: video.id,
+		webUrl,
+		thumbnailVersion: video.thumbnailVersion,
+	});
 
 	return {
 		type: "video",
@@ -76,7 +80,7 @@ export const buildSlackVideoBlock = ({
 		},
 		video_url: embedUrl.toString(),
 		alt_text: truncate(`Watch ${video.name}`, 200),
-		thumbnail_url: thumbnailUrl.toString(),
+		thumbnail_url: thumbnailUrl,
 		provider_name: "Cap",
 		...(video.ownerName ? { author_name: truncate(video.ownerName, 49) } : {}),
 	};

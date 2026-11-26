@@ -1,0 +1,237 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+	rows: [] as Record<string, unknown>[],
+	speech: vi.fn(),
+	delivered: vi.fn(),
+}));
+
+vi.mock("@cap/database", () => {
+	const chain = {
+		select: () => chain,
+		from: () => chain,
+		innerJoin: () => chain,
+		leftJoin: () => chain,
+		where: () => Object.assign(Promise.resolve(mocks.rows), chain),
+		limit: async () => mocks.rows,
+		update: () => chain,
+		set: () => chain,
+		catch: () => chain,
+	};
+	return { db: () => chain };
+});
+vi.mock("@cap/database/auth/session", () => ({ getCurrentUser: vi.fn() }));
+vi.mock("@cap/database/auth/domain-utils", () => ({
+	isBlockedAccountEmail: () => false,
+}));
+vi.mock("@cap/database/auth/request-site", () => ({
+	isCrossSiteCookieWrite: () => false,
+}));
+vi.mock("@cap/env", () => ({
+	buildEnv: { NEXT_PUBLIC_WEB_URL: "https://cap.so" },
+}));
+vi.mock("@/lib/developer-key-hash", () => ({
+	hashKey: async (key: string) => `hash:${key}`,
+}));
+vi.mock("@/lib/infra-standing", () => ({
+	getInfraBilling: async () => ({
+		stored: { videoCount: 2, totalMinutes: 12.5, monthlyMicroCredits: 1062.5 },
+		storage: { uploadingVideos: 1 },
+	}),
+	infraBillingJson: () => ({
+		standing: { state: "active", pausesAt: null },
+		upload: { allowed: true },
+	}),
+	infraStorageJson: () => ({ dailyMicroCredits: 0 }),
+}));
+vi.mock("@/lib/developer-transcript-usage", () => ({
+	getSpeechUsage: mocks.speech,
+}));
+vi.mock("@/lib/infra-delivery", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/infra-delivery")>()),
+	getDeliveredUsage: mocks.delivered,
+}));
+
+import { app } from "@/app/api/developer/v1/[...route]/usage";
+
+beforeEach(() => {
+	mocks.rows = [
+		{
+			appId: "app-1",
+			balanceMicroCredits: 1,
+			createdVideos: 3,
+			uploadedVideos: 2,
+			totalDurationMinutes: 12.5,
+		},
+	];
+	mocks.speech.mockReset();
+	mocks.delivered.mockReset();
+	mocks.delivered.mockResolvedValue(null);
+	mocks.speech.mockResolvedValue({
+		balanceMicroCredits: 949_286,
+		availableMicroCredits: 909_286,
+		heldMicroCredits: 40_000,
+		speech: {
+			periodStart: "2026-11-01T00:00:00.000Z",
+			seconds: 18_252.4,
+			microCredits: 50_714,
+			transcripts: 104,
+		},
+	});
+});
+
+describe("GET /usage", () => {
+	it("reports what speech has cost this month, what is held and what is available", async () => {
+		const response = await app.request("/", {
+			headers: { Authorization: "Bearer csk_valid_key" },
+		});
+
+		expect(response.status).toBe(200);
+		const { data } = (await response.json()) as {
+			data: Record<string, unknown>;
+		};
+		expect(data).toMatchObject({
+			balanceMicroCredits: 949_286,
+			availableMicroCredits: 909_286,
+			heldMicroCredits: 40_000,
+			speech: {
+				periodStart: "2026-11-01T00:00:00.000Z",
+				seconds: 18_252.4,
+				microCredits: 50_714,
+				transcripts: 104,
+			},
+		});
+		expect(mocks.speech).toHaveBeenCalledWith("app-1");
+	});
+
+	it("says which app the key belongs to, so a credit link can name it", async () => {
+		const response = await app.request("/", {
+			headers: { Authorization: "Bearer csk_valid_key" },
+		});
+		const { data } = (await response.json()) as {
+			data: Record<string, unknown>;
+		};
+		expect(data.appId).toBe("app-1");
+	});
+
+	it("adds the monthly cost of every stored video to the storage figures", async () => {
+		const response = await app.request("/", {
+			headers: { Authorization: "Bearer csk_valid_key" },
+		});
+		const { data } = (await response.json()) as {
+			data: Record<string, unknown>;
+		};
+		expect(data.storage).toEqual({
+			dailyMicroCredits: 0,
+			storedMonthlyMicroCredits: 1063,
+		});
+	});
+
+	it("keeps every field it returned before", async () => {
+		const response = await app.request("/", {
+			headers: { Authorization: "Bearer csk_valid_key" },
+		});
+		const { data } = (await response.json()) as {
+			data: Record<string, unknown>;
+		};
+		expect(Object.keys(data)).toEqual(
+			expect.arrayContaining([
+				"balanceMicroCredits",
+				"balanceDollars",
+				"totalVideos",
+				"uploadingVideos",
+				"totalDurationMinutes",
+				"standing",
+				"rates",
+			]),
+		);
+		expect(data.balanceDollars).toBe("9.49286");
+	});
+
+	it("reports delivery as null until it has been measured", async () => {
+		const response = await app.request("/", {
+			headers: { Authorization: "Bearer csk_valid_key" },
+		});
+		const { data } = (await response.json()) as {
+			data: Record<string, unknown>;
+		};
+
+		expect(data).toHaveProperty("delivery", null);
+		expect(mocks.delivered).toHaveBeenCalledWith("app-1");
+	});
+
+	it("reports delivered minutes in total and by rendition tier, with the last final day", async () => {
+		mocks.delivered.mockResolvedValue({
+			seconds: 74_910,
+			secondsByTier: {
+				"360p": 750,
+				"720p": 20_160,
+				"1080p": 54_000,
+				"1440p": 0,
+				"2160p": 0,
+			},
+			finalThrough: "2026-11-18",
+		});
+
+		const response = await app.request("/", {
+			headers: { Authorization: "Bearer csk_valid_key" },
+		});
+		const { data } = (await response.json()) as {
+			data: Record<string, unknown>;
+		};
+
+		expect(data.delivery).toEqual({
+			minutes: 1248.5,
+			minutesByTier: {
+				"360p": 12.5,
+				"720p": 336,
+				"1080p": 900,
+				"1440p": 0,
+				"2160p": 0,
+			},
+			finalThrough: "2026-11-18",
+		});
+	});
+
+	it("keeps answering with storage, speech and billing when the delivery read fails", async () => {
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		mocks.delivered.mockRejectedValue(
+			Object.assign(new Error("Failed query"), {
+				cause: Object.assign(new Error("Lock wait timeout exceeded"), {
+					code: "ER_LOCK_WAIT_TIMEOUT",
+					errno: 1205,
+				}),
+			}),
+		);
+
+		const response = await app.request("/", {
+			headers: { Authorization: "Bearer csk_valid_key" },
+		});
+
+		expect(response.status).toBe(200);
+		const { data } = (await response.json()) as {
+			data: Record<string, unknown>;
+		};
+		expect(data.delivery).toBeNull();
+		expect(data).toMatchObject({
+			balanceMicroCredits: 949_286,
+			totalVideos: 2,
+			uploadingVideos: 1,
+			totalDurationMinutes: 12.5,
+			standing: { state: "active", pausesAt: null },
+			upload: { allowed: true },
+			storage: { dailyMicroCredits: 0 },
+			speech: {
+				periodStart: "2026-11-01T00:00:00.000Z",
+				seconds: 18_252.4,
+				microCredits: 50_714,
+				transcripts: 104,
+			},
+		});
+		expect(errors).toHaveBeenCalledWith(
+			"[developer-usage] Delivery usage unavailable",
+			expect.any(Error),
+		);
+		errors.mockRestore();
+	});
+});

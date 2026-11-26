@@ -9,6 +9,7 @@ interface TestimonialsProps {
 	title?: string;
 	subtitle?: string;
 	showHeader?: boolean;
+	titleAs?: "h1" | "h2";
 }
 
 export const Testimonials = ({
@@ -16,7 +17,9 @@ export const Testimonials = ({
 	title = "Teams & creators love Cap",
 	subtitle = "Don't just take our word for it. Here's what our users are saying about their experience with Cap.",
 	showHeader = true,
+	titleAs = "h2",
 }: TestimonialsProps) => {
+	const TitleTag = titleAs === "h1" ? motion.h1 : motion.h2;
 	const displayedTestimonials = amount
 		? testimonials.slice(0, amount)
 		: testimonials;
@@ -27,14 +30,14 @@ export const Testimonials = ({
 		<div>
 			{showHeader && (
 				<>
-					<motion.h2
+					<TitleTag
 						initial={{ opacity: 0, y: 20 }}
 						animate={{ opacity: 1, y: 0 }}
 						transition={{ duration: 0.4 }}
 						className="text-3xl font-medium text-center md:text-4xl text-gray-12 text-balance"
 					>
 						{title}
-					</motion.h2>
+					</TitleTag>
 					<motion.p
 						initial={{ opacity: 0, y: 20 }}
 						animate={{ opacity: 1, y: 0 }}

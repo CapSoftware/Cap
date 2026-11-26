@@ -1,8 +1,8 @@
 use crate::{
     output_pipeline::{
         AudioFrame, AudioMuxer, BlockingThreadFinish, DiskSpaceMonitor, DiskSpacePollResult,
-        HealthSender, Muxer, PipelineHealthEvent, SharedHealthSender, TaskPool, VideoFrame,
-        VideoMuxer, emit_health, wait_for_blocking_thread_finish,
+        HealthSender, Muxer, NoVideoFramesCaptured, PipelineHealthEvent, SharedHealthSender,
+        TaskPool, VideoFrame, VideoMuxer, emit_health, wait_for_blocking_thread_finish,
     },
     sources::screen_capture,
 };
@@ -302,6 +302,7 @@ struct Mp4EncoderState {
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
     audio_handle: Option<JoinHandle<anyhow::Result<()>>>,
     video_frame_count: Arc<AtomicU64>,
+    video_busy_frame_count: Arc<AtomicU64>,
     audio_frame_count: Arc<AtomicU64>,
     audio_channel_depth: Option<Arc<AtomicUsize>>,
     instant_mode: bool,
@@ -316,6 +317,7 @@ pub struct AVFoundationMp4Muxer {
     was_paused: bool,
     fatal_error: SharedFatalError,
     health_tx: SharedHealthSender,
+    frame_copier: Option<FrameCopier>,
 }
 
 #[derive(Default)]
@@ -324,6 +326,7 @@ pub struct AVFoundationMp4MuxerConfig {
     pub instant_mode: bool,
     pub ultra_quality: bool,
     pub compatibility_quality: bool,
+    pub video_bitrate: Option<u32>,
 }
 
 impl Muxer for AVFoundationMp4Muxer {
@@ -358,6 +361,21 @@ impl Muxer for AVFoundationMp4Muxer {
                 video_config,
                 audio_config,
                 config.output_height,
+            )
+        } else if let Some(video_bitrate) = config.video_bitrate {
+            cap_enc_avfoundation::MP4Encoder::init_with_video_bitrate(
+                output_path.clone(),
+                video_config,
+                audio_config,
+                config.output_height,
+                if config.ultra_quality {
+                    cap_enc_avfoundation::BitrateProfile::Ultra
+                } else if config.compatibility_quality {
+                    cap_enc_avfoundation::BitrateProfile::Compatibility
+                } else {
+                    cap_enc_avfoundation::BitrateProfile::Balanced
+                },
+                video_bitrate,
             )
         } else if config.ultra_quality {
             cap_enc_avfoundation::MP4Encoder::init_ultra(
@@ -407,8 +425,10 @@ impl Muxer for AVFoundationMp4Muxer {
         };
 
         let video_frame_count = Arc::new(AtomicU64::new(0));
+        let video_busy_frame_count = Arc::new(AtomicU64::new(0));
         let audio_frame_count = Arc::new(AtomicU64::new(0));
         let video_count_thread = video_frame_count.clone();
+        let video_busy_thread = video_busy_frame_count.clone();
 
         let encoder_handle = std::thread::Builder::new()
             .name("mp4-video-encoder".to_string())
@@ -473,6 +493,10 @@ impl Muxer for AVFoundationMp4Muxer {
                                         retry_count += 1;
                                         if retry_count >= MAX_RETRIES {
                                             encoder_busy_count += 1;
+                                            video_busy_thread.store(
+                                                encoder_busy_count,
+                                                std::sync::atomic::Ordering::Relaxed,
+                                            );
                                             if encoder_busy_count <= 5 || encoder_busy_count.is_multiple_of(100) {
                                                 debug!(
                                                     encoder_busy_count,
@@ -680,6 +704,7 @@ impl Muxer for AVFoundationMp4Muxer {
                 encoder_handle: Some(encoder_handle),
                 audio_handle,
                 video_frame_count,
+                video_busy_frame_count,
                 audio_frame_count,
                 audio_channel_depth,
                 instant_mode: is_instant,
@@ -689,6 +714,7 @@ impl Muxer for AVFoundationMp4Muxer {
             channel_pressure,
             audio_channel_pressure,
             was_paused: false,
+            frame_copier: None,
             fatal_error,
             health_tx,
         })
@@ -774,11 +800,15 @@ impl Muxer for AVFoundationMp4Muxer {
             let video_frames = state
                 .video_frame_count
                 .load(std::sync::atomic::Ordering::Relaxed);
+            let video_frames_dropped_busy = state
+                .video_busy_frame_count
+                .load(std::sync::atomic::Ordering::Relaxed);
             let audio_frames = state
                 .audio_frame_count
                 .load(std::sync::atomic::Ordering::Relaxed);
             info!(
                 video_frames,
+                video_frames_dropped_busy,
                 audio_frames,
                 video_thread_timed_out,
                 audio_thread_timed_out,
@@ -798,7 +828,17 @@ impl Muxer for AVFoundationMp4Muxer {
             match state.encoder.lock() {
                 Ok(mut encoder) => {
                     if let Err(e) = encoder.finish(Some(timestamp)) {
-                        if video_thread_timed_out && video_frames > 0 {
+                        if matches!(e, cap_enc_avfoundation::FinishError::NoFrames) {
+                            warn!(
+                                video_frames,
+                                video_frames_dropped_busy,
+                                audio_frames,
+                                "MP4 encoder wrote no video frames; the output is empty"
+                            );
+                            if finish_error.is_none() {
+                                finish_error = Some(anyhow::Error::new(NoVideoFramesCaptured));
+                            }
+                        } else if video_thread_timed_out && video_frames > 0 {
                             warn!(
                                 video_frames,
                                 "Best-effort encoder finalize failed after thread timeout, \
@@ -806,7 +846,13 @@ impl Muxer for AVFoundationMp4Muxer {
                             );
                         } else {
                             let err = anyhow!("Failed to finish MP4 encoder: {e}");
-                            warn!("{err:#}");
+                            // Uploaded logs keep warnings but not the info line
+                            // above, and these counts tell a capture that
+                            // delivered nothing from an encoder that took nothing.
+                            warn!(
+                                video_frames,
+                                video_frames_dropped_busy, audio_frames, "{err:#}"
+                            );
                             if finish_error.is_none() {
                                 finish_error = Some(err);
                             }
@@ -834,6 +880,59 @@ impl Muxer for AVFoundationMp4Muxer {
         }
 
         Ok(Ok(()))
+    }
+}
+
+/// AVAssetWriter keeps appended frames until it has encoded and written
+/// them, which periodically takes up to a second and longer under CPU load.
+/// ScreenCaptureKit gives each stream only a few surfaces and delivers
+/// nothing while the app holds all of them, so the recorded screen froze
+/// for as long as the writer lagged. The writer gets a copy from a pool this
+/// process owns, and the capture surface goes straight back.
+struct FrameCopier {
+    size: (usize, usize),
+    scaler: Option<screen_capture::FrameScaler>,
+    set_up_at: std::time::Instant,
+}
+
+/// How long frames go out uncopied before a failed copier setup is retried.
+const FRAME_COPIER_RETRY: Duration = Duration::from_secs(1);
+
+impl FrameCopier {
+    /// The copy, or the original frame if it cannot be copied.
+    fn copy(
+        copier: &mut Option<Self>,
+        sample_buf: arc::R<cidre::cm::SampleBuf>,
+    ) -> arc::R<cidre::cm::SampleBuf> {
+        let Some(size) = sample_buf
+            .image_buf()
+            .map(|image| (image.width(), image.height()))
+        else {
+            return sample_buf;
+        };
+        let set_up = copier.as_ref().is_none_or(|c| {
+            c.size != size || (c.scaler.is_none() && c.set_up_at.elapsed() >= FRAME_COPIER_RETRY)
+        });
+        if set_up {
+            let scaler = screen_capture::FrameScaler::copier(size.0, size.1);
+            if scaler.is_none() {
+                warn!(
+                    width = size.0,
+                    height = size.1,
+                    "Could not set up the screen frame copy; recording capture frames directly"
+                );
+            }
+            *copier = Some(Self {
+                size,
+                scaler,
+                set_up_at: std::time::Instant::now(),
+            });
+        }
+        copier
+            .as_ref()
+            .and_then(|c| c.scaler.as_ref())
+            .and_then(|scaler| scaler.scale_frame(&sample_buf))
+            .unwrap_or(sample_buf)
     }
 }
 
@@ -869,9 +968,10 @@ impl VideoMuxer for AVFoundationMp4Muxer {
                 pressure.on_send();
             }
 
+            let sample_buf = FrameCopier::copy(&mut self.frame_copier, frame.sample_buf);
             let send_result = state
                 .video_tx
-                .try_send(Some(VideoFrameMessage::Frame(frame.sample_buf, timestamp)));
+                .try_send(Some(VideoFrameMessage::Frame(sample_buf, timestamp)));
 
             match send_result {
                 Ok(()) => {
@@ -1398,7 +1498,12 @@ impl Muxer for AVFoundationCameraMuxer {
                 match state.encoder.lock() {
                     Ok(mut encoder) => {
                         if let Err(e) = encoder.finish(Some(timestamp)) {
-                            let err = anyhow!("Failed to finish camera MP4 encoder: {e}");
+                            let err = if matches!(e, cap_enc_avfoundation::FinishError::NoFrames) {
+                                anyhow::Error::new(NoVideoFramesCaptured)
+                                    .context("Camera MP4 encoder wrote no video frames")
+                            } else {
+                                anyhow!("Failed to finish camera MP4 encoder: {e}")
+                            };
                             warn!("{err:#}");
                             if finish_error.is_none() {
                                 finish_error = Some(err);
@@ -1525,6 +1630,101 @@ impl AudioMuxer for AVFoundationCameraMuxer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn screen_frame(width: usize, height: usize, index: i64) -> arc::R<cidre::cm::SampleBuf> {
+        use cidre::{cm, cv};
+        let buf = cv::PixelBuf::new(width, height, cv::PixelFormat::_420V, None).unwrap();
+        let desc = cm::VideoFormatDesc::with_image_buf(&buf).unwrap();
+        let timing = cm::SampleTimingInfo {
+            duration: cm::Time::new(1, 30),
+            pts: cm::Time::new(index, 30),
+            dts: cm::Time::invalid(),
+        };
+        cm::SampleBuf::with_image_buf(&buf, true, None, std::ptr::null(), &desc, &timing).unwrap()
+    }
+
+    /// The writer must never hold the capture surface: it gets a different
+    /// pixel buffer with the same size and timing, also after a size change.
+    #[test]
+    fn writer_gets_a_copy_of_each_screen_frame() {
+        let mut copier = None;
+        for (index, (width, height)) in [(64, 48), (64, 48), (32, 16)].into_iter().enumerate() {
+            let source = screen_frame(width, height, index as i64);
+            let copy = FrameCopier::copy(&mut copier, source.clone());
+            let (from, to) = (source.image_buf().unwrap(), copy.image_buf().unwrap());
+            assert!(!std::ptr::eq(from, to), "frame {index} was not copied");
+            assert_eq!((to.width(), to.height()), (width, height));
+            assert_eq!(copy.pts(), source.pts());
+        }
+    }
+
+    #[test]
+    fn failed_copier_setup_is_retried() {
+        let failed = |since: Duration| {
+            Some(FrameCopier {
+                size: (64, 48),
+                scaler: None,
+                set_up_at: std::time::Instant::now().checked_sub(since).unwrap(),
+            })
+        };
+        let source = screen_frame(64, 48, 0);
+
+        let mut copier = failed(Duration::ZERO);
+        let frame = FrameCopier::copy(&mut copier, source.clone());
+        assert!(std::ptr::eq(
+            source.image_buf().unwrap(),
+            frame.image_buf().unwrap()
+        ));
+
+        let mut copier = failed(FRAME_COPIER_RETRY);
+        let frame = FrameCopier::copy(&mut copier, source.clone());
+        assert!(!std::ptr::eq(
+            source.image_buf().unwrap(),
+            frame.image_buf().unwrap()
+        ));
+        assert!(copier.unwrap().scaler.is_some());
+    }
+
+    /// The writers behind a resumed Studio segment that got no screen frame
+    /// before Pause, and a segment whose camera got no frame. They report an
+    /// empty output the recorder can leave out, not a failed one.
+    #[tokio::test]
+    async fn finishing_without_a_frame_reports_no_video_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let info = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 1280, 720, 30);
+        let mut tasks = TaskPool::default();
+
+        let mut screen = <AVFoundationMp4Muxer as Muxer>::setup(
+            AVFoundationMp4MuxerConfig::default(),
+            directory.path().join("display.mp4"),
+            Some(info),
+            None,
+            Arc::new(AtomicBool::new(false)),
+            &mut tasks,
+        )
+        .await
+        .unwrap();
+        let error = screen.finish(Duration::from_secs(1)).unwrap_err();
+        assert!(error.is::<NoVideoFramesCaptured>(), "screen: {error:#}");
+
+        let mut camera = <AVFoundationCameraMuxer as Muxer>::setup(
+            AVFoundationCameraMuxerConfig::default(),
+            directory.path().join("camera.mp4"),
+            Some(info),
+            None,
+            Arc::new(AtomicBool::new(true)),
+            &mut tasks,
+        )
+        .await
+        .unwrap();
+        let error = camera.finish(Duration::from_secs(1)).unwrap_err();
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.is::<NoVideoFramesCaptured>()),
+            "camera: {error:#}"
+        );
+    }
 
     mod mp4_muxer_buffer_size {
         use super::*;

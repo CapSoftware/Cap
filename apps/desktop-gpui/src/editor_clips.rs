@@ -1614,6 +1614,12 @@ impl EditorWindow {
             return;
         }
         if source.is_file() && has_allowed_extension(&source.to_string_lossy(), &["mp4"]) {
+            if self.is_audio_only() {
+                let error = tr::editor::clips::error::audio_only_mix();
+                cx.spawn(async move |_, _| show_import_error(error))
+                    .detach();
+                return;
+            }
             self.import_mp4(source, window, cx);
             return;
         }
@@ -1844,7 +1850,7 @@ impl Drop for PendingImportDirectory {
         if entries.iter().any(|entry| {
             !matches!(
                 entry.file_name().to_str(),
-                Some("display.mp4" | "audio.ogg")
+                Some("display.mp4" | "display-source.mp4" | "audio.ogg")
             ) || !entry.file_type().is_ok_and(|kind| kind.is_file())
         }) {
             tracing::warn!(path = %self.path.display(), "retaining unexpected import staging contents");
@@ -1867,6 +1873,7 @@ struct PreparedMp4Import {
     meta: RecordingMeta,
     fallback_timeline: Option<TimelineConfiguration>,
     segment: MultipleSegment,
+    name: Option<String>,
     duration: f64,
     cancelled: Arc<AtomicBool>,
     directory: PendingImportDirectory,
@@ -1966,7 +1973,9 @@ impl PreparedMp4Import {
                 cursor: None,
                 keyboard: None,
                 display_notch: None,
+                cursor_shape_version: None,
             },
+            name: imported_clip_name(source),
             duration,
             cancelled,
             directory,
@@ -2007,9 +2016,10 @@ impl PreparedMp4Import {
             timescale: 1.0,
             start: 0.0,
             end: self.duration,
-            name: None,
+            name: self.name.clone(),
             speed_audio_mode: None,
             hide_cursor: None,
+            voice_eq: None,
             volume: None,
         });
         add_clip_configs(&mut config, index, std::slice::from_ref(&self.segment));
@@ -2064,39 +2074,74 @@ impl PreparedMp4Import {
     }
 }
 
+/// What the "Existing recording" dialog asks the OS for. A `.cap` recording
+/// is a package only on macOS, where the open panel returns it like a file.
+/// On Windows and Linux it is a plain folder: a file dialog filtered to
+/// `*.cap` opens the folder instead of returning it, and nothing inside
+/// matches the filter, so the recording can never be chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExistingRecordingPicker {
+    Package,
+    Folder,
+}
+
+const fn existing_recording_picker(macos: bool) -> ExistingRecordingPicker {
+    if macos {
+        ExistingRecordingPicker::Package
+    } else {
+        ExistingRecordingPicker::Folder
+    }
+}
+
 /// `getExistingRecordingPickerOptions` (`ED/existing-recording-picker.ts`):
-/// a `.cap` filter on macOS (bundles are packages there), a directory picker
-/// on Windows, both rooted at the recordings directory where the dialog
-/// supports one.
+/// a `.cap` filter on macOS, a directory picker elsewhere, rooted at the
+/// recordings directory where the dialog supports one.
 async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        crate::platform::open_image_panel(&["cap"])
-    }
-    #[cfg(target_os = "linux")]
-    {
-        crate::platform::open_file_panel_async(
-            &[(tr::editor::clips::cap_filter(), &["cap"])],
-            Some(crate::recording::recordings_dir()),
-            _cx,
-        )
-        .await
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        rfd::FileDialog::new()
-            .set_directory(crate::recording::recordings_dir())
-            .add_filter(tr::editor::clips::cap_filter(), &["cap"])
-            .pick_file()
+    match existing_recording_picker(cfg!(target_os = "macos")) {
+        ExistingRecordingPicker::Package => crate::platform::open_image_panel(&["cap"]),
+        ExistingRecordingPicker::Folder => {
+            let root = crate::recording::recordings_dir();
+            #[cfg(target_os = "linux")]
+            {
+                crate::platform::open_folder_panel_async(Some(root), _cx).await
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                rfd::FileDialog::new().set_directory(root).pick_folder()
+            }
+        }
     }
 }
 
 /// `toast.error(\`Failed to import clip: ...\`)` (`:520`), as the blocking
 /// dialog this app uses where the webview has toasts.
+fn imported_clip_name(source: &Path) -> Option<String> {
+    let stem = source.file_stem()?.to_string_lossy();
+    let name = stem.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 fn show_import_error(message: &str) {
+    let title = tr::editor::clips::import_error_title();
+    let description = tr::editor::clips::import_error(message);
+    // rfd shows Linux message dialogs through zenity and shows nothing
+    // without it, so a folder that is not a recording would import nothing
+    // and say nothing.
+    #[cfg(target_os = "linux")]
+    if !crate::linux_dialog::zenity_available()
+        && crate::linux_dialog::show(&crate::linux_dialog::Request {
+            title: title.to_string(),
+            message: description.to_string(),
+            accept: tr::common::ok().to_string(),
+            cancel: None,
+        })
+        .is_some()
+    {
+        return;
+    }
     let _ = rfd::MessageDialog::new()
-        .set_title(tr::editor::clips::import_error_title())
-        .set_description(tr::editor::clips::import_error(message))
+        .set_title(title)
+        .set_description(description)
         .set_level(rfd::MessageLevel::Error)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
@@ -2447,9 +2492,12 @@ fn ensure_multiple_segments(meta: &mut RecordingMeta) -> Result<&mut MultipleSeg
                     cursor: segment.cursor,
                     keyboard: None,
                     display_notch: None,
+                    cursor_shape_version: None,
                 }],
                 cursors: Cursors::default(),
                 status: Some(StudioRecordingStatus::Complete),
+                cursor_shape_version: 0,
+                audio_only: false,
             },
         };
     }
@@ -2494,6 +2542,7 @@ fn full_timeline_for_segments(
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                voice_eq: None,
                 volume: None,
             })
         })
@@ -3062,6 +3111,7 @@ fn single_segment_to_multiple(segment: &cap_project::SingleSegment) -> MultipleS
         cursor: segment.cursor.clone(),
         keyboard: None,
         display_notch: None,
+        cursor_shape_version: None,
     }
 }
 
@@ -3093,6 +3143,7 @@ fn full_timeline_for_source_segments(
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                voice_eq: None,
                 volume: None,
             })
         })
@@ -3200,9 +3251,10 @@ fn source_timeline_segments_for_import(
             },
             start,
             end,
-            name: None,
+            name: segment.name,
             speed_audio_mode: segment.speed_audio_mode,
             hide_cursor: segment.hide_cursor,
+            voice_eq: segment.voice_eq,
             volume: segment.volume,
         });
     }
@@ -3222,6 +3274,9 @@ fn copy_source_segment(
     target_relative_dir: &str,
     cursor_id_map: &HashMap<String, String>,
 ) -> Result<MultipleSegment, String> {
+    let source_cursor_shape_version = source_meta.studio_meta().map_or(0, |studio| {
+        studio.segment_cursor_shape_version(source_segment)
+    });
     let display = copy_video_meta(
         &source_meta.project_path,
         target_project_path,
@@ -3308,6 +3363,7 @@ fn copy_source_segment(
         cursor: cursor.map(|path| path.as_str().into()),
         keyboard: keyboard.map(|path| path.as_str().into()),
         display_notch: source_segment.display_notch,
+        cursor_shape_version: Some(source_cursor_shape_version),
     })
 }
 
@@ -3345,6 +3401,14 @@ pub(crate) fn append_cap_project_to_editor(
             return Err(tr::editor::clips::error::source_failed(error));
         }
         StudioRecordingStatus::Complete | StudioRecordingStatus::NeedsRemux => {}
+    }
+
+    let target_audio_only = RecordingMeta::load_for_project(target_project_path)
+        .ok()
+        .and_then(|meta| meta.studio_meta().map(StudioRecordingMeta::is_audio_only))
+        .unwrap_or(false);
+    if source_studio_meta.is_audio_only() != target_audio_only {
+        return Err(tr::editor::clips::error::audio_only_mix().to_string());
     }
 
     let source_segments = studio_segments_for_import(source_studio_meta);
@@ -3432,9 +3496,10 @@ pub(crate) fn append_cap_project_to_editor(
                 timescale: source_segment.timescale,
                 start: source_segment.start,
                 end: source_segment.end,
-                name: None,
+                name: source_segment.name,
                 speed_audio_mode: source_segment.speed_audio_mode,
                 hide_cursor: source_segment.hide_cursor,
+                voice_eq: source_segment.voice_eq,
                 volume: source_segment.volume,
             });
         }
@@ -3652,6 +3717,7 @@ mod tests {
                 cursor: None,
                 keyboard: None,
                 display_notch: None,
+                cursor_shape_version: None,
             };
             RecordingMeta {
                 project_path: project.clone(),
@@ -3664,6 +3730,8 @@ mod tests {
                             segments: vec![recording_segment.clone()],
                             cursors: Cursors::default(),
                             status: Some(StudioRecordingStatus::Complete),
+                            cursor_shape_version: 0,
+                            audio_only: false,
                         },
                     },
                 )),
@@ -3765,6 +3833,7 @@ mod tests {
             let timeline = result.timeline.as_ref().unwrap();
             assert_eq!(timeline.segments.len(), 2);
             assert_eq!(timeline.segments[1].recording_clip, 1);
+            assert_eq!(timeline.segments[1].name.as_deref(), Some("source"));
             assert!(timeline.segments[1].end > 0.0);
             let mut without_append = result;
             let _ = without_append.timeline.as_mut().unwrap().segments.pop();
@@ -3970,6 +4039,7 @@ mod tests {
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            voice_eq: None,
             volume: None,
         }
     }
@@ -4524,6 +4594,177 @@ mod tests {
         assert_eq!(compute_drop_index(px(97.), &cards), 48);
         assert_eq!(compute_drop_index(px(300.), &cards), 49);
         assert_eq!(compute_drop_index(px(0.), &[]), 0);
+    }
+
+    #[test]
+    fn existing_recording_is_picked_as_a_folder_except_on_macos() {
+        assert_eq!(
+            existing_recording_picker(true),
+            ExistingRecordingPicker::Package
+        );
+        assert_eq!(
+            existing_recording_picker(false),
+            ExistingRecordingPicker::Folder
+        );
+    }
+
+    #[test]
+    fn picked_folder_imports_only_when_it_is_a_cap_recording() {
+        let target = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let source = target.root.join("source.cap");
+        let source_segment = source.join("content/segments/segment-0");
+        std::fs::create_dir_all(&source_segment).unwrap();
+        std::fs::write(source_segment.join("display.mp4"), MP4_WITHOUT_AUDIO).unwrap();
+        std::fs::copy(
+            target.project.join("recording-meta.json"),
+            source.join("recording-meta.json"),
+        )
+        .unwrap();
+
+        let plain_folder = target.root.join("Holiday photos");
+        std::fs::create_dir(&plain_folder).unwrap();
+        let before = target.project_bytes();
+        for (picked, expected) in [
+            (
+                plain_folder.as_path(),
+                tr::editor::clips::error::not_a_project(),
+            ),
+            (
+                source_segment.as_path(),
+                tr::editor::clips::error::not_a_project(),
+            ),
+            (
+                target.root.as_path(),
+                tr::editor::clips::error::not_a_project(),
+            ),
+            (
+                target.project.as_path(),
+                tr::editor::clips::error::into_itself(),
+            ),
+        ] {
+            assert_eq!(
+                append_cap_project_to_editor(&target.project, picked).unwrap_err(),
+                expected,
+                "picked {}",
+                picked.display()
+            );
+        }
+        assert_eq!(target.project_bytes(), before);
+
+        assert_eq!(
+            append_cap_project_to_editor(&target.project, &source).unwrap(),
+            1
+        );
+        let meta = RecordingMeta::load_for_project(&target.project).unwrap();
+        let RecordingMetaInner::Studio(studio) = &meta.inner else {
+            panic!("target stopped being a studio recording");
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_ref() else {
+            panic!("target is not multi-segment");
+        };
+        assert_eq!(inner.segments.len(), 2);
+        assert!(meta.path(&inner.segments[1].display.path).is_file());
+    }
+
+    #[test]
+    fn imported_cap_projects_keep_their_own_cursor_shape_rule() {
+        fn set_version(project: &Path, version: Option<u32>) {
+            let path = project.join("recording-meta.json");
+            let mut meta: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let object = meta.as_object_mut().unwrap();
+            match version {
+                Some(version) => object.insert("cursorShapeVersion".into(), version.into()),
+                None => object.remove("cursorShapeVersion"),
+            };
+            std::fs::write(path, serde_json::to_string(&meta).unwrap()).unwrap();
+        }
+
+        for (target_version, source_version) in [
+            (None, Some(cap_project::CURSOR_SHAPE_VERSION)),
+            (Some(cap_project::CURSOR_SHAPE_VERSION), None),
+        ] {
+            let target = ImportFixture::new(MP4_WITHOUT_AUDIO);
+            let source = target.root.join("source.cap");
+            let source_segment = source.join("content/segments/segment-0");
+            std::fs::create_dir_all(&source_segment).unwrap();
+            std::fs::write(source_segment.join("display.mp4"), MP4_WITHOUT_AUDIO).unwrap();
+            std::fs::copy(
+                target.project.join("recording-meta.json"),
+                source.join("recording-meta.json"),
+            )
+            .unwrap();
+            set_version(&target.project, target_version);
+            set_version(&source, source_version);
+
+            append_cap_project_to_editor(&target.project, &source).unwrap();
+
+            let meta = RecordingMeta::load_for_project(&target.project).unwrap();
+            let studio = meta.studio_meta().unwrap();
+            let StudioRecordingMeta::MultipleSegments { inner } = studio else {
+                panic!("target is not multi-segment");
+            };
+            assert_eq!(
+                studio.segment_cursor_shape_version(&inner.segments[0]),
+                target_version.unwrap_or(0)
+            );
+            assert_eq!(
+                studio.segment_cursor_shape_version(&inner.segments[1]),
+                source_version.unwrap_or(0)
+            );
+        }
+    }
+
+    #[test]
+    fn imported_mp4_clips_are_named_after_the_file() {
+        for (file, expected) in [
+            ("/videos/Product demo.mp4", Some("Product demo")),
+            ("/videos/  take 2 .final.mp4", Some("take 2 .final")),
+            ("/videos/   .mp4", None),
+            ("/videos/片段.mp4", Some("片段")),
+        ] {
+            assert_eq!(
+                imported_clip_name(Path::new(file)).as_deref(),
+                expected,
+                "{file}"
+            );
+        }
+    }
+
+    #[test]
+    fn imported_cap_projects_keep_their_clip_names() {
+        let target = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let source = target.root.join("source.cap");
+        let source_segment = source.join("content/segments/segment-0");
+        std::fs::create_dir_all(&source_segment).unwrap();
+        std::fs::write(source_segment.join("display.mp4"), MP4_WITHOUT_AUDIO).unwrap();
+        std::fs::copy(
+            target.project.join("recording-meta.json"),
+            source.join("recording-meta.json"),
+        )
+        .unwrap();
+        let mut source_config = target.config.clone();
+        let mut named = segment(0, 0.0, 0.25);
+        named.name = Some("Intro".to_string());
+        source_config.timeline = Some(timeline(vec![named, segment(0, 0.25, 0.5)]));
+        source_config.write(&source).unwrap();
+
+        assert_eq!(
+            append_cap_project_to_editor(&target.project, &source).unwrap(),
+            1
+        );
+        let config = ProjectConfiguration::load(&target.project).unwrap();
+        let names: Vec<_> = config
+            .timeline
+            .unwrap()
+            .segments
+            .into_iter()
+            .map(|segment| (segment.recording_clip, segment.name))
+            .collect();
+        assert_eq!(
+            names,
+            [(0, None), (1, Some("Intro".to_string())), (1, None)]
+        );
     }
 
     #[test]

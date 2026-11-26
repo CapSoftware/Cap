@@ -4,6 +4,7 @@ import {
 	type ManagedStreams,
 } from "../src/core/stream-manager";
 import { CapRecorder } from "../src/index";
+import { createUpload } from "./create-upload";
 
 class Track {
 	stop = mock(() => {});
@@ -134,7 +135,7 @@ test("records both audio sources through one track and releases the mixer", asyn
 		},
 	);
 	const recorder = new CapRecorder({
-		publicKey: "test-public-key",
+		createUpload,
 		mode: "tab",
 		camera: { enabled: false },
 		systemAudio: true,
@@ -195,7 +196,7 @@ test("times out pending audio startup and releases captured tracks", async () =>
 	setGlobal("setTimeout", timeout);
 	setGlobal("clearTimeout", clear);
 	const recorder = new CapRecorder({
-		publicKey: "test-public-key",
+		createUpload,
 		mode: "tab",
 		camera: { enabled: false },
 		systemAudio: true,
@@ -246,7 +247,7 @@ test.each(["encoder", "audio"] as const)(
 			},
 		);
 		const recorder = new CapRecorder({
-			publicKey: "test-public-key",
+			createUpload,
 			mode: "tab",
 			camera: { enabled: false },
 			systemAudio: true,

@@ -1,5 +1,5 @@
 import { buildEnv } from "@cap/env";
-import "@cap/ui/style";
+import "./tailwind-base.css";
 import type { PropsWithChildren } from "react";
 import { DubAnalytics } from "@/components/referrals/DubAnalytics";
 import { formatStarCount, getGitHubStars } from "@/utils/github";

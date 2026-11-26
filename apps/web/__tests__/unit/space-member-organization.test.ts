@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	user: vi.fn(),
 	spaceAccess: vi.fn(),
+	organizationAccess: vi.fn(),
 	select: vi.fn(),
 	insert: vi.fn(),
 	update: vi.fn(),
@@ -29,6 +30,12 @@ vi.mock("@/actions/organization/space-authorization", () => ({
 	requireSpaceManager: mocks.spaceAccess,
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("@/actions/organization/authorization", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("@/actions/organization/authorization")
+	>()),
+	getOrganizationAccess: mocks.organizationAccess,
+}));
 
 import { createSpace } from "@/actions/organization/create-space";
 import { updateSpace } from "@/actions/organization/update-space";
@@ -114,6 +121,7 @@ beforeEach(() => {
 					return query;
 				},
 				limit: () => query,
+				for: () => query,
 			},
 		);
 		return query;
@@ -132,6 +140,7 @@ beforeEach(() => {
 	mocks.transaction.mockImplementation(
 		async (callback: (tx: typeof mocks) => Promise<unknown>) => callback(mocks),
 	);
+	mocks.organizationAccess.mockResolvedValue({ role: "member" });
 });
 
 describe("creating a space with members", () => {
@@ -163,6 +172,17 @@ describe("creating a space with members", () => {
 			{ userId: "creator", role: "admin" },
 			{ userId: "teammate", role: "member" },
 		]);
+	});
+
+	it("refuses a caller who is no longer in the active organization", async () => {
+		mocks.organizationAccess.mockResolvedValue(null);
+
+		const result = await createSpace(memberForm({ name: "Sales" }));
+
+		expect(result).toMatchObject({ success: false });
+		expect(mocks.organizationAccess).toHaveBeenCalledWith("creator", "org-1");
+		expect(mocks.insert).not.toHaveBeenCalled();
+		expect(mocks.transaction).not.toHaveBeenCalled();
 	});
 
 	it("adds the creator as admin when no members are submitted", async () => {
