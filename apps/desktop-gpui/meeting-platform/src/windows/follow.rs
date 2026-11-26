@@ -37,7 +37,7 @@ use windows::{
     core::{Interface, PCWSTR},
 };
 
-use crate::call_output::{Chooser, Session};
+use crate::call_output::{Chooser, Followed, Session, followed};
 
 pub(crate) struct ComGuard(bool);
 
@@ -166,21 +166,22 @@ impl Managers {
     }
 }
 
-/// One look: the output a call plays to, or `None` for the default output.
-/// Cheap unless another program is playing to an output other than the
-/// default: only then are the microphone's users and the process list read.
+/// One look: the output a call plays to, or `None` for the default output,
+/// and what plays there. Cheap unless another program is playing to an
+/// output other than the default: only then are the microphone's users and
+/// the process list read.
 fn look(
     enumerator: &IMMDeviceEnumerator,
     managers: &mut Managers,
     chooser: &mut Chooser,
-) -> Option<String> {
+) -> (Option<String>, Option<Followed>) {
     managers.next_look();
     let outputs = active_endpoints(enumerator, eRender);
     let ids: Vec<&str> = outputs.iter().map(|(id, _)| id.as_str()).collect();
     managers.keep_only(&ids);
     if outputs.len() < 2 {
         chooser.reset();
-        return None;
+        return (None, None);
     }
     let default = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
         .ok()
@@ -196,7 +197,7 @@ fn look(
     let elsewhere = |s: &Session| s.active && s.pid != 0 && s.pid != ours;
     if !playing.iter().any(elsewhere) {
         chooser.reset();
-        return None;
+        return (None, None);
     }
     if let Some((id, device)) = outputs.iter().find(|(id, _)| Some(id) == default.as_ref()) {
         managers.sessions(id, device, true, &mut playing);
@@ -216,7 +217,11 @@ fn look(
     } else {
         HashMap::new()
     };
-    chooser.choose(default.as_deref(), &playing, &recording, &procs, ours)
+    let choice = chooser.choose(default.as_deref(), &playing, &recording, &procs, ours);
+    let there = choice
+        .as_deref()
+        .map(|id| followed(id, &playing, &recording, &procs, ours));
+    (choice, there)
 }
 
 /// Looks for the output a call plays to every `every`, on its own thread,
@@ -225,15 +230,18 @@ fn look(
 pub struct CallOutputWatch {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    followed: Arc<std::sync::Mutex<Option<Followed>>>,
 }
 
 impl CallOutputWatch {
     pub fn start(every: Duration, changes: flume::Sender<Option<String>>) -> std::io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
+        let there = Arc::new(std::sync::Mutex::new(None));
         let thread = std::thread::Builder::new()
             .name("cap-meeting-call-output".into())
             .spawn({
                 let stop = stop.clone();
+                let there = there.clone();
                 move || {
                     let _com = ComGuard::init();
                     let enumerator: windows::core::Result<IMMDeviceEnumerator> =
@@ -246,7 +254,10 @@ impl CallOutputWatch {
                     let mut chooser = Chooser::default();
                     let mut last: Option<Option<String>> = None;
                     while !stop.load(Ordering::Acquire) {
-                        let now = look(&enumerator, &mut managers, &mut chooser);
+                        let (now, seen) = look(&enumerator, &mut managers, &mut chooser);
+                        if let Ok(mut slot) = there.lock() {
+                            *slot = seen;
+                        }
                         if last.as_ref() != Some(&now) {
                             if changes.send(now.clone()).is_err() {
                                 return;
@@ -260,7 +271,13 @@ impl CallOutputWatch {
         Ok(Self {
             stop,
             thread: Some(thread),
+            followed: there,
         })
+    }
+
+    /// What plays on the followed output, as the latest look saw it.
+    pub fn followed(&self) -> Arc<std::sync::Mutex<Option<Followed>>> {
+        self.followed.clone()
     }
 }
 

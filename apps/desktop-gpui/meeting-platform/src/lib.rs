@@ -34,6 +34,8 @@ pub struct BrowserProbe {
     pub trusted: bool,
 }
 
+#[cfg(windows)]
+pub use call_output::Followed;
 #[cfg(target_os = "macos")]
 pub use macos::browser_probe::{accessibility_trusted, probe_browser};
 #[cfg(windows)]

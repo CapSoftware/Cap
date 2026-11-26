@@ -23,6 +23,7 @@ use windows::{
             IActivateAudioInterfaceCompletionHandler,
             IActivateAudioInterfaceCompletionHandler_Impl, IAudioCaptureClient, IAudioClient,
             PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+            PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
         },
         System::{
@@ -70,17 +71,22 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for Activated_Impl {
 }
 
 /// A loopback of everything the computer plays except `reader`'s process
-/// tree, as 48 kHz float stereo.
-fn open_excluding(reader: u32) -> Result<Stream, String> {
+/// tree or, with `call`, of only the call's process tree, as 48 kHz float
+/// stereo.
+fn open_without_reader(reader: u32, call: Option<u32>) -> Result<Stream, String> {
     if refused_for_test() {
         return Err("refused for the test".into());
     }
+    let (target, mode) = match call {
+        Some(call) => (call, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE),
+        None => (reader, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE),
+    };
     let params = AUDIOCLIENT_ACTIVATION_PARAMS {
         ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
         Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
             ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
-                TargetProcessId: reader,
-                ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+                TargetProcessId: target,
+                ProcessLoopbackMode: mode,
             },
         },
     };
@@ -162,6 +168,7 @@ fn open_excluding(reader: u32) -> Result<Stream, String> {
 /// next.
 pub struct ReaderFreeLoopback {
     reader: u32,
+    call: Option<u32>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -174,6 +181,26 @@ impl ReaderFreeLoopback {
         sink: impl FnMut(&[f32], u32) + Send + 'static,
         failed: Arc<AtomicBool>,
     ) -> Result<Self, String> {
+        Self::start_with(reader, None, sink, failed)
+    }
+
+    /// As [`start`](Self::start), reading only `call`'s process tree: for
+    /// a reader that plays to the output a call was followed to.
+    pub fn start_call_only(
+        call: u32,
+        reader: u32,
+        sink: impl FnMut(&[f32], u32) + Send + 'static,
+        failed: Arc<AtomicBool>,
+    ) -> Result<Self, String> {
+        Self::start_with(reader, Some(call), sink, failed)
+    }
+
+    fn start_with(
+        reader: u32,
+        call: Option<u32>,
+        sink: impl FnMut(&[f32], u32) + Send + 'static,
+        failed: Arc<AtomicBool>,
+    ) -> Result<Self, String> {
         let sink = Arc::new(std::sync::Mutex::new(sink));
         let mut last = String::new();
         for attempt in 0..3 {
@@ -183,6 +210,7 @@ impl ReaderFreeLoopback {
             let sink = sink.clone();
             match Self::open(
                 reader,
+                call,
                 move |samples: &[f32], rate: u32| {
                     if let Ok(mut sink) = sink.lock() {
                         sink(samples, rate);
@@ -199,6 +227,7 @@ impl ReaderFreeLoopback {
 
     fn open(
         reader: u32,
+        call: Option<u32>,
         mut sink: impl FnMut(&[f32], u32) + Send + 'static,
         failed: Arc<AtomicBool>,
     ) -> Result<Self, String> {
@@ -213,7 +242,7 @@ impl ReaderFreeLoopback {
                     // alive until the activation completes. What COM answered
                     // for it goes with any refusal.
                     let (_com, apartment) = ComGuard::init_reporting();
-                    let stream = match open_excluding(reader) {
+                    let stream = match open_without_reader(reader, call) {
                         Ok(stream) => {
                             let _ = ready_tx.send(Ok(()));
                             stream
@@ -245,6 +274,7 @@ impl ReaderFreeLoopback {
         match ready_rx.recv_timeout(Duration::from_secs(4)) {
             Ok(Ok(())) => Ok(Self {
                 reader,
+                call,
                 stop,
                 thread: Some(thread),
             }),
@@ -262,6 +292,11 @@ impl ReaderFreeLoopback {
     /// The screen reader this loopback leaves out.
     pub fn reader(&self) -> u32 {
         self.reader
+    }
+
+    /// The call whose process tree alone is read, if only it is.
+    pub fn call(&self) -> Option<u32> {
+        self.call
     }
 }
 

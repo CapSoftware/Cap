@@ -1186,6 +1186,9 @@ enum WindowsLoopback {
     /// While a screen reader runs: what the computer plays, without the
     /// reader's speech.
     ReaderFree(cap_meeting_platform::ReaderFreeLoopback),
+    /// A followed output a screen reader plays to as well: only the call's
+    /// processes, by endpoint id.
+    CallOnly(cap_meeting_platform::ReaderFreeLoopback, String),
 }
 
 #[cfg(windows)]
@@ -1196,14 +1199,14 @@ impl WindowsLoopback {
                 let _ = capturer.pause();
             }
             Self::Call(loopback, _) => drop(loopback),
-            Self::ReaderFree(loopback) => drop(loopback),
+            Self::ReaderFree(loopback) | Self::CallOnly(loopback, _) => drop(loopback),
         }
     }
 
     fn followed(&self) -> Option<String> {
         match self {
             Self::Default(_) | Self::ReaderFree(_) => None,
-            Self::Call(_, id) => Some(id.clone()),
+            Self::Call(_, id) | Self::CallOnly(_, id) => Some(id.clone()),
         }
     }
 }
@@ -1285,27 +1288,30 @@ impl SystemPlatform {
 
         fn reader_free(
             reader: u32,
+            call: Option<u32>,
             tx: flume::Sender<SystemChunk>,
             dropped: Arc<AtomicU64>,
             callbacks: Arc<AtomicU64>,
             failed: Arc<AtomicBool>,
         ) -> Result<cap_meeting_platform::ReaderFreeLoopback, String> {
-            cap_meeting_platform::ReaderFreeLoopback::start(
-                reader,
-                move |samples, sample_rate| {
-                    callbacks.fetch_add(1, Ordering::Relaxed);
-                    let message = SystemChunk::Samples {
-                        samples: samples.to_vec(),
-                        sample_rate,
-                        synthetic: false,
-                        received: Instant::now(),
-                    };
-                    if tx.try_send(message).is_err() {
-                        dropped.fetch_add(1, Ordering::Relaxed);
-                    }
-                },
-                failed,
-            )
+            let sink = move |samples: &[f32], sample_rate: u32| {
+                callbacks.fetch_add(1, Ordering::Relaxed);
+                let message = SystemChunk::Samples {
+                    samples: samples.to_vec(),
+                    sample_rate,
+                    synthetic: false,
+                    received: Instant::now(),
+                };
+                if tx.try_send(message).is_err() {
+                    dropped.fetch_add(1, Ordering::Relaxed);
+                }
+            };
+            match call {
+                Some(call) => cap_meeting_platform::ReaderFreeLoopback::start_call_only(
+                    call, reader, sink, failed,
+                ),
+                None => cap_meeting_platform::ReaderFreeLoopback::start(reader, sink, failed),
+            }
         }
 
         let (tx, rx) = flume::bounded::<SystemChunk>(SOURCE_CHANNEL);
@@ -1354,11 +1360,15 @@ impl SystemPlatform {
         let mut reader_refused: Option<(u32, Instant)> = None;
         // A refusal is logged once per meeting; retries after it stay quiet.
         let mut reader_told = false;
+        // The same for a reader on a followed call's output, by (call, reader).
+        let mut call_only_refused: Option<((u32, u32), Instant)> = None;
+        let mut call_only_told = false;
         if first.is_none()
             && let Some(reader) = cap_meeting_platform::running_reader()
         {
             match reader_free(
                 reader,
+                None,
                 tx.clone(),
                 dropped.clone(),
                 callbacks.clone(),
@@ -1400,6 +1410,9 @@ impl SystemPlatform {
             *slot = first.followed();
         }
         let watching = watch.is_some();
+        let call_info = watch
+            .as_ref()
+            .map(cap_meeting_platform::CallOutputWatch::followed);
         let (stop_tx, stop_rx) = flume::bounded::<()>(1);
         let thread = std::thread::Builder::new()
             .name("cap-meeting-loopback".into())
@@ -1460,6 +1473,66 @@ impl SystemPlatform {
                         } else {
                             None
                         };
+                        // A followed output a screen reader plays to as well:
+                        // only the call is read there. Otherwise following is
+                        // as before.
+                        if call_only_refused
+                            .as_ref()
+                            .is_some_and(|(_, at)| at.elapsed() >= REFUSED_RETRY)
+                        {
+                            call_only_refused = None;
+                        }
+                        let call_only = wanted
+                            .as_deref()
+                            .and_then(|id| {
+                                let there = call_info.as_ref()?.lock().ok()?.clone()?;
+                                let call = there.call.filter(|_| there.endpoint == id)?;
+                                let reader = cap_meeting_platform::running_reader()?;
+                                there.on_output.contains(&reader).then_some((call, reader))
+                            })
+                            .filter(|key| {
+                                call_only_refused.as_ref().is_none_or(|(refused, _)| refused != key)
+                            });
+                        if let (Some((call, pid)), Some(id)) = (call_only, wanted.as_deref()) {
+                            if let Some(WindowsLoopback::CallOnly(only, at)) = &current
+                                && only.call() == Some(call)
+                                && only.reader() == pid
+                                && at == id
+                                && !errored
+                            {
+                                continue;
+                            }
+                            match reader_free(
+                                pid,
+                                Some(call),
+                                tx.clone(),
+                                dropped.clone(),
+                                callbacks.clone(),
+                                failed.clone(),
+                            ) {
+                                Ok(loopback) => {
+                                    if let Some(old) = current.take() {
+                                        old.stop();
+                                    }
+                                    restarts.fetch_add(1, Ordering::Relaxed);
+                                    tracing::info!(output = %id, "a screen reader plays to the call's output; only the call is read there");
+                                    current = Some(WindowsLoopback::CallOnly(loopback, id.to_string()));
+                                    if let Ok(mut slot) = followed.lock() {
+                                        *slot = Some(id.to_string());
+                                    }
+                                    continue;
+                                }
+                                Err(error) => {
+                                    if call_only_told {
+                                        tracing::debug!(%error, "the call-only loopback was refused again");
+                                    } else {
+                                        tracing::warn!(%error, "could not leave the screen reader's speech out of the call's output; recording as before");
+                                        call_only_told = true;
+                                    }
+                                    call_only_refused = Some(((call, pid), Instant::now()));
+                                }
+                            }
+                        }
                         match (&current, &wanted, reader) {
                             (Some(WindowsLoopback::ReaderFree(free)), None, Some(pid))
                                 if free.reader() == pid && !errored =>
@@ -1492,6 +1565,7 @@ impl SystemPlatform {
                                 // cannot open, what runs now goes on.
                                 match reader_free(
                                     pid,
+                                    None,
                                     tx.clone(),
                                     dropped.clone(),
                                     callbacks.clone(),

@@ -134,6 +134,63 @@ fn only_output(sessions: &[&Session], default: Option<&str>) -> Option<String> {
     }
 }
 
+/// The output a call is followed to, as one look saw it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Followed {
+    pub endpoint: String,
+    /// The process whose tree plays everything the call app plays there.
+    pub call: Option<u32>,
+    /// Every process with a session on that output.
+    pub on_output: Vec<u32>,
+}
+
+/// [`Followed`] for `endpoint`, from the same look the choice came from.
+pub fn followed(
+    endpoint: &str,
+    playing: &[Session],
+    recording: &[Session],
+    procs: &HashMap<u32, Proc>,
+    ours: u32,
+) -> Followed {
+    let call = call_sessions(playing, recording, procs, ours)
+        .and_then(|sessions| call_root(&pids_on(endpoint, sessions.into_iter()), procs));
+    Followed {
+        endpoint: endpoint.to_string(),
+        call,
+        on_output: pids_on(endpoint, playing.iter()),
+    }
+}
+
+fn pids_on<'a>(endpoint: &str, sessions: impl Iterator<Item = &'a Session>) -> Vec<u32> {
+    let mut pids: Vec<u32> = sessions
+        .filter(|s| s.endpoint == endpoint)
+        .map(|s| s.pid)
+        .collect();
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+/// One process whose tree holds all of `pids`: the only one, or the nearest
+/// process that started them all when that is an app (never a launcher).
+fn call_root(pids: &[u32], procs: &HashMap<u32, Proc>) -> Option<u32> {
+    match pids {
+        [] => None,
+        [only] => Some(*only),
+        [first, rest @ ..] => {
+            let others: Vec<Vec<u32>> = rest.iter().map(|pid| chain(*pid, procs)).collect();
+            let root = chain(*first, procs)
+                .into_iter()
+                .find(|pid| others.iter().all(|up| up.contains(pid)))?;
+            procs
+                .get(&root)
+                .map(|p| p.exe.as_str())
+                .is_some_and(|exe| !exe.is_empty() && !LAUNCHERS.contains(&exe))
+                .then_some(root)
+        }
+    }
+}
+
 /// The output to loop back from one look, or `None` for the default output,
 /// remembering what the call app was last heard on.
 #[derive(Debug, Default)]
@@ -237,6 +294,58 @@ mod tests {
             choose(Some(SPEAKERS), &playing, &recording, &HashMap::new(), OURS),
             Some(HEADSET.into())
         );
+    }
+
+    #[test]
+    fn the_followed_output_names_the_call_and_everyone_playing_there() {
+        // A call in the browser's audio service (4100, under chrome 4000) on
+        // the headset, a reader (700) speaking there too, music (800) on
+        // the speakers.
+        let playing = [
+            session(HEADSET, 4100),
+            session(HEADSET, 700),
+            session(SPEAKERS, 800),
+        ];
+        let recording = [session(HEADSET_MIC, 4000)];
+        let tree = procs(&[
+            (4000, 1, "chrome.exe"),
+            (4100, 4000, "chrome.exe"),
+            (700, 1, "nvda.exe"),
+            (800, 1, "music.exe"),
+        ]);
+        assert_eq!(
+            followed(HEADSET, &playing, &recording, &tree, OURS),
+            Followed {
+                endpoint: HEADSET.into(),
+                call: Some(4100),
+                on_output: vec![700, 4100],
+            }
+        );
+        // Two processes of the call app there: the app that started both.
+        let playing = [session(HEADSET, 4100), session(HEADSET, 4200)];
+        let tree = procs(&[
+            (4000, 1, "teams.exe"),
+            (4100, 4000, "webview.exe"),
+            (4200, 4000, "webview.exe"),
+        ]);
+        let recording = [session(HEADSET_MIC, 4000)];
+        assert_eq!(
+            followed(HEADSET, &playing, &recording, &tree, OURS).call,
+            Some(4000)
+        );
+        // Started only by the shell: no one process holds the call.
+        let tree = procs(&[
+            (1, 0, "explorer.exe"),
+            (4100, 1, "a.exe"),
+            (4200, 1, "b.exe"),
+        ]);
+        let recording = [session(HEADSET_MIC, 4100), session(HEADSET_MIC, 4200)];
+        assert_eq!(
+            followed(HEADSET, &playing, &recording, &tree, OURS).call,
+            None
+        );
+        // No one records the microphone: no call.
+        assert_eq!(followed(HEADSET, &playing, &[], &tree, OURS).call, None);
     }
 
     #[test]
