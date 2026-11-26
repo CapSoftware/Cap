@@ -42,6 +42,9 @@ export const meetingNotesRequestSchema = z
 		timezone: z
 			.string()
 			.max(64)
+			// Linux reports the /etc/localtime link target, which can sit in
+			// zoneinfo/posix or zoneinfo/right; both hold the same zones.
+			.transform((zone) => zone.replace(/^(?:posix|right)\//, ""))
 			.refine(isTimeZone, "must be an IANA time zone")
 			.optional(),
 		participants: z
