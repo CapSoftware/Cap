@@ -196,16 +196,6 @@ label = "Capturer les frappes au clavier"
 description = "Restaure automatiquement l'encoche pour les nouveaux enregistrements d'écran et de zone lorsque la région sélectionnée contient toute l'encoche. Les écrans externes, les zones partielles et les enregistrements de fenêtre ne sont pas modifiés. Chaque enregistrement peut remplacer ce réglage dans l'éditeur."
 label = "Afficher l'encoche du MacBook dans les enregistrements d'écran"
 
-[settings.general.recording.max_fps]
-description = "Fréquence d'images maximale de la capture d'écran."
-description_high = "Fréquence d'images maximale de la capture d'écran. Des valeurs plus élevées peuvent provoquer des pertes d'images ou une hausse de l'utilisation du processeur sur certains systèmes."
-fps_120 = "120 i/s"
-fps_24 = "24 i/s"
-fps_25 = "25 i/s"
-fps_30 = "30 i/s"
-fps_60 = "60 i/s (recommandé)"
-label = "Fréquence d'images maximale"
-
 [settings.general.recording.keep_drawings]
 description = "Les dessins restent jusqu'à ce que vous les effaciez. Sinon, chacun s'estompe quelques secondes après avoir été tracé."
 label = "Garder les dessins à l'écran"
@@ -350,6 +340,21 @@ resolution_up_to = "Jusqu'à {resolution}"
 title = "Mode Studio"
 ultra = "Détail maximal"
 ultra_description = "Conserve un maximum de détails pour les retouches poussées. Utilise le plus d'espace disque."
+
+[settings.quality.studio.frame_rate]
+description = "Le mode Studio enregistre au plus à cette fréquence, et jamais plus vite que le rafraîchissement de votre écran. Avec la caméra activée, il enregistre à 30 i/s ou moins."
+description_high = "Au-delà de 60 i/s, l'enregistrement utilise plus de processeur et d'espace disque, et certains ordinateurs l'encodent par logiciel. Le mode Studio n'enregistre jamais plus vite que le rafraîchissement de votre écran. Avec la caméra activée, il enregistre à 30 i/s ou moins."
+description_match = "Enregistre à la fréquence de rafraîchissement de votre écran, jusqu'à {fps} i/s. Au-delà de 60 i/s, l'enregistrement utilise plus de processeur et d'espace disque. Avec la caméra activée, le mode Studio enregistre à 30 i/s ou moins."
+fps_120 = "120 i/s"
+fps_144 = "144 i/s"
+fps_165 = "165 i/s"
+fps_24 = "24 i/s"
+fps_240 = "240 i/s"
+fps_25 = "25 i/s"
+fps_30 = "30 i/s"
+fps_60 = "60 i/s (recommandé)"
+label = "Fréquence d'images"
+match_display = "Comme l'écran"
 
 [settings.quality.instant]
 description = "Mis en ligne pendant l'enregistrement, le lien est prêt dès que vous arrêtez. Pour une qualité optimale, utilisez le mode Studio : il enregistre dans la meilleure qualité permise par votre écran et vous pouvez exporter jusqu'en 4K."
