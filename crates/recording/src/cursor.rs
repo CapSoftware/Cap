@@ -706,6 +706,8 @@ pub fn spawn_cursor_recorder(
     }
     let completion = scope.map(|scope| scope.task_completion());
     let stop_token_child = stop_token.child_token();
+    #[cfg(windows)]
+    let stop_cut = crate::output_pipeline::StopCut::current();
     let thread = std::thread::spawn(move || {
         let _completion = completion;
         let crop_bounds = target.crop_bounds;
@@ -778,6 +780,16 @@ pub fn spawn_cursor_recorder(
             if stop_wakeup_rx
                 .recv_timeout(Duration::from_millis(16))
                 .is_ok()
+            {
+                break;
+            }
+
+            // Input after the stop request is not recorded, however late the
+            // stop reaches the recorder.
+            #[cfg(windows)]
+            if stop_cut
+                .as_ref()
+                .is_some_and(|cut| cut.excludes(Instant::now(), Duration::from_millis(16)))
             {
                 break;
             }
@@ -968,9 +980,16 @@ pub fn spawn_cursor_recorder(
 
         info!("cursor recorder done");
 
+        let stopped_at = Instant::now();
+        #[cfg(windows)]
+        let stopped_at = stop_cut.as_ref().map_or(stopped_at, |cut| {
+            cut.limit(stopped_at, Duration::from_millis(16))
+        });
         if let Some(epoch) = input_epoch(start_gate.as_ref(), start_time)
-            && let Some(confirmation) =
-                still_shape_confirmation(&response.moves, epoch.elapsed().as_secs_f64() * 1000.0)
+            && let Some(confirmation) = still_shape_confirmation(
+                &response.moves,
+                stopped_at.saturating_duration_since(epoch).as_secs_f64() * 1000.0,
+            )
         {
             response.moves.push(confirmation);
         }

@@ -29,6 +29,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub struct EncoderPreferences {
     force_software: Arc<AtomicBool>,
     finish_wait: EncoderFinishWait,
+    stop_cut: crate::output_pipeline::StopCut,
 }
 
 #[cfg(windows)]
@@ -44,11 +45,17 @@ impl EncoderPreferences {
         Self {
             force_software: Arc::new(AtomicBool::new(false)),
             finish_wait: EncoderFinishWait::default(),
+            stop_cut: crate::output_pipeline::StopCut::default(),
         }
     }
 
     pub fn finish_wait(&self) -> EncoderFinishWait {
         self.finish_wait.clone()
+    }
+
+    /// The recording's stop request; see [`crate::output_pipeline::StopCut`].
+    pub fn stop_cut(&self) -> crate::output_pipeline::StopCut {
+        self.stop_cut.clone()
     }
 
     pub fn should_force_software(&self) -> bool {

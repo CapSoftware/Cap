@@ -377,6 +377,8 @@ struct WindowsStudioTerminal {
     acknowledged: std::sync::atomic::AtomicBool,
     #[cfg(windows)]
     late_stop: LateStop,
+    #[cfg(windows)]
+    stop_cut: crate::output_pipeline::StopCut,
 }
 
 #[cfg(windows)]
@@ -2523,8 +2525,18 @@ impl ActorHandle {
             .load(std::sync::atomic::Ordering::Acquire)
     }
 
+    /// Marks the instant the user asked to stop; the first call counts.
+    /// Nothing captured after it is saved, however late the stop reaches the
+    /// pipelines. Call it as soon as the request is made.
+    #[cfg(windows)]
+    pub fn mark_stop_requested(&self) {
+        self.terminal.stop_cut.mark();
+    }
+
     #[cfg(any(target_os = "macos", windows))]
     pub async fn stop_with_intent(&self, intent: StudioStopIntent) -> WindowsStudioStopReport {
+        #[cfg(windows)]
+        self.mark_stop_requested();
         let terminal = self.terminal.clone();
         let actor = self.actor_ref.clone();
         let recording_dir = self.recording_dir.clone();
@@ -3057,6 +3069,8 @@ async fn spawn_studio_recording_actor(
     let actor_recording_dir = recording_dir.clone();
     #[cfg(windows)]
     let late_stop = LateStop::default();
+    #[cfg(windows)]
+    let stop_cut = segment_pipeline_factory.encoder_preferences.stop_cut();
     diagnostic.stage("recording");
     let actor_ref = Actor::spawn(Actor {
         diagnostic: Some(diagnostic),
@@ -3101,6 +3115,7 @@ async fn spawn_studio_recording_actor(
         #[cfg(windows)]
         terminal: Arc::new(WindowsStudioTerminal {
             late_stop,
+            stop_cut,
             ..Default::default()
         }),
         actor_ref,
@@ -3846,6 +3861,10 @@ impl SegmentPipelineFactory {
             )
             .await
         };
+        // Every pipeline of the segment keeps nothing captured after a stop
+        // request, however late the stop reaches it.
+        #[cfg(windows)]
+        let startup = self.encoder_preferences.stop_cut().scope(startup);
         let mut pipeline = if crate::output_pipeline::PipelineBuildScope::current().is_some() {
             startup.await?
         } else {
@@ -5320,14 +5339,18 @@ mod tests {
     #[cfg(windows)]
     struct GatedFinishMuxer {
         release: Option<std::sync::mpsc::Receiver<()>>,
+        sent: Arc<std::sync::Mutex<Vec<Duration>>>,
     }
 
     #[cfg(windows)]
     impl Muxer for GatedFinishMuxer {
-        type Config = std::sync::mpsc::Receiver<()>;
+        type Config = (
+            std::sync::mpsc::Receiver<()>,
+            Arc<std::sync::Mutex<Vec<Duration>>>,
+        );
 
         async fn setup(
-            release: Self::Config,
+            (release, sent): Self::Config,
             _: PathBuf,
             _: Option<VideoInfo>,
             _: Option<cap_media_info::AudioInfo>,
@@ -5336,6 +5359,7 @@ mod tests {
         ) -> anyhow::Result<Self> {
             Ok(Self {
                 release: Some(release),
+                sent,
             })
         }
 
@@ -5362,13 +5386,20 @@ mod tests {
     impl VideoMuxer for GatedFinishMuxer {
         type VideoFrame = TestVideoFrame;
 
-        fn send_video_frame(&mut self, _: TestVideoFrame, _: Duration) -> anyhow::Result<()> {
+        fn send_video_frame(
+            &mut self,
+            _: TestVideoFrame,
+            timestamp: Duration,
+        ) -> anyhow::Result<()> {
+            self.sent.lock().unwrap().push(timestamp);
             Ok(())
         }
     }
 
     /// A Studio recording whose screen muxer is still finishing when Stop
     /// reaches its limit, with `release` deciding when that finish returns.
+    /// The screen is built under the recording's stop cut, as segments are,
+    /// and `sent` holds the timestamps the screen muxer received.
     #[cfg(windows)]
     async fn studio_with_slow_screen_finish(
         path: &Path,
@@ -5376,22 +5407,26 @@ mod tests {
         ActorHandle,
         std::sync::mpsc::Sender<()>,
         flume::Sender<TestVideoFrame>,
+        Arc<std::sync::Mutex<Vec<Duration>>>,
     ) {
         std::fs::create_dir_all(path.join("content")).unwrap();
         write_in_progress_meta(path, None).unwrap();
         let timestamps = Timestamps::now();
-        let (screen_tx, screen_rx) = flume::bounded(4);
+        let (screen_tx, screen_rx) = flume::bounded(16);
         let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stop_cut = crate::output_pipeline::StopCut::default();
         let scope = crate::output_pipeline::PipelineBuildScope::new();
         let screen = crate::output_pipeline::finish_pipeline_startup(
             &scope,
-            OutputPipeline::builder(path.join("content/display.mp4"))
-                .with_video::<ChannelVideoSource<TestVideoFrame>>(ChannelVideoSourceConfig::new(
-                    test_video_info(),
-                    screen_rx,
-                ))
-                .with_timestamps(timestamps)
-                .build::<GatedFinishMuxer>(release_rx),
+            stop_cut.clone().scope(
+                OutputPipeline::builder(path.join("content/display.mp4"))
+                    .with_video::<ChannelVideoSource<TestVideoFrame>>(
+                        ChannelVideoSourceConfig::new(test_video_info(), screen_rx),
+                    )
+                    .with_timestamps(timestamps)
+                    .build::<GatedFinishMuxer>((release_rx, sent.clone())),
+            ),
         )
         .await
         .unwrap();
@@ -5462,6 +5497,7 @@ mod tests {
             recording_dir: path.to_path_buf(),
             terminal: Arc::new(WindowsStudioTerminal {
                 late_stop,
+                stop_cut,
                 ..Default::default()
             }),
             actor_ref,
@@ -5469,7 +5505,7 @@ mod tests {
             done_fut: completion_rx_to_done_fut(completion_rx),
             markers: crate::markers::RecordingMarkers::new(None),
         };
-        (handle, release_tx, screen_tx)
+        (handle, release_tx, screen_tx, sent)
     }
 
     #[cfg(windows)]
@@ -5487,7 +5523,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("recording.cap");
         let path = project.as_path();
-        let (handle, release, _screen_tx) = studio_with_slow_screen_finish(path).await;
+        let (handle, release, _screen_tx, _sent) = studio_with_slow_screen_finish(path).await;
 
         let stop_started = Instant::now();
         let outcome = tokio::time::timeout(Duration::from_secs(30), handle.stop_with_outcome())
@@ -5529,7 +5565,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("recording.cap");
         let path = project.as_path();
-        let (handle, release, _screen_tx) = studio_with_slow_screen_finish(path).await;
+        let (handle, release, _screen_tx, _sent) = studio_with_slow_screen_finish(path).await;
 
         let outcome = tokio::time::timeout(Duration::from_secs(30), handle.stop_with_outcome())
             .await
@@ -5560,6 +5596,56 @@ mod tests {
         release.send(()).unwrap();
         finishing.wait().await.result.unwrap();
         assert!(!crate::recovery::finishing::contains(path));
+    }
+
+    /// The user asks to stop, but the Stop reaches the recording long after
+    /// (its runtime was busy): what the screen captured in between is not
+    /// saved, and the stop still goes late and finishes normally.
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn late_stop_cut_drops_capture_after_a_stop_request_that_arrives_late() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("recording.cap");
+        let path = project.as_path();
+        // The fixture's clock and first frame are taken after this instant.
+        let before_recording = Instant::now();
+        let (handle, release, screen_tx, sent) = studio_with_slow_screen_finish(path).await;
+        assert!(handle.terminal.stop_cut.instant().is_none());
+
+        handle.mark_stop_requested();
+        let request = handle.terminal.stop_cut.instant().unwrap();
+        for _ in 0..6 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            screen_tx
+                .send_async(TestVideoFrame {
+                    timestamp: Timestamp::Instant(Instant::now()),
+                })
+                .await
+                .unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let outcome = tokio::time::timeout(Duration::from_secs(30), handle.stop_with_outcome())
+            .await
+            .expect("Stop must return at its limit while a track is still finishing");
+        assert_eq!(handle.terminal.stop_cut.instant(), Some(request));
+        let finishing = outcome.finishing.clone().unwrap();
+        release.send(()).unwrap();
+        finishing.wait().await.result.unwrap();
+
+        // Without the cut the six later frames would be saved and the still
+        // screen would be carried out to Stop, more than 10 s later.
+        let muxed = sent.lock().unwrap().clone();
+        assert!(
+            !muxed.is_empty(),
+            "the frame captured before the request is kept"
+        );
+        let frame = Duration::from_nanos(33_333_334);
+        let limit = request.duration_since(before_recording) + frame;
+        assert!(
+            muxed.iter().all(|timestamp| *timestamp <= limit),
+            "nothing past the request plus one frame ({limit:?}): {muxed:?}"
+        );
     }
 
     #[cfg(target_os = "macos")]
