@@ -5111,7 +5111,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn lost_system_audio_device_sets_terminal_health() {
+    async fn lost_system_audio_device_records_silence_and_is_reported_at_stop() {
         let (mut feed, _token, _config) = system_recovery_fixture();
         let health = RecordingSourceHealth::new(11, Arc::new(StreamHealth::new(7)));
         feed.recording_health = Some(health.clone());
@@ -5124,9 +5124,16 @@ mod tests {
             .await
             .unwrap();
         let error = ready.await.expect_err("missing monitor must not reopen");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while health.stop_error().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("reconnect error {error} was not reported at Stop"));
         assert!(
-            health.terminal_error().is_some(),
-            "reconnect error {error} left system audio healthy"
+            health.terminal_error().is_none(),
+            "a device that is gone records silence instead of failing the take"
         );
         actor.kill();
         actor.wait_for_stop().await;
