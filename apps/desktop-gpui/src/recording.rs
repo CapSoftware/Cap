@@ -4863,6 +4863,7 @@ mod studio_finalization_tests {
             .unwrap(),
             cursor_data: Default::default(),
             clean_stopped: None,
+            screen_frames: None,
         }
     }
 
@@ -5145,6 +5146,7 @@ mod studio_finalization_tests {
             meta,
             cursor_data: Default::default(),
             clean_stopped: None,
+            screen_frames: None,
         }
     }
 
