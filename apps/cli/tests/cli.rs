@@ -781,6 +781,11 @@ fn export_succeeds_when_project_config_is_corrupted() {
         output_path.exists(),
         "export reported success but wrote no file"
     );
+    assert!(stderr(&export).contains("exporting with default settings"));
+    assert_eq!(
+        std::fs::read(project.join("project-config.json")).unwrap(),
+        b"{not valid json"
+    );
 }
 
 #[test]

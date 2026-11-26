@@ -8,7 +8,7 @@ use std::{
 };
 
 use cap_export::{ExporterBase, ExporterBuilder, Mp4ExporterBase, make_cursor_only_project};
-use cap_project::{RecordingMeta, RecordingMetaInner, XY};
+use cap_project::{ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -603,17 +603,10 @@ impl Export {
             builder = builder.with_output_path(output_path);
         }
 
-        // `meta.project_config()` already falls back to a default/new-project
-        // config when `project-config.json` is missing or unreadable (the
-        // same fallback `cap project validate`/`inspect`/`config get` rely
-        // on). Wire it in unconditionally so the exporter never falls through
-        // to `ExporterBuilder`'s own `ProjectConfiguration::load`, which has
-        // no such fallback and turns a missing/corrupt config into a hard
-        // export failure on a project `validate` reports as valid.
         builder = builder.with_config(if settings.cursor_only() {
             make_cursor_only_project(meta.project_config())
         } else {
-            meta.project_config()
+            export_project_config(project_path, &meta)
         });
 
         let exporter = settings.prepare(builder).await?;
@@ -1084,6 +1077,24 @@ async fn export_instant_project(
     Ok(())
 }
 
+// A missing or unreadable project-config.json exports with the same default
+// the editor and `cap project inspect` fall back to (#4453). A readable one is
+// passed through exactly as the exporter would load it itself.
+fn export_project_config(project_path: &Path, meta: &RecordingMeta) -> ProjectConfiguration {
+    match ProjectConfiguration::load(project_path) {
+        Ok(config) => config,
+        Err(error) => {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "Could not read project-config.json in {} ({error}); exporting with default settings.",
+                    project_path.display()
+                );
+            }
+            meta.project_config()
+        }
+    }
+}
+
 /// Render a project to its default output path with default settings (mp4, 1080p60, Maximum). Used by
 /// `cap upload --export` to glue record -> export -> upload into one step.
 pub async fn export_project_default(project_path: PathBuf) -> Result<PathBuf, String> {
@@ -1095,9 +1106,11 @@ pub async fn export_project_default(project_path: PathBuf) -> Result<PathBuf, St
         return prepare_instant_output(project_path).await;
     }
 
+    let config = export_project_config(&project_path, &meta);
     let exporter = settings
         .prepare(
             ExporterBase::builder(project_path)
+                .with_config(config)
                 .with_force_ffmpeg_decoder(settings.force_ffmpeg_decoder()),
         )
         .await?;
