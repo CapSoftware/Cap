@@ -5,7 +5,7 @@ use cap_recording::{
     CameraFeed, DoneFut, MicrophoneFeed, PipelineStoppedByUser,
     feeds::{camera, microphone},
     instant_recording,
-    screen_capture::ScreenCaptureTarget,
+    screen_capture::{ScreenCaptureTarget, frame_accounting::ScreenFrameTotals},
     studio_recording::{self, ActorHandle as StudioActorHandle},
     upload_resume::UploadLock,
 };
@@ -513,6 +513,7 @@ impl RecordStopArgs {
                 &RecordEvent::Stopped {
                     path: &session.path.display().to_string(),
                     recording_meta_exists: session.recording_meta_exists.unwrap_or(true),
+                    screen_frames: None,
                 },
             )?;
             cleanup_session(&id, &session.path);
@@ -533,6 +534,7 @@ impl RecordStopArgs {
                         &RecordEvent::Stopped {
                             path: &current.path.display().to_string(),
                             recording_meta_exists: current.recording_meta_exists.unwrap_or(true),
+                            screen_frames: None,
                         },
                     )?;
                     cleanup_session(&id, &current.path);
@@ -566,6 +568,7 @@ impl RecordStopArgs {
                     &RecordEvent::Stopped {
                         path: &current.path.display().to_string(),
                         recording_meta_exists: true,
+                        screen_frames: None,
                     },
                 );
             }
@@ -1206,6 +1209,10 @@ fn emit_stopped(format: OutputFormat, completed: &CompletedRecording) -> Result<
         &RecordEvent::Stopped {
             path: &completed.project_path().display().to_string(),
             recording_meta_exists,
+            screen_frames: match completed {
+                CompletedRecording::Studio(recording) => recording.screen_frames,
+                CompletedRecording::Instant(_) => None,
+            },
         },
     )
 }
@@ -1329,6 +1336,8 @@ enum RecordEvent<'a> {
     Stopped {
         path: &'a str,
         recording_meta_exists: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        screen_frames: Option<ScreenFrameTotals>,
     },
     Error {
         error: &'a str,
@@ -1347,10 +1356,20 @@ fn emit_record_event(format: OutputFormat, event: &RecordEvent<'_>) -> Result<()
                 RecordEvent::Stopped {
                     path,
                     recording_meta_exists,
+                    screen_frames,
                 } => {
                     println!("Recording stopped: {path}");
                     if !recording_meta_exists {
                         println!("warning: recording-meta.json was not written");
+                    }
+                    if let Some(frames) = screen_frames {
+                        println!(
+                            "Screen frames: {} written, {} lost of {} on screen ({:.2}%)",
+                            frames.written,
+                            frames.lost(),
+                            frames.displayed,
+                            frames.lost_pct()
+                        );
                     }
                 }
                 RecordEvent::Error { error } => println!("Recording error: {error}"),
@@ -1763,11 +1782,27 @@ mod tests {
         let stopped = serde_json::to_value(RecordEvent::Stopped {
             path: "p",
             recording_meta_exists: true,
+            screen_frames: None,
         })
         .unwrap();
         assert_eq!(stopped["type"], "stopped");
         assert_eq!(stopped["recordingMetaExists"], true);
         assert!(stopped.get("recording_meta_exists").is_none());
+        assert!(stopped.get("screenFrames").is_none());
+
+        let counted = serde_json::to_value(RecordEvent::Stopped {
+            path: "p",
+            recording_meta_exists: true,
+            screen_frames: Some(ScreenFrameTotals {
+                displayed: 2400,
+                written: 2390,
+                lost_in_capture: 10,
+                ..Default::default()
+            }),
+        })
+        .unwrap();
+        assert_eq!(counted["screenFrames"]["displayed"], 2400);
+        assert_eq!(counted["screenFrames"]["lostInCapture"], 10);
     }
 
     #[test]

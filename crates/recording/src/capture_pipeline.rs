@@ -176,6 +176,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                     })
                     .await
             } else {
+                let frame_accounting = screen_capture.frame_accounting();
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
                     .with_timestamps(start_time)
@@ -187,6 +188,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                         video_bitrate,
                         output_size,
                         shared_pause_state,
+                        frame_accounting: Some(frame_accounting),
                         ..Default::default()
                     })
                     .await
