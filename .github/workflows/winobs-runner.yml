@@ -1,0 +1,93 @@
+name: winobs runner proof
+
+on:
+  push:
+    branches: ["ci/winobs-runner*"]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  run:
+    name: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/winobs
+      - name: Facts
+        shell: powershell
+        run: |
+          [System.Environment]::OSVersion.Version
+          Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name + ' ' + $_.CurrentHorizontalResolution + 'x' + $_.CurrentVerticalResolution + '@' + $_.CurrentRefreshRate }
+          $null = [Windows.Foundation.Metadata.ApiInformation,Windows.Foundation,ContentType=WindowsRuntime]; $t = [Windows.Foundation.Metadata.ApiInformation]
+          'MinUpdateInterval present: ' + $t::IsPropertyPresent('Windows.Graphics.Capture.GraphicsCaptureSession', 'MinUpdateInterval')
+          'IsBorderRequired present: ' + $t::IsPropertyPresent('Windows.Graphics.Capture.GraphicsCaptureSession', 'IsBorderRequired')
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tools
+        shell: pwsh
+        run: |
+          python -m pip install --quiet psutil numpy pygame-ce
+          New-Item -ItemType Directory -Force C:\rig\ff, C:\rig\bins, C:\rig\out, C:\rig\x | Out-Null
+          curl.exe -sSL -o C:\rig\ff.zip https://github.com/GyanD/codexffmpeg/releases/download/7.1.1/ffmpeg-7.1.1-essentials_build.zip
+          Expand-Archive -Force C:\rig\ff.zip C:\rig\ffx
+          Get-ChildItem C:\rig\ffx -Recurse -Filter ffprobe.exe | ForEach-Object { Copy-Item (Join-Path $_.DirectoryName '*.exe') C:\rig\ff }
+          Copy-Item .github\winobs\*.py C:\rig\x\
+      - name: Builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pair in "mbase:46009464012" "mhead:46023657924"; do
+            n=${pair%%:*}; id=${pair#*:}
+            mkdir -p /c/rig/bins/$n
+            gh run download "$id" -R "${{ github.repository }}" -n cli-windows -D /c/rig/dl-$n
+            tar -xzf /c/rig/dl-$n/cli-windows.tgz -C /c/rig/bins/$n
+            cat /c/rig/bins/$n/commit.txt
+          done
+      - name: Recordings
+        shell: cmd
+        run: |
+          set PATH=C:\rig\ff;%PATH%
+          cd /d C:\rig\x
+          python setres.py
+          set R2=--recorder base=cap:C:\rig\bins\mbase\bin\cap.exe --recorder head=cap:C:\rig\bins\mhead\bin\cap.exe
+          python xbench.py run --out C:\rig\out\r-instant %R2% --cap-mode instant --cap-default-fps --scenes scroll --fps 30 --reps 3 --duration 15 --warmup 3 --validate
+          python xbench.py run --out C:\rig\out\r-studio60 %R2% --scenes scroll --fps 60 --reps 3 --duration 15 --warmup 3 --validate
+          python xbench.py run --out C:\rig\out\r-studio30 %R2% --scenes scroll --fps 30 --reps 2 --duration 15 --warmup 3
+          python xbench.py run --out C:\rig\out\r-still %R2% --scenes still --fps 60 --reps 2 --duration 15 --warmup 3
+          exit /b 0
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          for f in /c/rig/out/*/runs.jsonl; do echo "== $f"; python /c/rig/x/summ.py "$f" || true; done
+          echo "== pacing decisions"
+          grep -h -o "Windows capture pacing[^\r]*" /c/rig/out/*/runs/*/cap.stderr.log | sort | uniq -c || true
+          echo "== interval histograms"
+          python - <<'EOF'
+          import glob, json
+          for f in sorted(glob.glob("C:/rig/out/*/runs.jsonl")):
+              for l in open(f):
+                  r = json.loads(l)
+                  a = r.get("analysis") or {}
+                  print(f.split("/")[-2], r["recorder"], r["scene"], r["fps"], (a.get("window") or {}).get("step_hist"), a.get("pts_delta_ms"))
+          EOF
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: winobs-${{ matrix.runner }}
+          path: |
+            C:\rig\out\*\runs.jsonl
+            C:\rig\out\**\cap.stderr.log
+          retention-days: 5
