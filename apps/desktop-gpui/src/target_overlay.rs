@@ -461,6 +461,7 @@ pub struct TargetSelect {
     pub focus_center: bool,
     pub desktop_monitors: Vec<DesktopMonitorRect>,
     pub desktop_area: Option<SharedDesktopArea>,
+    area_ratio: Option<(u32, u32)>,
     _poll: Option<gpui::Task<()>>,
 }
 
@@ -543,6 +544,7 @@ impl TargetSelect {
             focus_center: crate::store::GeneralSettings::load().focus_center,
             desktop_monitors: Vec::new(),
             desktop_area: None,
+            area_ratio: None,
             _poll: None,
         });
         cx.set_global(TargetSelectGlobal(select.clone()));
@@ -573,6 +575,7 @@ impl TargetSelect {
             crate::foreign_window::put_back_all(self.take_arranged(), cx.background_executor());
             self.focus_window = saved_focus();
             self.focus_center = crate::store::GeneralSettings::load().focus_center;
+            self.area_ratio = stored_area_ratio();
         }
         if self.mode == mode {
             cx.notify();
@@ -2041,8 +2044,6 @@ pub struct OverlayWindow {
     crop: Option<AreaRect>,
     drag: Option<AreaDrag>,
     snap_guides: Vec<SnapGuide>,
-    /// The aspect ratio a drawn or resized area keeps, `None` for free.
-    area_ratio: Option<(u32, u32)>,
     area_snap_to_ratio: bool,
     area_snapped: Option<(u32, u32)>,
     area_locked: bool,
@@ -2280,7 +2281,6 @@ impl OverlayWindow {
             crop: locked_area,
             drag: None,
             snap_guides: Vec::new(),
-            area_ratio: stored_area_ratio(),
             area_snap_to_ratio: stored_area_snap_to_ratio(),
             area_snapped: None,
             area_locked: locked_area.is_some(),
@@ -2364,7 +2364,7 @@ impl OverlayWindow {
                 return;
             }
             if event.dragging() {
-                this.area_mouse_move(event.position, snap_off(&event.modifiers), cx);
+                this.area_mouse_move(event.position, snap_off(&event.modifiers), true, cx);
             } else {
                 this.cancel_area_drag(cx);
             }
@@ -2691,7 +2691,7 @@ impl OverlayWindow {
                 self.area_locked = false;
                 self.area_mouse_down(position, cx);
             }
-            ProbeDrag::Move => self.area_mouse_move(position, false, cx),
+            ProbeDrag::Move => self.area_mouse_move(position, false, true, cx),
             ProbeDrag::Release => self.area_mouse_up(position, false, cx),
         }
         self.drag.is_some()
@@ -4404,7 +4404,12 @@ impl OverlayWindow {
                     .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                         this.area_hover_at(event.position, window, cx);
                         if !cfg!(windows) {
-                            this.area_mouse_move(event.position, snap_off(&event.modifiers), cx);
+                            this.area_mouse_move(
+                                event.position,
+                                snap_off(&event.modifiers),
+                                true,
+                                cx,
+                            );
                         }
                     }))
                     .when(cfg!(windows), |this| this.child(self.area_drag_events(cx)))
@@ -4478,7 +4483,7 @@ impl OverlayWindow {
                 root = root.child(self.render_locked_badge(shown, cx));
             } else if let Some(ratio) = self
                 .area_snapped
-                .filter(|_| interactive && self.area_ratio.is_none())
+                .filter(|_| interactive && self.select.read(cx).area_ratio.is_none())
             {
                 root = root.child(self.render_snapped_ratio(shown, ratio));
             }
@@ -4960,6 +4965,9 @@ impl OverlayWindow {
         const WIDTH: f32 = 600.;
         let theme = self.theme;
         let locked = self.area_locked;
+        let select = self.select.read(cx);
+        let area_ratio = select.area_ratio;
+        let show_lock = select.desktop_area.is_none();
         let label = match crop.filter(|_| valid) {
             Some(crop) => format!("{} × {}", crop.width.round(), crop.height.round()),
             None => tr::overlay::area::draw().to_string(),
@@ -4987,11 +4995,9 @@ impl OverlayWindow {
                         .group_hover(id, move |style| style.text_color(theme.gray_12)),
                 )
         };
-        let in_more = self
-            .area_ratio
-            .is_some_and(|ratio| !QUICK_AREA_RATIOS.contains(&Some(ratio)));
+        let in_more = area_ratio.is_some_and(|ratio| !QUICK_AREA_RATIOS.contains(&Some(ratio)));
         let chips = QUICK_AREA_RATIOS.iter().enumerate().map(|(index, ratio)| {
-            let selected = self.area_ratio == *ratio;
+            let selected = area_ratio == *ratio;
             let ratio = *ratio;
             div()
                 .id(("area-ratio", index))
@@ -5097,36 +5103,37 @@ impl OverlayWindow {
                             cx,
                         ),
                     )
-                    .child(divider())
-                    .child(
-                        self.hinted(
-                            icon_button(
+                    .when(show_lock, |toolbar| {
+                        toolbar.child(divider()).child(
+                            self.hinted(
+                                icon_button(
+                                    "area-lock",
+                                    if locked {
+                                        "icons/lock.svg"
+                                    } else {
+                                        "icons/lock-open.svg"
+                                    },
+                                )
+                                .when(locked, |button| {
+                                    button.bg(Theme::with_alpha(theme.gray_12, 0.12))
+                                })
+                                .when(!locked && !valid, |button| button.opacity(0.4))
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_area_lock(cx))),
                                 "area-lock",
                                 if locked {
-                                    "icons/lock.svg"
+                                    Hint::new(tr::overlay::area::unlock_title())
+                                        .body(tr::overlay::area::unlock_body())
+                                } else if valid {
+                                    Hint::new(tr::overlay::area::lock_title())
+                                        .body(tr::overlay::area::lock_body())
                                 } else {
-                                    "icons/lock-open.svg"
+                                    Hint::new(tr::overlay::area::lock_title())
+                                        .body(tr::overlay::area::lock_needs_area())
                                 },
-                            )
-                            .when(locked, |button| {
-                                button.bg(Theme::with_alpha(theme.gray_12, 0.12))
-                            })
-                            .when(!locked && !valid, |button| button.opacity(0.4))
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_area_lock(cx))),
-                            "area-lock",
-                            if locked {
-                                Hint::new(tr::overlay::area::unlock_title())
-                                    .body(tr::overlay::area::unlock_body())
-                            } else if valid {
-                                Hint::new(tr::overlay::area::lock_title())
-                                    .body(tr::overlay::area::lock_body())
-                            } else {
-                                Hint::new(tr::overlay::area::lock_title())
-                                    .body(tr::overlay::area::lock_needs_area())
-                            },
-                            cx,
-                        ),
-                    ),
+                                cx,
+                            ),
+                        )
+                    }),
             )
     }
 
@@ -5370,7 +5377,7 @@ impl OverlayWindow {
         else {
             return;
         };
-        if let Some(ratio) = self.area_ratio {
+        if let Some(ratio) = self.select.read(cx).area_ratio {
             bounds = area_with_ratio(bounds, ratio_value(ratio), self.display_size);
         }
         if !bounds.is_valid_for(area_min_size(self.select.read(cx).recording_mode)) {
@@ -5445,7 +5452,7 @@ impl OverlayWindow {
 
     fn open_aspect_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         self.area_snap_to_ratio = stored_area_snap_to_ratio();
-        let items = self.aspect_menu_items();
+        let items = self.aspect_menu_items(cx);
         self.mode_menu = None;
         self.countdown_menu = None;
         self.device_menu = None;
@@ -5454,13 +5461,14 @@ impl OverlayWindow {
         cx.notify();
     }
 
-    fn aspect_menu_items(&self) -> Vec<crate::ui::MenuItem> {
+    fn aspect_menu_items(&self, cx: &App) -> Vec<crate::ui::MenuItem> {
+        let area_ratio = self.select.read(cx).area_ratio;
         let mut items = more_area_ratios()
             .into_iter()
             .map(|ratio| {
                 crate::ui::MenuItem::new(
                     format!("{}:{}", ratio.0, ratio.1),
-                    self.area_ratio == Some(ratio),
+                    area_ratio == Some(ratio),
                 )
             })
             .collect::<Vec<_>>();
@@ -5477,7 +5485,7 @@ impl OverlayWindow {
             crate::ui::Menu::plain(
                 &self.theme,
                 "overlay-aspect-menu",
-                self.aspect_menu_items(),
+                self.aspect_menu_items(cx),
                 state,
             )
             .on_select(cx.listener(|this, index: &usize, _, cx| {
@@ -5545,7 +5553,10 @@ impl OverlayWindow {
     fn fill_area(&mut self, cx: &mut Context<Self>) {
         self.select
             .update(cx, |select, cx| select.set_desktop_area(None, cx));
-        let to = area_fill(self.display_size, self.area_ratio.map(ratio_value));
+        let to = area_fill(
+            self.display_size,
+            self.select.read(cx).area_ratio.map(ratio_value),
+        );
         self.reshape_area(to, cx);
     }
 
@@ -5565,7 +5576,10 @@ impl OverlayWindow {
     /// Locks drawn and resized areas to `ratio`, reshaping the current one
     /// around its centre, and remembers the choice for the next picker.
     fn set_area_ratio(&mut self, ratio: Option<(u32, u32)>, cx: &mut Context<Self>) {
-        self.area_ratio = ratio;
+        self.select.update(cx, |select, cx| {
+            select.area_ratio = ratio;
+            cx.notify();
+        });
         self.area_snapped = None;
         store_area_ratio(ratio);
         if let (Some(ratio), Some(shared)) = (ratio, self.select.read(cx).desktop_area.clone()) {
@@ -6251,7 +6265,13 @@ impl OverlayWindow {
         }
     }
 
-    fn area_mouse_move(&mut self, position: Point<Pixels>, free: bool, cx: &mut Context<Self>) {
+    fn area_mouse_move(
+        &mut self,
+        position: Point<Pixels>,
+        free: bool,
+        dragging: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.recording_area {
             return;
         }
@@ -6266,7 +6286,7 @@ impl OverlayWindow {
             let monitors = self.select.read(cx).desktop_monitors.clone();
             if let Some(union_bounds) = desktop_union_bounds(&monitors) {
                 let desktop_point = local_to_desktop_physical((raw_x, raw_y), &monitor);
-                let ratio = self.area_ratio.map(ratio_value);
+                let ratio = self.select.read(cx).area_ratio.map(ratio_value);
                 let desktop_rect = match &self.drag {
                     Some(AreaDrag::DesktopDraw { anchor, .. }) => Some(desktop_draw_rect(
                         *anchor,
@@ -6327,7 +6347,12 @@ impl OverlayWindow {
                 };
 
                 if let Some(desktop_rect) = desktop_rect {
-                    self.apply_classified_desktop_rect(desktop_rect, Some(desktop_point), true, cx);
+                    self.apply_classified_desktop_rect(
+                        desktop_rect,
+                        Some(desktop_point),
+                        dragging,
+                        cx,
+                    );
                     self.area_camera_pending = true;
                     cx.notify();
                     return;
@@ -6339,7 +6364,7 @@ impl OverlayWindow {
         let x = raw_x.clamp(0., self.display_size.0);
         let y = raw_y.clamp(0., self.display_size.1);
 
-        let ratio = self.area_ratio.map(ratio_value);
+        let ratio = self.select.read(cx).area_ratio.map(ratio_value);
         let moving = matches!(drag, AreaDrag::Move { .. });
         let mut snapped = None;
         let (next, guides) = match (drag, ratio) {
@@ -6468,7 +6493,7 @@ impl OverlayWindow {
         if self.recording_area {
             return;
         }
-        self.area_mouse_move(position, free, cx);
+        self.area_mouse_move(position, free, false, cx);
         let Some(drag) = self.drag.take() else {
             return;
         };
@@ -6492,26 +6517,13 @@ impl OverlayWindow {
             _ => false,
         };
 
-        if let Some(mut shared) = self.select.read(cx).desktop_area.clone() {
+        if let Some(shared) = self.select.read(cx).desktop_area.clone() {
             if clicked || shared.bounds.width < 2. || shared.bounds.height < 2. {
                 self.select
                     .update(cx, |select, cx| select.set_desktop_area(None, cx));
                 if clicked {
                     self.fit_area_to_window_at((f32::from(position.x), f32::from(position.y)), cx);
                 }
-            } else {
-                shared.dragging = false;
-                let pointer = self.monitor_rect().map(|monitor| {
-                    local_to_desktop_physical(
-                        (f32::from(position.x), f32::from(position.y)),
-                        &monitor,
-                    )
-                });
-                let monitors = self.select.read(cx).desktop_monitors.clone();
-                shared.controls_display =
-                    choose_controls_display(pointer, shared.bounds, &shared.screens, &monitors);
-                self.select
-                    .update(cx, |select, cx| select.set_desktop_area(Some(shared), cx));
             }
             if matches!(drag, AreaDrag::Draw { .. } | AreaDrag::DesktopDraw { .. })
                 && !clicked
