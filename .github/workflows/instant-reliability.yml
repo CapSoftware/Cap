@@ -375,7 +375,8 @@ jobs:
             CAP_GPUI_AUTO_OVERLAY=window CAP_GPUI_AUTO_WINDOW=xmessage \
             dbus-run-session -- "$RUNNER_TEMP/build/real-app-tests" --ignored --test-threads=1 --nocapture \
             real_app_instant_recording_with_camera_uploads_and_verifies \
-            real_app_camera_only_instant_recording_uploads_once_and_verifies
+            real_app_camera_only_instant_recording_uploads_once_and_verifies \
+            real_app_camera_only_upload_deleted_during_retry_is_not_recreated
 
       # The recorded window is grey and the test pattern is saturated colour,
       # so a frame without colour is a frame without the camera.
