@@ -2,14 +2,15 @@ name: Scratch stop-time vs length
 
 on:
   push:
-    branches: ["ci/stoptime-len"]
+    branches: ["ci/stoptime-len", "ci/stoptime-len-win"]
 
 concurrency:
-  group: scratch-stoptime-len
+  group: scratch-stoptime-len-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   macos:
+    if: github.ref_name == 'ci/stoptime-len'
     runs-on: macos-15
     timeout-minutes: 300
     steps:
@@ -101,8 +102,8 @@ jobs:
         run: |
           B="$RUNNER_TEMP/bins"; R="$RUNNER_TEMP/rig"
           S=$("$B/main/cap.exe" targets screens --format json | python -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
-          for d in 60 300 1800; do
-            python "$R/run.py" --stim "$R/stim.py" --screen "$S" --out "$RUNNER_TEMP/len$d" --dur $d --reps 1 --keep --level debug \
+          for d in 1800; do
+            python "$R/run.py" --stim "$R/stim.py" --screen "$S" --out "$RUNNER_TEMP/len$d" --dur $d --reps 3 --keep --level debug \
               --arm "c062=$B/c062/cap.exe" --arm "main=$B/main/cap.exe"
             find "$RUNNER_TEMP/len$d" -name '*.mp4' -size +1M -delete
           done
