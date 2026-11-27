@@ -79,11 +79,6 @@ fn active_endpoints(enumerator: &IMMDeviceEnumerator, flow: EDataFlow) -> Vec<(S
         .collect()
 }
 
-/// How often the watch looks while only a call's process tree is read: a
-/// tab of the call's app that starts playing on another output is left out
-/// within this.
-const CALL_ONLY_LOOK: Duration = Duration::from_millis(500);
-
 /// The audio sessions of every endpoint looked at, by endpoint id. A
 /// session manager is kept for as long as its endpoint is there.
 #[derive(Default)]
@@ -308,11 +303,7 @@ impl CallOutputWatch {
                             }
                             last = Some(now);
                         }
-                        std::thread::park_timeout(if matches!(meant, Some(Meant::Tree(_))) {
-                            CALL_ONLY_LOOK
-                        } else {
-                            every
-                        });
+                        std::thread::park_timeout(every);
                     }
                 }
             })?;
