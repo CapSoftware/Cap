@@ -1935,6 +1935,7 @@ pub struct SegmentUi<'a> {
     pub audio_picker_lane: Option<u32>,
     /// `isHoveringGenerateZoomButton` (`TL/ZoomTrack.tsx:308-309, 784`).
     pub hovering_generate_zoom: bool,
+    pub keyboard_generate_prompt: bool,
     pub scene_preview_time: Option<f64>,
     /// The shots a hovered Auto scene pill would lay down, drawn as ghosts so
     /// a count can be judged against the footage before it is committed.
@@ -2347,6 +2348,7 @@ fn render_track_content(
     let mut content = div().relative().size_full();
 
     if !segments.iter().any(|segment| segment.lane == row.lane)
+        && !(row.kind == TrackKind::Keyboard && ui.keyboard_generate_prompt)
         && let Some(empty) = render_empty_track(
             theme,
             row.kind,

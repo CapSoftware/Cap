@@ -1090,6 +1090,17 @@ screenshots_description = "Hier erscheinen Ihre Bildschirmfotos. Machen Sie ein 
 view_all_recordings = "Alle Aufnahmen anzeigen"
 view_all_screenshots = "Alle Bildschirmfotos anzeigen"
 
+[main.link_start]
+camera = "Kamera: {name}"
+instant = "Instant-Modus: {target}"
+microphone = "Mikrofon: {name}"
+none = "Keins"
+requested = "Ein Link möchte eine Aufnahme starten."
+start = "Aufnahme starten"
+studio = "Studio-Modus: {target}"
+system_audio = "Systemaudio: an"
+title = "Aufnahme starten?"
+
 [main.mic_warning]
 body = "Diese Aufnahme enthält Ihre Stimme nicht. Wählen Sie ein Mikrofon oder fahren Sie ohne Mikrofon fort."
 dont_show_again = "Nicht mehr anzeigen"
@@ -1564,6 +1575,10 @@ screenshot = "Bildschirmfotos sofort aufnehmen und beschriften."
 studio = "Lokale Aufnahme in höchster Qualität zum späteren Bearbeiten."
 subtitle = "Wählen Sie, wie Sie Ihren Bildschirm aufnehmen möchten"
 title = "Aufnahmemodus wählen"
+
+[dialog.saving]
+in_background = "Ihre Aufnahme wird noch gespeichert und erscheint in Ihrer Bibliothek, sobald sie fertig ist. Sie können jetzt eine neue Aufnahme starten."
+title = "Wird noch gespeichert"
 
 [dialog.storage]
 stopped_kept = "Die Aufnahme wurde beendet, weil der Speicherplatz knapp ist. Ihre Aufnahmedateien bleiben erhalten. Geben Sie Speicherplatz frei und stellen Sie die Aufnahme dann unten wieder her."

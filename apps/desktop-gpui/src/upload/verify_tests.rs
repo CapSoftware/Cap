@@ -223,6 +223,7 @@ struct MockState {
     deletes: u32,
     created: Vec<String>,
     created_orgs: Vec<Option<String>>,
+    recreated: Vec<String>,
     deleted: Vec<String>,
     deleted_on_web: Vec<String>,
     delete_on_completion: Vec<String>,
@@ -461,6 +462,11 @@ impl MockCap {
 
     pub(super) fn created(&self) -> Vec<String> {
         self.lock().created.clone()
+    }
+
+    /// Caps deleted on the web that a create call with their id brought back.
+    pub(super) fn recreated(&self) -> Vec<String> {
+        self.lock().recreated.clone()
     }
 
     /// Videos whose published output a replacement upload superseded.
@@ -859,6 +865,17 @@ impl Server {
                 )
             }
             ("GET", "/api/desktop/video/create") => {
+                if let Some(id) = query.get("videoId").cloned()
+                    && state.deleted_on_web.contains(&id)
+                {
+                    if query.get("requireExisting").map(String::as_str) == Some("true") {
+                        return reply(404, json!({ "error": "Video not found" }));
+                    }
+                    // As on the real server: a delete leaves no record, so a
+                    // create with the old id inserts the video again.
+                    state.deleted_on_web.retain(|deleted| deleted != &id);
+                    state.recreated.push(id);
+                }
                 let id = query.get("videoId").cloned().unwrap_or_else(|| {
                     state.next_id += 1;
                     format!("verifyvideo{:04}", state.next_id)

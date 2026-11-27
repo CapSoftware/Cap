@@ -2580,7 +2580,7 @@ impl TimelineConfiguration {
             let next_transition = self.effective_transition(segment_index + 1);
             let next_duration = next_transition.as_ref().map_or(0.0, |value| value.duration);
             let single_start = segment_start + incoming_duration;
-            let output_end = segment_start + segment.duration() - next_duration;
+            let output_end = segment_start + (segment.duration() - next_duration);
 
             if frame_time >= single_start && frame_time < output_end {
                 let source_time = segment.interpolate_time(frame_time - segment_start)?;
@@ -2594,7 +2594,7 @@ impl TimelineConfiguration {
                 });
             }
 
-            segment_start += segment.duration() - next_duration;
+            segment_start = output_end;
             incoming = next_transition;
         }
 
@@ -5099,6 +5099,38 @@ mod tests {
                 && incoming.source_time == 10.5
                 && progress == 0.5
         ));
+    }
+
+    #[test]
+    fn every_frame_maps_across_transitions_at_rounding_boundaries() {
+        let mut timeline = timeline_with_transitions(
+            [1, 2]
+                .into_iter()
+                .map(|segment_index| ClipTransition {
+                    segment_index,
+                    kind: ClipTransitionType::CrossFade,
+                    duration: 0.5,
+                })
+                .collect(),
+        );
+        let template = timeline.segments[0].clone();
+        timeline.segments = [(0.0, 3.1), (4.1, 5.5), (6.5, 10.5)]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (start, end))| TimelineSegment {
+                recording_clip: index as u32,
+                start,
+                end,
+                timescale: 1.0,
+                ..template.clone()
+            })
+            .collect();
+
+        let frames = (timeline.duration() * 30.0).floor() as u32;
+        let unmapped = (0..frames)
+            .filter(|frame| timeline.get_segment_time(*frame as f64 / 30.0).is_none())
+            .collect::<Vec<_>>();
+        assert_eq!(unmapped, Vec::<u32>::new());
     }
 
     #[test]
