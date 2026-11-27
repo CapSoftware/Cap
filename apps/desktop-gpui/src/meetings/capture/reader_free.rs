@@ -297,14 +297,17 @@ mod platform {
         Ok(plan.len())
     }
 
-    /// Removes our links from streams that no longer play to `output`. The
-    /// number removed.
-    fn unlink_others(output: &str) -> Result<usize, String> {
-        let plan = plan_unlinks(&dump()?, output, NODE);
-        for id in &plan {
+    /// Links what plays to `output` into our capture and removes our links
+    /// from streams that play elsewhere now, from one look at the graph.
+    fn reconcile(output: &str) -> Result<(), String> {
+        let graph = dump()?;
+        for (from, to) in plan_links(&graph, output, NODE) {
+            run("pw-link", &[&from.to_string(), &to.to_string()])?;
+        }
+        for id in plan_unlinks(&graph, output, NODE) {
             run("pw-link", &["-d", &id.to_string()])?;
         }
-        Ok(plan.len())
+        Ok(())
     }
 
     /// Cap's own capture stream: an input node no one plays to on their own
@@ -468,6 +471,7 @@ mod platform {
         output: Arc<Mutex<String>>,
         events: Option<Child>,
         thread: Option<JoinHandle<()>>,
+        reconciler: Option<JoinHandle<()>>,
     }
 
     impl ReaderFree {
@@ -494,6 +498,7 @@ mod platform {
                 output: Arc::new(Mutex::new(output.to_string())),
                 events: None,
                 thread: None,
+                reconciler: None,
             };
             // Our node appears in the graph a moment after it connects.
             let waited = Instant::now();
@@ -518,19 +523,35 @@ mod platform {
             let stdout = events.stdout.take();
             made.events = Some(events);
             let current = made.output.clone();
+            // A stream that appears or changes (moved to another output, or
+            // only its volume) wakes one look at the graph; a burst of
+            // changes is one look.
+            let (wake, woken) = flume::bounded::<()>(1);
+            made.reconciler = std::thread::Builder::new()
+                .name("cap-meeting-reader-free-reconcile".into())
+                .spawn(move || {
+                    while woken.recv().is_ok() {
+                        // A new or moved stream reaches its output a moment
+                        // after the event.
+                        std::thread::sleep(Duration::from_millis(30));
+                        while woken.try_recv().is_ok() {}
+                        let output = current.lock().map(|o| o.clone()).unwrap_or_default();
+                        if let Err(error) = reconcile(&output) {
+                            tracing::debug!(%error, "could not update the reader-free capture's links");
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                })
+                .ok();
             made.thread = stdout.and_then(|stdout| {
                 std::thread::Builder::new()
                     .name("cap-meeting-reader-free-links".into())
                     .spawn(move || {
                         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                            if line.contains("'new' on sink-input") {
-                                let output = current.lock().map(|o| o.clone()).unwrap_or_default();
-                                // A new stream reaches its output a moment
-                                // after it appears.
-                                std::thread::sleep(Duration::from_millis(30));
-                                if let Err(error) = link(&output) {
-                                    tracing::debug!(%error, "could not link a new stream to the reader-free capture");
-                                }
+                            if line.contains("'new' on sink-input")
+                                || line.contains("'change' on sink-input")
+                            {
+                                let _ = wake.try_send(());
                             }
                         }
                     })
@@ -559,11 +580,8 @@ mod platform {
             if !changed {
                 return;
             }
-            if let Err(error) = link(output) {
-                tracing::debug!(%error, "could not link the new output's streams to the reader-free capture");
-            }
-            if let Err(error) = unlink_others(output) {
-                tracing::debug!(%error, "could not unlink the old output's streams from the reader-free capture");
+            if let Err(error) = reconcile(output) {
+                tracing::debug!(%error, "could not follow the new output with the reader-free capture");
             }
         }
     }
@@ -577,6 +595,10 @@ mod platform {
             }
             if let Some(thread) = self.thread.take() {
                 let _ = thread.join();
+            }
+            // The events thread is gone, so the reconciler's channel closes.
+            if let Some(reconciler) = self.reconciler.take() {
+                let _ = reconciler.join();
             }
             // Our node, and every link into it, goes with the capture.
             drop(self.capture.take());
