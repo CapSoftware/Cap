@@ -1353,16 +1353,19 @@ def wait_finalized(sb, timeout):
     return None
 
 
-def perf_record(side, label, mode, fps, secs, mic):
+def perf_record(side, label, mode, fps, secs, mic, cam=False):
     sb = Sandbox(f"perf-{label}-{side}-{int(time.time())}", general={"maxFps": fps, "postStudioRecordingBehaviour": "showOverlay"})
     env = {} if OS != "Linux" else {"CAP_GPUI_AUTO_OVERLAY": "window", "CAP_GPUI_AUTO_WINDOW": "xmessage"}
     if not mic:
         env["CAP_GPUI_AUTO_NO_MIC"] = "1"
     env["CAP_GPUI_AUTO_RECORD"] = f"{mode}:{secs}"
+    if cam:
+        env["CAP_GPUI_AUTO_CAMERA"] = "1"
     server = None
     if mode == "instant":
         server = Mock(f"perf-{label}-{side}-{int(time.time())}")
         sb = Sandbox(f"perf-{label}-{side}-{int(time.time())}", server=server.url, general={"maxFps": fps})
+    stim = subprocess.Popen(os.environ["GATE_STIM"], shell=True) if os.environ.get("GATE_STIM") else None
     proc = sb.launch(side, f"perf-{label}", env)
     entry = {"label": label, "mode": mode, "fps_setting": fps, "secs": secs, "mic": mic}
     t_start = wait_log(proc, "auto-record start requested", 90)
@@ -1394,6 +1397,9 @@ def perf_record(side, label, mode, fps, secs, mic):
                 time.sleep(0.25)
     entry["log_errors"] = tail(proc, 8, grep=["ERROR", "panicked"])
     kill(proc)
+    if stim:
+        kill(stim)
+        shell(os.environ.get("GATE_STIM_KILL"))
     if server:
         server.finish()
     projects = sb.projects()
@@ -1406,17 +1412,18 @@ def perf_record(side, label, mode, fps, secs, mic):
 
 
 def perf_playback(side, sb, project):
-    env = {"CAP_GPUI_AUTO_EDITOR": str(project), "CAP_GPUI_AUTO_PLAYBACK": "12", "CAP_GPUI_AUTO_FRAME_STATS": "10"}
+    env = {"CAP_GPUI_AUTO_EDITOR": str(project), "CAP_GPUI_AUTO_PLAYBACK": "16", "CAP_GPUI_AUTO_FRAME_STATS": "14"}
     proc = sb.launch(side, "perf-play", env)
     entry = {}
     elapsed, _ = wait_window(proc, 90, min_size=400)
     entry["editor_window_s"] = round(elapsed, 3) if elapsed else None
     t_play = wait_log(proc, "auto playback: playing", 120)
     if t_play:
+        time.sleep(3)
         with Sampler(proc.pid) as s:
             time.sleep(10)
         entry["playback_resources"] = s.summary()
-        time.sleep(4)
+        time.sleep(5)
     entry["frame_stats"] = tail(proc, 4, grep=["frame stats", "playback fps"])
     entry["log_errors"] = tail(proc, 6, grep=["ERROR", "panicked"])
     kill(proc)
@@ -1427,7 +1434,8 @@ def flow_playab():
     """One project (recorded by the oldest build) played by every build, rotated."""
     rounds = int(os.environ.get("GATE_PLAY_ROUNDS", "6"))
     src_side = SIDES[0]
-    sb, entry = perf_record(src_side, "playsrc", "studio", 60, 30, False)
+    cam = os.environ.get("GATE_PLAY_CAMERA") == "1"
+    sb, entry = perf_record(src_side, "playsrc", "studio", 60, 30, False, cam=cam)
     record("playab_source", src_side, entry)
     if not entry.get("project"):
         return
@@ -1438,10 +1446,17 @@ def flow_playab():
             view = Sandbox(f"playab-{side}-{rnd}")
             dest = view.root / "recordings" / project.name
             shutil.copytree(project, dest)
-            e = perf_playback(side, view, dest)
-            e["round"] = rnd
-            record("playab", side, e)
-            log("playab", side, rnd, g_cpu(e))
+            for warm in (False, True):
+                e = perf_playback(side, view, dest)
+                e["round"] = rnd
+                e["warm"] = warm
+                e["camera"] = cam
+                e["hover"] = tail_file(view, "hover analysis")
+                record("playab", side, e)
+                log("playab", side, rnd, "warm" if warm else "cold", g_cpu(e))
+            idle = editor_idle(side, view, dest)
+            idle["round"] = rnd
+            record("editor_idle", side, idle)
 
 
 EXPORT_1080 = {"format": "Mp4", "fps": 60, "export_to": "file", "resolution": "1080p", "compression": "Maximum", "custom_bpp": None}
@@ -1451,9 +1466,11 @@ def flow_exportab():
     """One project (recorded by the oldest build) exported by every build with
     the same saved settings, rotated. GATE_EXPORT_PRESET=4k|1080, rounds."""
     rounds = int(os.environ.get("GATE_EXPORT_ROUNDS", "4"))
-    prefs = EXPORT_4K if os.environ.get("GATE_EXPORT_PRESET", "1080" if OS == "Windows" else "4k") == "4k" else EXPORT_1080
+    preset = os.environ.get("GATE_EXPORT_PRESET", "1080" if OS == "Windows" else "4k")
+    prefs = {"4k": EXPORT_4K, "1080": EXPORT_1080}.get(preset)
+    src_fps = int(os.environ.get("GATE_SRC_FPS", "60"))
     src_side = SIDES[0]
-    sb, entry = studio_record(src_side, f"exab-src-{src_side}", secs=20)
+    sb, entry = perf_record(src_side, f"exsrc{src_fps}", "studio", src_fps, 20, OS != "Windows")
     record("exportab_source", src_side, entry)
     if not entry.get("project"):
         return
@@ -1468,7 +1485,8 @@ def flow_exportab():
             with Sampler_after_window(view, side) as holder:
                 e = editor_export(side, view, dest, "mp4")
             e["round"] = rnd
-            e["preset"] = prefs["resolution"]
+            e["preset"] = preset
+            e["src_fps"] = src_fps
             for name, probe in (e.get("outputs") or {}).items():
                 try:
                     e["bytes"] = (WORK / f"exports-{side}" / name).stat().st_size
@@ -1487,6 +1505,27 @@ class Sampler_after_window:
 
     def __exit__(self, *exc):
         return False
+
+
+def tail_file(sb, needle):
+    out = []
+    for f in sorted(sb.root.glob("*.log")):
+        for line in f.read_text(errors="replace").splitlines():
+            if needle in line:
+                out.append(line[-160:])
+    return out[-4:]
+
+
+def editor_idle(side, sb, project):
+    """Editor open on the project, not playing: CPU from +5 s to +20 s."""
+    proc = sb.launch(side, "editor-idle", {"CAP_GPUI_AUTO_EDITOR": str(project)})
+    wait_window(proc, 90, min_size=400)
+    time.sleep(5)
+    with Sampler(proc.pid) as s:
+        time.sleep(15)
+    entry = {"idle_resources": s.summary()}
+    kill(proc)
+    return entry
 
 
 def g_cpu(e):
@@ -1543,6 +1582,70 @@ def flow_memmap():
             kill(proc)
             record("memmap", side, entry)
             log("memmap", side, rnd, entry.get("rss_mb"), entry.get("threads"))
+
+
+def thread_names(pid):
+    if OS != "Linux":
+        return None
+    names = {}
+    try:
+        for t in os.listdir(f"/proc/{pid}/task"):
+            try:
+                n = open(f"/proc/{pid}/task/{t}/comm").read().strip()
+            except OSError:
+                continue
+            names[n] = names.get(n, 0) + 1
+    except OSError:
+        return None
+    return dict(sorted(names.items()))
+
+
+def flow_idle60():
+    """Main window open, nothing touched, Notes never enabled: 60 s of idle.
+    CPU seconds, context switches (wakeups), threads, sockets, Notes logs."""
+    for rnd in range(int(os.environ.get("GATE_IDLE_ROUNDS", "3"))):
+        order = SIDES[rnd % len(SIDES):] + SIDES[: rnd % len(SIDES)]
+        for side in order:
+            sb = Sandbox(f"idle60-{side}-{rnd}")
+            proc = sb.launch(side, "idle60", {"RUST_LOG": "info"})
+            wait_window(proc, 90)
+            time.sleep(10)
+            entry = {"round": rnd}
+            try:
+                p = psutil.Process(proc.pid)
+                t0 = p.cpu_times()
+                c0 = p.num_ctx_switches()
+                entry["threads_start"] = p.num_threads()
+                entry["thread_names"] = thread_names(proc.pid)
+                conns = set()
+                rss = []
+                for _ in range(12):
+                    time.sleep(5)
+                    try:
+                        for c in (getattr(p, "net_connections", None) or p.connections)(kind="inet"):
+                            if c.raddr:
+                                conns.add(f"{c.raddr.ip}:{c.raddr.port} {c.status}")
+                    except (psutil.Error, OSError):
+                        pass
+                    rss.append(p.memory_info().rss)
+                t1 = p.cpu_times()
+                c1 = p.num_ctx_switches()
+                entry["cpu_s_60"] = round((t1.user + t1.system) - (t0.user + t0.system), 3)
+                entry["ctx_switches_60"] = (c1.voluntary - c0.voluntary) + (c1.involuntary - c0.involuntary)
+                entry["threads_end"] = p.num_threads()
+                entry["rss_mb_end"] = round(rss[-1] / 1048576, 1)
+                entry["rss_mb_drift"] = round((rss[-1] - rss[0]) / 1048576, 1)
+                entry["remote_sockets"] = sorted(conns)
+                entry["windows"] = [w[4] for w in visible_windows(proc.pid)]
+            except psutil.Error as error:
+                entry["error"] = str(error)
+            entry["notes_log"] = tail(proc, 12, grep=["meeting", "Meeting", "calendar", "Calendar", "capabilit", "model", "speaker", "diariz", "transcri"])
+            entry["log_lines"] = len(text(proc).splitlines())
+            if rnd == 0:
+                entry["shot"] = screenshot(f"idle60-{side}")
+            kill(proc)
+            record("idle60", side, entry)
+            log("idle60", side, rnd, entry.get("cpu_s_60"), entry.get("ctx_switches_60"), entry.get("threads_end"), entry.get("remote_sockets"))
 
 
 def flow_perf():
@@ -1704,6 +1807,7 @@ def main():
         "playab": flow_playab,
         "memmap": flow_memmap,
         "exportab": flow_exportab,
+        "idle60": flow_idle60,
     }
     for name, fn in flows.items():
         if "all" not in FLOWS and name not in FLOWS:
