@@ -3889,19 +3889,20 @@ impl EditorWindow {
     /// gpui only renders on invalidation, so a height transition needs someone
     /// to ask for the next frame. Same ticker the settings window's collapsible
     /// uses.
+    ///
+    /// Every collapsible is drawn inside the sidebar section, so each tick
+    /// invalidates only that cached view. Notifying the editor or refreshing
+    /// the window would rebuild the header, toolbar, transport and timeline on
+    /// all 15 frames of the transition.
     pub(crate) fn animate_collapsibles(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        cx.notify();
-        window.refresh();
+        self.invalidate_sidebar(cx);
         cx.spawn_in(window, async move |this, cx| {
             for _ in 0..14 {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(16))
                     .await;
                 if this
-                    .update_in(cx, |_, window, cx| {
-                        cx.notify();
-                        window.refresh();
-                    })
+                    .update(cx, |this, cx| this.invalidate_sidebar(cx))
                     .is_err()
                 {
                     return;
