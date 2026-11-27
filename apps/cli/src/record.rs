@@ -1,10 +1,12 @@
 use cap_project::{
     InstantRecordingMeta, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    StudioRecordingStatus,
 };
 use cap_recording::{
     CameraFeed, DoneFut, MicrophoneFeed, PipelineStoppedByUser,
     feeds::{camera, microphone},
     instant_recording,
+    recovery::RecoveryManager,
     screen_capture::{ScreenCaptureTarget, frame_accounting::ScreenFrameTotals},
     studio_recording::{self, ActorHandle as StudioActorHandle},
     upload_resume::UploadLock,
@@ -24,7 +26,7 @@ use std::{
     process::Stdio,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -147,23 +149,97 @@ fn video_bitrate_bps(mbps: f64) -> u32 {
 }
 
 pub(crate) const LOW_STORAGE_EXIT_CODE: i32 = 3;
+pub(crate) const CAPTURE_FAILED_EXIT_CODE: i32 = 4;
 const LOW_STORAGE_CODE: &str = "lowStorage";
+const CAPTURE_FAILED_CODE: &str = "captureFailed";
 const STORAGE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
-static LOW_STORAGE_FAILURE: AtomicBool = AtomicBool::new(false);
+static EARLY_STOP: AtomicU8 = AtomicU8::new(0);
+static STUDIO_CAPTURE_UNCONFIRMED: AtomicBool = AtomicBool::new(false);
+
+/// A failed stop whose capture shutdown was not confirmed may still have
+/// encoder tasks writing, so its media is left for recovery once this
+/// process has exited.
+fn note_studio_stop(outcome: &studio_recording::StudioStopOutcome) {
+    if outcome.result.is_err() && !outcome.capture_stopped {
+        STUDIO_CAPTURE_UNCONFIRMED.store(true, Ordering::SeqCst);
+    }
+}
+
+fn note_early_stop(reason: StopReason) {
+    EARLY_STOP.store(
+        match reason {
+            StopReason::LowStorage => 1,
+            StopReason::CaptureFailed => 2,
+        },
+        Ordering::SeqCst,
+    );
+}
+
+fn early_stop() -> Option<StopReason> {
+    match EARLY_STOP.load(Ordering::SeqCst) {
+        1 => Some(StopReason::LowStorage),
+        2 => Some(StopReason::CaptureFailed),
+        _ => None,
+    }
+}
 
 pub(crate) fn failure_exit_code() -> i32 {
-    if LOW_STORAGE_FAILURE.load(Ordering::SeqCst) {
-        LOW_STORAGE_EXIT_CODE
-    } else {
-        1
+    match early_stop() {
+        Some(StopReason::LowStorage) => LOW_STORAGE_EXIT_CODE,
+        Some(StopReason::CaptureFailed) => CAPTURE_FAILED_EXIT_CODE,
+        None => 1,
     }
 }
 
 fn low_storage_error_code() -> Option<&'static str> {
-    LOW_STORAGE_FAILURE
-        .load(Ordering::SeqCst)
-        .then_some(LOW_STORAGE_CODE)
+    early_stop().map(|reason| match reason {
+        StopReason::LowStorage => LOW_STORAGE_CODE,
+        StopReason::CaptureFailed => CAPTURE_FAILED_CODE,
+    })
+}
+
+/// A Studio recording whose capture failed part way is marked Failed with its
+/// media kept. The desktop editor salvages such a project when the user opens
+/// it; the CLI has no editor, so the recording that just failed and an explicit
+/// export run the same salvage. Recordings still saving in this process are
+/// skipped by `inspect_recording`.
+pub(crate) fn salvage_failed_studio(project_path: &Path) -> Result<bool, String> {
+    let Ok(meta) = RecordingMeta::load_for_project(project_path) else {
+        return Ok(false);
+    };
+    if !meta
+        .studio_meta()
+        .is_some_and(|studio| matches!(studio.status(), StudioRecordingStatus::Failed { .. }))
+    {
+        return Ok(false);
+    }
+    let Some(incomplete) = RecoveryManager::inspect_recording(project_path) else {
+        return Ok(false);
+    };
+    if incomplete.recoverable_segments.is_empty() {
+        return Ok(false);
+    }
+    if let Ok(storage) = disk_space::recording_storage(project_path, FinalizationKind::Studio)
+        && !storage.can_finalize()
+    {
+        return Err(format!(
+            "Not enough free space to recover the recording: {} MB free, about {} MB needed. Its files are kept at {}",
+            mib(storage.available_bytes),
+            mib(storage
+                .finalization_bytes()
+                .saturating_add(disk_space::RECORDING_DISK_RESERVE_BYTES / 2)),
+            project_path.display()
+        ));
+    }
+    RecoveryManager::salvage(&incomplete)
+        .map(|_| true)
+        .map_err(|error| {
+            format!(
+                "Could not recover the recording: {error}. Its files are kept at {}",
+                project_path.display()
+            )
+        })
 }
 
 fn mib(bytes: u64) -> u64 {
@@ -187,7 +263,7 @@ fn ensure_storage_to_start(path: &Path) -> Result<(), String> {
     if storage.status() != DiskSpaceStatus::Exhausted {
         return Ok(());
     }
-    LOW_STORAGE_FAILURE.store(true, Ordering::SeqCst);
+    note_early_stop(StopReason::LowStorage);
     Err(format!(
         "Not enough free space to record: {} MB free on the drive for {}. Cap keeps {} MB free so a recording can always be saved. Free up space or pass a --path on another drive",
         mib(available_bytes),
@@ -196,11 +272,17 @@ fn ensure_storage_to_start(path: &Path) -> Result<(), String> {
     ))
 }
 
-fn low_storage_stop_message(path: &Path) -> String {
-    format!(
-        "Recording stopped early because the drive is almost full. Everything captured so far was saved to {}",
-        path.display()
-    )
+fn early_stop_message(reason: StopReason, path: &Path) -> String {
+    match reason {
+        StopReason::LowStorage => format!(
+            "Recording stopped early because the drive is almost full. Everything captured so far was saved to {}",
+            path.display()
+        ),
+        StopReason::CaptureFailed => format!(
+            "Recording stopped early because capture failed. Everything captured before the failure was saved to {}",
+            path.display()
+        ),
+    }
 }
 
 /// Resolves once free space falls to the point where saving the recording
@@ -418,7 +500,22 @@ async fn run_foreground(params: RecordParams, format: OutputFormat) -> Result<()
         let _ = emit_record_event(format, &storage_event(low, storage));
     });
     let (completed, stop_reason) =
-        finalize(actor, params.duration, interactive, None, storage).await?;
+        match finalize(actor, params.duration, interactive, None, storage).await {
+            Ok(finalized) => finalized,
+            Err(error) => {
+                let path = salvage_after_capture_failure(params.mode, path, error).await?;
+                emit_record_event(
+                    format,
+                    &RecordEvent::Stopped {
+                        path: &path.display().to_string(),
+                        recording_meta_exists: path.join("recording-meta.json").exists(),
+                        screen_frames: None,
+                        reason: Some(StopReason::CaptureFailed),
+                    },
+                )?;
+                return Err(early_stop_message(StopReason::CaptureFailed, &path));
+            }
+        };
     crate::automation::run_recording_finished(
         completed.project_path(),
         automation_mode(params.mode),
@@ -426,7 +523,7 @@ async fn run_foreground(params: RecordParams, format: OutputFormat) -> Result<()
     .await;
     emit_stopped(format, &completed, stop_reason)?;
     match stop_reason {
-        Some(StopReason::LowStorage) => Err(low_storage_stop_message(completed.project_path())),
+        Some(reason) => Err(early_stop_message(reason, completed.project_path())),
         None => Ok(()),
     }
 }
@@ -644,7 +741,23 @@ async fn session_worker(params: RecordParams, recording_id: &str) -> Result<(), 
         }
     });
     let (completed, stop_reason) =
-        finalize(actor, params.duration, false, Some(&stop_path), storage).await?;
+        match finalize(actor, params.duration, false, Some(&stop_path), storage).await {
+            Ok(finalized) => finalized,
+            Err(error) => {
+                let path = salvage_after_capture_failure(params.mode, path.clone(), error).await?;
+                return session::write_session(&Session {
+                    recording_id: recording_id.to_string(),
+                    pid: std::process::id(),
+                    recording_meta_exists: Some(path.join("recording-meta.json").exists()),
+                    path,
+                    status: SessionStatus::Stopped,
+                    started_at,
+                    error: None,
+                    stop_reason: Some(StopReason::CaptureFailed),
+                    storage_low: false,
+                });
+            }
+        };
     crate::automation::run_recording_finished(
         completed.project_path(),
         automation_mode(params.mode),
@@ -754,6 +867,30 @@ impl RecordStopArgs {
     }
 }
 
+/// Salvages the Studio recording whose capture just failed, the way the
+/// desktop editor does when the failed recording is opened. Returns the
+/// original error when there was nothing to salvage or the salvage failed.
+async fn salvage_after_capture_failure(
+    mode: RecordMode,
+    path: PathBuf,
+    error: String,
+) -> Result<PathBuf, String> {
+    if mode != RecordMode::Studio || STUDIO_CAPTURE_UNCONFIRMED.load(Ordering::SeqCst) {
+        return Err(error);
+    }
+    let project = path.clone();
+    match tokio::task::spawn_blocking(move || salvage_failed_studio(&project)).await {
+        Ok(Ok(true)) => {
+            tracing::warn!(%error, path = %path.display(), "Recording capture failed; recovered what was captured");
+            note_early_stop(StopReason::CaptureFailed);
+            Ok(path)
+        }
+        Ok(Ok(false)) => Err(error),
+        Ok(Err(salvage)) => Err(format!("{error}. {salvage}")),
+        Err(join) => Err(format!("{error}. Recovery task failed: {join}")),
+    }
+}
+
 fn finish_stopped_session(format: OutputFormat, session: &Session) -> Result<(), String> {
     emit_record_event(
         format,
@@ -766,9 +903,9 @@ fn finish_stopped_session(format: OutputFormat, session: &Session) -> Result<(),
     )?;
     cleanup_session(&session.recording_id, &session.path);
     match session.stop_reason {
-        Some(StopReason::LowStorage) => {
-            LOW_STORAGE_FAILURE.store(true, Ordering::SeqCst);
-            Err(low_storage_stop_message(&session.path))
+        Some(reason) => {
+            note_early_stop(reason);
+            Err(early_stop_message(reason, &session.path))
         }
         None => Ok(()),
     }
@@ -943,15 +1080,15 @@ impl ActorHandle {
                     Some(finishing) => wait_for_studio_finish(finishing).await,
                     None => outcome,
                 };
+                note_studio_stop(&outcome);
                 outcome.result.map(Box::new).map(CompletedRecording::Studio)
             }
             #[cfg(not(windows))]
-            Self::Studio(actor) => actor
-                .stop()
-                .await
-                .map(Box::new)
-                .map(CompletedRecording::Studio)
-                .map_err(|e| format!("{e:#}")),
+            Self::Studio(actor) => {
+                let outcome = actor.stop_with_outcome().await;
+                note_studio_stop(&outcome);
+                outcome.result.map(Box::new).map(CompletedRecording::Studio)
+            }
             Self::Instant { actor, .. } => actor
                 .stop()
                 .await
@@ -1289,7 +1426,7 @@ async fn finalize(
                     biased;
                     _ = wait_for_stop(duration, interactive, stop_file) => None,
                     _ = storage => {
-                        LOW_STORAGE_FAILURE.store(true, Ordering::SeqCst);
+                        note_early_stop(StopReason::LowStorage);
                         Some(StopReason::LowStorage)
                     }
                 }
@@ -1308,9 +1445,7 @@ async fn finalize(
                 .stop()
                 .await
                 .map_err(|e| format!("recording panicked; finalize failed: {e}"))?;
-            let stop_reason = LOW_STORAGE_FAILURE
-                .load(Ordering::SeqCst)
-                .then_some(StopReason::LowStorage);
+            let stop_reason = early_stop();
             Ok((finalize_completed(completed).await?, stop_reason))
         }
     }
@@ -2120,6 +2255,15 @@ mod tests {
         .unwrap();
         assert_eq!(low_storage["reason"], "lowStorage");
 
+        let capture_failed = serde_json::to_value(RecordEvent::Stopped {
+            path: "p",
+            recording_meta_exists: true,
+            screen_frames: None,
+            reason: Some(StopReason::CaptureFailed),
+        })
+        .unwrap();
+        assert_eq!(capture_failed["reason"], "captureFailed");
+
         let storage = serde_json::to_value(storage_event(
             true,
             RecordingStorage {
@@ -2190,6 +2334,231 @@ mod tests {
             row.error.as_deref(),
             Some("recording process is not running")
         );
+    }
+
+    fn studio_fixture(dir: &Path, status: StudioRecordingStatus) -> PathBuf {
+        studio_fixture_with(dir, status, true)
+    }
+
+    fn studio_fixture_with(dir: &Path, status: StudioRecordingStatus, listed: bool) -> PathBuf {
+        use cap_enc_ffmpeg::segmented_stream::{
+            SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
+        };
+        use cap_project::{
+            Cursors, MultipleSegment, MultipleSegments, StudioRecordingMeta, VideoMeta,
+        };
+
+        ffmpeg::init().unwrap();
+        let project = dir.join("failed.cap");
+        let display = project.join("content/segments/segment-0/display");
+        std::fs::create_dir_all(&display).unwrap();
+        let mut encoder = SegmentedVideoEncoder::init(
+            display,
+            cap_media_info::VideoInfo {
+                pixel_format: cap_media_info::Pixel::NV12,
+                width: 320,
+                height: 240,
+                time_base: ffmpeg::Rational(1, 1_000_000),
+                frame_rate: ffmpeg::Rational(30, 1),
+            },
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_secs(2),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for index in 0..180u64 {
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
+            for plane in 0..frame.planes() {
+                frame.data_mut(plane).fill(128);
+            }
+            encoder
+                .queue_frame(frame, Duration::from_nanos(index * 1_000_000_000 / 30))
+                .unwrap();
+        }
+        drop(encoder);
+        let meta = RecordingMeta {
+            platform: None,
+            project_path: project.clone(),
+            pretty_name: "Failed".to_string(),
+            sharing: None,
+            upload: None,
+            inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
+                inner: MultipleSegments {
+                    segments: listed
+                        .then(|| MultipleSegment {
+                            display: VideoMeta {
+                                path: relative_path::RelativePathBuf::from(
+                                    "content/segments/segment-0/display.mp4",
+                                ),
+                                fps: 30,
+                                start_time: None,
+                                device_id: None,
+                            },
+                            camera: None,
+                            mic: None,
+                            system_audio: None,
+                            cursor: None,
+                            keyboard: None,
+                            display_notch: None,
+                            cursor_shape_version: None,
+                        })
+                        .into_iter()
+                        .collect(),
+                    cursors: Cursors::default(),
+                    status: Some(status),
+                    cursor_shape_version: 0,
+                    audio_only: false,
+                },
+            })),
+        };
+        std::fs::write(
+            project.join("recording-meta.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+        project
+    }
+
+    fn studio_status(project: &Path) -> StudioRecordingStatus {
+        RecordingMeta::load_for_project(project)
+            .unwrap()
+            .studio_meta()
+            .unwrap()
+            .status()
+    }
+
+    fn fragments(project: &Path) -> Vec<PathBuf> {
+        let mut found: Vec<_> =
+            std::fs::read_dir(project.join("content/segments/segment-0/display"))
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|extension| extension == "m4s"))
+                .collect();
+        found.sort();
+        found
+    }
+
+    fn failed() -> StudioRecordingStatus {
+        StudioRecordingStatus::Failed {
+            error: "display: Task mux-video failed: Windows M4S encoder channel disconnected"
+                .to_string(),
+        }
+    }
+
+    #[test]
+    fn a_failed_studio_project_is_recovered_before_export() {
+        for listed in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let project = studio_fixture_with(directory.path(), failed(), listed);
+
+            assert_eq!(salvage_failed_studio(&project), Ok(true), "listed {listed}");
+            assert!(matches!(
+                studio_status(&project),
+                StudioRecordingStatus::Complete
+            ));
+            assert!(
+                project
+                    .join("content/segments/segment-0/display.mp4")
+                    .is_file()
+            );
+            assert_eq!(salvage_failed_studio(&project), Ok(false));
+        }
+    }
+
+    #[test]
+    fn damaged_media_is_refused_and_the_original_files_are_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = studio_fixture(directory.path(), failed());
+        let fragments = fragments(&project);
+        assert!(fragments.len() >= 2);
+        for fragment in &fragments {
+            let mut bytes = std::fs::read(fragment).unwrap();
+            let start = bytes.len() / 4;
+            let end = bytes.len() - 64;
+            bytes[start..end].fill(0);
+            std::fs::write(fragment, bytes).unwrap();
+        }
+        let before: Vec<_> = fragments
+            .iter()
+            .map(|fragment| std::fs::read(fragment).unwrap())
+            .collect();
+
+        let error = salvage_failed_studio(&project).unwrap_err();
+        assert!(error.contains("Its files are kept"), "{error}");
+        assert!(matches!(
+            studio_status(&project),
+            StudioRecordingStatus::Failed { .. }
+        ));
+        let after: Vec<_> = fragments
+            .iter()
+            .map(|fragment| std::fs::read(fragment).unwrap())
+            .collect();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn only_failed_studio_projects_are_recovered() {
+        for status in [
+            StudioRecordingStatus::InProgress,
+            StudioRecordingStatus::NeedsRemux,
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let project = studio_fixture(directory.path(), status.clone());
+            let before = std::fs::read(project.join("recording-meta.json")).unwrap();
+            assert_eq!(salvage_failed_studio(&project), Ok(false));
+            assert_eq!(
+                std::fs::read(project.join("recording-meta.json")).unwrap(),
+                before
+            );
+            assert!(
+                !project
+                    .join("content/segments/segment-0/display.mp4")
+                    .exists()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_capture_stop_is_left_for_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = studio_fixture(directory.path(), failed());
+        STUDIO_CAPTURE_UNCONFIRMED.store(true, Ordering::SeqCst);
+        let result =
+            salvage_after_capture_failure(RecordMode::Studio, project.clone(), "boom".into()).await;
+        STUDIO_CAPTURE_UNCONFIRMED.store(false, Ordering::SeqCst);
+
+        assert_eq!(result, Err("boom".to_string()));
+        assert!(matches!(
+            studio_status(&project),
+            StudioRecordingStatus::Failed { .. }
+        ));
+        assert_eq!(
+            salvage_after_capture_failure(RecordMode::Instant, project.clone(), "boom".into())
+                .await,
+            Err("boom".to_string())
+        );
+    }
+
+    #[test]
+    fn a_detached_recording_that_recovered_a_failed_capture_reports_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = Session {
+            recording_id: "detached-capture-failed".to_string(),
+            pid: 1,
+            path: directory.path().join("recording.cap"),
+            status: SessionStatus::Stopped,
+            started_at: Some(1),
+            recording_meta_exists: Some(true),
+            error: None,
+            stop_reason: Some(StopReason::CaptureFailed),
+            storage_low: false,
+        };
+        let error = finish_stopped_session(OutputFormat::Json, &session).unwrap_err();
+        assert!(error.contains("capture failed"), "{error}");
+        assert_eq!(failure_exit_code(), CAPTURE_FAILED_EXIT_CODE);
+        assert_eq!(low_storage_error_code(), Some(CAPTURE_FAILED_CODE));
     }
 
     #[test]

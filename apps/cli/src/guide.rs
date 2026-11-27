@@ -156,6 +156,10 @@ fn build() -> Guide {
                 code: 3,
                 meaning: "Recording refused or stopped early because its drive is almost full. A `stopped` event with reason `lowStorage` before the error means everything captured was saved and the project is complete.",
             },
+            ExitCode {
+                code: 4,
+                meaning: "Studio recording stopped early because capture failed (for example the encoder stopped). A `stopped` event with reason `captureFailed` before the error means what was captured until then was recovered and the project is complete.",
+            },
         ],
         commands: vec![
             cmd(
@@ -173,7 +177,7 @@ fn build() -> Guide {
             CommandDoc {
                 requires_duration: false,
                 notes: Some(
-                    "The `started` then `stopped` sequence applies to the foreground run. With `--detach` the stream emits only `started` (or `error`) and returns immediately with recordingId+pid; the `stopped` event is delivered by `cap record stop`. Low disk space: start is refused (exit 3) at 512 MB free or less; `storage` (status low/ok, availableBytes, recordingBytes, reservedBytes) reports when free space runs low; before saving would no longer fit the recording stops by itself, saves, emits `stopped` with reason `lowStorage`, then `error` with code `lowStorage`, and exits 3. Detached sessions show `storageLow` and `stopReason` in `record status`.",
+                    "The `started` then `stopped` sequence applies to the foreground run. With `--detach` the stream emits only `started` (or `error`) and returns immediately with recordingId+pid; the `stopped` event is delivered by `cap record stop`. Low disk space: start is refused (exit 3) at 512 MB free or less; `storage` (status low/ok, availableBytes, recordingBytes, reservedBytes) reports when free space runs low; before saving would no longer fit the recording stops by itself, saves, emits `stopped` with reason `lowStorage`, then `error` with code `lowStorage`, and exits 3. Detached sessions show `storageLow` and `stopReason` in `record status`. When a Studio capture fails part way, the recording recovers what was captured, emits `stopped` with reason `captureFailed`, then `error` with code `captureFailed`, and exits 4.",
                 ),
                 ..cmd(
                     "record start",
@@ -184,7 +188,7 @@ fn build() -> Guide {
             },
             cmd(
                 "record stop",
-                "Finalize a detached recording by recordingId (or --path). Exits 3 after `stopped` with reason `lowStorage` when the recording stopped itself for low disk space.",
+                "Finalize a detached recording by recordingId (or --path). Exits 3 after `stopped` with reason `lowStorage` when the recording stopped itself for low disk space, or 4 after reason `captureFailed`.",
                 OutputMode::Ndjson,
                 &["stopped", "error"],
             ),

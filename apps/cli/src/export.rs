@@ -823,11 +823,12 @@ fn parse_tracks(
 /// that are already progressive.
 async fn ensure_remuxed(project_path: PathBuf) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        crate::record::salvage_failed_studio(&project_path)?;
         cap_recording::recovery::RecoveryManager::remux_if_needed(&project_path)
+            .map_err(|e| format!("Failed to remux recording before export: {e}"))
     })
     .await
-    .map_err(|e| format!("recording remux task failed: {e}"))?
-    .map_err(|e| format!("Failed to remux recording before export: {e}"))?;
+    .map_err(|e| format!("recording remux task failed: {e}"))??;
 
     Ok(())
 }
