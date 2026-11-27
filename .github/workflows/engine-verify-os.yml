@@ -185,6 +185,14 @@ jobs:
         shell: bash
         run: touch "$RUNNER_TEMP/crash-reports-since"
 
+      - name: Keep Linux crash cores
+        if: inputs.platform == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends gdb >/dev/null
+          mkdir -p "$RUNNER_TEMP/verify-cores"
+          sudo sysctl -w "kernel.core_pattern=$RUNNER_TEMP/verify-cores/core.%p"
+
       # A test process that crashes on Windows (0xc0000005) leaves nothing:
       # Git Bash starts run.sh's children with crash reporting off. Tests run
       # through PowerShell instead (scripts/verify/native-launch.ps1, about
@@ -221,6 +229,9 @@ jobs:
         id: test
         shell: bash
         run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            ulimit -c unlimited
+          fi
           if [[ "${{ inputs.archive }}" == true ]]; then
             scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --from-archive "$RUNNER_TEMP/verify.tar.zst"
           else
@@ -243,6 +254,12 @@ jobs:
           --title "${{ inputs.platform }} ${{ inputs.tier }}${{ inputs.shards > 1 && format(' shard {0}/{1}', matrix.shard, inputs.shards) || '' }}"
           --junit "$CAP_VERIFY_REPORT_DIR/junit.xml" --flaky "$CAP_VERIFY_FLAKY_FILE"
           "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Print Linux crash stacks
+        if: failure() && inputs.platform == 'linux'
+        continue-on-error: true
+        shell: bash
+        run: python3 scripts/verify/linux-core-stacks.py "$RUNNER_TEMP/verify-cores" "$CAP_VERIFY_REPORT_DIR/crash-stacks"
 
       - name: Collect macOS crash reports
         id: crash-reports

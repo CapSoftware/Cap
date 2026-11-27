@@ -19,6 +19,15 @@
 #include <spa/pod/builder.h>
 #include <spa/pod/iter.h>
 
+#ifdef CAP_TEST_GBM
+#include <fcntl.h>
+#include <gbm.h>
+#include <linux/dma-buf.h>
+#include <sys/ioctl.h>
+
+static struct gbm_device *gpu;
+#endif
+
 #define WIDTH 640
 #define HEIGHT 360
 #define STRIDE (WIDTH * 4)
@@ -103,11 +112,34 @@ static void on_add_buffer(void *userdata, struct pw_buffer *buffer) {
 		fprintf(stderr, "consumer refused DMA-BUF buffers\n");
 		return;
 	}
+#ifdef CAP_TEST_GBM
+	struct gbm_bo *bo = gbm_bo_create(gpu, WIDTH, HEIGHT, GBM_FORMAT_XRGB8888,
+		GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR);
+	if (bo == NULL || gbm_bo_get_modifier(bo) != LINEAR) {
+		fprintf(stderr, "failed to allocate a LINEAR GPU buffer\n");
+		exit(1);
+	}
+	int fd = gbm_bo_get_fd(bo);
+	struct dma_buf_sync sync = {.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ};
+	if (fd < 0 || ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) < 0) {
+		perror("GPU DMA-BUF read sync");
+		exit(1);
+	}
+	sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
+	if (ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) < 0) {
+		perror("GPU DMA-BUF end read sync");
+		exit(1);
+	}
+	buffer->user_data = bo;
+	fprintf(stderr, "GPU DMA-BUF fd=%d stride=%u modifier=%llu read sync OK\n", fd,
+		gbm_bo_get_stride(bo), (unsigned long long)gbm_bo_get_modifier(bo));
+#else
 	int fd = memfd_create("fake-niri-dmabuf", MFD_CLOEXEC);
 	if (fd < 0 || ftruncate(fd, STRIDE * HEIGHT) < 0) {
 		perror("memfd");
 		return;
 	}
+#endif
 	d->type = SPA_DATA_DmaBuf;
 	d->flags = SPA_DATA_FLAG_READWRITE;
 	d->fd = fd;
@@ -121,6 +153,10 @@ static void on_add_buffer(void *userdata, struct pw_buffer *buffer) {
 static void on_remove_buffer(void *userdata, struct pw_buffer *buffer) {
 	(void)userdata;
 	close(buffer->buffer->datas[0].fd);
+#ifdef CAP_TEST_GBM
+	gbm_bo_destroy(buffer->user_data);
+	buffer->user_data = NULL;
+#endif
 }
 
 static void on_state_changed(void *userdata, enum pw_stream_state old, enum pw_stream_state state,
@@ -148,19 +184,38 @@ static void on_process(void *userdata) {
 	if (buffer == NULL)
 		return;
 	struct spa_data *d = &buffer->buffer->datas[0];
+#ifdef CAP_TEST_GBM
+	uint32_t stride = 0;
+	void *mapping = NULL;
+	uint8_t *pixels = gbm_bo_map(buffer->user_data, 0, 0, WIDTH, HEIGHT,
+		GBM_BO_TRANSFER_WRITE, &stride, &mapping);
+#else
+	uint32_t stride = STRIDE;
 	uint8_t *pixels = mmap(NULL, STRIDE * HEIGHT, PROT_READ | PROT_WRITE, MAP_SHARED, d->fd, 0);
-	if (pixels != MAP_FAILED) {
+#endif
+	if (pixels != NULL && pixels != MAP_FAILED) {
 		uint8_t level = (uint8_t)(16 + (data->frame * 8) % 224);
-		for (int i = 0; i < STRIDE * HEIGHT; i += 4) {
+		for (uint32_t i = 0; i < stride * HEIGHT; i += 4) {
 			pixels[i] = level;
 			pixels[i + 1] = 0x40;
 			pixels[i + 2] = 0x80;
 			pixels[i + 3] = 0xff;
 		}
+#ifdef CAP_TEST_GBM
+		gbm_bo_unmap(buffer->user_data, mapping);
+#else
 		munmap(pixels, STRIDE * HEIGHT);
+#endif
+	} else {
+		fprintf(stderr, "failed to map producer pixels\n");
+		exit(1);
 	}
 	d->chunk->offset = 0;
+#ifdef CAP_TEST_GBM
+	d->chunk->stride = gbm_bo_get_stride(buffer->user_data);
+#else
 	d->chunk->stride = STRIDE;
+#endif
 	d->chunk->size = 1;
 	d->chunk->flags = SPA_CHUNK_FLAG_NONE;
 	data->frame++;
@@ -178,6 +233,19 @@ static const struct pw_stream_events events = {
 
 int main(int argc, char **argv) {
 	struct data data = {0};
+#ifdef CAP_TEST_GBM
+	const char *node = getenv("CAP_TEST_DRM_RENDER_NODE");
+	if (node == NULL) {
+		fprintf(stderr, "set CAP_TEST_DRM_RENDER_NODE to a hardware render node\n");
+		return 1;
+	}
+	int render_fd = open(node, O_RDWR | O_CLOEXEC);
+	if (render_fd < 0 || (gpu = gbm_create_device(render_fd)) == NULL) {
+		perror("open GPU render node");
+		return 1;
+	}
+	fprintf(stderr, "GPU producer on %s via %s\n", node, gbm_device_get_backend_name(gpu));
+#endif
 	pw_init(&argc, &argv);
 	data.loop = pw_main_loop_new(NULL);
 	data.stream = pw_stream_new_simple(pw_main_loop_get_loop(data.loop), "fake-niri-screencast",
