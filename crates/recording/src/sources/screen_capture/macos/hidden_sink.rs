@@ -7,7 +7,14 @@
 //! excluded, so excluding one window the app is not showing removes its
 //! audio and keeps every visible window in the video.
 
+use std::ffi::c_void;
+
 use cidre::{arc, core_audio as ca, sc, sys};
+use core_foundation::{base::FromVoid, boolean::CFBoolean, string::CFString};
+use core_graphics::{
+    display::{CFDictionary, kCGWindowListOptionIncludingWindow},
+    window::{copy_window_info, kCGWindowIsOnscreen},
+};
 use tracing::info;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,8 +32,9 @@ struct OutputProcess {
 }
 
 /// One off-screen window of each app that writes only to hidden virtual
-/// devices, to add to the display filter's excluded windows.
-pub(super) fn writer_windows(content: &sc::ShareableContent) -> Vec<arc::R<sc::Window>> {
+/// devices, to add to the display filter's excluded windows. `log` reports
+/// each app once, at capture start.
+pub(super) fn writer_windows(content: &sc::ShareableContent, log: bool) -> Vec<arc::R<sc::Window>> {
     let writers = hidden_sink_writers(&output_processes(), &default_outputs());
     if writers.is_empty() {
         return Vec::new();
@@ -50,20 +58,42 @@ pub(super) fn writer_windows(content: &sc::ShareableContent) -> Vec<arc::R<sc::W
 
         match hidden_windows.first() {
             Some(window) => {
-                info!(
-                    pid,
-                    window_id = window.id(),
-                    "Leaving out the audio of an app that only plays to a hidden virtual device"
-                );
+                if log {
+                    info!(
+                        pid,
+                        window_id = window.id(),
+                        "Leaving out the audio of an app that only plays to a hidden virtual device"
+                    );
+                }
                 excluded.push(window.retained());
             }
-            None => info!(
+            None if log => info!(
                 pid,
                 "App only plays to a hidden virtual device but has no off-screen window; its audio stays in System Audio"
             ),
+            None => {}
         }
     }
     excluded
+}
+
+/// Whether any of the excluded windows is now shown or has closed, so the
+/// exclusion must move to another window to keep the video complete.
+pub(super) fn any_shown_or_closed(window_ids: &[u32]) -> bool {
+    window_ids
+        .iter()
+        .any(|&id| window_on_screen(id).is_none_or(|on_screen| on_screen))
+}
+
+/// `None` once the window no longer exists.
+fn window_on_screen(id: u32) -> Option<bool> {
+    let windows = copy_window_info(kCGWindowListOptionIncludingWindow, id)?;
+    let info = unsafe { CFDictionary::<CFString, *const c_void>::from_void(*windows.get(0)?) };
+    // The window server leaves the key out for windows that are not on screen.
+    Some(unsafe {
+        info.find(kCGWindowIsOnscreen)
+            .is_some_and(|value| bool::from((*CFBoolean::from_void(*value)).clone()))
+    })
 }
 
 fn default_outputs() -> Vec<u32> {
