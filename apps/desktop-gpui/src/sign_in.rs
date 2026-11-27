@@ -108,15 +108,15 @@ impl SignIn {
         let browser_url = url.clone();
         let task = cx.spawn(async move |this, cx| {
             if let Some(server) = session.custom_server().map(str::to_string) {
-                let returns_state = matches!(
-                    gpui_tokio::Tokio::spawn(cx, async move {
-                        auth::server_returns_sign_in_state(&server).await
-                    })
-                    .await,
-                    Ok(true)
-                );
-                if !returns_state {
+                let probe_server = server.clone();
+                let support = gpui_tokio::Tokio::spawn(cx, async move {
+                    auth::probe_sign_in_state(&probe_server).await
+                })
+                .await
+                .unwrap_or(auth::SignInStateSupport::Unknown);
+                if !auth::sign_in_state_required(&server, support) {
                     tracing::warn!(
+                        ?support,
                         "sign-in server did not confirm state support; accepting callbacks without state for this attempt"
                     );
                     session.accept_callbacks_without_state();

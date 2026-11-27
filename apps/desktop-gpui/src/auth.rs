@@ -732,17 +732,27 @@ fn parse_auth_callback(
     parse_auth_params(url)
 }
 
-/// Whether a server other than the official one returns `state` on its
-/// sign-in callbacks: it rejects a malformed `state` with 400 and accepts a
-/// well-formed one. Asked directly by the app before the browser opens.
-pub async fn server_returns_sign_in_state(server: &str) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignInStateSupport {
+    Supported,
+    Unsupported,
+    Unknown,
+}
+
+const SIGN_IN_STATE_SERVERS: &str = "signInStateServers";
+
+/// Asks a server other than the official one whether it returns `state` on
+/// its sign-in callbacks: a current server rejects a malformed `state` with
+/// 400 and accepts a well-formed one. Sent by the app before the browser
+/// opens.
+pub async fn probe_sign_in_state(server: &str) -> SignInStateSupport {
     let Ok(client) = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(5))
         .build()
     else {
-        return false;
+        return SignInStateSupport::Unknown;
     };
     let status = |state: &'static str| {
         let request = apply_desktop_headers(client.get(format!(
@@ -752,53 +762,54 @@ pub async fn server_returns_sign_in_state(server: &str) -> bool {
     };
     let malformed = status("x").await;
     let well_formed = status("abcdefghijklmnopqrstuvwxyz012345").await;
-    sign_in_state_supported(malformed, well_formed)
+    sign_in_state_support(malformed, well_formed)
 }
 
-fn sign_in_state_supported(
+fn sign_in_state_support(
     malformed: Option<reqwest::StatusCode>,
     well_formed: Option<reqwest::StatusCode>,
-) -> bool {
-    malformed == Some(reqwest::StatusCode::BAD_REQUEST)
-        && well_formed.is_some_and(|status| {
-            status != reqwest::StatusCode::BAD_REQUEST && !status.is_server_error()
-        })
+) -> SignInStateSupport {
+    let bad_request = reqwest::StatusCode::BAD_REQUEST;
+    match (malformed, well_formed) {
+        (Some(malformed), Some(well_formed))
+            if malformed.is_server_error() || well_formed.is_server_error() =>
+        {
+            SignInStateSupport::Unknown
+        }
+        (Some(malformed), Some(well_formed))
+            if malformed == bad_request && well_formed != bad_request =>
+        {
+            SignInStateSupport::Supported
+        }
+        (Some(malformed), Some(_)) if malformed != bad_request => SignInStateSupport::Unsupported,
+        _ => SignInStateSupport::Unknown,
+    }
 }
 
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .fold(0u8, |diff, (left, right)| diff | (left ^ right))
-            == 0
+/// Whether sign-in to this server must return `state`. A server that has
+/// confirmed support once stays required when a later check fails.
+pub fn sign_in_state_required(server: &str, support: SignInStateSupport) -> bool {
+    let Some(origin) = origin_of(server) else {
+        return false;
+    };
+    if support == SignInStateSupport::Supported
+        && !store::set_store_setting(SIGN_IN_STATE_SERVERS, &origin, Value::Bool(true))
+    {
+        tracing::warn!("saving sign-in state support failed");
+    }
+    let confirmed_before = store::store_section(SIGN_IN_STATE_SERVERS)
+        .get(&origin)
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    state_required(support, confirmed_before)
 }
 
-fn parse_auth_params(url: &str) -> Option<AuthParams> {
-    let parsed = reqwest::Url::parse(url).ok()?;
-    let query = query_map(&parsed);
-    if let Some(api_key) = query.get("api_key")
-        && let Some(user_id) = query.get("user_id")
-    {
-        return Some(AuthParams::ApiKey {
-            api_key: api_key.clone(),
-            user_id: user_id.clone(),
-        });
+fn state_required(support: SignInStateSupport, confirmed_before: bool) -> bool {
+    match support {
+        SignInStateSupport::Supported => true,
+        SignInStateSupport::Unsupported => false,
+        SignInStateSupport::Unknown => confirmed_before,
     }
-    if let Some(token) = query.get("token")
-        && let Some(user_id) = query.get("user_id")
-    {
-        let expires = query
-            .get("expires")
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(0);
-        return Some(AuthParams::Session {
-            token: token.clone(),
-            user_id: user_id.clone(),
-            expires,
-        });
-    }
-    None
 }
 
 fn query_map(url: &reqwest::Url) -> HashMap<String, String> {
@@ -1029,31 +1040,49 @@ mod tests {
 
     #[test]
     fn state_support_needs_a_400_for_malformed_and_not_for_well_formed_state() {
+        use SignInStateSupport::*;
         use reqwest::StatusCode;
-        let found = StatusCode::FOUND;
-        let bad = StatusCode::BAD_REQUEST;
-        assert!(sign_in_state_supported(Some(bad), Some(found)));
-        assert!(sign_in_state_supported(Some(bad), Some(StatusCode::OK)));
-        assert!(!sign_in_state_supported(Some(found), Some(found)));
-        assert!(!sign_in_state_supported(Some(bad), Some(bad)));
-        assert!(!sign_in_state_supported(None, Some(found)));
-        assert!(!sign_in_state_supported(Some(bad), None));
-        assert!(!sign_in_state_supported(
-            Some(bad),
-            Some(StatusCode::BAD_GATEWAY)
-        ));
-        assert!(!sign_in_state_supported(
-            Some(StatusCode::INTERNAL_SERVER_ERROR),
-            Some(found)
-        ));
-        assert!(!sign_in_state_supported(
-            Some(StatusCode::MOVED_PERMANENTLY),
-            Some(StatusCode::MOVED_PERMANENTLY)
-        ));
+        let found = Some(StatusCode::FOUND);
+        let bad = Some(StatusCode::BAD_REQUEST);
+        assert_eq!(sign_in_state_support(bad, found), Supported);
+        assert_eq!(sign_in_state_support(bad, Some(StatusCode::OK)), Supported);
+        assert_eq!(sign_in_state_support(found, found), Unsupported);
+        assert_eq!(
+            sign_in_state_support(Some(StatusCode::MOVED_PERMANENTLY), found),
+            Unsupported
+        );
+        assert_eq!(
+            sign_in_state_support(Some(StatusCode::NOT_FOUND), Some(StatusCode::NOT_FOUND)),
+            Unsupported
+        );
+        assert_eq!(sign_in_state_support(bad, bad), Unknown);
+        assert_eq!(sign_in_state_support(None, found), Unknown);
+        assert_eq!(sign_in_state_support(bad, None), Unknown);
+        assert_eq!(sign_in_state_support(None, None), Unknown);
+        assert_eq!(
+            sign_in_state_support(bad, Some(StatusCode::BAD_GATEWAY)),
+            Unknown
+        );
+        assert_eq!(
+            sign_in_state_support(Some(StatusCode::SERVICE_UNAVAILABLE), found),
+            Unknown
+        );
+    }
+
+    #[test]
+    fn a_server_that_confirmed_state_stays_required_when_a_check_fails() {
+        use SignInStateSupport::*;
+        assert!(state_required(Supported, false));
+        assert!(state_required(Supported, true));
+        assert!(state_required(Unknown, true));
+        assert!(!state_required(Unknown, false));
+        assert!(!state_required(Unsupported, true));
+        assert!(!state_required(Unsupported, false));
     }
 
     #[tokio::test]
     async fn state_support_probe_reads_real_responses() {
+        use SignInStateSupport::*;
         let serve = |respond: fn(&str) -> &'static str| {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let port = listener.local_addr().unwrap().port();
@@ -1075,12 +1104,12 @@ mod tests {
                 "302 Found"
             }
         });
-        assert!(server_returns_sign_in_state(&current).await);
+        assert_eq!(probe_sign_in_state(&current).await, Supported);
         let older = serve(|_| "302 Found");
-        assert!(!server_returns_sign_in_state(&older).await);
+        assert_eq!(probe_sign_in_state(&older).await, Unsupported);
         let failing = serve(|_| "503 Service Unavailable");
-        assert!(!server_returns_sign_in_state(&failing).await);
-        assert!(!server_returns_sign_in_state("http://127.0.0.1:9").await);
+        assert_eq!(probe_sign_in_state(&failing).await, Unknown);
+        assert_eq!(probe_sign_in_state("http://127.0.0.1:9").await, Unknown);
     }
 
     #[test]
