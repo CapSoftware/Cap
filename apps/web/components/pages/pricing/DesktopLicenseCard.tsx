@@ -37,6 +37,8 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 	const [enteringCode, setEnteringCode] = useState(false);
 	const [codeDraft, setCodeDraft] = useState("");
 	const codeInput = useRef<HTMLInputElement>(null);
+	const codeToggle = useRef<HTMLButtonElement>(null);
+	const refocusCodeToggle = useRef(false);
 	const offerEnded = useEnded();
 	const offer = codeApplied && !offerEnded;
 
@@ -46,8 +48,18 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 	}, []);
 
 	useEffect(() => {
-		if (enteringCode) codeInput.current?.focus();
+		if (enteringCode) {
+			codeInput.current?.focus();
+		} else if (refocusCodeToggle.current) {
+			refocusCodeToggle.current = false;
+			codeToggle.current?.focus();
+		}
 	}, [enteringCode]);
+
+	const closeCodeEntry = () => {
+		refocusCodeToggle.current = true;
+		setEnteringCode(false);
+	};
 
 	const listPrice = yearly ? copy.pricing.yearly : copy.pricing.lifetime;
 	const perLicense = offer ? listPrice / 2 : listPrice;
@@ -56,7 +68,7 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 	const applyCode = (event: FormEvent) => {
 		event.preventDefault();
 		if (!codeDraft.trim()) {
-			setEnteringCode(false);
+			closeCodeEntry();
 			return;
 		}
 		if (parsePromotionCode(codeDraft) !== CODE) {
@@ -64,7 +76,7 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 			return;
 		}
 		setCodeApplied(true);
-		setEnteringCode(false);
+		closeCodeEntry();
 		setCodeDraft("");
 	};
 
@@ -164,7 +176,7 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 								value={codeDraft}
 								onChange={(event) => setCodeDraft(event.target.value)}
 								onKeyDown={(event) => {
-									if (event.key === "Escape") setEnteringCode(false);
+									if (event.key === "Escape") closeCodeEntry();
 								}}
 								aria-label="Promo code"
 								placeholder="Promo code"
@@ -192,6 +204,7 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 									>
 										50% off
 										<button
+											ref={codeToggle}
 											type="button"
 											onClick={() => setCodeApplied(false)}
 											aria-label={`Remove ${CODE}`}
@@ -202,6 +215,7 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 									</span>
 								) : offerEnded ? null : (
 									<button
+										ref={codeToggle}
 										type="button"
 										onClick={() => setEnteringCode(true)}
 										className="text-[13px] text-[rgba(17,17,17,0.5)] underline decoration-[rgba(17,17,17,0.25)] underline-offset-[3px] transition-colors duration-200 hover:text-[#111111] hover:decoration-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
