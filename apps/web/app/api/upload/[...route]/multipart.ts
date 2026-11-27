@@ -26,6 +26,11 @@ import {
 	decodeDesktopReuploadToken,
 } from "@/lib/desktop-reupload-token";
 import { startFaststartRemux } from "@/lib/faststart-remux";
+import { FREE_PLAN_DURATION_GRACE_SECONDS } from "@/lib/free-plan-duration";
+import {
+	measureFreePlanObject,
+	runAfterResponse,
+} from "@/lib/free-plan-measure-probe";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import {
 	getMediaProcessingRejection,
@@ -57,9 +62,6 @@ export const app = new Hono().use(withAuth);
 
 const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
 const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
-// Clients stop at the cap and then finalize, so reported durations can land
-// slightly past the limit for honest recordings.
-const FREE_PLAN_DURATION_GRACE_SECONDS = 30;
 
 const runPromiseAnyEnv = runPromise as <A, E>(
 	effect: Effect.Effect<A, E, unknown>,
@@ -499,11 +501,9 @@ app.post(
 			// recorder upload must report a duration, and any reported duration
 			// over the limit is rejected regardless of subpath — renaming the
 			// subpath alone does not skip the gate. The duration is still
-			// client-reported — a tampered client can understate it, or omit it
-			// on a non-raw subpath — so this raises the bar rather than
-			// enforcing authoritatively; that would require measuring the media
-			// server-side during processing. Gated on the org owner's plan to
-			// match the recorder bootstrap.
+			// client-reported, so raw recorder uploads are measured again when
+			// they are processed (lib/free-plan-duration.ts). Gated on the org
+			// owner's plan to match the recorder bootstrap.
 			const reportedDuration =
 				typeof body.durationInSecs === "number" ? body.durationInSecs : null;
 			const missingRequiredDuration =
@@ -700,6 +700,13 @@ app.post(
 							queueVideoTranscription(videoId),
 						).pipe(Effect.catchAll(Effect.logWarning));
 					}
+					runAfterResponse(() =>
+						measureFreePlanObject(videoId, outputKey, {
+							anyAge: true,
+							fresh: true,
+							identity: head.ETag,
+						}),
+					);
 					return c.json({
 						success: true,
 						fileKey: outputKey,
@@ -888,6 +895,14 @@ app.post(
 							),
 						);
 
+						runAfterResponse(() =>
+							measureFreePlanObject(Video.VideoId.make(videoId), fileKey, {
+								anyAge: true,
+								fresh: true,
+								identity: objectIdentity,
+							}),
+						);
+
 						return c.json({
 							location: result.Location,
 							objectIdentity,
@@ -1062,6 +1077,15 @@ app.post(
 							),
 						);
 					}
+
+					if (subpath === "result.mp4")
+						runAfterResponse(() =>
+							measureFreePlanObject(Video.VideoId.make(videoId), fileKey, {
+								anyAge: true,
+								fresh: true,
+								identity: objectIdentity,
+							}),
+						);
 
 					return c.json({
 						location: result.Location,

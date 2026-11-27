@@ -46,20 +46,7 @@ export async function createVideoForServerProcessing({
 
 	if (!user) throw new Error("Unauthorized");
 
-	// Free-tier length cap. `duration` here is client-supplied metadata sent at
-	// upload-start, so it is only authoritative when a positive value is given
-	// (instant recordings legitimately start with 0/unknown duration). A
-	// positive declared duration over the cap is rejected up-front; the real
-	// duration is only known at finalize, which is where the cap must ultimately
-	// be enforced.
-	if (
-		!userIsPro(user) &&
-		typeof duration === "number" &&
-		Number.isFinite(duration) &&
-		duration > 300
-	) {
-		throw new Error("upgrade_required");
-	}
+	if (!userIsPro(user)) throw new Error("upgrade_required");
 
 	await requireOrganizationAccess(user.id, orgId);
 	if (folderId) await requirePersonalFolder(user.id, orgId, folderId);

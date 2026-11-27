@@ -380,6 +380,13 @@ export const ShareVideo = forwardRef<
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
 		const isSegmentsSource = data.source.type === "desktopSegments";
 		const isOverShareLimit = data.ownerIsOverShareLimit === true;
+		const isOverDurationLimit = data.ownerIsOverDurationLimit === true;
+		const isPlaybackPending = data.playbackPending === true;
+		useEffect(() => {
+			if (!isPlaybackPending) return;
+			const timer = setInterval(() => router.refresh(), 3000);
+			return () => clearInterval(timer);
+		}, [isPlaybackPending, router]);
 		const isActivelyRecording =
 			isSegmentsSource &&
 			(data.hasActiveUpload ?? false) &&
@@ -572,15 +579,16 @@ export const ShareVideo = forwardRef<
 								/>
 							</div>
 						</div>
-					) : isProcessingInProgress ? (
+					) : isProcessingInProgress || isPlaybackPending ? (
 						<PreparingVideoOverlay className="h-full" />
-					) : isOverShareLimit ? (
+					) : isOverShareLimit || isOverDurationLimit ? (
 						// Quota gate: the player is never mounted, so the video is not
 						// fetched or playable until the owner upgrades (server recomputes
 						// the flag on the next load). Recording/processing branches above
 						// keep priority so in-flight uploads always finalize.
 						<ShareableLinkLimitOverlay
 							isOwner={viewerIsOwner}
+							reason={isOverShareLimit ? "links" : "duration"}
 							onUpgrade={openUpgradeModal}
 							onUpgradeHover={() => {
 								void importUpgradeModal();
@@ -721,7 +729,7 @@ export const ShareVideo = forwardRef<
 					)}
 				</div>
 
-				{!data.owner.isPro && !isOverShareLimit && (
+				{!data.owner.isPro && !isOverShareLimit && !isOverDurationLimit && (
 					<div className="absolute top-4 left-4 z-30">
 						<button
 							type="button"
