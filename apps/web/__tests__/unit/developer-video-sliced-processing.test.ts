@@ -355,16 +355,19 @@ describe("sending slices", () => {
 		let answerMp4: (value: { status: "started"; jobId: string }) => void = () =>
 			undefined;
 		const startJob = mocks.startJob.getMockImplementation();
+		const mp4Sent = Promise.withResolvers<void>();
 		mocks.startJob.mockImplementation(async (path, body) =>
 			path === "/video/process"
 				? new Promise((resolve) => {
 						answerMp4 = resolve;
+						mp4Sent.resolve();
 					})
 				: startJob?.(path, body),
 		);
 
 		const dispatched = dispatchDeveloperVideoParts("video-1", "encode-1");
-		await vi.waitFor(() => expect(mocks.startJob).toHaveBeenCalledTimes(1));
+		await mp4Sent.promise;
+		expect(mocks.startJob).toHaveBeenCalledTimes(1);
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(mocks.startJob.mock.calls.map(([path]) => path)).toEqual([
 			"/video/process",
@@ -433,16 +436,19 @@ describe("sending slices", () => {
 	it("sends the first slice on its own before the others", async () => {
 		let answerFirst: (value: { status: "started"; jobId: string }) => void =
 			() => undefined;
+		const firstSent = Promise.withResolvers<void>();
 		mocks.startJob.mockImplementation(async (_path, body) =>
 			(body as { range: { startSeconds: number } }).range.startSeconds === 0
 				? new Promise((resolve) => {
 						answerFirst = resolve;
+						firstSent.resolve();
 					})
 				: { status: "started", jobId: "job" },
 		);
 
 		const dispatched = dispatchDeveloperVideoPart("video-1", "encode-1", "hls");
-		await vi.waitFor(() => expect(mocks.startJob).toHaveBeenCalledTimes(1));
+		await firstSent.promise;
+		expect(mocks.startJob).toHaveBeenCalledTimes(1);
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(sentInOrder().map((entry) => entry.index)).toEqual([0]);
 

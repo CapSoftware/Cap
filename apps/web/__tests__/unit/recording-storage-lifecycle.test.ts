@@ -1792,9 +1792,16 @@ describe("recording storage lifecycle", () => {
 		const gate = new Promise<void>((resolve) => {
 			release = resolve;
 		});
-		mocks.driveDelete.mockReturnValue(Effect.promise(() => gate));
+		const deleting = Promise.withResolvers<void>();
+		mocks.driveDelete.mockReturnValue(
+			Effect.promise(() => {
+				deleting.resolve();
+				return gate;
+			}),
+		);
 		const pending = Effect.runPromise(drive.access.deleteObject(outputKey));
-		await vi.waitFor(() => expect(mocks.driveDelete).toHaveBeenCalledTimes(1));
+		await deleting.promise;
+		expect(mocks.driveDelete).toHaveBeenCalledTimes(1);
 		expect(drive.records.has(outputKey)).toBe(true);
 		expect(drive.deleteIndex).not.toHaveBeenCalled();
 		if (!release) throw new Error("Missing Drive delete resolver");
@@ -1813,8 +1820,12 @@ describe("recording storage lifecycle", () => {
 			const gate = new Promise<void>((resolve) => {
 				release = resolve;
 			});
+			const deleting = Promise.withResolvers<void>();
 			mocks.driveDelete.mockReturnValue(
-				Effect.promise(() => gate).pipe(
+				Effect.promise(() => {
+					deleting.resolve();
+					return gate;
+				}).pipe(
 					Effect.zipRight(
 						status === 404
 							? Effect.fail(
@@ -1827,9 +1838,8 @@ describe("recording storage lifecycle", () => {
 				),
 			);
 			const pending = Effect.runPromise(drive.access.deleteObject(outputKey));
-			await vi.waitFor(() =>
-				expect(mocks.driveDelete).toHaveBeenCalledTimes(1),
-			);
+			await deleting.promise;
+			expect(mocks.driveDelete).toHaveBeenCalledTimes(1);
 			const replacement = {
 				...original,
 				providerObjectId: "new-pending-file",

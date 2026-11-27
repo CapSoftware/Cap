@@ -163,12 +163,26 @@ function deferred<T>() {
 	return { promise, resolve };
 }
 
+function stubFetch(fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>) {
+	const calls: PromiseWithResolvers<void>[] = [];
+	const call = (index: number) => {
+		calls[index] ??= Promise.withResolvers<void>();
+		return calls[index];
+	};
+	vi.stubGlobal("fetch", (...args: Parameters<typeof fetch>) => {
+		const result = fetchImpl(...args);
+		call(fetchImpl.mock.calls.length - 1).resolve();
+		return result;
+	});
+	return (count: number) => call(count - 1).promise;
+}
+
 async function settleFetch(
-	fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>,
+	fetched: (count: number) => Promise<void>,
 	count: number,
 ) {
 	await act(async () => {
-		await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(count));
+		await fetched(count);
 		await waitForQueryNotification();
 	});
 }
@@ -225,7 +239,7 @@ describe("share MP4 playback after its initial signature expires", () => {
 					response(initialPlayableUrl, 206, initialRedirected),
 				)
 				.mockResolvedValueOnce(response(freshUrl, 206, true));
-			vi.stubGlobal("fetch", fetchImpl);
+			const fetched = stubFetch(fetchImpl);
 			const player = createPlayer(initialUrl);
 
 			try {
@@ -238,7 +252,7 @@ describe("share MP4 playback after its initial signature expires", () => {
 						),
 					);
 				});
-				await settleFetch(fetchImpl, 1);
+				await settleFetch(fetched, 1);
 				await vi.waitFor(() => {
 					expect(player.videoRef.current?.getAttribute("src")).toBe(
 						initialPlayableUrl,
@@ -249,7 +263,7 @@ describe("share MP4 playback after its initial signature expires", () => {
 				await act(async () => {
 					player.videoRef.current?.dispatchEvent(new Event("error"));
 				});
-				await settleFetch(fetchImpl, 2);
+				await settleFetch(fetched, 2);
 				await vi.waitFor(() => {
 					expect(player.videoRef.current?.getAttribute("src")).toBe(freshUrl);
 				});
@@ -278,7 +292,7 @@ describe("share MP4 playback after its initial signature expires", () => {
 			.fn<typeof fetch>()
 			.mockResolvedValueOnce(response(initialUrl, 206))
 			.mockReturnValueOnce(refreshResponse.promise);
-		vi.stubGlobal("fetch", fetchImpl);
+		const fetched = stubFetch(fetchImpl);
 		const player = createPlayer(initialUrl);
 
 		try {
@@ -291,7 +305,7 @@ describe("share MP4 playback after its initial signature expires", () => {
 					),
 				);
 			});
-			await settleFetch(fetchImpl, 1);
+			await settleFetch(fetched, 1);
 			await vi.waitFor(() => {
 				expect(player.videoRef.current?.getAttribute("src")).toBe(initialUrl);
 			});
@@ -319,7 +333,7 @@ describe("share MP4 playback after its initial signature expires", () => {
 			await act(async () => {
 				video.dispatchEvent(new Event("error"));
 			});
-			await settleFetch(fetchImpl, 2);
+			await settleFetch(fetched, 2);
 			expect(
 				player.container.querySelector('[data-testid="media-player-error"]'),
 			).toBeNull();
@@ -372,7 +386,7 @@ describe("share MP4 playback after its initial signature expires", () => {
 			.fn<typeof fetch>()
 			.mockResolvedValueOnce(response(initialUrl, 206))
 			.mockResolvedValueOnce(response("/api/playlist?videoType=mp4", 404));
-		vi.stubGlobal("fetch", fetchImpl);
+		const fetched = stubFetch(fetchImpl);
 		const player = createPlayer(initialUrl);
 
 		try {
@@ -385,7 +399,7 @@ describe("share MP4 playback after its initial signature expires", () => {
 					),
 				);
 			});
-			await settleFetch(fetchImpl, 1);
+			await settleFetch(fetched, 1);
 			await vi.waitFor(() => {
 				expect(player.videoRef.current?.getAttribute("src")).toBe(initialUrl);
 			});
@@ -393,7 +407,7 @@ describe("share MP4 playback after its initial signature expires", () => {
 			await act(async () => {
 				player.videoRef.current?.dispatchEvent(new Event("error"));
 			});
-			await settleFetch(fetchImpl, 2);
+			await settleFetch(fetched, 2);
 			await vi.waitFor(() => {
 				expect(player.container.textContent).toContain(
 					"Could not load a playable video source. Reload to try again.",

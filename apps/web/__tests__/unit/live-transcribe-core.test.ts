@@ -805,7 +805,7 @@ describe("describeLiveChunk", () => {
 			...baseManifest,
 			audio_segments: [1, 2, 3, 4, 6, 7].map((index) => seg(index)),
 		};
-		const describe = (
+		const chunk = (
 			lastProcessedIndex: number,
 			lastIndex: number,
 			contextFromIndex: number | null = null,
@@ -817,21 +817,21 @@ describe("describeLiveChunk", () => {
 				contextFromIndex,
 			});
 
-		expect(describe(-1, 2)).toMatchObject({ startMs: 0, durationMs: 4000 });
-		expect(describe(2, 4, 1)).toMatchObject({
+		expect(chunk(-1, 2)).toMatchObject({ startMs: 0, durationMs: 4000 });
+		expect(chunk(2, 4, 1)).toMatchObject({
 			startMs: 4000,
 			durationMs: 4000,
 			contextMs: 4000,
 		});
 		// Past the gap at index 5.
-		expect(describe(4, 6)).toBeNull();
-		expect(describe(2, 7)).toBeNull();
+		expect(chunk(4, 6)).toBeNull();
+		expect(chunk(2, 7)).toBeNull();
 		// Cursor beyond the contiguous audio, or behind the chunk start.
-		expect(describe(5, 6)).toBeNull();
-		expect(describe(2, 2)).toBeNull();
+		expect(chunk(5, 6)).toBeNull();
+		expect(chunk(2, 2)).toBeNull();
 		// Context must be audio before the cursor that exists.
-		expect(describe(2, 4, 3)).toBeNull();
-		expect(describe(2, 4, 0)).toBeNull();
+		expect(chunk(2, 4, 3)).toBeNull();
+		expect(chunk(2, 4, 0)).toBeNull();
 	});
 });
 

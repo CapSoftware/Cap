@@ -3,12 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
 	queries: [] as { sql: string; params: unknown[] }[],
 	hold: null as Promise<void> | null,
+	onQuery: null as (() => void) | null,
 }));
 
 vi.mock("@cap/database", async () => {
 	const { drizzle } = await import("drizzle-orm/mysql-proxy");
 	const client = drizzle(async (sql, params) => {
 		state.queries.push({ sql, params });
+		state.onQuery?.();
 		if (state.hold) await state.hold;
 		return { rows: [] };
 	});
@@ -27,6 +29,7 @@ const LATEST_DAY =
 beforeEach(() => {
 	state.queries = [];
 	state.hold = null;
+	state.onQuery = null;
 	vi.useFakeTimers();
 	vi.setSystemTime(new Date("2026-11-13T23:59:59Z"));
 });
@@ -116,8 +119,14 @@ describe("latest storage day", () => {
 			release = resolve;
 		});
 
+		const bothAsked = Promise.withResolvers<void>();
+		state.onQuery = () => {
+			if (state.queries.length === 2) bothAsked.resolve();
+		};
+
 		const charge = latestStorageCharge(db() as never, "account-1");
-		await vi.waitFor(() => expect(state.queries).toHaveLength(2));
+		await bothAsked.promise;
+		expect(state.queries).toHaveLength(2);
 		expect(state.queries.map(({ params }) => params[1])).toEqual([
 			"video_create",
 			"storage_daily",

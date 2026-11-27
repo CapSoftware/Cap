@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,9 @@ import {
 	createLoomImporter,
 	loadImporterSettings,
 } from "../../loom-importer/app";
+import * as importJob from "../../loom-importer/job";
+
+const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 describe("Loom importer API", () => {
 	let root: string;
@@ -77,47 +80,55 @@ describe("Loom importer API", () => {
 
 	test("keeps waiting imports out of the shared job store and reports them as queued", async () => {
 		const { app, stats } = importer();
-		const first = (await (await post(app, body("first"))).json()) as {
-			jobId: string;
-		};
-		const second = (await (await post(app, body("second"))).json()) as {
-			jobId: string;
-		};
-		expect(stats()).toEqual({ running: 1, queued: 1 });
-		expect(getJob(first.jobId)?.abortController).toBeDefined();
-		expect(getJob(second.jobId)).toBeUndefined();
-		const status = await app.request(
-			`/loom-importer/video/process/${second.jobId}/status`,
-			{ headers: { "x-media-server-secret": "importer-secret" } },
-		);
-		expect(await status.json()).toMatchObject({
-			jobId: second.jobId,
-			videoId: "second",
-			phase: "queued",
-		});
-		const listing = (await (
-			await app.request("/loom-importer/video/status", {
-				headers: { "x-media-server-secret": "importer-secret" },
-			})
-		).json()) as {
-			jobs: Array<{ jobId: string; videoId: string; phase: string }>;
-		};
-		expect(listing.jobs).toContainEqual(
-			expect.objectContaining({
+		const imports = spyOn(importJob, "runLoomImport");
+		try {
+			const first = (await (await post(app, body("first"))).json()) as {
+				jobId: string;
+			};
+			const second = (await (await post(app, body("second"))).json()) as {
+				jobId: string;
+			};
+			expect(stats()).toEqual({ running: 1, queued: 1 });
+			expect(getJob(first.jobId)?.abortController).toBeDefined();
+			expect(getJob(second.jobId)).toBeUndefined();
+			const status = await app.request(
+				`/loom-importer/video/process/${second.jobId}/status`,
+				{ headers: { "x-media-server-secret": "importer-secret" } },
+			);
+			expect(await status.json()).toMatchObject({
 				jobId: second.jobId,
 				videoId: "second",
 				phase: "queued",
-			}),
-		);
-		const full = await post(app, body("third"));
-		expect(full.status).toBe(503);
-		expect(await full.json()).toMatchObject({ code: "SERVER_BUSY" });
-		release();
-		const deadline = Date.now() + 10_000;
-		while (stats().running + stats().queued > 0 && Date.now() < deadline)
-			await Bun.sleep(50);
-		expect(getJob(first.jobId)?.phase).toBe("error");
-		expect(getJob(second.jobId)?.phase).toBe("error");
+			});
+			const listing = (await (
+				await app.request("/loom-importer/video/status", {
+					headers: { "x-media-server-secret": "importer-secret" },
+				})
+			).json()) as {
+				jobs: Array<{ jobId: string; videoId: string; phase: string }>;
+			};
+			expect(listing.jobs).toContainEqual(
+				expect.objectContaining({
+					jobId: second.jobId,
+					videoId: "second",
+					phase: "queued",
+				}),
+			);
+			const full = await post(app, body("third"));
+			expect(full.status).toBe(503);
+			expect(await full.json()).toMatchObject({ code: "SERVER_BUSY" });
+			release();
+			await imports.mock.results[0]?.value;
+			await settled();
+			expect(imports).toHaveBeenCalledTimes(2);
+			await imports.mock.results[1]?.value;
+			await settled();
+			expect(stats()).toEqual({ running: 0, queued: 0 });
+			expect(getJob(first.jobId)?.phase).toBe("error");
+			expect(getJob(second.jobId)?.phase).toBe("error");
+		} finally {
+			imports.mockRestore();
+		}
 	});
 
 	test("rejects malformed jobs", async () => {

@@ -123,7 +123,9 @@ describe("recording completion acknowledgement", () => {
 		const committed = new Promise<void>((resolve) => {
 			release = resolve;
 		});
+		const queueing = Promise.withResolvers<void>();
 		mocks.queue.mockImplementation(async () => {
+			queueing.resolve();
 			await committed;
 			return "queued";
 		});
@@ -132,7 +134,8 @@ describe("recording completion acknowledgement", () => {
 			settled = true;
 			return response;
 		});
-		await vi.waitFor(() => expect(mocks.queue).toHaveBeenCalledOnce());
+		await queueing.promise;
+		expect(mocks.queue).toHaveBeenCalledOnce();
 		expect(settled).toBe(false);
 		if (!release) throw new Error("Missing source commit resolver");
 		release();

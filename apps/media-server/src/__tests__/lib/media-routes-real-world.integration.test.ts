@@ -20,6 +20,7 @@ import * as audioLevels from "../../lib/audio-levels";
 import * as containerCpu from "../../lib/container-cpu";
 import * as containerMemory from "../../lib/container-memory";
 import type { Job, JobProgress } from "../../lib/job-manager";
+import * as lifecycle from "../../lib/lifecycle";
 import { withTimeout } from "../../lib/media-common";
 import { probeVideoFile } from "../../lib/media-probe";
 import * as mediaVideo from "../../lib/media-video";
@@ -810,6 +811,7 @@ describe("media routes real-world integration tests", () => {
 			}
 			throw new Error("Optional correction unavailable");
 		});
+		const tracked = spyOn(lifecycle, "trackBackgroundTask");
 		let jobId: string | undefined;
 		try {
 			const body = { ...fencedMuxRequest("local-audio"), audioLevels: true };
@@ -819,7 +821,8 @@ describe("media routes real-world integration tests", () => {
 			expect(response.status).toBe(200);
 			jobId = ((await response.json()) as { jobId: string }).jobId;
 			await withTimeout(called, 10_000);
-			await new Promise((resolve) => setTimeout(resolve, 25));
+			expect(tracked).toHaveBeenCalledTimes(1);
+			await tracked.mock.results[0]?.value;
 			expect(getJob(jobId)?.phase).toBe("complete");
 			expect(getJob(jobId)?.error).toBeUndefined();
 			expect(audio).toHaveBeenCalledTimes(1);
@@ -833,6 +836,7 @@ describe("media routes real-world integration tests", () => {
 			]);
 			expect(sourceReads).toHaveLength(body.sourceObjects.length);
 		} finally {
+			tracked.mockRestore();
 			audio.mockRestore();
 			if (jobId) deleteJob(jobId);
 		}
@@ -1365,6 +1369,7 @@ describe("media routes real-world integration tests", () => {
 	});
 
 	test("keeps a finished job answerable while its completion webhook is undelivered", async () => {
+		const tracked = spyOn(lifecycle, "trackBackgroundTask");
 		const response = await app.fetch(
 			mediaPostRequest("/video/process", {
 				videoId: "undelivered-completion",
@@ -1398,7 +1403,8 @@ describe("media routes real-world integration tests", () => {
 		try {
 			expect(job.phase).toBe("complete");
 			await job.webhookPromise;
-			await Bun.sleep(100);
+			expect(tracked).toHaveBeenCalledTimes(1);
+			await tracked.mock.results[0]?.value;
 			expect(job.terminalWebhookAcknowledgedAt).toBeUndefined();
 			for (const fire of afterFiveMinutes) fire();
 
@@ -1421,6 +1427,7 @@ describe("media routes real-world integration tests", () => {
 			expect((await readStatus()).status).toBe(200);
 		} finally {
 			timers.mockRestore();
+			tracked.mockRestore();
 			deleteJob(jobId);
 		}
 	}, 90000);

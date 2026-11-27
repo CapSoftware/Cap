@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, jest, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
 	existsSync,
@@ -180,12 +180,15 @@ describe("recording upload cancellation", () => {
 		async (failure) => {
 			const originalFetch = globalThis.fetch;
 			const controller = new AbortController();
+			const attempted = Promise.withResolvers<void>();
 			let attempts = 0;
 			globalThis.fetch = (async (_input, _init) => {
 				attempts++;
+				attempted.resolve();
 				if (failure === "network") throw new Error("Connection reset");
 				return new Response(null, { status: 503 });
 			}) as typeof fetch;
+			jest.useFakeTimers();
 			try {
 				const outcome = uploadToS3(
 					new Uint8Array([1, 2, 3]),
@@ -193,12 +196,14 @@ describe("recording upload cancellation", () => {
 					"image/jpeg",
 					controller.signal,
 				).catch((error: unknown) => error);
-				await Bun.sleep(25);
+				await attempted.promise;
+				await new Promise<void>((resolve) => setImmediate(resolve));
 				expect(attempts).toBe(1);
 				controller.abort(new Error("Recording worker lease expired"));
 				expect(await withTimeout(outcome, 100)).toBeInstanceOf(Error);
 				expect(attempts).toBe(1);
 			} finally {
+				jest.useRealTimers();
 				controller.abort();
 				globalThis.fetch = originalFetch;
 			}
@@ -1159,11 +1164,13 @@ describe("processVideo integration tests", () => {
 		const cleanupFinished = new Promise<void>((resolve) => {
 			resolveCleanup = resolve;
 		});
+		const cleanupStarted = Promise.withResolvers<void>();
 
 		const timedOutWork = withTimeout(
 			new Promise<never>(() => {}),
 			1,
 			async () => {
+				cleanupStarted.resolve();
 				await cleanupFinished;
 			},
 		);
@@ -1172,7 +1179,8 @@ describe("processVideo integration tests", () => {
 			settled = true;
 		});
 
-		await Bun.sleep(25);
+		await cleanupStarted.promise;
+		await new Promise<void>((resolve) => setImmediate(resolve));
 		expect(settled).toBe(false);
 
 		resolveCleanup?.();

@@ -162,15 +162,20 @@ describe("mobile Cap views", () => {
 		);
 
 	it("notifies the owner like a signed-in view on the share page", async () => {
-		expect((await trackView()).status).toBe(200);
+		const notified = Promise.withResolvers<void>();
+		mocks.createNotification.mockImplementationOnce(async () => {
+			notified.resolve();
+			return undefined;
+		});
 
-		await vi.waitFor(() =>
-			expect(mocks.createNotification).toHaveBeenCalledWith({
-				type: "view",
-				videoId: "video",
-				authorId: "viewer",
-			}),
-		);
+		expect((await trackView()).status).toBe(200);
+		await notified.promise;
+
+		expect(mocks.createNotification).toHaveBeenCalledWith({
+			type: "view",
+			videoId: "video",
+			authorId: "viewer",
+		});
 	});
 
 	it("does not notify for a Cap that was just updated", async () => {

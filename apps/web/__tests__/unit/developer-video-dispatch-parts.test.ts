@@ -245,6 +245,7 @@ describe("settling a finished part", () => {
 			processing: processingState({ mp4: running("t1") }),
 		});
 		const pending: Array<() => void> = [];
+		const bothAsked = Promise.withResolvers<void>();
 		mocks.head.mockImplementation(
 			(key: string) =>
 				new Promise((resolve) => {
@@ -254,6 +255,7 @@ describe("settling a finished part", () => {
 							contentType: null,
 						}),
 					);
+					if (pending.length === 2) bothAsked.resolve();
 				}),
 		);
 
@@ -262,7 +264,8 @@ describe("settling a finished part", () => {
 			"mp4",
 			"t1",
 		);
-		await vi.waitFor(() => expect(pending).toHaveLength(2));
+		await bothAsked.promise;
+		expect(pending).toHaveLength(2);
 		for (const resolve of pending) resolve();
 
 		expect(await settling).toEqual({ success: true, applied: true });
@@ -275,10 +278,12 @@ describe("settling a finished part", () => {
 			processing: processingState({ hls: running("t2") }),
 		});
 		const pending: Array<() => void> = [];
+		const bothAsked = Promise.withResolvers<void>();
 		mocks.head.mockImplementation(
 			() =>
 				new Promise((resolve) => {
 					pending.push(() => resolve({ bytes: 50, contentType: null }));
+					if (pending.length === 2) bothAsked.resolve();
 				}),
 		);
 		mocks.readText.mockImplementation(
@@ -293,6 +298,7 @@ describe("settling a finished part", () => {
 							].join("\n"),
 						),
 					);
+					if (pending.length === 2) bothAsked.resolve();
 				}),
 		);
 
@@ -317,7 +323,8 @@ describe("settling a finished part", () => {
 			"hls",
 			"t2",
 		);
-		await vi.waitFor(() => expect(pending).toHaveLength(2));
+		await bothAsked.promise;
+		expect(pending).toHaveLength(2);
 		for (const resolve of pending) resolve();
 
 		expect(await settling).toEqual({ success: true, applied: true });

@@ -60,12 +60,26 @@ function waitForQueryNotification() {
 	return new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
+function stubFetch(fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>) {
+	const calls: PromiseWithResolvers<void>[] = [];
+	const call = (index: number) => {
+		calls[index] ??= Promise.withResolvers<void>();
+		return calls[index];
+	};
+	vi.stubGlobal("fetch", (...args: Parameters<typeof fetch>) => {
+		const result = fetchImpl(...args);
+		call(fetchImpl.mock.calls.length - 1).resolve();
+		return result;
+	});
+	return (count: number) => call(count - 1).promise;
+}
+
 async function settleFetch(
-	fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>,
+	fetched: (count: number) => Promise<void>,
 	count: number,
 ) {
 	await act(async () => {
-		await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(count));
+		await fetched(count);
 		await waitForQueryNotification();
 	});
 }
@@ -236,7 +250,7 @@ describe("share MP4 source rendered on the server, with the real player", () => 
 		const fetchImpl = vi
 			.fn<typeof fetch>()
 			.mockResolvedValueOnce(response(freshUrl, 206, true));
-		vi.stubGlobal("fetch", fetchImpl);
+		const fetched = stubFetch(fetchImpl);
 		vi.stubGlobal("ResizeObserver", NoopResizeObserver);
 		vi.stubGlobal("MediaError", {
 			MEDIA_ERR_ABORTED: 1,
@@ -253,7 +267,7 @@ describe("share MP4 source rendered on the server, with the real player", () => 
 		});
 		try {
 			expect(player.recoverableErrors).toEqual([]);
-			await settleFetch(fetchImpl, 1);
+			await settleFetch(fetched, 1);
 			expect(fetchImpl.mock.calls[0]?.[0]).toMatch(PLAYLIST_PROBE);
 			await vi.waitFor(() => {
 				expect(videoRef.current?.getAttribute("src")).toBe(freshUrl);

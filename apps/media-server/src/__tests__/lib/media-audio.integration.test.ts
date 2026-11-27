@@ -234,20 +234,26 @@ describe("mediaAudio integration tests", () => {
 	describe("extractAudioStream", () => {
 		test("preserves queued audio when the reader pauses before EOF", async () => {
 			const expected = await extractAudio(TEST_VIDEO_WITH_AUDIO);
+			const registration = spyOn(subprocess, "registerSubprocess");
 			const { stream, cleanup } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
 			const reader = stream.getReader();
 			const chunks: Uint8Array[] = [];
 			try {
+				const proc = registration.mock.calls[0][0];
+				const first = await reader.read();
+				expect(first.done).toBe(false);
+				if (first.value) chunks.push(first.value);
+				expect(await proc.exited).toBe(0);
 				while (true) {
 					const { done, value } = await reader.read();
 					if (done) break;
 					chunks.push(value);
-					await Bun.sleep(50);
 				}
 				expect(Buffer.concat(chunks).equals(expected)).toBe(true);
 			} finally {
 				reader.releaseLock();
 				cleanup();
+				registration.mockRestore();
 			}
 		});
 

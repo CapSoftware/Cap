@@ -156,12 +156,26 @@ function waitForQueryNotification() {
 	return new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
+function stubFetch(fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>) {
+	const calls: PromiseWithResolvers<void>[] = [];
+	const call = (index: number) => {
+		calls[index] ??= Promise.withResolvers<void>();
+		return calls[index];
+	};
+	vi.stubGlobal("fetch", (...args: Parameters<typeof fetch>) => {
+		const result = fetchImpl(...args);
+		call(fetchImpl.mock.calls.length - 1).resolve();
+		return result;
+	});
+	return (count: number) => call(count - 1).promise;
+}
+
 async function settleFetch(
-	fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>,
+	fetched: (count: number) => Promise<void>,
 	count: number,
 ) {
 	await act(async () => {
-		await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(count));
+		await fetched(count);
 		await waitForQueryNotification();
 	});
 }
@@ -336,7 +350,7 @@ describe("share MP4 source rendered on the server", () => {
 		const fetchImpl = vi
 			.fn<typeof fetch>()
 			.mockResolvedValueOnce(response(freshUrl, 206, true));
-		vi.stubGlobal("fetch", fetchImpl);
+		const fetched = stubFetch(fetchImpl);
 		const { props, videoRef } = playerProps();
 		const player = await hydratePlayer(props, (video) =>
 			setMediaState(video, {
@@ -345,7 +359,7 @@ describe("share MP4 source rendered on the server", () => {
 			}),
 		);
 		try {
-			await settleFetch(fetchImpl, 1);
+			await settleFetch(fetched, 1);
 			expect(fetchImpl.mock.calls[0]?.[0]).toMatch(PLAYLIST_PROBE);
 			await vi.waitFor(() => {
 				expect(videoRef.current?.getAttribute("src")).toBe(freshUrl);
@@ -366,7 +380,7 @@ describe("share MP4 source rendered on the server", () => {
 					headers: { "content-type": "video/mp4" },
 				}),
 			);
-		vi.stubGlobal("fetch", fetchImpl);
+		const fetched = stubFetch(fetchImpl);
 		const { props, videoRef } = playerProps({
 			rawFallbackSrc: "/api/playlist?videoType=raw-preview",
 		});
@@ -375,7 +389,7 @@ describe("share MP4 source rendered on the server", () => {
 			await act(async () => {
 				videoRef.current?.dispatchEvent(new Event("error"));
 			});
-			await settleFetch(fetchImpl, 2);
+			await settleFetch(fetched, 2);
 			expect(fetchImpl.mock.calls[0]?.[0]).toMatch(PLAYLIST_PROBE);
 			expect(fetchImpl.mock.calls[1]?.[0]).toMatch(RAW_PROBE);
 			await vi.waitFor(() => {
@@ -396,7 +410,7 @@ describe("share MP4 source rendered on the server", () => {
 					headers: { "content-type": "video/mp4" },
 				}),
 			);
-		vi.stubGlobal("fetch", fetchImpl);
+		const fetched = stubFetch(fetchImpl);
 		const { props, videoRef } = playerProps({
 			rawFallbackSrc: "/api/playlist?videoType=raw-preview",
 		});
@@ -405,7 +419,7 @@ describe("share MP4 source rendered on the server", () => {
 			await act(async () => {
 				videoRef.current?.dispatchEvent(new Event("error"));
 			});
-			await settleFetch(fetchImpl, 2);
+			await settleFetch(fetched, 2);
 			expect(fetchImpl.mock.calls[0]?.[0]).toMatch(PLAYLIST_PROBE);
 			expect(fetchImpl.mock.calls[1]?.[0]).toMatch(RAW_PROBE);
 			await vi.waitFor(() => {

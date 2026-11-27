@@ -1095,18 +1095,24 @@ describe("durable desktop recording source commit", () => {
 		seedSegments(storage);
 		const copyGate = deferred();
 		const readbackGate = deferred();
+		const copying = deferred();
+		const readingBack = deferred();
 		const copy = storage.bucket.copyObject.getMockImplementation();
 		const get = storage.bucket.getObject.getMockImplementation();
 		if (!copy || !get) throw new Error("Missing fixture operation");
 		storage.bucket.copyObject.mockImplementation((...args) =>
 			Effect.promise(async () => {
+				copying.resolve();
 				await copyGate.promise;
 				return Effect.runPromise(copy(...args));
 			}),
 		);
 		storage.bucket.getObject.mockImplementation((key) =>
 			Effect.promise(async () => {
-				if (key.endsWith("/inventory.json")) await readbackGate.promise;
+				if (key.endsWith("/inventory.json")) {
+					readingBack.resolve();
+					await readbackGate.promise;
+				}
 				return Effect.runPromise(get(key));
 			}),
 		);
@@ -1118,9 +1124,8 @@ describe("durable desktop recording source commit", () => {
 			},
 		);
 		try {
-			await vi.waitFor(() =>
-				expect(storage.bucket.copyObject).toHaveBeenCalled(),
-			);
+			await copying.promise;
+			expect(storage.bucket.copyObject).toHaveBeenCalled();
 			expect(acknowledged).toBe(false);
 			expect(
 				storage.bucket.putObject.mock.calls.some(([key]) =>
@@ -1128,13 +1133,12 @@ describe("durable desktop recording source commit", () => {
 				),
 			).toBe(false);
 			copyGate.resolve();
-			await vi.waitFor(() =>
-				expect(
-					storage.bucket.getObject.mock.calls.some(([key]) =>
-						key.endsWith("/inventory.json"),
-					),
-				).toBe(true),
-			);
+			await readingBack.promise;
+			expect(
+				storage.bucket.getObject.mock.calls.some(([key]) =>
+					key.endsWith("/inventory.json"),
+				),
+			).toBe(true);
 			expect(acknowledged).toBe(false);
 			readbackGate.resolve();
 			await pending;
@@ -1718,17 +1722,18 @@ describe("large desktop recording snapshots", () => {
 		const copy = storage.bucket.copyObject.getMockImplementation();
 		if (!copy) throw new Error("Missing fixture operation");
 		const gate = deferred();
+		const copying = deferred();
 		storage.bucket.copyObject.mockImplementationOnce((...args) =>
 			Effect.promise(async () => {
+				copying.resolve();
 				await gate.promise;
 				return Effect.runPromise(copy(...args));
 			}),
 		);
 		const stale = advanceDesktopRecordingSourceCommit(video, checkpoint);
 		try {
-			await vi.waitFor(() =>
-				expect(storage.bucket.copyObject).toHaveBeenCalledOnce(),
-			);
+			await copying.promise;
+			expect(storage.bucket.copyObject).toHaveBeenCalledOnce();
 			const source = await finishSnapshot(video, checkpoint);
 			const before = await buildDesktopRecordingSourceUrls(video, source);
 			gate.resolve();

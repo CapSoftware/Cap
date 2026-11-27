@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { createElement, type ReactNode } from "react";
+import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TrimmingTool } from "@/components/tools/TrimmingTool";
@@ -49,6 +49,7 @@ describe("TrimmingTool effects", () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		root.unmount();
 		container.remove();
 		URL.createObjectURL = originalCreate;
@@ -64,30 +65,27 @@ describe("TrimmingTool effects", () => {
 	});
 
 	it("keeps the selected video source and revokes it on unmount", async () => {
-		root.render(createElement(TrimmingTool));
-		await vi.waitFor(() =>
-			expect(container.querySelector("input[type=file]")).not.toBeNull(),
-		);
+		vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		await act(async () => root.render(createElement(TrimmingTool)));
+		expect(container.querySelector("input[type=file]")).not.toBeNull();
 		const input = container.querySelector(
 			"input[type=file]",
 		) as HTMLInputElement;
 		const file = new File(["x"], "clip.mp4", { type: "video/mp4" });
 		Object.defineProperty(input, "files", { value: [file] });
 
-		input.dispatchEvent(new Event("change", { bubbles: true }));
-		await vi.waitFor(() =>
-			expect(container.querySelector("video")?.getAttribute("src")).toBe(
-				"blob:trim-1",
-			),
-		);
-
-		await new Promise<void>((resolve) => setTimeout(resolve, 50));
+		await act(async () => {
+			input.dispatchEvent(new Event("change", { bubbles: true }));
+			// The tool shows a picked file 10 ms after it is chosen.
+			await vi.advanceTimersByTimeAsync(10);
+		});
 		expect(container.querySelector("video")?.getAttribute("src")).toBe(
 			"blob:trim-1",
 		);
 		expect(revoked).not.toContain("blob:trim-1");
 
-		root.unmount();
+		act(() => root.unmount());
 		expect(revoked).toContain("blob:trim-1");
 	});
 

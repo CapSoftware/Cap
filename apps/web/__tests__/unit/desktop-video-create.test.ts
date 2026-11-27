@@ -379,13 +379,18 @@ describe("DELETE /delete", () => {
 		const gate = new Promise<void>((resolve) => {
 			release = resolve;
 		});
-		deletion.deleteVideo.mockReturnValue(Effect.promise(() => gate));
+		const deleting = Promise.withResolvers<void>();
+		deletion.deleteVideo.mockReturnValue(
+			Effect.promise(() => {
+				deleting.resolve();
+				return gate;
+			}),
+		);
 		const pending = app.request("https://cap.test/delete?videoId=video-1", {
 			method: "DELETE",
 		});
-		await vi.waitFor(() =>
-			expect(deletion.deleteVideo).toHaveBeenCalledTimes(1),
-		);
+		await deleting.promise;
+		expect(deletion.deleteVideo).toHaveBeenCalledTimes(1);
 		expect(invalidateGoogleDriveStorageQuotaCache).not.toHaveBeenCalled();
 		if (!release) throw new Error("Missing central deletion resolver");
 		release();

@@ -75,9 +75,16 @@ describe("developer video start", () => {
 		mocks.after.mockImplementationOnce(() => {
 			throw new Error("after() called outside a request scope");
 		});
+		const dispatched = Promise.withResolvers<void>();
+		mocks.dispatch.mockImplementationOnce(async () => {
+			mocks.order.push("dispatch");
+			dispatched.resolve();
+			return [];
+		});
 
 		expect(await startDeveloperVideoProcessing("video-1", claim)).toBe(true);
-		await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledTimes(1));
+		await dispatched.promise;
+		expect(mocks.dispatch).toHaveBeenCalledTimes(1);
 	});
 
 	it("hands the source the probe read to the dispatch so it is not read again", async () => {
@@ -109,7 +116,9 @@ describe("developer video start", () => {
 		const slow = new Promise<void>((resolve) => {
 			release = resolve;
 		});
+		const dispatching = Promise.withResolvers<void>();
 		mocks.dispatch.mockImplementation(async () => {
+			dispatching.resolve();
 			await slow;
 			mocks.order.push("dispatch");
 			return [];
@@ -119,7 +128,8 @@ describe("developer video start", () => {
 		const kick = kickStartDeveloperVideo("video-1", "encode-1").then(() => {
 			settled = true;
 		});
-		await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledTimes(1));
+		await dispatching.promise;
+		expect(mocks.dispatch).toHaveBeenCalledTimes(1);
 		await Promise.resolve();
 
 		expect(settled).toBe(false);

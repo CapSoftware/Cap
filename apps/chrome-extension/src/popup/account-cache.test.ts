@@ -2,7 +2,15 @@
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { AUTH_KEY } from "../shared/storage";
 
 vi.mock("react-dom/client", async (importOriginal) => {
@@ -11,6 +19,16 @@ vi.mock("react-dom/client", async (importOriginal) => {
 });
 
 let stored: Record<string, unknown>;
+
+// The first import of the popup transforms its whole module graph. Doing it
+// here, without mounting, keeps that one-off cost out of the tests.
+beforeAll(async () => {
+	vi.mocked(createRoot).mockReturnValueOnce({
+		render: () => undefined,
+		unmount: () => undefined,
+	} as unknown as ReturnType<typeof createRoot>);
+	await import("./main");
+});
 
 beforeEach(() => {
 	vi.resetModules();
@@ -82,6 +100,5 @@ describe("popup account cache", () => {
 			if (plan === "Free")
 				expect(document.body.textContent).not.toContain("Pro");
 		},
-		15_000,
 	);
 });

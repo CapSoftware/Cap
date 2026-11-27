@@ -343,12 +343,19 @@ describe("connectMessages", () => {
 	});
 
 	it("reports a play the browser refuses", async () => {
-		const { video, command, posted } = embedded();
+		const { video, command, posted, parent } = embedded();
 		video.refuse = true;
+		const reported = Promise.withResolvers<void>();
+		const post = parent.postMessage;
+		parent.postMessage = (message, origin) => {
+			post(message, origin);
+			reported.resolve();
+		};
 
 		command({ type: "cap-player", command: "play" });
-		await vi.waitFor(() => expect(posted).toHaveLength(2));
+		await reported.promise;
 
+		expect(posted).toHaveLength(2);
 		expect(posted[1]?.message).toMatchObject({
 			event: "error",
 			code: "play_refused",
@@ -357,14 +364,13 @@ describe("connectMessages", () => {
 
 	it("does not report a play that a pause interrupted", async () => {
 		const { video, command, posted } = embedded();
-		video.play = () => {
-			const error = new Error("interrupted");
-			error.name = "AbortError";
-			return Promise.reject(error);
-		};
+		const error = new Error("interrupted");
+		error.name = "AbortError";
+		const interrupted = Promise.reject(error);
+		video.play = () => interrupted;
 
 		command({ type: "cap-player", command: "play" });
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await Promise.allSettled([interrupted]);
 
 		expect(posted).toHaveLength(1);
 	});

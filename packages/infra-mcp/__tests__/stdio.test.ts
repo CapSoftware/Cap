@@ -158,7 +158,6 @@ describe("over stdio", () => {
 		const pid = transport.pid;
 		expect(pid).not.toBeNull();
 		await client.close();
-		const startedAt = Date.now();
 		const alive = () => {
 			try {
 				process.kill(pid ?? 0, 0);
@@ -167,9 +166,6 @@ describe("over stdio", () => {
 				return false;
 			}
 		};
-		for (; alive() && Date.now() - startedAt < 5000; ) {
-			await new Promise((resolve) => setTimeout(resolve, 20));
-		}
 		expect(alive()).toBe(false);
 	});
 });

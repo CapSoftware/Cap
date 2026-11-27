@@ -78,10 +78,8 @@ describe("drain", () => {
 		expect(getDrainBlockers().backgroundTasks).toBeGreaterThanOrEqual(1);
 
 		const drained = waitForDrain(5_000);
-		await Bun.sleep(50);
 		work.resolve();
 		await task;
-		await Bun.sleep(50);
 		endRequest();
 
 		expect(await drained).toBe(true);
@@ -103,7 +101,6 @@ describe("drain", () => {
 	test("stops tracking rejected background work", async () => {
 		const failure = trackBackgroundTask(Promise.reject(new Error("failed")));
 		await failure.catch(() => {});
-		await Bun.sleep(0);
 		expect(await waitForDrain(1_000)).toBe(true);
 	});
 });
@@ -141,7 +138,7 @@ describe("shutdown handler", () => {
 		);
 
 		const shuttingDown = shutdown("SIGTERM");
-		await Bun.sleep(50);
+		await new Promise<void>((resolve) => setImmediate(resolve));
 		expect(isDraining()).toBe(true);
 		expect(finalizedWhileBusy).toBeUndefined();
 
@@ -163,7 +160,7 @@ describe("shutdown handler", () => {
 		);
 
 		const shuttingDown = shutdown("SIGTERM");
-		await Bun.sleep(50);
+		await new Promise<void>((resolve) => setImmediate(resolve));
 		expect(finalized).toBe(0);
 		await shutdown("SIGINT");
 		await shuttingDown;
@@ -211,7 +208,6 @@ describe("shutdown failures", () => {
 		);
 
 		const shuttingDown = shutdown("SIGTERM");
-		await Bun.sleep(20);
 		expect(codes).toEqual([]);
 		await shutdown("SIGTERM");
 		expect(codes).toEqual([1]);
@@ -264,9 +260,13 @@ describe("streamed response idle timeout", () => {
 		let restores = 0;
 		let cancelled = false;
 		let push: ReadableStreamDefaultController<Uint8Array> | undefined;
+		const pulled = Promise.withResolvers<void>();
 		const source = new ReadableStream<Uint8Array>({
 			start(controller) {
 				push = controller;
+			},
+			pull() {
+				pulled.resolve();
 			},
 			cancel() {
 				cancelled = true;
@@ -277,7 +277,7 @@ describe("streamed response idle timeout", () => {
 		}).getReader();
 
 		const first = reader.read();
-		await Bun.sleep(10);
+		await pulled.promise;
 		expect(restores).toBe(0);
 
 		push?.enqueue(new Uint8Array([1]));

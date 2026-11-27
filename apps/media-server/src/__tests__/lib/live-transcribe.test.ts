@@ -125,6 +125,8 @@ function createFakeCap() {
 	let notModified = 0;
 	let server: ReturnType<typeof Bun.serve>;
 	let asrSubmits = 0;
+	const manifestReads: (() => void)[] = [];
+	const reportWaiters: { action: string; resolve: () => void }[] = [];
 
 	const state = () => {
 		const urls: Record<string, string> = {};
@@ -151,6 +153,7 @@ function createFakeCap() {
 			const path = url.pathname;
 			if (path === "/storage/manifest") {
 				manifestGets++;
+				for (const resolve of manifestReads.splice(0)) resolve();
 				const etag = `"m${manifestVersion}"`;
 				if (request.headers.get("if-none-match") === etag) {
 					notModified++;
@@ -202,6 +205,11 @@ function createFakeCap() {
 				expect(request.headers.get("x-media-server-secret")).toBe("secret");
 				const report = (await request.json()) as Report;
 				reports.push(report);
+				for (const waiter of [...reportWaiters]) {
+					if (waiter.action !== report.action) continue;
+					reportWaiters.splice(reportWaiters.indexOf(waiter), 1);
+					waiter.resolve();
+				}
 				if (stopAfter && report.action === stopAfter) {
 					return Response.json({ continue: false });
 				}
@@ -246,6 +254,16 @@ function createFakeCap() {
 		},
 		get asrSubmits() {
 			return asrSubmits;
+		},
+		nextManifestRead() {
+			return new Promise<void>((resolve) => manifestReads.push(resolve));
+		},
+		reported(action: string) {
+			if (reports.some((report) => report.action === action))
+				return Promise.resolve();
+			return new Promise<void>((resolve) =>
+				reportWaiters.push({ action, resolve }),
+			);
 		},
 		record(indices: number[], is_complete = false) {
 			for (const index of indices) segments.set(index, new Uint8Array([index]));
@@ -294,10 +312,11 @@ describe("LiveSession", () => {
 	test("transcribes a recording as it grows, then reports done", async () => {
 		const fresh = createFakeCap();
 		const session = new LiveSession(startRequest(fresh, 4), deps);
+		fresh.record([1, 2, 3]);
 		const done = session.start();
-		for (let index = 1; index <= 24; index++) {
+		await fresh.reported("chunk");
+		for (let index = 4; index <= 24; index++) {
 			fresh.record([index], index === 24);
-			await Bun.sleep(3);
 		}
 		await done;
 		fresh.stop();
@@ -371,8 +390,9 @@ describe("LiveSession", () => {
 		const fresh = createFakeCap();
 		fresh.record([1]);
 		const session = new LiveSession(startRequest(fresh), deps);
+		const read = fresh.nextManifestRead();
 		session.start();
-		await Bun.sleep(20);
+		await read;
 		await session.release();
 		fresh.stop();
 		expect(fresh.reports.at(-1)).toMatchObject({ action: "release" });
@@ -387,10 +407,7 @@ describe("LiveSession", () => {
 		fresh.hangOn("chunk");
 		const session = new LiveSession(startRequest(fresh), deps);
 		session.start();
-		for (let i = 0; i < 400; i++) {
-			if (fresh.reports.some((report) => report.action === "chunk")) break;
-			await Bun.sleep(5);
-		}
+		await fresh.reported("chunk");
 		const releasedAt = Date.now();
 		await session.release();
 		const waited = Date.now() - releasedAt;

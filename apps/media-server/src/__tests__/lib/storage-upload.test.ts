@@ -617,7 +617,6 @@ describe("beginStorageUpload", () => {
 				{ type: "put", url: "https://storage.test/result.mp4" },
 				"video/mp4",
 			);
-			await Bun.sleep(20);
 			expect(calls).toHaveLength(0);
 			await pending.finish();
 			expect(calls).toEqual(["PUT"]);

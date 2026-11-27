@@ -800,17 +800,24 @@ describe("meterDeliveryLog", () => {
 
 	it("keeps memory bounded on a large log", async () => {
 		const LINES = 400_000;
+		const userAgent = "x".repeat(200);
 		function* source() {
+			let batch = "";
 			for (let i = 0; i < LINES; i++) {
 				const tier = ["360p", "720p", "1080p", "audio"][(i / 10) % 4];
-				yield `${line({
+				batch += `${line({
 					"cs-uri-stem":
 						i % 10 === 0
 							? `${base}/hls/${tier}.m4s`
 							: `/regular${i % 97}/abc/segments/video/segment_${i}.m4s`,
-					"cs(User-Agent)": "x".repeat(200),
+					"cs(User-Agent)": userAgent,
 				})}\n`;
+				if (batch.length >= 64 * 1024) {
+					yield batch;
+					batch = "";
+				}
 			}
+			if (batch) yield batch;
 		}
 		global.gc?.();
 		const before = process.memoryUsage().heapUsed;
@@ -828,7 +835,7 @@ describe("meterDeliveryLog", () => {
 		expect(result.delivered).toBe(LINES / 10);
 		expect(result.parts).toHaveLength(4);
 		expect(peak - before).toBeLessThan(64 * 1024 * 1024);
-	}, 60_000);
+	});
 });
 
 describe("readDeliveryParts", () => {
