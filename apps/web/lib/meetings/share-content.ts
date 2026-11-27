@@ -10,6 +10,15 @@ export function noteTitle(title: string): string {
 	return firstCharacters(trimmed || UNTITLED_NOTE, NOTE_TITLE_COLUMN_CHARS);
 }
 
+function withoutTags(value: string): string {
+	let current = value;
+	for (;;) {
+		const next = current.replace(/<[^>]*>/g, "");
+		if (next === current) return next.replace(/[<>]/g, "");
+		current = next;
+	}
+}
+
 export function noteExcerpt(markdown: string): string {
 	const text = markdown
 		.replace(/```[\s\S]*?```/g, " ")
@@ -23,9 +32,9 @@ export function noteExcerpt(markdown: string): string {
 				.replace(/^>+\s*/, "")
 				.replace(/^([-*+]|\d+[.)])\s+(\[[ xX]\]\s+)?/, "")
 				.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-				.replace(/<[^>]*>/g, "")
 				.replace(/[*_~`]+/g, ""),
 		)
+		.map(withoutTags)
 		.join(" ")
 		.replace(/\s+/g, " ")
 		.trim();
