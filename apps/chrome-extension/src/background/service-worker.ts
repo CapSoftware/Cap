@@ -9,7 +9,10 @@ import {
 	isRecordingStatusBroadcast,
 	isServiceWorkerRequest,
 } from "../shared/messages";
-import { rememberRecordingMode } from "../shared/preferences";
+import {
+	rememberCameraSelection,
+	rememberRecordingMode,
+} from "../shared/preferences";
 import {
 	isRecorderHostPage,
 	RECORDER_OPEN_PARAM,
@@ -2035,7 +2038,12 @@ const handleRequest = async (
 	}
 
 	if (message.type === "close-webcam-preview") {
-		const settings = await loadSettings();
+		const current = await loadSettings();
+		const settings =
+			current.capture.recordingMode === "camera"
+				? current
+				: rememberCameraSelection(current, null, []);
+		if (settings !== current) await saveSettings(settings);
 		await saveWebcamPreviewDismissed(true);
 		await broadcastOverlayHide();
 		return { ok: true, settings };
