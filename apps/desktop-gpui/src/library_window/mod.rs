@@ -2643,15 +2643,24 @@ impl LibraryWindow {
         cx: &mut Context<Self>,
         on: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> AnyElement {
+        let label: SharedString = label.into();
+        self.pill_shell(id, label.clone())
+            .role(gpui::Role::Button)
+            .aria_label(label)
+            .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
+            .into_any_element()
+    }
+
+    /// A pill with nothing to change: drawn the same, but not a button.
+    fn pill_shell(
+        &self,
+        id: impl Into<SharedString>,
+        label: SharedString,
+    ) -> gpui::Stateful<gpui::Div> {
         let p = self.palette;
         let dark = p.dark;
-        let label: SharedString = label.into();
         div()
             .id(id.into())
-            // Each press moves the rule to its next value, so a screen
-            // reader hears the new value as the button's name.
-            .role(gpui::Role::Button)
-            .aria_label(label.clone())
             .h(px(30.))
             .px(px(10.))
             .flex()
@@ -2673,8 +2682,6 @@ impl LibraryWindow {
                     .size(px(11.))
                     .text_color(p.muted),
             )
-            .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
-            .into_any_element()
     }
 
     fn render_rule_row(&self, index: usize, row: &RuleRow, cx: &mut Context<Self>) -> AnyElement {
@@ -2858,12 +2865,17 @@ impl LibraryWindow {
                 move |this, window, cx| this.cycle_field(index, window, cx),
             ))
             .when(!op.is_empty(), |el| {
-                el.child(self.pill(
-                    format!("rule-op-{index}"),
-                    op,
-                    cx,
-                    move |this, _window, cx| this.cycle_op(index, cx),
-                ))
+                el.child(if matches!(row.rule, Rule::Date { .. }) {
+                    self.pill_shell(format!("rule-op-{index}"), op.into())
+                        .into_any_element()
+                } else {
+                    self.pill(
+                        format!("rule-op-{index}"),
+                        op,
+                        cx,
+                        move |this, _window, cx| this.cycle_op(index, cx),
+                    )
+                })
             })
             .child(div().flex_1().min_w_0().flex().child(value))
             .child(
