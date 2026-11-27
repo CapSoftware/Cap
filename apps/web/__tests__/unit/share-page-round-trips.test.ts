@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
 	query: vi.fn(),
 	note: false,
 	access: "allowed" as "allowed" | "private" | "password",
+	ownerIsPro: true,
+	overLinkLimit: false,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -25,7 +27,10 @@ vi.mock("@cap/env", () => ({
 	serverEnv: () => ({}),
 }));
 vi.mock("@cap/ui", () => ({ Logo: () => null }));
-vi.mock("@cap/utils", () => ({ userIsPro: () => true }));
+vi.mock("@cap/utils", () => ({ userIsPro: () => mocks.ownerIsPro }));
+vi.mock("@/lib/shareable-link-quota", () => ({
+	isVideoOverShareableLinkLimit: async () => mocks.overLinkLimit,
+}));
 vi.mock("@cap/web-backend", async () => {
 	const { Context, Effect } = await import("effect");
 	const { resolveEffectiveVideoRules } = await import(
@@ -258,7 +263,15 @@ function rowsFor(query: string) {
 	if (query.includes("from `space_members`")) return [["space-member"]];
 	if (query.includes("from `video_edits`")) return [];
 	if (query.includes("from `video_notes`"))
-		return [project(query, { video_notes: noteContent })];
+		return [
+			[
+				noteContent.summaryMarkdown,
+				noteContent.notesMarkdown,
+				noteContent.transcript,
+				noteContent.participants,
+				noteContent.meetingStartedAt,
+			],
+		];
 	throw new Error(`Unexpected query: ${query}`);
 }
 
@@ -296,6 +309,8 @@ beforeEach(() => {
 	mocks.query.mockReset();
 	mocks.note = false;
 	mocks.access = "allowed";
+	mocks.ownerIsPro = true;
+	mocks.overLinkLimit = false;
 });
 
 describe("share page database round trips", () => {
@@ -399,13 +414,33 @@ describe("share page note content", () => {
 		},
 	);
 
-	it("reads the note only for a viewer the policy lets in", async () => {
+	const renderNote = async () => {
 		const page = await openNote("allowed");
 		const authorized = page.props.children as ReactElement;
-		await (authorized.type as (props: unknown) => Promise<unknown>)(
-			authorized.props,
-		);
+		const content = (await (
+			authorized.type as (props: unknown) => Promise<unknown>
+		)(authorized.props)) as ReactElement<{
+			children: ReactElement<{ document: ReactElement; transcript: unknown }>;
+		}>;
+		return content.props.children.props;
+	};
+
+	it("reads the note only for a viewer the policy lets in", async () => {
+		const shell = await renderNote();
 
 		expect(noteQueries()).toHaveLength(1);
+		expect(JSON.stringify(shell.document.props)).toContain(NOTE_TEXT);
+		expect(shell.transcript).not.toBeNull();
+	});
+
+	it("holds back a note that is over the owner's free link allowance", async () => {
+		mocks.ownerIsPro = false;
+		mocks.overLinkLimit = true;
+
+		const shell = await renderNote();
+
+		expect(shell.document.props).toEqual({ isOwner: false });
+		expect(shell.transcript).toBeNull();
+		expect(JSON.stringify(shell)).not.toContain(NOTE_TEXT);
 	});
 });

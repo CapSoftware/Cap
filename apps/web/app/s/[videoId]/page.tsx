@@ -119,6 +119,7 @@ import {
 	SignInRequiredState,
 } from "./_components/AccessStates";
 import { NoteDocument } from "./_components/note/NoteDocument";
+import { NoteLinkLimit } from "./_components/note/NoteLinkLimit";
 import { NoteTranscript } from "./_components/note/NoteTranscript";
 import { PasswordGate } from "./_components/PasswordGate";
 import { PendingRecordingShare } from "./_components/PendingRecordingShare";
@@ -672,9 +673,8 @@ async function AuthorizedContent({
 	const ownerIsPro = userIsPro(video.owner);
 
 	// Fail-open: a broken count must never take the share page down.
-	const overShareLimitPromise =
-		ownerIsPro || video.isNote
-			? Promise.resolve(false)
+	const overShareLimitPromise = ownerIsPro
+		? Promise.resolve(false)
 			: isVideoOverShareableLinkLimit({
 					id: videoId,
 					ownerId: video.owner.id,
@@ -1304,7 +1304,9 @@ async function AuthorizedContent({
 
 	if (video.isNote) {
 		const noteTurns =
-			!rules.settings.disableTranscript && Array.isArray(note?.transcript)
+			!ownerIsOverShareLimit &&
+			!rules.settings.disableTranscript &&
+			Array.isArray(note?.transcript)
 				? note.transcript
 				: [];
 		return (
@@ -1313,16 +1315,20 @@ async function AuthorizedContent({
 					header={header}
 					data={videoWithOrganizationInfo}
 					document={
-						<NoteDocument
-							summaryMarkdown={note?.summaryMarkdown ?? null}
-							notesMarkdown={note?.notesMarkdown ?? null}
-							participants={
-								Array.isArray(note?.participants) ? note.participants : []
-							}
-							meetingStartedAt={note?.meetingStartedAt ?? null}
-							duration={video.duration}
-							ownerName={video.owner.name}
-						/>
+						ownerIsOverShareLimit ? (
+							<NoteLinkLimit isOwner={user?.id === video.owner.id} />
+						) : (
+							<NoteDocument
+								summaryMarkdown={note?.summaryMarkdown ?? null}
+								notesMarkdown={note?.notesMarkdown ?? null}
+								participants={
+									Array.isArray(note?.participants) ? note.participants : []
+								}
+								meetingStartedAt={note?.meetingStartedAt ?? null}
+								duration={video.duration}
+								ownerName={video.owner.name}
+							/>
+						)
 					}
 					transcript={
 						noteTurns.length > 0 ? <NoteTranscript turns={noteTurns} /> : null

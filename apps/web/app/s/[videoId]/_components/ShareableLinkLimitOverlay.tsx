@@ -9,6 +9,9 @@ import { BarChart3, Infinity as InfinityIcon, Share2 } from "lucide-react";
 const LIMIT = Video.FREE_PLAN_SHAREABLE_LINKS_PER_MONTH;
 const MAX_MINUTES = Video.FREE_PLAN_MAX_RECORDING_SECONDS / 60;
 
+const STUDIO_NOTE =
+	"Videos recorded in Studio mode are saved to your device, free and unlimited.";
+
 const COPY = {
 	links: {
 		ownerTitle: "You've run out of shareable links",
@@ -16,6 +19,15 @@ const COPY = {
 		ownerBody: `You've used all ${LIMIT} shareable links included with Cap's free plan this month. Upgrade to Cap Pro and this video becomes instantly viewable, along with everything else you record.`,
 		viewerBody: `The owner of this video has used all ${LIMIT} shareable links included with Cap's free plan this month. As soon as they upgrade to Cap Pro, this video will be instantly viewable.`,
 		viewerNote: `Cap's free plan includes ${LIMIT} shareable links per month.`,
+		ownerNote: STUDIO_NOTE,
+	},
+	noteLinks: {
+		ownerTitle: "You've run out of shareable links",
+		viewerTitle: "This note is over its free limit",
+		ownerBody: `You've used all ${LIMIT} shareable links included with Cap's free plan this month. Upgrade to Cap Pro and this note becomes instantly readable, along with everything else you share.`,
+		viewerBody: `The owner of this note has used all ${LIMIT} shareable links included with Cap's free plan this month. As soon as they upgrade to Cap Pro, this note will be instantly readable.`,
+		viewerNote: `Cap's free plan includes ${LIMIT} shareable links per month.`,
+		ownerNote: "This note is still saved in the Cap desktop app.",
 	},
 	duration: {
 		ownerTitle: `This video is longer than ${MAX_MINUTES} minutes`,
@@ -23,6 +35,7 @@ const COPY = {
 		ownerBody: `Cap's free plan shares videos up to ${MAX_MINUTES} minutes long. Upgrade to Cap Pro and this video becomes instantly viewable, along with everything else you record.`,
 		viewerBody: `This video is longer than the ${MAX_MINUTES} minutes Cap's free plan shares. As soon as the owner upgrades to Cap Pro, it will be instantly viewable.`,
 		viewerNote: `Cap's free plan shares videos up to ${MAX_MINUTES} minutes long.`,
+		ownerNote: STUDIO_NOTE,
 	},
 };
 
@@ -91,9 +104,7 @@ export function ShareableLinkLimitOverlay({
 					</Button>
 				)}
 				<p className="mt-3 text-xs text-white/40">
-					{isOwner
-						? "Videos recorded in Studio mode are saved to your device, free and unlimited."
-						: copy.viewerNote}
+					{isOwner ? copy.ownerNote : copy.viewerNote}
 				</p>
 			</div>
 		</div>
