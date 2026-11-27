@@ -36,6 +36,7 @@ title = "文件"
 open_file = "打开文件…"
 open_recent = "打开最近使用"
 import_media = "导入媒体…"
+export = "导出…"
 
 [menu.edit]
 copy = "拷贝"
@@ -58,7 +59,7 @@ zoom = "缩放"
 
 [menu.help]
 title = "帮助"
-feedback = "提供反馈…"
+feedback = "向 Cap 发送反馈…"
 changelog = "更新日志"
 dashboard = "仪表盘"
 documentation = "文档"

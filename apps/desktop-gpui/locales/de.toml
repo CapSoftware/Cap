@@ -36,6 +36,7 @@ title = "Ablage"
 open_file = "Datei öffnen…"
 open_recent = "Benutzte Dokumente"
 import_media = "Medien importieren…"
+export = "Exportieren…"
 
 [menu.edit]
 copy = "Kopieren"
@@ -58,7 +59,7 @@ zoom = "Zoomen"
 
 [menu.help]
 title = "Hilfe"
-feedback = "Feedback geben…"
+feedback = "Feedback an Cap senden…"
 changelog = "Änderungsprotokoll"
 dashboard = "Dashboard"
 documentation = "Dokumentation"
