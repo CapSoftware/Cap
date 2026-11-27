@@ -1090,6 +1090,16 @@ screenshots_description = "スクリーンショットはここに表示され�
 view_all_recordings = "すべての録画を表示"
 view_all_screenshots = "すべてのスクリーンショットを表示"
 
+[main.link_start]
+camera = "カメラ: {name}"
+instant = "リンクから {target} を Instant モードで録画するよう求められました。"
+microphone = "マイク: {name}"
+none = "なし"
+start = "録画を開始"
+studio = "リンクから {target} を Studio モードで録画するよう求められました。"
+system_audio = "システムオーディオ: オン"
+title = "録画を開始しますか？"
+
 [main.mic_warning]
 body = "この録画には声が入りません。マイクを選択するか、マイクなしで続けてください。"
 dont_show_again = "今後表示しない"

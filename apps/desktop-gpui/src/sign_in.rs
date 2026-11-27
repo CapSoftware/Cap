@@ -89,7 +89,18 @@ impl SignIn {
             return;
         }
 
-        let session = auth::begin_sign_in();
+        let session = match auth::begin_sign_in() {
+            Ok(session) => session,
+            Err(error) => {
+                tracing::warn!("sign-in failed: {error}");
+                cx.emit(SignInEvent::Finished {
+                    origin,
+                    outcome: SignInOutcome::Failed(error),
+                });
+                cx.notify();
+                return;
+            }
+        };
         let url = session.url.clone();
         let id = self.next_id;
         self.next_id += 1;

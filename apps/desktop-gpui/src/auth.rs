@@ -77,6 +77,7 @@ impl std::fmt::Display for AuthApiError {
 pub struct SignInSession {
     pub url: String,
     id: u64,
+    state: String,
     local: Option<flume::Receiver<AuthParams>>,
     deep: flume::Receiver<String>,
     callback: Arc<CallbackControl>,
@@ -96,16 +97,17 @@ pub enum SignInWaitError {
 /// Start one sign-in attempt: a loopback callback server, a deep-link slot,
 /// and the browser URL that leads back to either. Dropping the session tears
 /// both down.
-pub fn begin_sign_in() -> SignInSession {
+pub fn begin_sign_in() -> Result<SignInSession, String> {
     let server = server_url();
     let local_only = should_use_local_server_session(&server);
     let id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
     let callback = Arc::new(CallbackControl::default());
+    let state = new_sign_in_state()?;
 
     // Without a port the server redirects straight to the `cap-desktop://`
     // deep link, so a failed bind degrades to the deep-link path instead of
     // failing sign-in outright.
-    let local = match start_local_callback(callback.clone()) {
+    let local = match start_local_callback(callback.clone(), state.clone()) {
         Ok(local) => Some(local),
         Err(error) => {
             tracing::warn!(
@@ -123,16 +125,29 @@ pub fn begin_sign_in() -> SignInSession {
         tx: deep_tx,
     });
 
-    SignInSession {
-        url: sign_in_request_url(&server, local.as_ref().map(|local| local.port), local_only),
+    Ok(SignInSession {
+        url: sign_in_request_url(
+            &server,
+            local.as_ref().map(|local| local.port),
+            local_only,
+            &state,
+        ),
         id,
+        state,
         local: local.map(|local| local.complete),
         deep: deep_rx,
         callback,
-    }
+    })
 }
 
-fn sign_in_request_url(server: &str, port: Option<u16>, local_only: bool) -> String {
+fn new_sign_in_state() -> Result<String, String> {
+    use base64::Engine;
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes).map_err(|error| error.to_string())?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn sign_in_request_url(server: &str, port: Option<u16>, local_only: bool, state: &str) -> String {
     let mut url = format!("{server}/api/desktop/session/request?type=api_key");
     if let Some(port) = port {
         url.push_str(&format!("&port={port}"));
@@ -142,6 +157,7 @@ fn sign_in_request_url(server: &str, port: Option<u16>, local_only: bool) -> Str
     } else {
         "&platform=desktop"
     });
+    url.push_str(&format!("&state={state}"));
     url
 }
 
@@ -165,7 +181,7 @@ impl SignInSession {
             loop {
                 match self.deep.recv_async().await {
                     Ok(url) => {
-                        if let Some(params) = parse_auth_params(&url) {
+                        if let Some(params) = parse_auth_callback(&url, &self.state) {
                             break params;
                         }
                     }
@@ -510,20 +526,24 @@ struct LocalCallback {
 const MAX_CALLBACK_CONNECTIONS: usize = 8;
 const CALLBACK_REQUEST_DEADLINE: Duration = Duration::from_secs(30);
 
-fn start_local_callback(control: Arc<CallbackControl>) -> std::io::Result<LocalCallback> {
+fn start_local_callback(
+    control: Arc<CallbackControl>,
+    state: String,
+) -> std::io::Result<LocalCallback> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
     let (tx, rx) = flume::bounded(1);
     std::thread::Builder::new()
         .name("cap-sign-in-callback".into())
-        .spawn(move || serve_local_callback(listener, port, &control, &tx))?;
+        .spawn(move || serve_local_callback(listener, port, &state, &control, &tx))?;
     Ok(LocalCallback { port, complete: rx })
 }
 
 fn serve_local_callback(
     listener: TcpListener,
     port: u16,
+    state: &str,
     control: &CallbackControl,
     tx: &flume::Sender<AuthParams>,
 ) {
@@ -552,11 +572,12 @@ fn serve_local_callback(
                 }
                 active.fetch_add(1, Ordering::AcqRel);
                 let tx = tx.clone();
+                let state = state.to_string();
                 let connection_active = active.clone();
                 let spawned = std::thread::Builder::new()
                     .name("cap-sign-in-request".into())
                     .spawn(move || {
-                        handle_callback_connection(stream, port, &tx);
+                        handle_callback_connection(stream, port, &state, &tx);
                         connection_active.fetch_sub(1, Ordering::AcqRel);
                     });
                 if let Err(error) = spawned {
@@ -575,7 +596,12 @@ fn serve_local_callback(
     }
 }
 
-fn handle_callback_connection(mut stream: TcpStream, port: u16, tx: &flume::Sender<AuthParams>) {
+fn handle_callback_connection(
+    mut stream: TcpStream,
+    port: u16,
+    state: &str,
+    tx: &flume::Sender<AuthParams>,
+) {
     // BSD sockets inherit O_NONBLOCK from the listener, so on macOS a stream
     // accepted from the non-blocking listener reads WouldBlock until the
     // browser's request bytes land. Treating that as a failed read dropped the
@@ -594,7 +620,7 @@ fn handle_callback_connection(mut stream: TcpStream, port: u16, tx: &flume::Send
     let Some(target) = read_request_target(&mut stream, deadline) else {
         return;
     };
-    let params = parse_auth_params(&format!("http://127.0.0.1:{port}{target}"));
+    let params = parse_auth_callback(&format!("http://127.0.0.1:{port}{target}"), state);
     let (status, body) = if params.is_some() {
         ("200 OK", crate::local_page::signed_in())
     } else {
@@ -660,7 +686,29 @@ fn origin_of(value: &str) -> Option<String> {
     Some(url.origin().ascii_serialization())
 }
 
-pub fn parse_auth_params(url: &str) -> Option<AuthParams> {
+fn parse_auth_callback(url: &str, expected_state: &str) -> Option<AuthParams> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let mut states = parsed
+        .query_pairs()
+        .filter(|(key, _)| key == "state")
+        .map(|(_, value)| value);
+    let state = states.next()?;
+    if states.next().is_some() || !constant_time_eq(state.as_bytes(), expected_state.as_bytes()) {
+        return None;
+    }
+    parse_auth_params(url)
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .fold(0u8, |diff, (left, right)| diff | (left ^ right))
+            == 0
+}
+
+fn parse_auth_params(url: &str) -> Option<AuthParams> {
     let parsed = reqwest::Url::parse(url).ok()?;
     let query = query_map(&parsed);
     if let Some(api_key) = query.get("api_key")
@@ -746,7 +794,7 @@ mod tests {
     #[test]
     fn loopback_callback_survives_a_slow_browser_and_keeps_serving() {
         let control = Arc::new(CallbackControl::default());
-        let local = start_local_callback(control.clone()).unwrap();
+        let local = start_local_callback(control.clone(), "expected-state".into()).unwrap();
 
         let unrelated = request(
             local.port,
@@ -756,10 +804,19 @@ mod tests {
         assert!(unrelated.starts_with("HTTP/1.1 404"), "{unrelated}");
         assert!(local.complete.try_recv().is_err());
 
+        for forged in [
+            "GET /?type=api_key&api_key=other&user_id=other HTTP/1.1\r\n\r\n",
+            "GET /?type=api_key&api_key=other&user_id=other&state=wrong-state HTTP/1.1\r\n\r\n",
+        ] {
+            let response = request(local.port, Duration::ZERO, forged);
+            assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+        }
+        assert!(local.complete.try_recv().is_err());
+
         let callback = request(
             local.port,
             Duration::from_millis(300),
-            "GET /?type=api_key&api_key=key-1&user_id=user-1 HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/html\r\n\r\n",
+            "GET /?type=api_key&api_key=key-1&user_id=user-1&state=expected-state HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/html\r\n\r\n",
         );
         assert!(callback.starts_with("HTTP/1.1 200"), "{callback}");
         assert!(callback.contains("signed in"));
@@ -791,7 +848,7 @@ mod tests {
         let fallback = request(
             local.port,
             Duration::ZERO,
-            "GET /?type=api_key&api_key=key-1&user_id=user-1 HTTP/1.1\r\n\r\n",
+            "GET /?type=api_key&api_key=key-1&user_id=user-1&state=expected-state HTTP/1.1\r\n\r\n",
         );
         assert!(fallback.starts_with("HTTP/1.1 200"), "{fallback}");
         control.stop.store(true, Ordering::Release);
@@ -823,13 +880,58 @@ mod tests {
     #[test]
     fn sign_in_url_omits_a_missing_port() {
         assert_eq!(
-            sign_in_request_url("https://cap.so", Some(4280), false),
-            "https://cap.so/api/desktop/session/request?type=api_key&port=4280&platform=desktop"
+            sign_in_request_url("https://cap.so", Some(4280), false, "s1"),
+            "https://cap.so/api/desktop/session/request?type=api_key&port=4280&platform=desktop&state=s1"
         );
         assert_eq!(
-            sign_in_request_url("http://localhost:3000", None, true),
-            "http://localhost:3000/api/desktop/session/request?type=api_key&platform=web"
+            sign_in_request_url("http://localhost:3000", None, true, "s2"),
+            "http://localhost:3000/api/desktop/session/request?type=api_key&platform=web&state=s2"
         );
+    }
+
+    #[test]
+    fn sign_in_state_is_random_and_url_safe() {
+        let first = new_sign_in_state().unwrap();
+        let second = new_sign_in_state().unwrap();
+        assert_ne!(first, second);
+        assert_eq!(first.len(), 43);
+        assert!(
+            first
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        );
+    }
+
+    #[test]
+    fn callbacks_need_the_session_state() {
+        let expected = AuthParams::ApiKey {
+            api_key: "k".into(),
+            user_id: "u".into(),
+        };
+        for url in [
+            "cap-desktop://signin?type=api_key&api_key=k&user_id=u&state=abc123",
+            "http://127.0.0.1:4280/?type=api_key&api_key=k&user_id=u&state=abc123",
+            "cap-desktop://signin?state=abc123&api_key=k&user_id=u",
+        ] {
+            assert_eq!(
+                parse_auth_callback(url, "abc123"),
+                Some(expected.clone()),
+                "{url}"
+            );
+        }
+        for url in [
+            "cap-desktop://signin?type=api_key&api_key=k&user_id=u",
+            "cap-desktop://signin?api_key=k&user_id=u&state=",
+            "cap-desktop://signin?api_key=k&user_id=u&state=abc12",
+            "cap-desktop://signin?api_key=k&user_id=u&state=abc1234",
+            "cap-desktop://signin?api_key=k&user_id=u&state=ABC123",
+            "cap-desktop://signin?api_key=k&user_id=u&state=abc123&state=other",
+            "cap-desktop://signin?api_key=k&user_id=u&state=other&state=abc123",
+            "cap-desktop://auth?token=t&user_id=u&expires=9&state=wrong",
+            "cap-desktop://signin?state=abc123",
+        ] {
+            assert_eq!(parse_auth_callback(url, "abc123"), None, "{url}");
+        }
     }
 
     #[test]
@@ -838,6 +940,7 @@ mod tests {
         let old = SignInSession {
             url: String::new(),
             id: u64::MAX - 1,
+            state: String::new(),
             local: None,
             deep: old_rx,
             callback: Arc::new(CallbackControl::default()),

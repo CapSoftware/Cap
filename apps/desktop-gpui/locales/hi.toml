@@ -1090,6 +1090,16 @@ screenshots_description = "आपके स्क्रीनशॉट यहा
 view_all_recordings = "सभी रिकॉर्डिंग देखें"
 view_all_screenshots = "सभी स्क्रीनशॉट देखें"
 
+[main.link_start]
+camera = "कैमरा: {name}"
+instant = "एक लिंक ने Cap से {target} को Instant मोड में रिकॉर्ड करने को कहा है।"
+microphone = "माइक्रोफ़ोन: {name}"
+none = "कोई नहीं"
+start = "रिकॉर्डिंग शुरू करें"
+studio = "एक लिंक ने Cap से {target} को Studio मोड में रिकॉर्ड करने को कहा है।"
+system_audio = "सिस्टम ऑडियो: चालू"
+title = "रिकॉर्डिंग शुरू करें?"
+
 [main.mic_warning]
 body = "इस रिकॉर्डिंग में आपकी आवाज़ शामिल नहीं होगी। कोई माइक्रोफ़ोन चुनें, या उसके बिना जारी रखें।"
 dont_show_again = "दोबारा न दिखाएँ"

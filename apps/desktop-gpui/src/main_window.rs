@@ -33,7 +33,6 @@ use crate::{
 };
 use gpui::{Entity, Task};
 
-
 /// How long the mode panel's doodles take to draw in. After this they render
 /// still, so an open panel stops asking for frames.
 const MODE_INFO_DRAW_DURATION: std::time::Duration = std::time::Duration::from_millis(1900);
@@ -486,11 +485,7 @@ impl gpui::RenderOnce for ModeHoverCard {
             .bg(theme.gray_12)
             .text_color(theme.gray_1)
             .shadow_lg()
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .child(mode.hover_title()),
-            )
+            .child(div().text_size(px(12.)).child(mode.hover_title()))
             .child(
                 div()
                     .text_size(px(10.))
@@ -498,41 +493,38 @@ impl gpui::RenderOnce for ModeHoverCard {
                     .text_color(theme.gray_4)
                     .child(description),
             )
-            .when_some(
-                (mode != Mode::Screenshot).then_some(mode),
-                |this, mode| {
-                    this.child(
-                        div()
-                            .id("mode-quality-settings")
-                            .group("mode-quality-settings")
-                            .tab_index(0)
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .mx(px(-4.))
-                            .px(px(8.))
-                            .py(px(4.))
-                            .rounded(px(6.))
-                            .text_size(px(11.))
-                            .text_color(theme.gray_4)
-                            .hover(|style| style.bg(theme.gray_11).text_color(theme.gray_1))
-                            .child(
-                                svg()
-                                    .path("icons/settings.svg")
-                                    .size(px(12.))
-                                    .text_color(theme.gray_4)
-                                    .group_hover("mode-quality-settings", |style| {
-                                        style.text_color(theme.gray_1)
-                                    }),
-                            )
-                            .child(tr::main::mode::hover::quality_settings())
-                            .on_click(move |_, _, cx| {
-                                cx.stop_propagation();
-                                cx.defer(move |cx| app_windows::open_quality_settings(mode, cx));
-                            }),
-                    )
-                },
-            )
+            .when_some((mode != Mode::Screenshot).then_some(mode), |this, mode| {
+                this.child(
+                    div()
+                        .id("mode-quality-settings")
+                        .group("mode-quality-settings")
+                        .tab_index(0)
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .mx(px(-4.))
+                        .px(px(8.))
+                        .py(px(4.))
+                        .rounded(px(6.))
+                        .text_size(px(11.))
+                        .text_color(theme.gray_4)
+                        .hover(|style| style.bg(theme.gray_11).text_color(theme.gray_1))
+                        .child(
+                            svg()
+                                .path("icons/settings.svg")
+                                .size(px(12.))
+                                .text_color(theme.gray_4)
+                                .group_hover("mode-quality-settings", |style| {
+                                    style.text_color(theme.gray_1)
+                                }),
+                        )
+                        .child(tr::main::mode::hover::quality_settings())
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            cx.defer(move |cx| app_windows::open_quality_settings(mode, cx));
+                        }),
+                )
+            })
     }
 }
 
@@ -2786,6 +2778,15 @@ impl MainWindow {
         let Ok(permit) = self.prepare_deep_link_start(cx) else {
             return;
         };
+        self.start_after_microphone_check(config, permit, cx);
+    }
+
+    fn start_after_microphone_check(
+        &mut self,
+        config: recording::StartConfig,
+        permit: RecordingStartPermit,
+        cx: &mut Context<Self>,
+    ) {
         let microphone_available = config.microphone.as_ref().is_some_and(|name| {
             self.devices
                 .microphones
@@ -2861,7 +2862,21 @@ impl MainWindow {
         permit: RecordingStartPermit,
         cx: &mut Context<Self>,
     ) {
-        self.check_storage_before_start(config, false, permit, cx);
+        if !self.recording_start_is_current(&permit, cx) {
+            self.finish_recording_start(&permit);
+            return;
+        }
+        if self.enumerating || self.device_format_pending.is_some() {
+            self.finish_recording_start(&permit);
+            self.session.update(cx, |session, cx| {
+                session.error = Some(tr::main::error::devices_not_ready().into());
+                cx.notify();
+            });
+            cx.defer(app_windows::show_main_window);
+            cx.notify();
+            return;
+        }
+        self.start_after_microphone_check(config, permit, cx);
     }
 
     fn recording_start_is_current(&self, permit: &RecordingStartPermit, cx: &gpui::App) -> bool {
@@ -7369,13 +7384,7 @@ impl MainWindow {
         self.mode_hover = ModeHoverState::default();
     }
 
-    fn update_mode_hover(
-        &mut self,
-        mode: Mode,
-        card: bool,
-        hovered: bool,
-        cx: &mut Context<Self>,
-    ) {
+    fn update_mode_hover(&mut self, mode: Mode, card: bool, hovered: bool, cx: &mut Context<Self>) {
         let previous = self.mode_hover.target();
         self.mode_hover.update(mode, card, hovered);
         let target = self.mode_hover.target();

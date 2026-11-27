@@ -1090,6 +1090,16 @@ screenshots_description = "Tus capturas de pantalla aparecerán aquí. ¡Haz una
 view_all_recordings = "Ver todas las grabaciones"
 view_all_screenshots = "Ver todas las capturas"
 
+[main.link_start]
+camera = "Cámara: {name}"
+instant = "Un enlace pidió a Cap grabar {target} en modo Instant."
+microphone = "Micrófono: {name}"
+none = "Ninguno"
+start = "Iniciar grabación"
+studio = "Un enlace pidió a Cap grabar {target} en modo Studio."
+system_audio = "Audio del sistema: activado"
+title = "¿Iniciar la grabación?"
+
 [main.mic_warning]
 body = "Esta grabación no incluirá tu voz. Selecciona un micrófono o continúa sin él."
 dont_show_again = "No volver a mostrar"

@@ -1090,6 +1090,16 @@ screenshots_description = "Hier erscheinen Ihre Bildschirmfotos. Machen Sie ein 
 view_all_recordings = "Alle Aufnahmen anzeigen"
 view_all_screenshots = "Alle Bildschirmfotos anzeigen"
 
+[main.link_start]
+camera = "Kamera: {name}"
+instant = "Ein Link möchte {target} im Instant-Modus aufnehmen."
+microphone = "Mikrofon: {name}"
+none = "Keins"
+start = "Aufnahme starten"
+studio = "Ein Link möchte {target} im Studio-Modus aufnehmen."
+system_audio = "Systemaudio: an"
+title = "Aufnahme starten?"
+
 [main.mic_warning]
 body = "Diese Aufnahme enthält Ihre Stimme nicht. Wählen Sie ein Mikrofon oder fahren Sie ohne Mikrofon fort."
 dont_show_again = "Nicht mehr anzeigen"
