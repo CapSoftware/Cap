@@ -16,6 +16,12 @@ use std::{
 use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
+/// Maximum in-memory cursor move events buffered before incremental disk flush.
+/// Prevents unbounded Vec growth (5GB+ RSS on 2min+ high-DPI recordings).
+const MAX_IN_MEMORY_CURSOR_MOVES: usize = 4_096;
+/// Minimum Euclidean distance (in normalized coordinates) required to record a redundant cursor move.
+const MIN_CURSOR_MOVE_DELTA_SQ: f64 = 1e-7;
+
 #[derive(Clone)]
 pub struct Cursor {
     pub file_name: String,
@@ -33,6 +39,33 @@ pub struct CursorActorResponse {
     pub moves: Vec<CursorMoveEvent>,
     pub clicks: Vec<CursorClickEvent>,
     pub keyboard_presses: Vec<KeyPressEvent>,
+}
+
+impl CursorActorResponse {
+    #[inline]
+    pub fn push_move_deduped(
+        &mut self,
+        ev: CursorMoveEvent,
+        last_flushed: Option<&CursorMoveEvent>,
+    ) {
+        if let Some(last) = self.moves.last().or(last_flushed) {
+            let dx = ev.x - last.x;
+            let dy = ev.y - last.y;
+            if last.cursor_id == ev.cursor_id && (dx * dx + dy * dy) < MIN_CURSOR_MOVE_DELTA_SQ {
+                return;
+            }
+        }
+        if self.moves.len() >= MAX_IN_MEMORY_CURSOR_MOVES {
+            let half = self.moves.len() / 2;
+            let mut idx = 0;
+            self.moves.retain(|_| {
+                let keep = idx >= half || idx % 2 == 0;
+                idx += 1;
+                keep
+            });
+        }
+        self.moves.push(ev);
+    }
 }
 
 pub struct CursorActor {
@@ -289,33 +322,53 @@ struct IncrementalDelta {
     keyboard_presses: Vec<KeyPressEvent>,
 }
 
-/// How many of the recorder's events were already handed to the incremental
-/// files, so each flush clones only the newer ones on the sampling thread.
+/// Drains buffered events from `CursorActorResponse` into each incremental
+/// delta and tracks the trailing flushed cursor moves so deduplication,
+/// final still-pointer shape confirmation, and in-memory bounds hold across flushes.
 #[derive(Default)]
 struct FlushedEvents {
-    moves: usize,
-    clicks: usize,
-    keyboard_presses: usize,
+    prev_move: Option<CursorMoveEvent>,
+    last_move: Option<CursorMoveEvent>,
 }
 
 impl FlushedEvents {
     fn take(
         &mut self,
         outputs: &IncrementalCaptureOutputs,
-        response: &CursorActorResponse,
+        response: &mut CursorActorResponse,
     ) -> IncrementalDelta {
         let mut delta = IncrementalDelta::default();
         if outputs.cursor.is_some() {
-            delta.moves = response.moves[self.moves..].to_vec();
-            delta.clicks = response.clicks[self.clicks..].to_vec();
+            match response.moves.as_slice() {
+                [.., second_last, last] => {
+                    self.prev_move = Some(second_last.clone());
+                    self.last_move = Some(last.clone());
+                }
+                [only] => {
+                    self.prev_move = self.last_move.take();
+                    self.last_move = Some(only.clone());
+                }
+                [] => {}
+            }
+            delta.moves = std::mem::take(&mut response.moves);
+            delta.clicks = std::mem::take(&mut response.clicks);
+            response.moves.shrink_to(MAX_IN_MEMORY_CURSOR_MOVES);
         }
         if outputs.keyboard.is_some() {
-            delta.keyboard_presses = response.keyboard_presses[self.keyboard_presses..].to_vec();
+            delta.keyboard_presses = std::mem::take(&mut response.keyboard_presses);
         }
-        self.moves = response.moves.len();
-        self.clicks = response.clicks.len();
-        self.keyboard_presses = response.keyboard_presses.len();
         delta
+    }
+
+    fn trailing_move_pair<'a>(
+        &'a self,
+        moves: &'a [CursorMoveEvent],
+    ) -> Option<(&'a CursorMoveEvent, &'a CursorMoveEvent)> {
+        match moves {
+            [.., previous, last] => Some((previous, last)),
+            [last] => self.last_move.as_ref().map(|previous| (previous, last)),
+            [] => self.prev_move.as_ref().zip(self.last_move.as_ref()),
+        }
     }
 }
 
@@ -398,6 +451,28 @@ impl IncrementalFiles {
         self.append(delta);
         self.write();
     }
+
+    fn take_unpersisted(&mut self) -> IncrementalDelta {
+        let mut delta = IncrementalDelta::default();
+        if self.outputs.cursor.is_some() && self.cursor_pending {
+            let json = [
+                b"{\"clicks\":[" as &[u8],
+                &self.clicks_json,
+                b"],\"moves\":[",
+                &self.moves_json,
+                b"]}",
+            ]
+            .concat();
+            if let Ok(events) = serde_json::from_slice::<cap_project::CursorEvents>(&json) {
+                delta.clicks = events.clicks;
+                delta.moves = events.moves;
+            }
+        }
+        if self.outputs.keyboard.is_some() && self.keyboard_pending {
+            delta.keyboard_presses = std::mem::take(&mut self.keyboard.presses);
+        }
+        delta
+    }
 }
 
 fn append_json(buffer: &mut Vec<u8>, event: &impl serde::Serialize) {
@@ -429,6 +504,7 @@ enum WriterMessage {
 struct CursorFileWriter {
     tx: std::sync::mpsc::Sender<WriterMessage>,
     pending_deltas: Arc<AtomicUsize>,
+    unpersisted: Arc<std::sync::Mutex<IncrementalDelta>>,
     thread: std::thread::JoinHandle<Vec<PathBuf>>,
 }
 
@@ -439,6 +515,8 @@ impl CursorFileWriter {
         let (tx, rx) = std::sync::mpsc::channel::<WriterMessage>();
         let pending_deltas = Arc::new(AtomicUsize::new(0));
         let pending = pending_deltas.clone();
+        let unpersisted = Arc::new(std::sync::Mutex::new(IncrementalDelta::default()));
+        let unpersisted_out = unpersisted.clone();
         let thread = std::thread::Builder::new()
             .name("cursor-writer".to_string())
             .spawn(move || {
@@ -474,12 +552,19 @@ impl CursorFileWriter {
                         failed_images.retain(|(path, image)| !save_cursor_image(path, image));
                     }
                 }
+                if files.cursor_pending || files.keyboard_pending {
+                    files.write();
+                    if let Ok(mut guard) = unpersisted_out.lock() {
+                        *guard = files.take_unpersisted();
+                    }
+                }
                 failed_images.retain(|(path, image)| !save_cursor_image(path, image));
                 failed_images.into_iter().map(|(path, _)| path).collect()
             })?;
         Ok(Self {
             tx,
             pending_deltas,
+            unpersisted,
             thread,
         })
     }
@@ -939,7 +1024,7 @@ pub fn spawn_cursor_recorder(
                         x,
                         y,
                     };
-                    response.moves.push(mouse_event);
+                    response.push_move_deduped(mouse_event, flushed.last_move.as_ref());
                 }
             }
 
@@ -973,8 +1058,12 @@ pub fn spawn_cursor_recorder(
             );
             last_keys = current_keys;
 
-            if has_incremental_outputs && last_flush.elapsed() >= flush_interval {
-                let delta = flushed.take(&incremental_outputs, &response);
+            let cursor_buffer_full = incremental_outputs.cursor.is_some()
+                && response.moves.len() >= MAX_IN_MEMORY_CURSOR_MOVES;
+            if has_incremental_outputs
+                && (last_flush.elapsed() >= flush_interval || cursor_buffer_full)
+            {
+                let delta = flushed.take(&incremental_outputs, &mut response);
                 match &writer {
                     Some(writer) => writer.flush(delta),
                     None => inline_files.flush(delta),
@@ -986,26 +1075,40 @@ pub fn spawn_cursor_recorder(
         info!("cursor recorder done");
 
         if let Some(epoch) = input_epoch(start_gate.as_ref(), start_time)
-            && let Some(confirmation) =
-                still_shape_confirmation(&response.moves, epoch.elapsed().as_secs_f64() * 1000.0)
+            && let Some((previous, last)) = flushed.trailing_move_pair(&response.moves)
+            && let Some(confirmation) = still_shape_confirmation_pair(
+                previous,
+                last,
+                epoch.elapsed().as_secs_f64() * 1000.0,
+            )
         {
             response.moves.push(confirmation);
         }
 
-        let delta = has_incremental_outputs.then(|| flushed.take(&incremental_outputs, &response));
-        match writer {
+        let delta =
+            has_incremental_outputs.then(|| flushed.take(&incremental_outputs, &mut response));
+        let unpersisted = match writer {
             Some(writer) => {
+                let unpersisted = writer.unpersisted.clone();
                 let unsaved = writer.finish(delta);
                 response.cursors.retain(|_, cursor| {
                     !unsaved.iter().any(|path| path.ends_with(&cursor.file_name))
                 });
+                unpersisted
+                    .lock()
+                    .map(|mut guard| std::mem::take(&mut *guard))
+                    .unwrap_or_default()
             }
             None => {
                 if let Some(delta) = delta {
                     inline_files.flush(delta);
                 }
+                inline_files.take_unpersisted()
             }
-        }
+        };
+        response.moves.extend(unpersisted.moves);
+        response.clicks.extend(unpersisted.clicks);
+        response.keyboard_presses.extend(unpersisted.keyboard_presses);
 
         let _ = tx.send(response);
     });
@@ -1052,12 +1155,23 @@ fn records_cursor_move(
 /// under a still pointer. The stationary check kept seeing that shape until
 /// the stop, but on its own the event is zero milliseconds long, and loading
 /// replaces short-lived final shapes with the pointer.
+#[cfg(test)]
 fn still_shape_confirmation(moves: &[CursorMoveEvent], stop_ms: f64) -> Option<CursorMoveEvent> {
     let [.., previous, last] = moves else {
         return None;
     };
+    still_shape_confirmation_pair(previous, last, stop_ms)
+}
+
+fn still_shape_confirmation_pair(
+    previous: &CursorMoveEvent,
+    last: &CursorMoveEvent,
+    stop_ms: f64,
+) -> Option<CursorMoveEvent> {
+    let dx = last.x - previous.x;
+    let dy = last.y - previous.y;
     let shape_only =
-        previous.x == last.x && previous.y == last.y && previous.cursor_id != last.cursor_id;
+        (dx * dx + dy * dy) < MIN_CURSOR_MOVE_DELTA_SQ && previous.cursor_id != last.cursor_id;
     (shape_only && stop_ms > last.time_ms).then(|| CursorMoveEvent {
         time_ms: stop_ms,
         ..last.clone()
@@ -1887,10 +2001,15 @@ fn get_cursor_data() -> Option<CursorData> {
 
 #[cfg(test)]
 mod stationary_shape_tests {
-    use super::{records_cursor_move, should_sample_cursor_image, still_shape_confirmation};
+    use super::{
+        CursorActorResponse, Cursors, FlushedEvents, IncrementalCaptureOutputs,
+        records_cursor_move, should_sample_cursor_image, still_shape_confirmation,
+        still_shape_confirmation_pair,
+    };
     use cap_project::{
         CursorEvents, CursorMoveEvent, MIN_VISIBLE_CURSOR_SHAPE_MS, SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
     };
+    use std::path::PathBuf;
 
     fn cursor_move(time_ms: f64, x: f64, cursor_id: &str) -> CursorMoveEvent {
         CursorMoveEvent {
@@ -1988,6 +2107,40 @@ mod stationary_shape_tests {
         assert!(!records_cursor_move(false, None, "1"));
         assert!(records_cursor_move(true, Some("1"), "1"));
         assert!(records_cursor_move(true, None, "1"));
+    }
+
+    #[test]
+    fn final_still_shape_confirmation_survives_incremental_flushes() {
+        let outputs = IncrementalCaptureOutputs {
+            cursor: Some(PathBuf::from("unused-cursor.json")),
+            keyboard: None,
+        };
+        let mut flushed = FlushedEvents::default();
+        let mut response = CursorActorResponse {
+            cursors: Cursors::default(),
+            next_cursor_id: 0,
+            moves: vec![
+                cursor_move(0.0, 0.2, "arrow"),
+                cursor_move(500.0, 0.4, "arrow"),
+            ],
+            clicks: vec![],
+            keyboard_presses: vec![],
+        };
+
+        flushed.take(&outputs, &mut response);
+        response.push_move_deduped(cursor_move(3000.0, 0.4, "ibeam"), flushed.last_move.as_ref());
+
+        let (prev, last) = flushed.trailing_move_pair(&response.moves).unwrap();
+        let confirmation = still_shape_confirmation_pair(prev, last, 10_000.0).unwrap();
+        assert_eq!(confirmation.time_ms, 10_000.0);
+        assert_eq!(confirmation.cursor_id, "ibeam");
+
+        flushed.take(&outputs, &mut response);
+        assert!(response.moves.is_empty());
+        let (prev, last) = flushed.trailing_move_pair(&response.moves).unwrap();
+        let confirmation = still_shape_confirmation_pair(prev, last, 12_000.0).unwrap();
+        assert_eq!(confirmation.time_ms, 12_000.0);
+        assert_eq!(confirmation.cursor_id, "ibeam");
     }
 }
 
@@ -2171,7 +2324,10 @@ mod incremental_writer_tests {
             response.moves.extend(new.moves);
             response.clicks.extend(new.clicks);
             response.keyboard_presses.extend(new.keyboard_presses);
-            let taken = flushed.take(&outputs, &response);
+            let taken = flushed.take(&outputs, &mut response);
+            assert!(response.moves.is_empty());
+            assert!(response.clicks.is_empty());
+            assert!(response.keyboard_presses.is_empty());
             handed_over.moves.extend(taken.moves);
             handed_over.clicks.extend(taken.clicks);
             handed_over.keyboard_presses.extend(taken.keyboard_presses);
@@ -2181,16 +2337,24 @@ mod incremental_writer_tests {
         assert_eq!(handed_over.clicks, expected.clicks);
         assert_eq!(handed_over.keyboard_presses, expected.keyboard_presses);
 
+        response.moves = expected.moves.clone();
+        response.clicks = expected.clicks.clone();
+        response.keyboard_presses = expected.keyboard_presses.clone();
         let mut cursor_only = FlushedEvents::default();
         let taken = cursor_only.take(
             &IncrementalCaptureOutputs {
                 cursor: outputs.cursor.clone(),
                 keyboard: None,
             },
-            &response,
+            &mut response,
         );
         assert_eq!(taken.moves.len(), 95);
+        assert!(response.moves.is_empty());
         assert!(taken.keyboard_presses.is_empty());
+        assert_eq!(
+            response.keyboard_presses.len(),
+            expected.keyboard_presses.len()
+        );
     }
 
     #[test]
