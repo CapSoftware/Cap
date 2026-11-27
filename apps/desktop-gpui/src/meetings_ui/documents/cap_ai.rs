@@ -218,7 +218,6 @@ pub fn render_pro_row(palette: &Palette, row: ProRow, place: RowPlace) -> AnyEle
         .id("notes-pro-button")
         .role(gpui::Role::Button)
         .aria_label(label)
-        .when(palette.keyboard, crate::ui::keyboard_nav::stop)
         .flex_shrink_0()
         .h(px(26.))
         .px(px(10.))
