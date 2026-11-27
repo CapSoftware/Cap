@@ -590,16 +590,31 @@ fn create_d3d_capturer(
             .map_err(|e| anyhow!("Failed to create GraphicsCaptureItem: {}", e))?,
     };
 
-    scap_direct3d::Capturer::new(
+    scap_direct3d::Capturer::new_with_admission(
         capture_item,
         params.settings.clone(),
         {
-            let video_frame_counter = params.video_frame_counter.clone();
-            let video_drop_counter = params.video_drop_counter.clone();
+            // WGC delivers a frame per screen update (up to the monitor
+            // refresh rate on systems without MinUpdateInterval support), so
+            // cap delivery at the nominal rate before the frame is copied,
+            // converted or queued.
             let video_decimated_counter = params.video_decimated_counter.clone();
             let mut cadence_gate = params
                 .cadence_interval_hns
                 .map(FrameCadenceGate::nearest_deadline);
+            move |capture_time: windows::Foundation::TimeSpan| {
+                let admitted = cadence_gate
+                    .as_mut()
+                    .is_none_or(|gate| gate.admit(capture_time.Duration));
+                if !admitted {
+                    video_decimated_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                }
+                admitted
+            }
+        },
+        {
+            let video_frame_counter = params.video_frame_counter.clone();
+            let video_drop_counter = params.video_drop_counter.clone();
             let mut tx = params.video_tx.clone();
             let expected_width = params.expected_width;
             let expected_height = params.expected_height;
@@ -613,17 +628,6 @@ fn create_d3d_capturer(
                 let capture_time = frame.inner().SystemRelativeTime()?;
                 if frame.width() == 0 || frame.height() == 0 {
                     return Err(windows::core::Error::new(windows::Win32::Foundation::E_INVALIDARG, "Empty screen frame"));
-                }
-
-                // WGC delivers a frame per screen update — up to the monitor
-                // refresh rate on systems without MinUpdateInterval support —
-                // so cap delivery at the nominal rate before any conversion
-                // or channel work.
-                if let Some(gate) = cadence_gate.as_mut()
-                    && !gate.admit(capture_time.Duration)
-                {
-                    video_decimated_counter.fetch_add(1, atomic::Ordering::Relaxed);
-                    return Ok(());
                 }
 
                 let timestamp = Timestamp::PerformanceCounter(

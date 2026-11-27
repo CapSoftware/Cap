@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 use windows::{
-    Foundation::{Metadata::ApiInformation, TypedEventHandler},
+    Foundation::{Metadata::ApiInformation, TimeSpan, TypedEventHandler},
     Graphics::{
         Capture::{
             Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureItem,
@@ -496,6 +496,27 @@ impl Capturer {
     pub fn new(
         item: GraphicsCaptureItem,
         settings: Settings,
+        callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
+        closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
+        d3d_device: Option<ID3D11Device>,
+    ) -> Result<Capturer, NewCapturerError> {
+        Self::new_with_admission(
+            item,
+            settings,
+            |_| true,
+            callback,
+            closed_callback,
+            d3d_device,
+        )
+    }
+
+    /// Like [`Capturer::new`], with `admit` deciding from a frame's
+    /// `SystemRelativeTime` whether to keep it, before any copy of the frame
+    /// is made. A refused frame goes straight back to the pool.
+    pub fn new_with_admission(
+        item: GraphicsCaptureItem,
+        settings: Settings,
+        mut admit: impl FnMut(TimeSpan) -> bool + Send + 'static,
         mut callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
         mut closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
         d3d_device: Option<ID3D11Device>,
@@ -700,6 +721,10 @@ impl Capturer {
                                 *pool_size = (size.Width, size.Height);
                                 return Ok(());
                             }
+                        }
+
+                        if !admit(frame.SystemRelativeTime()?) {
+                            return Ok(());
                         }
 
                         let surface = frame.Surface()?;
