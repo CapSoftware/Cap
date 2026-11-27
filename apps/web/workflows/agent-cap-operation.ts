@@ -300,6 +300,7 @@ async function deleteCapDatabase(
 			.where(eq(Db.sharedVideos.videoId, videoId));
 		await tx.delete(Db.spaceVideos).where(eq(Db.spaceVideos.videoId, videoId));
 		await tx.delete(Db.videoEdits).where(eq(Db.videoEdits.videoId, videoId));
+		await tx.delete(Db.videoNotes).where(eq(Db.videoNotes.videoId, videoId));
 		await tx.delete(Db.videos).where(eq(Db.videos.id, videoId));
 		const now = new Date();
 		await tx

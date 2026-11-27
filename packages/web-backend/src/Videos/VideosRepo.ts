@@ -153,6 +153,7 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 							.delete(Db.notifications)
 							.where(Dz.eq(Db.notifications.videoId, id)),
 						db.delete(Db.importedVideos).where(Dz.eq(Db.importedVideos.id, id)),
+						db.delete(Db.videoNotes).where(Dz.eq(Db.videoNotes.videoId, id)),
 						db.delete(Db.videos).where(Dz.eq(Db.videos.id, id)),
 						db
 							.delete(Db.videoUploads)

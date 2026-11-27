@@ -807,6 +807,10 @@ export async function transferOneVideo(
 
 		if (item.sourceOwnerId !== payload.targetUserId) {
 			await tx
+				.update(Db.videoNotes)
+				.set({ ownerId: targetUserId })
+				.where(eq(Db.videoNotes.videoId, videoId));
+			await tx
 				.update(Db.videoUploads)
 				.set({
 					rawFileKey: sql`REPLACE(${Db.videoUploads.rawFileKey}, ${sourcePrefix}, ${destinationPrefix})`,
