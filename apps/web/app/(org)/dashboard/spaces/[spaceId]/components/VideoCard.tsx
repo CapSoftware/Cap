@@ -1,7 +1,6 @@
 import { faHome } from "@fortawesome/free-solid-svg-icons/faHome";
 import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
 import { faRecordVinyl } from "@fortawesome/free-solid-svg-icons/faRecordVinyl";
-import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, Minus, Plus } from "lucide-react";
@@ -15,6 +14,7 @@ import {
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import { formatMonthDayYear } from "@/lib/date-format";
+import { Fit, Layout, useRive } from "@/lib/rive";
 import type { VideoData } from "./AddVideosDialogBase";
 
 interface VideoCardProps {
