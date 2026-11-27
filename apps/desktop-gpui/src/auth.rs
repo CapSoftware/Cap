@@ -78,6 +78,7 @@ pub struct SignInSession {
     pub url: String,
     id: u64,
     state: String,
+    custom_server: Option<String>,
     local: Option<flume::Receiver<AuthParams>>,
     deep: flume::Receiver<String>,
     callback: Arc<CallbackControl>,
@@ -87,6 +88,7 @@ pub struct SignInSession {
 struct CallbackControl {
     stop: AtomicBool,
     completed: AtomicBool,
+    state_optional: AtomicBool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +109,7 @@ pub fn begin_sign_in() -> Result<SignInSession, String> {
     // Without a port the server redirects straight to the `cap-desktop://`
     // deep link, so a failed bind degrades to the deep-link path instead of
     // failing sign-in outright.
+    let custom_server = (!has_same_origin(&server, DEFAULT_SERVER_URL)).then(|| server.clone());
     let local = match start_local_callback(callback.clone(), state.clone()) {
         Ok(local) => Some(local),
         Err(error) => {
@@ -134,6 +137,7 @@ pub fn begin_sign_in() -> Result<SignInSession, String> {
         ),
         id,
         state,
+        custom_server,
         local: local.map(|local| local.complete),
         deep: deep_rx,
         callback,
@@ -181,7 +185,11 @@ impl SignInSession {
             loop {
                 match self.deep.recv_async().await {
                     Ok(url) => {
-                        if let Some(params) = parse_auth_callback(&url, &self.state) {
+                        if let Some(params) = parse_auth_callback(
+                            &url,
+                            &self.state,
+                            self.callback.state_optional.load(Ordering::Acquire),
+                        ) {
                             break params;
                         }
                     }
@@ -195,6 +203,19 @@ impl SignInSession {
         match select(select(local, deep), timeout).await {
             Either::Left((Either::Left((params, _)) | Either::Right((params, _)), _)) => Ok(params),
             Either::Right(_) => Err(SignInWaitError::TimedOut),
+        }
+    }
+
+    /// The server this attempt signs in to, when it is not the official one.
+    pub fn custom_server(&self) -> Option<&str> {
+        self.custom_server.as_deref()
+    }
+
+    /// Accepts callbacks without `state` for this attempt, for a server that
+    /// does not return it. Never applies to the official server.
+    pub fn accept_callbacks_without_state(&self) {
+        if self.custom_server.is_some() {
+            self.callback.state_optional.store(true, Ordering::Release);
         }
     }
 
@@ -544,7 +565,7 @@ fn serve_local_callback(
     listener: TcpListener,
     port: u16,
     state: &str,
-    control: &CallbackControl,
+    control: &Arc<CallbackControl>,
     tx: &flume::Sender<AuthParams>,
 ) {
     let started = Instant::now();
@@ -573,11 +594,12 @@ fn serve_local_callback(
                 active.fetch_add(1, Ordering::AcqRel);
                 let tx = tx.clone();
                 let state = state.to_string();
+                let connection_control = control.clone();
                 let connection_active = active.clone();
                 let spawned = std::thread::Builder::new()
                     .name("cap-sign-in-request".into())
                     .spawn(move || {
-                        handle_callback_connection(stream, port, &state, &tx);
+                        handle_callback_connection(stream, port, &state, &connection_control, &tx);
                         connection_active.fetch_sub(1, Ordering::AcqRel);
                     });
                 if let Err(error) = spawned {
@@ -600,6 +622,7 @@ fn handle_callback_connection(
     mut stream: TcpStream,
     port: u16,
     state: &str,
+    control: &CallbackControl,
     tx: &flume::Sender<AuthParams>,
 ) {
     // BSD sockets inherit O_NONBLOCK from the listener, so on macOS a stream
@@ -620,7 +643,11 @@ fn handle_callback_connection(
     let Some(target) = read_request_target(&mut stream, deadline) else {
         return;
     };
-    let params = parse_auth_callback(&format!("http://127.0.0.1:{port}{target}"), state);
+    let params = parse_auth_callback(
+        &format!("http://127.0.0.1:{port}{target}"),
+        state,
+        control.state_optional.load(Ordering::Acquire),
+    );
     let (status, body) = if params.is_some() {
         ("200 OK", crate::local_page::signed_in())
     } else {
@@ -686,17 +713,56 @@ fn origin_of(value: &str) -> Option<String> {
     Some(url.origin().ascii_serialization())
 }
 
-fn parse_auth_callback(url: &str, expected_state: &str) -> Option<AuthParams> {
+fn parse_auth_callback(
+    url: &str,
+    expected_state: &str,
+    state_optional: bool,
+) -> Option<AuthParams> {
     let parsed = reqwest::Url::parse(url).ok()?;
-    let mut states = parsed
+    let states = parsed
         .query_pairs()
         .filter(|(key, _)| key == "state")
-        .map(|(_, value)| value);
-    let state = states.next()?;
-    if states.next().is_some() || !constant_time_eq(state.as_bytes(), expected_state.as_bytes()) {
-        return None;
+        .map(|(_, value)| value)
+        .collect::<Vec<_>>();
+    match states.as_slice() {
+        [] if state_optional => {}
+        [state] if constant_time_eq(state.as_bytes(), expected_state.as_bytes()) => {}
+        _ => return None,
     }
     parse_auth_params(url)
+}
+
+/// Whether a server other than the official one returns `state` on its
+/// sign-in callbacks: it rejects a malformed `state` with 400 and accepts a
+/// well-formed one. Asked directly by the app before the browser opens.
+pub async fn server_returns_sign_in_state(server: &str) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(5))
+        .build()
+    else {
+        return false;
+    };
+    let status = |state: &'static str| {
+        let request = apply_desktop_headers(client.get(format!(
+            "{server}/api/desktop/session/request?type=api_key&state={state}"
+        )));
+        async move { request.send().await.ok().map(|response| response.status()) }
+    };
+    let malformed = status("x").await;
+    let well_formed = status("abcdefghijklmnopqrstuvwxyz012345").await;
+    sign_in_state_supported(malformed, well_formed)
+}
+
+fn sign_in_state_supported(
+    malformed: Option<reqwest::StatusCode>,
+    well_formed: Option<reqwest::StatusCode>,
+) -> bool {
+    malformed == Some(reqwest::StatusCode::BAD_REQUEST)
+        && well_formed.is_some_and(|status| {
+            status != reqwest::StatusCode::BAD_REQUEST && !status.is_server_error()
+        })
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -914,7 +980,7 @@ mod tests {
             "cap-desktop://signin?state=abc123&api_key=k&user_id=u",
         ] {
             assert_eq!(
-                parse_auth_callback(url, "abc123"),
+                parse_auth_callback(url, "abc123", false),
                 Some(expected.clone()),
                 "{url}"
             );
@@ -930,8 +996,110 @@ mod tests {
             "cap-desktop://auth?token=t&user_id=u&expires=9&state=wrong",
             "cap-desktop://signin?state=abc123",
         ] {
-            assert_eq!(parse_auth_callback(url, "abc123"), None, "{url}");
+            assert_eq!(parse_auth_callback(url, "abc123", false), None, "{url}");
         }
+    }
+
+    #[test]
+    fn a_server_without_state_support_accepts_only_stateless_or_matching_callbacks() {
+        let expected = Some(AuthParams::ApiKey {
+            api_key: "k".into(),
+            user_id: "u".into(),
+        });
+        assert_eq!(
+            parse_auth_callback("cap-desktop://signin?api_key=k&user_id=u", "abc123", true),
+            expected
+        );
+        assert_eq!(
+            parse_auth_callback(
+                "http://127.0.0.1:1/?api_key=k&user_id=u&state=abc123",
+                "abc123",
+                true
+            ),
+            expected
+        );
+        for url in [
+            "cap-desktop://signin?api_key=k&user_id=u&state=wrong",
+            "cap-desktop://signin?api_key=k&user_id=u&state=abc123&state=abc123",
+            "cap-desktop://signin?api_key=k&user_id=u&state=",
+        ] {
+            assert_eq!(parse_auth_callback(url, "abc123", true), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn state_support_needs_a_400_for_malformed_and_not_for_well_formed_state() {
+        use reqwest::StatusCode;
+        let found = StatusCode::FOUND;
+        let bad = StatusCode::BAD_REQUEST;
+        assert!(sign_in_state_supported(Some(bad), Some(found)));
+        assert!(sign_in_state_supported(Some(bad), Some(StatusCode::OK)));
+        assert!(!sign_in_state_supported(Some(found), Some(found)));
+        assert!(!sign_in_state_supported(Some(bad), Some(bad)));
+        assert!(!sign_in_state_supported(None, Some(found)));
+        assert!(!sign_in_state_supported(Some(bad), None));
+        assert!(!sign_in_state_supported(
+            Some(bad),
+            Some(StatusCode::BAD_GATEWAY)
+        ));
+        assert!(!sign_in_state_supported(
+            Some(StatusCode::INTERNAL_SERVER_ERROR),
+            Some(found)
+        ));
+        assert!(!sign_in_state_supported(
+            Some(StatusCode::MOVED_PERMANENTLY),
+            Some(StatusCode::MOVED_PERMANENTLY)
+        ));
+    }
+
+    #[tokio::test]
+    async fn state_support_probe_reads_real_responses() {
+        let serve = |respond: fn(&str) -> &'static str| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            std::thread::spawn(move || {
+                for mut stream in listener.incoming().flatten().take(2) {
+                    let target = read_request_target(&mut stream, far_future()).unwrap_or_default();
+                    let status = respond(&target);
+                    let _ = stream.write_all(
+                        format!("HTTP/1.1 {status}\r\nLocation: /login\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
+                    );
+                }
+            });
+            format!("http://127.0.0.1:{port}")
+        };
+        let current = serve(|target| {
+            if target.contains("state=x") {
+                "400 Bad Request"
+            } else {
+                "302 Found"
+            }
+        });
+        assert!(server_returns_sign_in_state(&current).await);
+        let older = serve(|_| "302 Found");
+        assert!(!server_returns_sign_in_state(&older).await);
+        let failing = serve(|_| "503 Service Unavailable");
+        assert!(!server_returns_sign_in_state(&failing).await);
+        assert!(!server_returns_sign_in_state("http://127.0.0.1:9").await);
+    }
+
+    #[test]
+    fn only_a_custom_server_can_accept_callbacks_without_state() {
+        let session = |custom_server: Option<String>| SignInSession {
+            url: String::new(),
+            id: u64::MAX - 2,
+            state: "abc123".into(),
+            custom_server,
+            local: None,
+            deep: flume::bounded(1).1,
+            callback: Arc::new(CallbackControl::default()),
+        };
+        let official = session(None);
+        official.accept_callbacks_without_state();
+        assert!(!official.callback.state_optional.load(Ordering::Acquire));
+        let custom = session(Some("http://localhost:3000".into()));
+        custom.accept_callbacks_without_state();
+        assert!(custom.callback.state_optional.load(Ordering::Acquire));
     }
 
     #[test]
@@ -941,6 +1109,7 @@ mod tests {
             url: String::new(),
             id: u64::MAX - 1,
             state: String::new(),
+            custom_server: None,
             local: None,
             deep: old_rx,
             callback: Arc::new(CallbackControl::default()),

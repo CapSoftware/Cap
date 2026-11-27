@@ -105,7 +105,24 @@ impl SignIn {
         let id = self.next_id;
         self.next_id += 1;
         let timeout = cx.background_executor().timer(auth::SIGN_IN_TIMEOUT);
+        let browser_url = url.clone();
         let task = cx.spawn(async move |this, cx| {
+            if let Some(server) = session.custom_server().map(str::to_string) {
+                let returns_state = matches!(
+                    gpui_tokio::Tokio::spawn(cx, async move {
+                        auth::server_returns_sign_in_state(&server).await
+                    })
+                    .await,
+                    Ok(true)
+                );
+                if !returns_state {
+                    tracing::warn!(
+                        "sign-in server did not confirm state support; accepting callbacks without state for this attempt"
+                    );
+                    session.accept_callbacks_without_state();
+                }
+            }
+            cx.update(|cx| cx.open_url(&browser_url));
             let outcome = match session.wait(timeout).await {
                 Ok(params) => match auth::process_auth_data(params) {
                     Ok(()) => {
@@ -146,7 +163,6 @@ impl SignIn {
             .ok();
         });
 
-        cx.open_url(&url);
         self.attempt = Some(Attempt {
             id,
             origin,

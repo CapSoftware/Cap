@@ -555,11 +555,8 @@ impl DeepLinkAction {
                 use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingStatus};
 
                 #[cfg(windows)]
-                if !project_path
-                    .to_str()
-                    .is_some_and(|path| is_local_drive_path(path) && !is_remote_drive(path))
-                {
-                    return Err("Only recordings on this computer can be opened".to_string());
+                if !project_path.to_str().is_some_and(is_local_drive_path) {
+                    return Err("Links can only open recordings on a local drive".to_string());
                 }
 
                 if crate::library::is_screenshot_bundle(&project_path) {
@@ -697,21 +694,6 @@ fn is_local_drive_path(path: &str) -> bool {
     let rest = path.strip_prefix("\\\\?\\").unwrap_or(&path);
     let bytes = rest.as_bytes();
     bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
-}
-
-#[cfg(windows)]
-fn is_remote_drive(path: &str) -> bool {
-    const DRIVE_REMOTE: u32 = 4;
-    let path = path.replace('/', "\\");
-    let rest = path.strip_prefix("\\\\?\\").unwrap_or(&path);
-    let Some(drive) = rest.get(..2) else {
-        return true;
-    };
-    let root: Vec<u16> = format!("{drive}\\")
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(root.as_ptr()) == DRIVE_REMOTE }
 }
 
 fn capture_mode_label(mode: &CaptureMode) -> String {
