@@ -404,8 +404,8 @@ impl FullReader {
 }
 
 fn create_device(adapter_index: Option<u32>) -> Result<(ID3D11Device, ID3D11DeviceContext, String)> {
-    let mut device = None;
-    let mut ctx = None;
+    let mut device: Option<ID3D11Device> = None;
+    let mut ctx: Option<ID3D11DeviceContext> = None;
     let adapter: Option<IDXGIAdapter1> = match adapter_index {
         Some(i) => {
             let f: IDXGIFactory1 = unsafe { CreateDXGIFactory1()? };

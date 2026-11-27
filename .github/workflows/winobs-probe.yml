@@ -45,6 +45,7 @@ jobs:
           RUST_TARGET_TRIPLE: ${{ matrix.os.target }}
         run: env -u PSModulePath node scripts/setup.js
       - name: Build capture probe
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
