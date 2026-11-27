@@ -257,8 +257,8 @@ impl EncoderBase {
         lost
     }
 
-    /// Stops collecting packets, so the frames sent from now on stay inside
-    /// the codec the way a hardware encoder holds them.
+    /// Discards the packets of the frames sent from now on, so they never
+    /// come back from the codec, like frames a hardware encoder still holds.
     #[cfg(test)]
     pub(crate) fn leave_packets_in_codec(&mut self) {
         self.leave_packets_in_codec = true;
@@ -269,11 +269,11 @@ impl EncoderBase {
         output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
-        #[cfg(test)]
-        if self.leave_packets_in_codec {
-            return Ok(());
-        }
         while packet_available(encoder.receive_packet(&mut self.packet))? {
+            #[cfg(test)]
+            if self.leave_packets_in_codec {
+                continue;
+            }
             self.packets_received += 1;
             self.packet.set_stream(self.stream_index);
             self.packet.rescale_ts(
