@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{io::Write as _, path::Path};
 
 use ::md5::{Digest as _, Md5};
 use image::ImageEncoder as _;
@@ -71,12 +71,12 @@ pub fn write_png_file(
     {
         return crate::png::write(std::io::BufWriter::new(file), data, width, height, color);
     }
-    let encoder = image::codecs::png::PngEncoder::new_with_quality(
-        std::io::BufWriter::new(file),
-        compression,
-        filter,
-    );
-    encoder.write_image(data, width, height, color)
+    let mut writer = std::io::BufWriter::new(file);
+    let encoder =
+        image::codecs::png::PngEncoder::new_with_quality(&mut writer, compression, filter);
+    encoder.write_image(data, width, height, color)?;
+    writer.flush()?;
+    Ok(())
 }
 
 pub fn encode_jpeg_rgb(
@@ -332,6 +332,75 @@ mod tests {
             assert_eq!(decoded.as_raw(), reference.as_raw());
         }
         assert!(encode_png_rgba(&[0, 0, 0, 0], 2, 1).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn png_file_reports_buffered_write_failures() {
+        use image::codecs::png::{CompressionType, FilterType};
+
+        for compression in [
+            CompressionType::Default,
+            CompressionType::Fast,
+            CompressionType::Best,
+        ] {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/full")
+                .unwrap();
+            let result = write_png_file(
+                file,
+                &[10, 20, 30, 255],
+                1,
+                1,
+                image::ExtendedColorType::Rgba8,
+                compression,
+                FilterType::Adaptive,
+            );
+            assert!(
+                matches!(result, Err(image::ImageError::IoError(_))),
+                "{compression:?}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn png_file_round_trips_pixels_and_finishes_the_stream() {
+        use image::codecs::png::{CompressionType, FilterType};
+
+        for compression in [
+            CompressionType::Default,
+            CompressionType::Fast,
+            CompressionType::Best,
+        ] {
+            for filter in [FilterType::Adaptive, FilterType::NoFilter] {
+                for color in [
+                    image::ExtendedColorType::Rgb8,
+                    image::ExtendedColorType::Rgba8,
+                ] {
+                    let rgba = [10, 20, 30, 40];
+                    let data = &rgba[..color.channel_count() as usize];
+                    let file = tempfile::NamedTempFile::new().unwrap();
+                    write_png_file(
+                        file.reopen().unwrap(),
+                        data,
+                        1,
+                        1,
+                        color,
+                        compression,
+                        filter,
+                    )
+                    .unwrap();
+                    let encoded = std::fs::read(file.path()).unwrap();
+                    assert!(
+                        encoded.ends_with(&[0, 0, 0, 0, b'I', b'E', b'N', b'D', 174, 66, 96, 130])
+                    );
+                    let decoded = image::load_from_memory(&encoded).unwrap();
+                    assert_eq!((decoded.width(), decoded.height()), (1, 1));
+                    assert_eq!(decoded.as_bytes(), data);
+                }
+            }
+        }
     }
 
     #[test]
