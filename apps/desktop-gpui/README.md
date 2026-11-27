@@ -868,12 +868,10 @@ renders at capture cadence while another app is frontmost. Remove the shim
 when the gpui pin understands the macOS 26 bit.
 
 Running from a dev build needs the ffmpeg dylibs the binary's install names
-point at (`@executable_path/../Frameworks/Spacedrive.framework/...`):
-
-```sh
-mkdir -p target/Frameworks
-ln -sfn "$(pwd)/../../target/native-deps/Spacedrive.framework" target/Frameworks/Spacedrive.framework
-```
+point at (`@executable_path/../Frameworks/Spacedrive.framework/...`).
+`bun run cap-setup` links them into `target/Frameworks` for the app and
+`target/debug/Frameworks` for `cargo test`, whose binaries run from
+`target/debug/deps`.
 
 ## Settings, and the store both apps share
 
