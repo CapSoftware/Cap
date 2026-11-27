@@ -3,6 +3,13 @@ mod ask;
 mod audio;
 mod bar;
 mod cap_ai;
+/// The Notes Cap Pro row's line box, for the catalog test that keeps every
+/// translation inside it.
+#[cfg(test)]
+pub(crate) mod cap_ai_row_metrics {
+    pub const TEXT_WIDTH: f32 = super::cap_ai::PRO_ROW_TEXT_WIDTH;
+    pub const LINES: usize = super::cap_ai::PRO_ROW_LINES;
+}
 #[cfg(test)]
 mod collapse_tests;
 mod commands;

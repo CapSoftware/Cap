@@ -2701,3 +2701,99 @@ async fn an_unanswered_notification_request_does_not_hold_a_failed_start(cx: &mu
     let gone = cx.spawn(|cx| async move { super::permission_answer(rx, &cx).await });
     assert_eq!(gone.await, Some(false));
 }
+
+const LONG_ITEM: &str = "Sam will send the final welcome email copy by Thursday and share the screenshots with the whole team before launch.";
+
+struct AnswerColumn {
+    palette: Palette,
+    answers: Vec<(&'static str, String, bool)>,
+}
+
+impl gpui::Render for AnswerColumn {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{InteractiveElement as _, ParentElement as _, Styled as _, div, px};
+        div()
+            .flex()
+            .flex_col()
+            .children(
+                self.answers
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (selector, text, linked))| {
+                        let selector = *selector;
+                        let answer = if *linked {
+                            let links: super::ask::AnswerLinks = std::rc::Rc::new(
+                                super::ask::answer_sentences(text)
+                                    .into_iter()
+                                    .map(|_| Some(("00:42".into(), vec!["line".to_string()])))
+                                    .collect(),
+                            );
+                            super::ask::render_linked(
+                                i,
+                                text,
+                                &self.palette,
+                                &links,
+                                std::rc::Rc::new(|_, _| {}),
+                            )
+                        } else {
+                            super::ask::render_answer(text, &self.palette)
+                        };
+                        div()
+                            .w(px(240.))
+                            .child(div().debug_selector(move || selector.into()).child(answer))
+                    }),
+            )
+    }
+}
+
+#[gpui::test]
+fn a_long_list_item_in_an_answer_wraps_like_the_lines_around_it(cx: &mut TestAppContext) {
+    let palette = Palette::new(&Theme::light());
+    let url = format!("- https://example.com/{}", "a".repeat(120));
+    let rows = |linked: bool| {
+        let pick = |plain: &'static str, with_times: &'static str| {
+            if linked { with_times } else { plain }
+        };
+        [
+            (pick("one", "one-l"), "- Short.".to_string(), linked),
+            (pick("para", "para-l"), LONG_ITEM.to_string(), linked),
+            (pick("bullet", "bullet-l"), format!("- {LONG_ITEM}"), linked),
+            (
+                pick("nested", "nested-l"),
+                format!("- Top.\n  - {LONG_ITEM}"),
+                linked,
+            ),
+            (pick("url", "url-l"), url.clone(), linked),
+        ]
+    };
+    let answers = rows(false).into_iter().chain(rows(true)).collect();
+    let (_, cx) = cx.add_window_view(|_, _| AnswerColumn { palette, answers });
+    cx.simulate_resize(gpui::size(gpui::px(800.), gpui::px(2000.)));
+    cx.run_until_parked();
+    let height = |selector: &'static str, cx: &mut VisualTestContext| {
+        cx.debug_bounds(selector)
+            .expect("the answer is drawn")
+            .size
+            .height
+    };
+    for [one, para, bullet, nested, url] in [
+        ["one", "para", "bullet", "nested", "url"],
+        ["one-l", "para-l", "bullet-l", "nested-l", "url-l"],
+    ] {
+        let line = height(one, cx);
+        let para = height(para, cx);
+        assert!(para > line * 2., "{one}: the paragraph wraps");
+        for item in [bullet, nested] {
+            let item_height = height(item, cx);
+            assert!(
+                item_height >= para,
+                "{item} wraps at least as much as the paragraph: {item_height:?} vs {para:?}"
+            );
+        }
+        assert!(height(url, cx) > line * 2., "{url}: an unbroken link wraps");
+    }
+}

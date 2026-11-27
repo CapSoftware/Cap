@@ -287,6 +287,22 @@ pub fn dock_fade(palette: &Palette, height: f32) -> Div {
         ))
 }
 
+/// The sidebar list fading out above its foot when it runs past it, the way
+/// the page fades under its dock, so a clipped row never ends mid-glyph.
+pub fn list_fade(palette: &Palette, height: f32) -> Div {
+    div()
+        .absolute()
+        .bottom_0()
+        .left_0()
+        .right_0()
+        .h(px(height))
+        .bg(gpui::linear_gradient(
+            180.,
+            gpui::linear_color_stop(alpha(palette.sidebar, 0.), 0.),
+            gpui::linear_color_stop(palette.sidebar, 0.9),
+        ))
+}
+
 /// Behind a dock that stacks lines over the bar: solid up to the top of the
 /// dock, so no text shows through between its rows, then a short fade.
 pub fn dock_backdrop(palette: &Palette, solid: f32, fade: f32) -> Div {

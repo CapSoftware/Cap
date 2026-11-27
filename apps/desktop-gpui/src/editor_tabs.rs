@@ -2545,7 +2545,11 @@ impl EditorWindow {
 
     // -- Keyboard ------------------------------------------------------------
 
-    fn generate_keyboard_segments_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn generate_keyboard_segments_clicked(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.generating_keyboard {
             return;
         }

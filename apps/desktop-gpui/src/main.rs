@@ -40,7 +40,8 @@ mod editor_export;
 mod editor_hover_bench;
 mod editor_latency;
 mod editor_latency_bench;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
+#[cfg_attr(windows, allow(dead_code))]
 mod editor_modal;
 mod editor_panels;
 mod editor_preparing;

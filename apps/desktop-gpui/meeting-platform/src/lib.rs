@@ -73,6 +73,12 @@ pub struct SpeakerLabels {
 /// names (macOS accessibility, Windows UI Automation).
 pub const READS_MEETING_APPS: bool = cfg!(any(target_os = "macos", windows));
 
+/// Whether Cap offers to name speakers from the meeting app on this platform.
+/// Off until a real call app is shown to say who is talking in a way the
+/// reader understands: Zoom (desktop and in the browser) on macOS and Windows
+/// does not, so Cap neither shows the option nor asks for access it would use.
+pub const NAMES_FROM_MEETING_APPS: bool = false;
+
 /// The most labels one look sends up.
 #[cfg(any(target_os = "macos", windows))]
 pub(crate) const MAX_LABELS: usize = 64;

@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
 	createUploadTargetForUser: vi.fn(),
 	createUploadTargetForVideo: vi.fn(),
 	revalidatePath: vi.fn(),
+	isPro: true,
 }));
 
 vi.mock("@cap/database", () => {
@@ -102,7 +103,7 @@ vi.mock("@cap/database/video-sharing-default", () => ({
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ CAP_VIDEOS_DEFAULT_PUBLIC: true }),
 }));
-vi.mock("@cap/utils", () => ({ userIsPro: () => true }));
+vi.mock("@cap/utils", () => ({ userIsPro: () => mocks.isPro }));
 vi.mock("@cap/web-backend", () => ({
 	Storage: {
 		createUploadTargetForUser: mocks.createUploadTargetForUser,
@@ -174,6 +175,7 @@ beforeEach(() => {
 	mocks.store = { videos: new Map(), uploads: new Map(), folders: new Map() };
 	mocks.rejectUpload = false;
 	mocks.transactionCalls = 0;
+	mocks.isPro = true;
 	mocks.currentUser.mockResolvedValue({ id: "fixture-user" });
 	mocks.organizationAccess.mockResolvedValue(undefined);
 	mocks.createUploadTargetForUser.mockReturnValue(
@@ -456,5 +458,65 @@ describe.each([
 
 		expect(mocks.store.videos.get(result.id)?.folderId).toBeUndefined();
 		expect(mocks.createUploadTargetForUser).toHaveBeenCalledOnce();
+	});
+});
+
+describe("dashboard imports on the free plan", () => {
+	beforeEach(() => {
+		mocks.isPro = false;
+	});
+
+	it.each([
+		{ name: "no duration", duration: undefined },
+		{ name: "an understated duration", duration: 120 },
+		{ name: "an honest five minutes", duration: 300 },
+		{ name: "a duration over the limit", duration: 301 },
+	])("refuses a processed upload with $name", async ({ duration }) => {
+		await expect(
+			createVideoForServerProcessing({ orgId, duration }),
+		).rejects.toThrow("upgrade_required");
+		expect(mocks.createUploadTargetForUser).not.toHaveBeenCalled();
+		expect(mocks.store.videos.size).toBe(0);
+	});
+
+	it.each([
+		{ name: "no duration", duration: undefined },
+		{ name: "an understated duration", duration: 120 },
+		{ name: "an honest duration", duration: 299 },
+	])("refuses a video upload URL with $name", async ({ duration }) => {
+		await expect(
+			createVideoAndGetUploadUrl({ orgId, duration, isUpload: true }),
+		).rejects.toThrow("upgrade_required");
+		await expect(
+			createVideoAndGetUploadUrl({
+				orgId,
+				duration,
+				videoId: Video.VideoId.make("existing-video"),
+			}),
+		).rejects.toThrow("upgrade_required");
+		expect(mocks.createUploadTargetForUser).not.toHaveBeenCalled();
+		expect(mocks.createUploadTargetForVideo).not.toHaveBeenCalled();
+		expect(mocks.store.videos.size).toBe(0);
+	});
+
+	it("refuses screenshot imports", async () => {
+		await expect(
+			createVideoAndGetUploadUrl({
+				orgId,
+				isUpload: true,
+				isScreenshot: true,
+			}),
+		).rejects.toThrow("upgrade_required");
+		expect(mocks.store.videos.size).toBe(0);
+	});
+
+	it("leaves Pro uploads unlimited", async () => {
+		mocks.isPro = true;
+		await expect(
+			createVideoAndGetUploadUrl({ orgId, duration: 3_600, isUpload: true }),
+		).resolves.toMatchObject({ id: "fixture-video" });
+		await expect(
+			createVideoForServerProcessing({ orgId, duration: 3_600 }),
+		).resolves.toMatchObject({ id: "fixture-video" });
 	});
 });

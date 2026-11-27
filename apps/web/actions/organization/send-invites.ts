@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@cap/database";
+import { isEmailShape } from "@cap/database/auth/domain-utils";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { sendEmail } from "@cap/database/emails/config";
 import { OrganizationInvite } from "@cap/database/emails/organization-invite";
@@ -62,14 +63,13 @@ export async function sendOrganizationInvites(
 		throw new Error(`Cannot send more than ${MAX_INVITES} invites at once`);
 	}
 
-	const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 	const inviteMap = new Map<string, AssignableOrganizationRole>();
 
 	for (const inviteInput of inviteInputs) {
 		const email =
 			typeof inviteInput === "string" ? inviteInput : inviteInput.email;
 		const normalizedEmail = email.trim().toLowerCase();
-		if (!emailRegex.test(normalizedEmail)) continue;
+		if (!isEmailShape(normalizedEmail)) continue;
 
 		const inviteRole =
 			typeof inviteInput === "string" || !inviteInput.role

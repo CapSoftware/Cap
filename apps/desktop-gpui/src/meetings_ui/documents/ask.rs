@@ -557,7 +557,7 @@ pub fn answer_sentences(text: &str) -> Vec<String> {
 
 /// An answer with each sourced sentence followed by its time; clicking a
 /// time asks the host to show those lines.
-fn render_linked(
+pub(super) fn render_linked(
     id: usize,
     text: &str,
     palette: &Palette,
@@ -617,7 +617,7 @@ fn render_linked(
                         .bg(palette.muted)
                         .flex_shrink_0(),
                 )
-                .child(div().flex_1().child(text)),
+                .child(div().flex_1().min_w_0().child(text)),
             AnswerLine::Heading => div()
                 .pt(px(4.))
                 .font_weight(FontWeight::SEMIBOLD)
@@ -655,7 +655,7 @@ pub fn render_answer(text: &str, palette: &Palette) -> AnyElement {
                             .bg(palette.muted)
                             .flex_shrink_0(),
                     )
-                    .child(div().flex_1().child(strip_bold(rest))),
+                    .child(div().flex_1().min_w_0().child(strip_bold(rest))),
             );
         } else if let Some(rest) = trimmed.strip_prefix('#') {
             blocks = blocks.child(

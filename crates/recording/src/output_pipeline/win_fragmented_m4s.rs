@@ -21,7 +21,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::AtomicBool,
+        atomic::{AtomicBool, Ordering},
         mpsc::{RecvTimeoutError, SyncSender, sync_channel},
     },
     thread::JoinHandle,
@@ -144,11 +144,33 @@ fn report_encode_result(
     encoded
 }
 
+const ENCODER_FINISH_LIMIT: Duration = Duration::from_secs(5);
+
+/// Shared by the muxers of one recording. Once a stop asks for it, finishing
+/// waits for the encoder thread however long it takes, so a slow encoder is
+/// finalized instead of abandoned while still writing.
+#[derive(Clone, Debug, Default)]
+pub struct EncoderFinishWait(Arc<AtomicBool>);
+
+impl EncoderFinishWait {
+    pub fn wait_without_limit(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    fn limit(wait: Option<&Self>) -> Duration {
+        match wait {
+            Some(wait) if wait.0.load(Ordering::Acquire) => Duration::MAX,
+            _ => ENCODER_FINISH_LIMIT,
+        }
+    }
+}
+
 fn finish_encoder_thread(
     handle: JoinHandle<anyhow::Result<()>>,
     label: &str,
+    limit: Duration,
 ) -> BlockingThreadFinish {
-    wait_for_blocking_thread_finish(handle, Duration::from_secs(5), label)
+    wait_for_blocking_thread_finish(handle, limit, label)
 }
 
 trait FinishableEncoderState {
@@ -159,17 +181,19 @@ trait FinishableEncoderState {
         timestamp: Duration,
         finish_label: &str,
         health_tx: &SharedHealthSender,
+        limit: Duration,
     ) -> anyhow::Result<()>;
 }
 
 fn finish_and_report_flush_failure(
     encoder: &mut SegmentedVideoEncoder,
-    timestamp: Duration,
+    _timestamp: Duration,
     finish_label: &str,
     health_tx: &SharedHealthSender,
+    limit: Duration,
 ) -> anyhow::Result<()> {
     let result = encoder
-        .finish_with_timestamp(timestamp)
+        .finish_within(limit)
         .map_err(|error| anyhow!("{finish_label}: {error:#}"));
     if let Some(failure) = encoder.take_flush_failure() {
         warn!(
@@ -200,11 +224,16 @@ impl FinishableEncoderState for EncoderState {
         timestamp: Duration,
         finish_label: &str,
         health_tx: &SharedHealthSender,
+        limit: Duration,
     ) -> anyhow::Result<()> {
         match self.encoder.lock() {
-            Ok(mut encoder) => {
-                finish_and_report_flush_failure(&mut encoder, timestamp, finish_label, health_tx)
-            }
+            Ok(mut encoder) => finish_and_report_flush_failure(
+                &mut encoder,
+                timestamp,
+                finish_label,
+                health_tx,
+                limit,
+            ),
             Err(_) => Err(anyhow!(
                 "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
             )),
@@ -228,11 +257,16 @@ impl FinishableEncoderState for CameraEncoderState {
         timestamp: Duration,
         finish_label: &str,
         health_tx: &SharedHealthSender,
+        limit: Duration,
     ) -> anyhow::Result<()> {
         match self.encoder.lock() {
-            Ok(mut encoder) => {
-                finish_and_report_flush_failure(&mut encoder, timestamp, finish_label, health_tx)
-            }
+            Ok(mut encoder) => finish_and_report_flush_failure(
+                &mut encoder,
+                timestamp,
+                finish_label,
+                health_tx,
+                limit,
+            ),
             Err(_) => Err(anyhow!(
                 "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
             )),
@@ -246,12 +280,13 @@ fn finish_segmented_encoder_impl(
     thread_label: &str,
     finish_label: &str,
     health_tx: &SharedHealthSender,
+    limit: Duration,
 ) -> anyhow::Result<()> {
     state.close_channel(thread_label);
 
     let thread_result = state
         .take_handle()
-        .map(|handle| finish_encoder_thread(handle, thread_label))
+        .map(|handle| finish_encoder_thread(handle, thread_label, limit))
         .unwrap_or(BlockingThreadFinish::Clean);
 
     let thread_error = match thread_result {
@@ -261,7 +296,7 @@ fn finish_segmented_encoder_impl(
     };
 
     let finalize_error = state
-        .finish_encoder(timestamp, finish_label, health_tx)
+        .finish_encoder(timestamp, finish_label, health_tx, limit)
         .err();
 
     match (thread_error, finalize_error) {
@@ -292,7 +327,10 @@ pub struct WindowsFragmentedM4SMuxer {
     disk_space_callback: Option<DiskSpaceCallback>,
     segment_tx:
         Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
+    offload_segment_bookkeeping: bool,
     health_tx: SharedHealthSender,
+    finish_wait: Option<EncoderFinishWait>,
+    stop_cut: Option<super::core::StopCut>,
 }
 
 pub struct WindowsFragmentedM4SMuxerConfig {
@@ -306,6 +344,8 @@ pub struct WindowsFragmentedM4SMuxerConfig {
     pub disk_space_callback: Option<DiskSpaceCallback>,
     pub segment_tx:
         Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
+    pub offload_segment_bookkeeping: bool,
+    pub finish_wait: Option<EncoderFinishWait>,
 }
 
 impl Default for WindowsFragmentedM4SMuxerConfig {
@@ -320,6 +360,8 @@ impl Default for WindowsFragmentedM4SMuxerConfig {
             shared_pause_state: None,
             disk_space_callback: None,
             segment_tx: None,
+            offload_segment_bookkeeping: false,
+            finish_wait: None,
         }
     }
 }
@@ -370,7 +412,10 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             started: false,
             disk_space_callback: config.disk_space_callback,
             segment_tx: config.segment_tx,
+            offload_segment_bookkeeping: config.offload_segment_bookkeeping,
             health_tx: SharedHealthSender::new(),
+            finish_wait: config.finish_wait,
+            stop_cut: super::core::StopCut::current(),
         };
 
         muxer.start_encoder()?;
@@ -394,6 +439,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
                 "Windows M4S encoder",
                 "Failed to finish segmented encoder",
                 &self.health_tx,
+                EncoderFinishWait::limit(self.finish_wait.as_ref()),
             )
         {
             return Ok(Err(error));
@@ -437,6 +483,11 @@ impl WindowsFragmentedM4SMuxer {
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
         }
+        if self.offload_segment_bookkeeping
+            && let Err(error) = encoder.offload_segment_bookkeeping()
+        {
+            warn!(%error, "Segment bookkeeping thread unavailable, keeping it on the encoder thread");
+        }
         if let Some(tx) = self.segment_tx.take() {
             encoder.set_segment_callback(tx);
         }
@@ -447,6 +498,7 @@ impl WindowsFragmentedM4SMuxer {
         let health_tx = self.health_tx.clone();
         let base_path = self.base_path.clone();
         let pause_flag = self.pause.flag();
+        let stop_cut = self.stop_cut.clone();
         let encoder_handle = std::thread::Builder::new()
             .name("win-m4s-segment-encoder".to_string())
             .spawn(move || {
@@ -456,7 +508,7 @@ impl WindowsFragmentedM4SMuxer {
                     return Err(anyhow!("Failed to send ready signal - receiver dropped"));
                 }
 
-                let mut pacer = FramePacer::new(video_config.fps());
+                let mut pacer = FramePacer::new(video_config.fps()).stopping_at(stop_cut);
                 let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
                 let mut first_timestamp: Option<Duration> = None;
 
@@ -728,7 +780,10 @@ pub struct WindowsFragmentedM4SCameraMuxer {
     frame_drops: FrameDropTracker,
     started: bool,
     disk_space_callback: Option<DiskSpaceCallback>,
+    offload_segment_bookkeeping: bool,
     health_tx: SharedHealthSender,
+    finish_wait: Option<EncoderFinishWait>,
+    stop_cut: Option<super::core::StopCut>,
 }
 
 pub struct WindowsFragmentedM4SCameraMuxerConfig {
@@ -738,6 +793,8 @@ pub struct WindowsFragmentedM4SCameraMuxerConfig {
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub disk_space_callback: Option<DiskSpaceCallback>,
+    pub finish_wait: Option<EncoderFinishWait>,
+    pub offload_segment_bookkeeping: bool,
 }
 
 impl Default for WindowsFragmentedM4SCameraMuxerConfig {
@@ -749,6 +806,8 @@ impl Default for WindowsFragmentedM4SCameraMuxerConfig {
             output_size: None,
             shared_pause_state: None,
             disk_space_callback: None,
+            finish_wait: None,
+            offload_segment_bookkeeping: false,
         }
     }
 }
@@ -793,7 +852,10 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
             ),
             started: false,
             disk_space_callback: config.disk_space_callback,
+            offload_segment_bookkeeping: config.offload_segment_bookkeeping,
             health_tx: SharedHealthSender::new(),
+            finish_wait: config.finish_wait,
+            stop_cut: super::core::StopCut::current(),
         };
 
         muxer.start_encoder()?;
@@ -817,6 +879,7 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
                 "Windows M4S camera encoder",
                 "Failed to finish camera segmented encoder",
                 &self.health_tx,
+                EncoderFinishWait::limit(self.finish_wait.as_ref()),
             )
         {
             return Ok(Err(error));
@@ -902,6 +965,11 @@ impl WindowsFragmentedM4SCameraMuxer {
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
         }
+        if self.offload_segment_bookkeeping
+            && let Err(error) = encoder.offload_segment_bookkeeping()
+        {
+            warn!(%error, "Camera segment bookkeeping thread unavailable, keeping it on the encoder thread");
+        }
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
 
@@ -909,6 +977,7 @@ impl WindowsFragmentedM4SCameraMuxer {
         let health_tx = self.health_tx.clone();
         let base_path = self.base_path.clone();
         let pause_flag = self.pause.flag();
+        let stop_cut = self.stop_cut.clone();
         let encoder_handle = std::thread::Builder::new()
             .name("win-m4s-camera-segment-encoder".to_string())
             .spawn(move || {
@@ -920,7 +989,7 @@ impl WindowsFragmentedM4SCameraMuxer {
                     ));
                 }
 
-                let mut pacer = FramePacer::new(video_config.fps());
+                let mut pacer = FramePacer::new(video_config.fps()).stopping_at(stop_cut);
                 let mut last_frame: Option<NativeCameraFrame> = None;
                 let mut first_timestamp: Option<Duration> = None;
 
@@ -1187,7 +1256,55 @@ impl AudioMuxer for WindowsFragmentedM4SCameraMuxer {
 
 #[cfg(test)]
 mod tests {
-    use super::reference_video_frame;
+    use super::{
+        EncoderFinishWait, FinishableEncoderState, SharedHealthSender,
+        finish_segmented_encoder_impl, reference_video_frame,
+    };
+    use std::{thread::JoinHandle, time::Duration};
+
+    struct ExitedEncoder(Option<JoinHandle<anyhow::Result<()>>>);
+
+    impl FinishableEncoderState for ExitedEncoder {
+        fn close_channel(&self, _: &str) {}
+
+        fn take_handle(&mut self) -> Option<JoinHandle<anyhow::Result<()>>> {
+            self.0.take()
+        }
+
+        fn finish_encoder(
+            &self,
+            _: Duration,
+            _: &str,
+            _: &SharedHealthSender,
+            _: Duration,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn late_stop_still_ends_promptly_when_the_encoder_thread_died() {
+        let wait = EncoderFinishWait::default();
+        wait.wait_without_limit();
+        let limit = EncoderFinishWait::limit(Some(&wait));
+        assert_eq!(limit, Duration::MAX);
+        let failed = std::thread::spawn(|| Err(anyhow::anyhow!("encoder failed")));
+        let panicked = std::thread::spawn(|| -> anyhow::Result<()> { panic!("encoder panicked") });
+        for (thread, expected) in [(failed, "encoder failed"), (panicked, "panicked")] {
+            let started = std::time::Instant::now();
+            let error = finish_segmented_encoder_impl(
+                &mut ExitedEncoder(Some(thread)),
+                Duration::ZERO,
+                "test encoder",
+                "Failed to finish test encoder",
+                &SharedHealthSender::new(),
+                limit,
+            )
+            .expect_err("an encoder thread that died must fail the finish");
+            assert!(started.elapsed() < Duration::from_secs(2));
+            assert!(format!("{error:#}").contains(expected), "{error:#}");
+        }
+    }
 
     #[test]
     fn instant_fragment_frames_reuse_reference_counted_pixels() {

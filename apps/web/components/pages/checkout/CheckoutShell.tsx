@@ -57,6 +57,7 @@ export function CheckoutShell({
 	return (
 		<div
 			data-header-flat
+			data-site-banner-off
 			className={`${htSans.className} ${htSans.variable} ${htSerif.variable} ${htMono.variable} text-[#111111]`}
 			style={grainBg(SHELL)}
 		>

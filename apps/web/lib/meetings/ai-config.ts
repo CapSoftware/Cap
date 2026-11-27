@@ -36,7 +36,7 @@ export const MEETINGS_AI_DEFAULTS: MeetingsAiConfig = {
 	askModels: ["openai/gpt-6-luna"],
 	notesMaxOutputTokens: 16_000,
 	askMaxOutputTokens: 2_000,
-	promptVersion: "v4",
+	promptVersion: "v6",
 	reasoningEffort: "none",
 	notesSinglePassChars: 400_000,
 	trialMeetings: 3,

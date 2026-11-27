@@ -570,6 +570,15 @@ fn main() {
                 drop(runtime.spawn(cap_utils::operation_diagnostics::run_checkpoints()));
             }
             let result = runtime.block_on(run(cli));
+            #[cfg(windows)]
+            if let Err(failure) = &result {
+                record::terminate_if_studio_still_finishing(|| {
+                    if json_mode && !JSON_WRITTEN.load(Ordering::SeqCst) {
+                        failure.emit_json();
+                    }
+                    eprintln!("error: {}", failure.describe());
+                });
+            }
             drop(_diagnostic_guard);
             if exit_after_success && result.is_ok() {
                 // Successful export/preview workers have already written their output by here.
@@ -609,7 +618,7 @@ fn main() {
                 failure.emit_json();
             }
             eprintln!("error: {}", failure.describe());
-            std::process::exit(1);
+            std::process::exit(record::failure_exit_code());
         }
         Err(_) => {
             eprintln!("error: CLI runtime thread panicked");

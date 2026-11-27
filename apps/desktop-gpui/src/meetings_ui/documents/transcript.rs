@@ -3202,6 +3202,7 @@ impl TranscriptView {
     /// never while starting or recording, and gone for good once dismissed.
     pub fn render_names_offer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !cfg!(target_os = "macos")
+            || !cap_meeting_platform::NAMES_FROM_MEETING_APPS
             || crate::permissions::grants_are_settings_only()
             || self.is_live()
             || self.names_offer_hidden
