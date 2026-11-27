@@ -111,6 +111,8 @@ pub fn render_sheet(
             actions = actions
                 .child(
                     style::ink_pill(&palette, "cap-ai-continue")
+                        .role(gpui::Role::Button)
+                        .aria_label(tr::cap_ai::sheet::continue_label())
                         .w_full()
                         .h(px(40.))
                         .justify_center()
