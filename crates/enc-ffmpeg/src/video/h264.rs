@@ -1398,9 +1398,12 @@ impl H264Encoder {
         self.past_ceiling_hardware = true;
     }
 
+    /// Makes the next handover fail like a hardware encoder that dies while
+    /// draining, holding every frame queued from now on.
     #[cfg(test)]
     pub(crate) fn fail_handover_drain(&mut self, error: ffmpeg::Error) {
         self.handover_drain_failure = Some(error);
+        self.base.leave_packets_in_codec();
     }
 
     #[cfg(test)]

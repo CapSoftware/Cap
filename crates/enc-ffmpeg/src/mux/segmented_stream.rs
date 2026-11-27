@@ -3338,15 +3338,18 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let base_path = temp.path().to_path_buf();
         let mut encoder = pretend_past_ceiling_libx264(&base_path);
-        encoder.encoder.fail_handover_drain(HARDWARE_FAILURE);
 
         let total_frames = 300;
+        let step = Duration::from_micros(33_333);
         let switches = record_with_switch_request(
             &mut encoder,
             total_frames,
             100,
-            Duration::from_micros(33_333),
+            step,
             |encoder, timestamp| {
+                if timestamp == step * 150 {
+                    encoder.encoder.fail_handover_drain(HARDWARE_FAILURE);
+                }
                 encoder
                     .queue_frame(create_test_frame(320, 240), timestamp)
                     .unwrap();
@@ -3371,7 +3374,7 @@ mod tests {
         assert_eq!(read_manifest(&base_path)["encoder_tail_lost"], true);
         assert!(encoder.take_flush_failure().is_none());
         assert_eq!(encoder.packets_written() + loss.frames, total_frames);
-        assert!(segment_starts(&base_path).contains(at));
+        assert!(segment_starts(&base_path).contains(&(*at - loss.frames as usize)));
         let decoded = decode_every_packet(&recorded_track(&base_path));
         assert_eq!(decoded.frames as u64, total_frames - loss.frames);
         let mut pts = decoded.frame_pts_secs.clone();

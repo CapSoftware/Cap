@@ -100,6 +100,8 @@ pub struct EncoderBase {
     held_packet: Option<(Packet, bool)>,
     frames_sent: u64,
     packets_received: u64,
+    #[cfg(test)]
+    leave_packets_in_codec: bool,
 }
 
 impl EncoderBase {
@@ -114,6 +116,8 @@ impl EncoderBase {
             held_packet: None,
             frames_sent: 0,
             packets_received: 0,
+            #[cfg(test)]
+            leave_packets_in_codec: false,
         }
     }
 
@@ -249,7 +253,15 @@ impl EncoderBase {
         let lost = self.frames_in_codec();
         self.frames_sent = 0;
         self.packets_received = 0;
+        self.leave_packets_in_codec = false;
         lost
+    }
+
+    /// Stops collecting packets, so the frames sent from now on stay inside
+    /// the codec the way a hardware encoder holds them.
+    #[cfg(test)]
+    pub(crate) fn leave_packets_in_codec(&mut self) {
+        self.leave_packets_in_codec = true;
     }
 
     fn process_packets<S: PacketSink + ?Sized>(
@@ -257,6 +269,10 @@ impl EncoderBase {
         output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
+        #[cfg(test)]
+        if self.leave_packets_in_codec {
+            return Ok(());
+        }
         while packet_available(encoder.receive_packet(&mut self.packet))? {
             self.packets_received += 1;
             self.packet.set_stream(self.stream_index);
