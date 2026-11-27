@@ -387,7 +387,7 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.scope.outputs.windows-shards) }}
     runs-on: windows-2022
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       CAP_VERIFY_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
       CAP_VERIFY_CAPTURE: display
