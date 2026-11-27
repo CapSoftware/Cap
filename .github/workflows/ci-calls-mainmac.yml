@@ -46,6 +46,8 @@ jobs:
           git rev-parse HEAD > "$stage/sha.txt"
           cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui
           cp apps/desktop-gpui/target/release/cap-gpui "$stage/bin/head/cap-gpui"
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release -p cap-meeting-platform --example speaker-labels
+          cp apps/desktop-gpui/target/release/examples/speaker-labels "$stage/bin/head/speaker-labels"
           cp -RL target/Frameworks/Spacedrive.framework "$stage/Frameworks/"
           test -f "$stage/Frameworks/Spacedrive.framework/Libraries/libavcodec.61.19.100.dylib"
           tar -C "$stage" -czf "$RUNNER_TEMP/app-mac.tgz" .

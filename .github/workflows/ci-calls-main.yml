@@ -38,7 +38,8 @@ jobs:
           node scripts/sync-desktop-versions.mjs
           ./scripts/prepare-gpui-dependency.sh
       - run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui
-      - run: tar -czf "$RUNNER_TEMP/app.tgz" -C "$GITHUB_WORKSPACE" apps/desktop-gpui/target/release/cap-gpui target/native-deps
+      - run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release -p cap-meeting-platform --example speaker-labels
+      - run: tar -czf "$RUNNER_TEMP/app.tgz" -C "$GITHUB_WORKSPACE" apps/desktop-gpui/target/release/cap-gpui apps/desktop-gpui/target/release/examples/speaker-labels target/native-deps
       - uses: actions/upload-artifact@v4
         with:
           name: app-linux
@@ -72,10 +73,13 @@ jobs:
       - shell: bash
         run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui
       - shell: bash
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release -p cap-meeting-platform --example speaker-labels
+      - shell: bash
         run: |
           stage="$RUNNER_TEMP/stage"
           mkdir -p "$stage/gpui-windows-shaders"
           cp apps/desktop-gpui/target/release/cap-gpui.exe "$stage/"
+          cp apps/desktop-gpui/target/release/examples/speaker-labels.exe "$stage/"
           cp target/release/*.dll "$stage/" || true
           ls target/native-deps 2>/dev/null | head
           cp ../zed-cap/crates/gpui_windows/src/*.hlsl "$stage/gpui-windows-shaders/"
