@@ -22,6 +22,7 @@ import {
 import { HLS_LADDER_COPIED_AUDIO_MAX_KBPS } from "./hls-ladder";
 import type { VideoMetadata } from "./job-manager";
 import {
+	capOutputSeconds,
 	createGuardedMediaFetch,
 	DOWNLOAD_TIMEOUT_MS,
 	decodeThreadsFromEnv,
@@ -1881,7 +1882,7 @@ async function videoSourceTraitsForEncode(
 export async function processVideo(
 	inputPath: string,
 	metadata: VideoMetadata,
-	options: VideoProcessingOptions = {},
+	options: VideoProcessingOptions & { maxOutputSeconds?: number } = {},
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
 	resilientFlags?: ResilientInputFlags,
@@ -1950,7 +1951,10 @@ export async function processVideo(
 	);
 	// A damaged source is read with its timestamps rebuilt, which the probe
 	// did not see, so a recovery attempt is bounded by its deadline alone.
-	const maxOutputSeconds = resilientFlags ? null : encodeLengthLimit(metadata);
+	const maxOutputSeconds = capOutputSeconds(
+		resilientFlags ? null : encodeLengthLimit(metadata),
+		options.maxOutputSeconds,
+	);
 	const capcodec =
 		videoTranscode && !normalizeH264Level && hdr === null
 			? capcodecOptionsForJob(opts)

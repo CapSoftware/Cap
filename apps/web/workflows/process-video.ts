@@ -6,6 +6,12 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { FatalError, sleep } from "workflow";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import {
+	FREE_PLAN_DURATION_WEBHOOK_PARAM,
+	freePlanDurationExceededMessage,
+	getFreePlanDurationLimit,
+	isFreePlanDurationError,
+} from "@/lib/free-plan-duration";
 import { getMediaProcessingRejection } from "@/lib/media-processing-policy";
 import {
 	createMediaServerCapacityError,
@@ -179,6 +185,7 @@ async function startMediaServerProcessJob(
 		inputExtension: string;
 		audioLevels?: boolean;
 		importedOriginal?: boolean;
+		maxOutputSeconds?: number;
 	},
 ): Promise<string> {
 	for (let attempt = 0; attempt < MEDIA_SERVER_START_MAX_ATTEMPTS; attempt++) {
@@ -289,6 +296,8 @@ async function processVideoOnMediaServer(
 		throw new FatalError(rejection);
 	}
 
+	const freePlanLimitSeconds = await getFreePlanDurationLimit(video);
+
 	const videoDomain = decodeStorageVideo(video);
 
 	const [bucket] =
@@ -335,7 +344,18 @@ async function processVideoOnMediaServer(
 		)
 		.pipe(runWorkflowPromise);
 
-	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true`;
+	const [limitedUpload] =
+		freePlanLimitSeconds === null
+			? []
+			: await db()
+					.select({ startedAt: videoUploads.startedAt })
+					.from(videoUploads)
+					.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true${
+		freePlanLimitSeconds === null
+			? ""
+			: `&${FREE_PLAN_DURATION_WEBHOOK_PARAM}=${limitedUpload?.startedAt.getTime() ?? 0}`
+	}`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 
 	await db()
@@ -363,6 +383,9 @@ async function processVideoOnMediaServer(
 		importedOriginal:
 			video.metadata?.loomDeferredProcessing?.rawFileKey === rawFileKey ||
 			undefined,
+		...(freePlanLimitSeconds === null
+			? {}
+			: { maxOutputSeconds: freePlanLimitSeconds }),
 	});
 }
 
@@ -464,7 +487,9 @@ async function setProcessingError(
 		.set({
 			phase: "error",
 			processingProgress: 0,
-			processingMessage: "Video processing failed",
+			processingMessage: isFreePlanDurationError(errorMessage)
+				? freePlanDurationExceededMessage
+				: "Video processing failed",
 			processingError: errorMessage,
 			updatedAt: new Date(),
 		})
