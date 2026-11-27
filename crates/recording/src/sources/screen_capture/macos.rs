@@ -28,7 +28,12 @@ use tracing::{debug, error, info, warn};
 
 const MAX_CAPTURE_RESTARTS: u32 = 3;
 const RESTART_DELAY: Duration = Duration::from_secs(2);
+// Each check is a WindowServer round trip that measured several percent of an
+// Instant recording's CPU at 100 ms, so a still window is checked less often and
+// the fast interval only runs while the window is changing.
 const WINDOW_FOLLOW_INTERVAL: Duration = Duration::from_millis(100);
+const WINDOW_FOLLOW_IDLE_INTERVAL: Duration = Duration::from_millis(500);
+const WINDOW_FOLLOW_ACTIVE_FOR: Duration = Duration::from_secs(2);
 const WINDOW_WATCH_INTERVAL: Duration = Duration::from_secs(1);
 const WINDOW_GONE_CHECKS: u32 = 2;
 
@@ -143,14 +148,11 @@ fn stream_settings(
 /// as the recording's own crop is when it starts. The window can be resized
 /// while it is recorded, and a source rect left at its first size would cut
 /// off whatever grew past it.
-fn current_window_crop(window: &WindowId, display: &Display) -> Option<super::CropBounds> {
+fn current_window_crop(window: &WindowId, scale: f64) -> Option<super::CropBounds> {
     let bounds = scap_targets::Window::from_id_direct(window)?
         .raw_handle()
         .logical_bounds()?;
-    Some(super::even_pixel_crop(
-        bounds,
-        display.raw_handle().scale().unwrap_or(1.0),
-    ))
+    Some(super::even_pixel_crop(bounds, scale))
 }
 
 /// What the stream reads. A display capture crops to `crop_bounds` on the
@@ -944,29 +946,44 @@ impl output_pipeline::VideoSource for VideoSource {
             let original_capturer = capturer.clone();
             ctx.tasks()
                 .spawn("screen-capture-window-follow", async move {
+                    let mut display_scale: Option<f64> = None;
+                    let mut last_change: Option<Instant> = None;
                     loop {
+                        let interval = if last_change
+                            .is_some_and(|at| at.elapsed() < WINDOW_FOLLOW_ACTIVE_FOR)
+                        {
+                            WINDOW_FOLLOW_INTERVAL
+                        } else {
+                            WINDOW_FOLLOW_IDLE_INTERVAL
+                        };
                         select! {
                             _ = follow_cancel.cancelled() => break Ok(()),
-                            _ = tokio::time::sleep(WINDOW_FOLLOW_INTERVAL) => {}
+                            _ = tokio::time::sleep(interval) => {}
                         }
-                        let Some(crop) = Display::from_id(&params.display_id)
-                            .and_then(|display| current_window_crop(&window, &display))
-                        else {
-                            continue;
-                        };
                         let capturer = active_capturer
                             .lock()
                             .ok()
                             .and_then(|active| active.clone())
                             .unwrap_or_else(|| original_capturer.clone());
-                        if capturer.source_size() == Some(crop.size()) {
-                            continue;
-                        }
                         // A stopped stream, paused or waiting on a restart, takes
                         // the window's size when it is rebuilt.
                         if !capturer.started.load(atomic::Ordering::Relaxed) {
                             continue;
                         }
+                        if display_scale.is_none() {
+                            display_scale = Display::from_id(&params.display_id)
+                                .map(|display| display.raw_handle().scale().unwrap_or(1.0));
+                        }
+                        let Some(scale) = display_scale else {
+                            continue;
+                        };
+                        let Some(crop) = current_window_crop(&window, scale) else {
+                            continue;
+                        };
+                        if capturer.source_size() == Some(crop.size()) {
+                            continue;
+                        }
+                        last_change = Some(Instant::now());
                         let update = capturer.capturer.update_cfg(&stream_settings(
                             &params.config,
                             &params.video_info,
@@ -1364,7 +1381,7 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
         .transpose()?;
     let captures_window = window_filter.is_some();
     let crop_bounds = window
-        .and_then(|id| current_window_crop(id, &display))
+        .and_then(|id| current_window_crop(id, display.raw_handle().scale().unwrap_or(1.0)))
         .or(params.config.crop_bounds);
 
     let content_filter = match window_filter {
