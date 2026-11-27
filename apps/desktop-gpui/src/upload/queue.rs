@@ -22,7 +22,7 @@ const MAX_AUTOMATIC_ATTEMPTS: u32 = 5;
 pub(crate) const RECORDING_DELETED_ON_WEB: &str =
     "This recording was deleted on the web; the local recording is preserved";
 pub(crate) const RECORDING_REPLACED_ON_WEB: &str =
-    "This recording was replaced on the web; the local recording is preserved";
+    "Replaced on the web. Your recording is still on this computer.";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum UploadKind {
@@ -101,14 +101,21 @@ impl UploadState {
             UploadPhase::Processing => tr::upload::status::processing(),
             UploadPhase::Retrying => tr::upload::status::retrying(),
             UploadPhase::NeedsAuthentication => tr::upload::status::sign_in(),
+            UploadPhase::Failed if self.replaced_on_web() => tr::upload::status::replaced(),
             UploadPhase::Failed => tr::upload::status::failed(),
             UploadPhase::Cancelled => tr::upload::status::paused(),
             UploadPhase::Verified => tr::upload::status::uploaded(),
         }
     }
 
+    fn replaced_on_web(&self) -> bool {
+        self.phase == UploadPhase::Failed
+            && self.last_error.as_deref() == Some(RECORDING_REPLACED_ON_WEB)
+    }
+
     pub(crate) fn can_retry(&self) -> bool {
         self.requested_audio.is_some()
+            && !self.replaced_on_web()
             && matches!(
                 self.phase,
                 UploadPhase::Retrying
@@ -792,7 +799,9 @@ impl<B: UploadBackend> Manager<B> {
                 tracing::info!(path = %project.display(), %error, "Instant upload paused");
             }
             Err(error) => {
-                self.backend.notify_failure();
+                if error != RECORDING_REPLACED_ON_WEB {
+                    self.backend.notify_failure();
+                }
                 state.fail(error.clone(), now());
                 if let Err(save_error) = write_state(&project, &state) {
                     tracing::error!(%save_error, "Failed to persist upload retry state");
@@ -1498,6 +1507,7 @@ mod tests {
         fail_confirmation: AtomicBool,
         stall_confirmation: AtomicBool,
         reupload_required: AtomicBool,
+        replaced_on_web: AtomicBool,
         delete: AtomicBool,
         keep_cleanup_entry: AtomicBool,
         transfers: AtomicUsize,
@@ -1554,6 +1564,9 @@ mod tests {
             }
             if self.reupload_required.swap(false, Ordering::AcqRel) {
                 return Ok(Confirmation::ReuploadRequired);
+            }
+            if self.replaced_on_web.load(Ordering::Acquire) {
+                return Ok(Confirmation::ReplacedOnWeb);
             }
             if self.verified.load(Ordering::Acquire) {
                 Ok(Confirmation::Verified(VerifiedUploadReceipt {
@@ -1649,6 +1662,34 @@ mod tests {
             0
         );
         drop(UploadLock::acquire(&fixture.project()).unwrap());
+    }
+
+    #[tokio::test]
+    async fn replaced_on_the_web_stops_quietly_without_a_retry() {
+        let fixture = Fixture::new();
+        let backend = FakeBackend::default();
+        backend.replaced_on_web.store(true, Ordering::Release);
+        let manager = Arc::new(Manager::new(backend, Duration::from_millis(20)));
+        manager
+            .admit(fixture.project(), fixture.upload(), false)
+            .await
+            .unwrap();
+        joined(&manager).await;
+        fixture.assert_retained();
+        assert_eq!(
+            manager
+                .backend
+                .failure_notifications
+                .load(Ordering::Acquire),
+            0
+        );
+        let state = fixture.state();
+        assert_eq!(state.phase, UploadPhase::Failed);
+        assert_eq!(state.last_error.as_deref(), Some(RECORDING_REPLACED_ON_WEB));
+        assert_eq!(state.label(), tr::upload::status::replaced());
+        assert!(!state.can_retry());
+        assert!(!state.is_pending());
+        assert_eq!(manager.backend.transfers.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test]
