@@ -955,3 +955,150 @@ fn every_key_is_used_outside_the_catalog() {
         "keys in locales/en.toml that no code reads: {unused:?}"
     );
 }
+
+/// The Cap Pro row at the foot of the Notes sidebar keeps two lines of
+/// height for its status line in every state, so a state change never moves
+/// the list, the button or Trash. Every catalog's row lines (with counts from
+/// 1 to 10) must wrap into those two lines at the row's width, measured with
+/// the bundled Geist at the row's 12.5 px and a 5% margin for the system font.
+/// Wrapping is fine; a third line would be clipped.
+#[test]
+fn the_notes_pro_row_never_needs_more_than_its_two_lines() {
+    use crate::meetings_ui::documents::cap_ai_row_metrics as row;
+    use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, fontdb::Database};
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut database = Database::new();
+    database.load_font_data(std::fs::read(root.join("assets/fonts/Geist.ttf")).unwrap());
+    let mut system = FontSystem::new_with_locale_and_db("en-US".into(), database);
+    let attrs = Attrs::new().family(Family::Name("Geist"));
+    let size = 12.5;
+    let mut width_of = |text: &str| -> f32 {
+        let mut buffer = Buffer::new(&mut system, Metrics::new(size, size * 1.25));
+        buffer.set_size(&mut system, None, None);
+        buffer.set_text(&mut system, text, &attrs, Shaping::Advanced);
+        buffer.shape_until_scroll(&mut system, false);
+        buffer
+            .layout_runs()
+            .map(|run| {
+                let mut width = 0.;
+                let mut missing = None;
+                for glyph in run.glyphs {
+                    if glyph.glyph_id != 0 {
+                        width += glyph.w;
+                    } else if missing != Some((glyph.start, glyph.end)) {
+                        missing = Some((glyph.start, glyph.end));
+                        width += missing_glyph_width(&run.text[glyph.start..glyph.end], size);
+                    }
+                }
+                width
+            })
+            .fold(0., f32::max)
+    };
+    // Greedy wrap: between words, and between any two CJK characters.
+    let mut lines_of = |text: &str| -> usize {
+        let mut pieces: Vec<String> = Vec::new();
+        for word in text.split(' ') {
+            let mut current = String::new();
+            for c in word.chars() {
+                let cjk = ('\u{3000}'..='\u{9fff}').contains(&c)
+                    || ('\u{ff00}'..='\u{ffef}').contains(&c);
+                if cjk {
+                    if !current.is_empty() {
+                        pieces.push(std::mem::take(&mut current));
+                    }
+                    pieces.push(c.to_string());
+                } else {
+                    current.push(c);
+                }
+            }
+            if !current.is_empty() {
+                pieces.push(current);
+            }
+            pieces.push(" ".into());
+        }
+        let limit = row::TEXT_WIDTH * 0.95;
+        let (mut lines, mut line) = (1, String::new());
+        for piece in pieces {
+            let candidate = format!("{line}{piece}");
+            if width_of(candidate.trim_end()) > limit && !line.trim().is_empty() {
+                lines += 1;
+                line = piece.trim_start().to_string();
+            } else {
+                line = candidate;
+            }
+        }
+        lines
+    };
+
+    // Every value of a key in the [cap_ai.row] section (plain, `text`, or
+    // plural forms), straight from each catalog.
+    let values = |catalog: &str| -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let mut inside = false;
+        for line in catalog.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                inside = line == "[cap_ai.row]";
+                continue;
+            }
+            let Some((key, value)) = line.split_once(" = ").filter(|_| inside) else {
+                continue;
+            };
+            let rest = value;
+            if rest.starts_with('"') {
+                out.push((key.to_string(), rest.trim_matches('"').to_string()));
+                continue;
+            }
+            for field in ["text", "one", "few", "many", "other"] {
+                // A field starts the table or follows a comma, so `context`
+                // never reads as `text`.
+                for lead in ["{ ", ", "] {
+                    let marker = format!("{lead}{field} = \"");
+                    if let Some(at) = rest.find(&marker) {
+                        let after = &rest[at + marker.len()..];
+                        if let Some(end) = after.find('"') {
+                            out.push((format!("{key}.{field}"), after[..end].to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    };
+
+    let mut checked = 0;
+    let mut failures = Vec::new();
+    for locale in Locale::ALL {
+        if locale.code() == "pseudo" {
+            continue;
+        }
+        let path = root.join(format!("locales/{}.toml", locale.code()));
+        let catalog = std::fs::read_to_string(&path).unwrap();
+        let found = values(&catalog);
+        assert!(
+            found.len() >= 3,
+            "{}: no [cap_ai.row] strings",
+            locale.code()
+        );
+        for (key, text) in found {
+            for count in ["1", "2", "3", "10"] {
+                let text = text.replace("{count}", count);
+                let lines = lines_of(&text);
+                checked += 1;
+                if lines > row::LINES {
+                    failures.push(format!(
+                        "{} `cap_ai.row.{key}` {text:?}: {lines} lines",
+                        locale.code()
+                    ));
+                }
+            }
+        }
+    }
+    assert!(checked > 0);
+    assert!(
+        failures.is_empty(),
+        "more lines than the row keeps:\n{}",
+        failures.join("\n")
+    );
+}

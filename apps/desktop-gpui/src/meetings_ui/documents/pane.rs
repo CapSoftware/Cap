@@ -1363,7 +1363,7 @@ impl Pane {
                 let doc = self.doc_id();
                 cx.defer(move |cx| cap_ai::open_upgrade(doc, Host::Documents, cx));
             }
-            CardKind::Write { .. } => self.write_notes(None, cx),
+            CardKind::Write => self.write_notes(None, cx),
             CardKind::Unavailable => {}
         }
     }

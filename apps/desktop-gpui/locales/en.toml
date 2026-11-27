@@ -4324,7 +4324,6 @@ try_free = "Sign in to try it free"
 write = "Write my notes"
 too_short = "This call was too short to write up."
 unavailable_title = "Cap AI notes aren't available on this server"
-free_left = { one = "{count} free note left", other = "{count} free notes left" }
 
 [cap_ai.live]
 sign_in = "Sign in and Cap AI writes this up when the meeting ends"
@@ -4337,9 +4336,9 @@ three = { text = "{a}, {b} and {c}", context = "First names of three people on a
 two = { text = "{a} and {b}", context = "First names of two people on a call." }
 
 [cap_ai.row]
-pro = { text = "AI notes with Cap Pro", context = "Cap Pro row in the Notes sidebar when the free count is not known yet, next to a Get Cap Pro button. One line.", max_px = 178, size = 12.5 }
-signed_out = { text = "Try Cap AI notes free", context = "Cap Pro row in the Notes sidebar for someone signed out, next to a Sign in button. One line.", max_px = 178, size = 12.5 }
-spent = { text = "No free notes left", context = "Cap Pro row in the Notes sidebar when the free Cap AI notes are used up, next to a Get Cap Pro button. One line.", max_px = 178, size = 12.5 }
+left = { one = "{count} free Cap AI note left", other = "{count} free Cap AI notes left", context = "Cap Pro row at the foot of the Notes sidebar: Cap AI write-ups left free on this account, next to a Get Cap Pro button. Local notes stay free and unlimited, so always say Cap AI notes. May wrap to two lines." }
+pro = { text = "Cap AI notes are part of Cap Pro", context = "Cap Pro row in the Notes sidebar when the free Cap AI notes are used up or not known yet, next to a Get Cap Pro button. May wrap to two lines." }
+signed_out = { text = "Try Cap AI notes free", context = "Cap Pro row in the Notes sidebar for someone signed out, next to a Sign in button. May wrap to two lines." }
 
 [cap_ai.settings]
 get_pro = "Get Cap Pro"

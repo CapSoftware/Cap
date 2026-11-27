@@ -4322,7 +4322,6 @@ try_free = "Inicia sesión y pruébalo gratis"
 write = "Escribir mis notas"
 too_short = "Esta llamada fue demasiado corta para redactarla."
 unavailable_title = "Las notas de Cap AI no están disponibles en este servidor"
-free_left = { one = "Te queda {count} nota gratis", other = "Te quedan {count} notas gratis" }
 
 [cap_ai.live]
 sign_in = "Inicia sesión y Cap AI redactará esto cuando termine la reunión"
@@ -4335,9 +4334,9 @@ three = "{a}, {b} y {c}"
 two = "{a} y {b}"
 
 [cap_ai.row]
-pro = "Notas con IA en Cap Pro"
-signed_out = "Prueba Cap AI gratis"
-spent = "Sin notas gratis"
+left = { one = "Te queda {count} nota de Cap AI gratis", other = "Te quedan {count} notas de Cap AI gratis" }
+pro = "Las notas de Cap AI son parte de Cap Pro"
+signed_out = "Prueba gratis las notas de Cap AI"
 
 [cap_ai.settings]
 get_pro = "Obtener Cap Pro"

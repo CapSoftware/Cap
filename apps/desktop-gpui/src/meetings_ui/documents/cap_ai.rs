@@ -23,7 +23,7 @@ pub enum CardKind {
     SignIn,
     Upgrade,
     Spent,
-    Write { trial: Option<u32> },
+    Write,
     Unavailable,
 }
 
@@ -83,10 +83,8 @@ pub fn card_kind(
     }
     Some(match access {
         AiAccess::Ready | AiAccess::Trial { .. } if note.failed || note.too_short => return None,
-        AiAccess::Ready => CardKind::Write { trial: None },
-        AiAccess::Trial { remaining } => CardKind::Write {
-            trial: Some(remaining),
-        },
+        // The count lives in the Cap Pro row, the one place that says it.
+        AiAccess::Ready | AiAccess::Trial { .. } => CardKind::Write,
         AiAccess::NeedsSignIn => CardKind::SignIn,
         _ if trial_remaining == Some(0) => CardKind::Spent,
         _ => CardKind::Upgrade,
@@ -179,12 +177,12 @@ pub fn pro_row_copy(row: ProRow) -> (SharedString, &'static str, bool) {
             true,
         ),
         ProRow::Left(n) => (
-            tr::cap_ai::card::free_left(n as usize).into(),
+            tr::cap_ai::row::left(n as usize).into(),
             tr::cap_ai::card::get_pro(),
             false,
         ),
         ProRow::Spent => (
-            tr::cap_ai::row::spent().into(),
+            tr::cap_ai::row::pro().into(),
             tr::cap_ai::card::get_pro(),
             false,
         ),
@@ -205,6 +203,13 @@ pub enum RowPlace {
 }
 
 pub const PRO_STRIP_HEIGHT: f32 = 40.;
+/// The sidebar row's line: its width (the sidebar less the row's padding) and
+/// the two lines of height it always keeps, so a longer state (or locale)
+/// never moves the button, Trash or the list.
+pub const PRO_ROW_PAD: f32 = 19.;
+pub const PRO_ROW_TEXT_WIDTH: f32 = style::SIDEBAR_WIDTH - PRO_ROW_PAD * 2.;
+pub const PRO_ROW_LINE: f32 = 17.;
+pub const PRO_ROW_LINES: usize = 2;
 
 pub fn render_pro_row(palette: &Palette, row: ProRow, place: RowPlace) -> AnyElement {
     let palette = *palette;
@@ -243,9 +248,8 @@ pub fn render_pro_row(palette: &Palette, row: ProRow, place: RowPlace) -> AnyEle
         });
     let text = div()
         .min_w_0()
-        .truncate()
         .text_size(px(12.5))
-        .line_height(px(17.))
+        .line_height(px(PRO_ROW_LINE))
         .text_color(palette.muted)
         .child(gpui::Text::new("notes-pro-line".into(), line));
     match place {
@@ -255,21 +259,30 @@ pub fn render_pro_row(palette: &Palette, row: ProRow, place: RowPlace) -> AnyEle
             // A footer: the list above ends at this line when it scrolls.
             .border_t_1()
             .border_color(palette.hairline)
-            .px(px(19.))
+            .px(px(PRO_ROW_PAD))
             .pt(px(10.))
             .pb(px(4.))
             .flex()
             .flex_col()
             .items_start()
             .gap(px(8.))
-            .child(text)
+            .child(
+                div()
+                    .w_full()
+                    .h(px(PRO_ROW_LINE * PRO_ROW_LINES as f32))
+                    .flex()
+                    .flex_col()
+                    .justify_end()
+                    .child(text),
+            )
             .child(button)
             .into_any_element(),
         RowPlace::Strip => div()
             .id("notes-pro")
             .flex_shrink_0()
             .w_full()
-            .h(px(PRO_STRIP_HEIGHT))
+            .min_h(px(PRO_STRIP_HEIGHT))
+            .py(px(6.))
             .px(px(16.))
             .flex()
             .items_center()
@@ -277,7 +290,7 @@ pub fn render_pro_row(palette: &Palette, row: ProRow, place: RowPlace) -> AnyEle
             .border_t_1()
             .border_color(palette.hairline)
             .bg(palette.content)
-            .child(text)
+            .child(div().min_w_0().child(text))
             .child(button)
             .into_any_element(),
     }
@@ -313,35 +326,24 @@ pub fn card_title(kind: CardKind, people: Option<String>) -> String {
     }
 }
 
-/// What the card offers: the pitch, one button, and the short line beside it.
+/// What the card offers: the pitch and one button.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CardOffer {
     pub pitch: bool,
     pub action: Option<&'static str>,
-    pub note: Option<String>,
 }
 
 pub fn card_offer(kind: CardKind) -> CardOffer {
     let pitch = kind != CardKind::Unavailable;
-    let (action, note) = match kind {
+    let action = match kind {
         // Signed out, the app can't know how many notes the server gives
         // free, so the button says it's free and nothing counts.
-        CardKind::SignIn => (Some(tr::cap_ai::card::try_free()), None),
-        CardKind::Write {
-            trial: Some(remaining),
-        } => (
-            Some(tr::cap_ai::card::write()),
-            Some(tr::cap_ai::card::free_left(remaining.max(1) as usize)),
-        ),
-        CardKind::Write { trial: None } => (Some(tr::cap_ai::card::write()), None),
-        CardKind::Upgrade | CardKind::Spent => (Some(tr::cap_ai::card::get_pro()), None),
-        CardKind::Unavailable => (None, None),
+        CardKind::SignIn => Some(tr::cap_ai::card::try_free()),
+        CardKind::Write => Some(tr::cap_ai::card::write()),
+        CardKind::Upgrade | CardKind::Spent => Some(tr::cap_ai::card::get_pro()),
+        CardKind::Unavailable => None,
     };
-    CardOffer {
-        pitch,
-        action,
-        note,
-    }
+    CardOffer { pitch, action }
 }
 
 /// The offer above an ended meeting's transcript: what Cap AI writes for
@@ -399,13 +401,6 @@ pub fn render_card(
                     .child(action)
                     .on_click(primary),
             )
-            .children(offer.note.map(|note| {
-                div()
-                    .text_size(px(12.5))
-                    .line_height(px(18.))
-                    .text_color(palette.muted)
-                    .child(note)
-            }))
     });
     div()
         .id("cap-ai-card")
@@ -594,11 +589,11 @@ mod tests {
         );
         assert_eq!(
             card_kind(AiAccess::Ready, None, ended(false)),
-            Some(CardKind::Write { trial: None })
+            Some(CardKind::Write)
         );
         assert_eq!(
             card_kind(AiAccess::Trial { remaining: 1 }, Some(1), ended(false)),
-            Some(CardKind::Write { trial: Some(1) })
+            Some(CardKind::Write)
         );
         assert_eq!(card_kind(AiAccess::NeedsUpgrade, None, ended(true)), None);
         let dismissed = NoteState {
@@ -636,8 +631,8 @@ mod tests {
                 Some(CardKind::SignIn),
                 Some(CardKind::Upgrade),
                 Some(CardKind::Spent),
-                Some(CardKind::Write { trial: None }),
-                Some(CardKind::Write { trial: Some(2) }),
+                Some(CardKind::Write),
+                Some(CardKind::Write),
                 Some(CardKind::Unavailable),
             ]
         );
@@ -778,7 +773,7 @@ mod tests {
             card_title(CardKind::Upgrade, None),
             tr::cap_ai::card::title()
         );
-        for kind in [CardKind::SignIn, CardKind::Write { trial: None }] {
+        for kind in [CardKind::SignIn, CardKind::Write] {
             let title = card_title(kind, None);
             assert!(
                 !title.chars().any(|c| c.is_ascii_digit()),
@@ -796,16 +791,11 @@ mod tests {
         let sign_in = card_offer(CardKind::SignIn);
         assert!(sign_in.pitch);
         assert_eq!(sign_in.action, Some(tr::cap_ai::card::try_free()));
-        assert_eq!(sign_in.note, None, "signed out, nothing to count");
 
-        let trial = card_offer(CardKind::Write { trial: Some(2) });
-        assert_eq!(trial.action, Some(tr::cap_ai::card::write()));
-        assert_eq!(trial.note, Some(tr::cap_ai::card::free_left(2)));
-        assert!(trial.note.as_deref().is_some_and(|n| n.contains('2')));
-
-        let ready = card_offer(CardKind::Write { trial: None });
-        assert_eq!(ready.action, Some(tr::cap_ai::card::write()));
-        assert_eq!(ready.note, None, "Cap Pro has nothing to count");
+        // Free or Pro, the card only offers to write: the Cap Pro row is the
+        // one place that counts free notes, so the two never disagree.
+        let write = card_offer(CardKind::Write);
+        assert_eq!(write.action, Some(tr::cap_ai::card::write()));
 
         for kind in [CardKind::Upgrade, CardKind::Spent] {
             let offer = card_offer(kind);
@@ -819,7 +809,6 @@ mod tests {
             CardOffer {
                 pitch: false,
                 action: None,
-                note: None
             },
             "no offer where Cap AI can't run"
         );
@@ -947,10 +936,10 @@ mod tests {
             ("Try Cap AI notes free".into(), "Sign in", true)
         );
         for (row, line) in [
-            (ProRow::Left(3), "3 free notes left"),
-            (ProRow::Left(1), "1 free note left"),
-            (ProRow::Spent, "No free notes left"),
-            (ProRow::Upgrade, "AI notes with Cap Pro"),
+            (ProRow::Left(3), "3 free Cap AI notes left"),
+            (ProRow::Left(1), "1 free Cap AI note left"),
+            (ProRow::Spent, "Cap AI notes are part of Cap Pro"),
+            (ProRow::Upgrade, "Cap AI notes are part of Cap Pro"),
         ] {
             assert_eq!(pro_row_copy(row), (line.into(), "Get Cap Pro", false));
         }

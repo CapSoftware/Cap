@@ -4322,7 +4322,6 @@ try_free = "サインインして無料で試す"
 write = "メモを書く"
 too_short = "この通話は短すぎてまとめられません。"
 unavailable_title = "このサーバーではCap AIのメモを利用できません"
-free_left = { other = "無料であと{count}件" }
 
 [cap_ai.live]
 sign_in = "サインインすると、会議の終了時にCap AIがまとめます"
@@ -4335,9 +4334,9 @@ three = "{a}、{b}、{c}"
 two = "{a}、{b}"
 
 [cap_ai.row]
-pro = "Cap ProでAIメモ"
+left = { other = "Cap AIメモは無料であと{count}件" }
+pro = "Cap AIメモはCap Proの機能です"
 signed_out = "Cap AIメモを無料で試す"
-spent = "無料枠は使い切りました"
 
 [cap_ai.settings]
 get_pro = "Cap Proにする"

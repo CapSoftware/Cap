@@ -4322,7 +4322,6 @@ try_free = "साइन इन करें और मुफ़्त आज़
 write = "मेरे नोट्स लिखें"
 too_short = "यह कॉल लिखने के लिए बहुत छोटी थी।"
 unavailable_title = "इस सर्वर पर Cap AI नोट्स उपलब्ध नहीं हैं"
-free_left = { one = "{count} मुफ़्त नोट बाकी", other = "{count} मुफ़्त नोट्स बाकी" }
 
 [cap_ai.live]
 sign_in = "साइन इन करें और मीटिंग खत्म होने पर Cap AI इसे लिख देगा"
@@ -4335,9 +4334,9 @@ three = "{a}, {b} और {c}"
 two = "{a} और {b}"
 
 [cap_ai.row]
-pro = "Cap Pro के साथ AI नोट्स"
-signed_out = "Cap AI मुफ़्त आज़माएं"
-spent = "कोई मुफ़्त नोट बाकी नहीं"
+left = { one = "{count} मुफ़्त Cap AI नोट बाकी", other = "{count} मुफ़्त Cap AI नोट्स बाकी" }
+pro = "Cap AI नोट्स Cap Pro का हिस्सा हैं"
+signed_out = "Cap AI नोट्स मुफ़्त आज़माएं"
 
 [cap_ai.settings]
 get_pro = "Cap Pro लें"
