@@ -397,8 +397,8 @@ export default async function SharedCapsPage(props: {
 						public: videos.public,
 						settings: videos.settings,
 						hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
-						totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
-						totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
+						totalComments: sql<number>`(SELECT COUNT(*) FROM ${comments} WHERE ${comments.videoId} = ${videos.id} AND ${comments.type} = 'text')`,
+						totalReactions: sql<number>`(SELECT COUNT(*) FROM ${comments} WHERE ${comments.videoId} = ${videos.id} AND ${comments.type} = 'emoji')`,
 						ownerName: users.name,
 						effectiveDate: videos.effectiveCreatedAt,
 						hasActiveUpload:
@@ -408,7 +408,6 @@ export default async function SharedCapsPage(props: {
 					})
 					.from(videos)
 					.innerJoin(spaceVideosPage, eq(videos.id, spaceVideosPage.id))
-					.leftJoin(comments, eq(videos.id, comments.videoId))
 					.leftJoin(users, eq(videos.ownerId, users.id))
 					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 					.groupBy(
@@ -564,8 +563,8 @@ export default async function SharedCapsPage(props: {
 						public: videos.public,
 						settings: videos.settings,
 						hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
-						totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
-						totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
+						totalComments: sql<number>`(SELECT COUNT(*) FROM ${comments} WHERE ${comments.videoId} = ${videos.id} AND ${comments.type} = 'text')`,
+						totalReactions: sql<number>`(SELECT COUNT(*) FROM ${comments} WHERE ${comments.videoId} = ${videos.id} AND ${comments.type} = 'emoji')`,
 						ownerName: users.name,
 						effectiveDate: videos.effectiveCreatedAt,
 						hasActiveUpload:
@@ -575,7 +574,6 @@ export default async function SharedCapsPage(props: {
 					})
 					.from(videos)
 					.innerJoin(orgVideosPage, eq(videos.id, orgVideosPage.id))
-					.leftJoin(comments, eq(videos.id, comments.videoId))
 					.leftJoin(users, eq(videos.ownerId, users.id))
 					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 					.groupBy(
