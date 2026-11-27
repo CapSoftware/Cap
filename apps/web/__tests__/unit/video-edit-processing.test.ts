@@ -118,6 +118,7 @@ vi.mock("@/app/s/[videoId]/_components/PasswordGate", () => ({
 vi.mock("@/app/s/[videoId]/_components/PendingRecordingShare", () => ({}));
 vi.mock("@/app/s/[videoId]/_components/ShareHeader", () => ({}));
 vi.mock("@/app/s/[videoId]/Share", () => ({}));
+vi.mock("@/app/s/[videoId]/NoteShare", () => ({}));
 vi.mock("@/app/s/[videoId]/edit/EditUpgradeGate", () => ({}));
 vi.mock("@/app/s/[videoId]/edit/EditVideoClient", () => ({
 	EditVideoClient: () => null,
