@@ -50,7 +50,11 @@ import { logReason } from "../lib/log-redaction";
 import { MediaAddressError } from "../lib/media-address-guard";
 import {
 	createGuardedMediaFetch,
+	encodeCapForRequestedLength,
+	exceedsRequestedLength,
+	LENGTH_LIMIT_ERROR_PREFIX,
 	PROCESS_TIMEOUT_MS,
+	runsPastRequestedLength,
 	UPLOAD_TIMEOUT_MS,
 } from "../lib/media-common";
 import {
@@ -242,6 +246,7 @@ const processSchema = z.object({
 	normalizeH264Level: z.boolean().optional(),
 	importedOriginal: z.boolean().optional(),
 	infra: z.boolean().optional(),
+	maxOutputSeconds: z.number().positive().optional(),
 });
 
 const ladderSchema = z.object({
@@ -1422,6 +1427,7 @@ async function processWithResilientRetry(
 		preset: options.preset,
 		remuxOnly: options.remuxOnly,
 		normalizeH264Level: options.normalizeH264Level,
+		maxOutputSeconds: options.maxOutputSeconds,
 	};
 
 	const onProgress = (progress: number, message: string) => {
@@ -2122,6 +2128,11 @@ async function processVideoAsync(
 		repairedTempFile = repairedFile;
 		signal.throwIfAborted();
 		updateJob(jobId, { metadata });
+		if (exceedsRequestedLength(metadata, options.maxOutputSeconds)) {
+			throw new Error(
+				`${LENGTH_LIMIT_ERROR_PREFIX}: the source runs longer than ${options.maxOutputSeconds} seconds`,
+			);
+		}
 		extendJobLifetimeForWork(
 			jobId,
 			getProcessTimeoutMs(metadata.duration, PROCESS_TIMEOUT_MS),
@@ -2145,7 +2156,14 @@ async function processVideoAsync(
 					processingInputPath,
 					input.path,
 					metadata,
-					options,
+					options.maxOutputSeconds
+						? {
+								...options,
+								maxOutputSeconds: encodeCapForRequestedLength(
+									options.maxOutputSeconds,
+								),
+							}
+						: options,
 					isWebm,
 					jobId,
 					workSignal,
@@ -2191,6 +2209,18 @@ async function processVideoAsync(
 				audioIncomplete
 			)
 				throw new Error(DAMAGED_INPUT_MESSAGE);
+		}
+		// The encode stops just past the requested length, so an output that
+		// runs past it came from a source longer than its probe showed: it is
+		// refused, not published cut short.
+		if (options.maxOutputSeconds && !options.existingOutput) {
+			const output = await withJobHeartbeat(jobId, () =>
+				probeVideoFile(outputPath),
+			);
+			if (runsPastRequestedLength(output.duration, options.maxOutputSeconds))
+				throw new Error(
+					`${LENGTH_LIMIT_ERROR_PREFIX}: the source runs longer than ${options.maxOutputSeconds} seconds`,
+				);
 		}
 		if (
 			options.maxImportBytes &&
