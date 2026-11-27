@@ -5,6 +5,7 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { faBoxArchive } from "@fortawesome/free-solid-svg-icons/faBoxArchive";
+import { faChevronRight } from "@fortawesome/free-solid-svg-icons/faChevronRight";
 import clsx from "clsx";
 import { Effect, Exit } from "effect";
 import { AnimatePresence } from "framer-motion";
@@ -17,6 +18,14 @@ import {
 	type SeededThumbnails,
 	SeededThumbnailsProvider,
 } from "@/components/VideoThumbnail";
+import {
+	CAP_KIND_LABEL,
+	CAP_KINDS,
+	type CapKind,
+	type CapKindCounts,
+	capKindHref,
+	capKindOf,
+} from "@/lib/cap-kind";
 import { DEFAULT_DASHBOARD_PAGE_SIZE } from "@/lib/dashboard-page-size";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { parsePageParam } from "@/lib/page-param";
@@ -43,6 +52,7 @@ import { DragHint } from "./components/DragHint";
 import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import { FoldersSection } from "./components/FoldersSection";
+import { NotesEmptyState } from "./components/NotesEmptyState";
 import { QuickActions } from "./components/QuickActions";
 import { useArchiveCaps, useLeavingCaps } from "./components/useArchiveCaps";
 import { useCapSelection } from "./components/useCapSelection";
@@ -76,6 +86,8 @@ export type VideoData = {
 	metadata?: VideoMetadata;
 	source: typeof videosSchema.$inferSelect.source;
 	isScreenshot: boolean;
+	isNote?: boolean;
+	noteExcerpt?: string | null;
 	hasPassword: boolean;
 	hasInheritedPassword?: boolean;
 	inheritedPasswordSources?: SpaceRuleSource[];
@@ -85,9 +97,35 @@ export type VideoData = {
 	archivedAt?: Date | null;
 }[];
 
+const GRID_CLASS =
+	"grid relative grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5";
+
+const OVERVIEW_ROWS: Record<CapKind, number> = {
+	videos: 2,
+	images: 1,
+	notes: 1,
+};
+
+const GRID_COLUMNS = [
+	{ columns: 2, show: "sm:block" },
+	{ columns: 3, show: "lg:block" },
+	{ columns: 4, show: "xl:block" },
+	{ columns: 5, show: "2xl:block" },
+];
+
+function overviewItemClass(index: number, rows: number) {
+	if (index < Math.max(2, rows + 1)) return undefined;
+	const step = GRID_COLUMNS.find(({ columns }) => index < columns * rows);
+	return step ? `hidden ${step.show}` : "hidden";
+}
+
+const NO_COUNTS: CapKindCounts = { videos: 0, images: 0, notes: 0 };
+
 export const Caps = ({
 	data,
 	count,
+	counts = NO_COUNTS,
+	kind,
 	analyticsEnabled,
 	folders,
 	thumbnails,
@@ -97,6 +135,8 @@ export const Caps = ({
 }: {
 	data: VideoData;
 	count: number;
+	counts?: CapKindCounts;
+	kind?: CapKind;
 	folders: FolderDataType[];
 	analyticsEnabled: boolean;
 	thumbnails?: SeededThumbnails;
@@ -109,6 +149,7 @@ export const Caps = ({
 	const page = parsePageParam(params.get("page"));
 	const { user } = useDashboardContext();
 	const isArchivedView = view === "archived";
+	const isOverview = !isArchivedView && kind === undefined;
 	const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
 	const totalPages = Math.ceil(count / pageSize);
 	const moveLocation = { type: "personal" } as const;
@@ -131,13 +172,13 @@ export const Caps = ({
 		() =>
 			isArchivedView
 				? ({ type: "archived" } as const)
-				: ({ type: "personal" } as const),
-		[isArchivedView],
+				: ({ type: "personal", kind } as const),
+		[isArchivedView, kind],
 	);
 	const selection = useCapSelection({
 		pageIds,
-		totalCount: count,
-		view: selectAllView,
+		totalCount: isOverview ? undefined : count,
+		view: isOverview ? undefined : selectAllView,
 	});
 	const selectedCaps = selection.selected;
 	const setSelectedCaps = selection.setSelected;
@@ -153,6 +194,20 @@ export const Caps = ({
 		onReturn: leavingCaps.restore,
 	});
 	const shownCount = count - leavingCaps.leavingCount;
+	const shownKindCounts = useMemo(() => {
+		const shown = { ...counts };
+		for (const video of listedVideos)
+			if (leavingCaps.leaving.has(video.id)) shown[capKindOf(video)] -= 1;
+		return shown;
+	}, [counts, listedVideos, leavingCaps.leaving]);
+	const sections = useMemo(
+		() =>
+			CAP_KINDS.map((sectionKind) => ({
+				kind: sectionKind,
+				caps: visibleVideos.filter((video) => capKindOf(video) === sectionKind),
+			})),
+		[visibleVideos],
+	);
 	const shownArchivedCount =
 		archivedCount + (isArchivedView ? 0 : leavingCaps.leavingCount);
 
@@ -286,13 +341,11 @@ export const Caps = ({
 		};
 	}, [selectedCaps, deleteCaps, isDeletingCaps, pageIds]);
 
-	if (
+	const libraryIsEmpty =
 		!isArchivedView &&
 		shownCount === 0 &&
 		folders.length === 0 &&
-		shownArchivedCount === 0
-	)
-		return <EmptyCapState />;
+		shownArchivedCount === 0;
 
 	const archivedLink =
 		!isArchivedView && shownArchivedCount > 0 ? (
@@ -307,6 +360,66 @@ export const Caps = ({
 				</span>
 			</Link>
 		) : null;
+
+	const renderCap = (video: VideoData[number], className?: string) => (
+		<CapGridItem
+			key={video.id}
+			id={video.id}
+			layoutDependency={visibleVideos}
+			returning={leavingCaps.returning.has(video.id)}
+			className={className}
+		>
+			<CapCard
+				key={video.id}
+				cap={video}
+				analytics={analytics[video.id] ?? 0}
+				onDelete={() => {
+					if (selectedCaps.length > 0) {
+						deleteCaps(selectedCaps);
+					} else {
+						deleteCap(video.id);
+					}
+				}}
+				userId={user?.id}
+				isLoadingAnalytics={isLoadingAnalytics}
+				isSelected={selectedCaps.includes(video.id)}
+				anyCapSelected={anyCapSelected}
+				onSelectToggle={(options) => selection.toggle(video.id, options)}
+				selectedIds={selectedCaps}
+				canMove={!isArchivedView}
+				moveLocation={moveLocation}
+				moveRootLabel="My Caps"
+				isArchived={isArchivedView}
+				onArchiveToggle={() =>
+					void archiveCaps.mutate({
+						ids: [video.id],
+						archived: !isArchivedView,
+					})
+				}
+			/>
+		</CapGridItem>
+	);
+
+	const showUploadPlaceholder =
+		!isArchivedView && isUploading && (isOverview || kind === "videos");
+
+	const overviewSections = sections.filter(
+		(section) =>
+			section.kind === "notes" ||
+			section.caps.length > 0 ||
+			(section.kind === "videos" && showUploadPlaceholder),
+	);
+
+	if (libraryIsEmpty && isOverview && !showUploadPlaceholder)
+		return (
+			<div className="flex flex-col w-full h-full">
+				<div className="flex flex-1 items-center pt-2 pb-12">
+					<EmptyCapState />
+				</div>
+				<CapListHeader title={CAP_KIND_LABEL.notes} />
+				<NotesEmptyState />
+			</div>
+		);
 
 	return (
 		<div className="flex relative flex-col w-full h-full">
@@ -323,7 +436,9 @@ export const Caps = ({
 						open={openNewFolderDialog}
 						onOpenChange={setOpenNewFolderDialog}
 					/>
-					<QuickActions onNewFolder={() => setOpenNewFolderDialog(true)} />
+					{isOverview && (
+						<QuickActions onNewFolder={() => setOpenNewFolderDialog(true)} />
+					)}
 					<FoldersSection
 						title="Folders"
 						scope="personal"
@@ -358,90 +473,145 @@ export const Caps = ({
 					</Link>
 				</div>
 			)}
-			{visibleVideos.length === 0 && archivedLink && (
-				<div className="flex justify-end mb-5">{archivedLink}</div>
-			)}
-			{visibleVideos.length > 0 && (
-				<>
-					<CapListHeader
-						title={isArchivedView ? "Archived" : "Videos and screenshots"}
-						count={shownCount}
-						selectionState={selection.pageState}
-						onToggleSelectAll={selection.togglePage}
-						actions={
+			<SeededThumbnailsProvider value={thumbnails}>
+				{isOverview ? (
+					<div className="flex flex-col gap-10">
+						{overviewSections.map((section, sectionIndex) => {
+							const sectionCount = shownKindCounts[section.kind];
+							const hasCaps =
+								section.caps.length > 0 ||
+								(section.kind === "videos" && showUploadPlaceholder);
+							return (
+								<section
+									key={section.kind}
+									aria-label={CAP_KIND_LABEL[section.kind]}
+								>
+									<CapListHeader
+										title={CAP_KIND_LABEL[section.kind]}
+										count={sectionCount > 0 ? sectionCount : undefined}
+										actions={
+											(sectionIndex === 0 && archivedLink) || hasCaps ? (
+												<>
+													{sectionIndex === 0 && archivedLink}
+													{hasCaps && (
+														<Link
+															href={capKindHref(section.kind)}
+															className={clsx(listControlClass, "gap-2 px-3")}
+														>
+															<span>See all</span>
+															<FontAwesomeIcon
+																icon={faChevronRight}
+																className="size-2.5 text-gray-9"
+															/>
+														</Link>
+													)}
+												</>
+											) : undefined
+										}
+									/>
+									{hasCaps ? (
+										<div className={GRID_CLASS}>
+											{section.kind === "videos" && showUploadPlaceholder && (
+												<UploadPlaceholderCard key={"upload-placeholder"} />
+											)}
+											<AnimatePresence
+												initial={false}
+												mode="popLayout"
+												custom={leavingCaps.leaving}
+											>
+												{section.caps.map((video, index) =>
+													renderCap(
+														video,
+														overviewItemClass(
+															index,
+															OVERVIEW_ROWS[section.kind],
+														),
+													),
+												)}
+											</AnimatePresence>
+										</div>
+									) : (
+										<NotesEmptyState />
+									)}
+								</section>
+							);
+						})}
+					</div>
+				) : (
+					<>
+						{visibleVideos.length === 0 && archivedLink && (
+							<div className="flex justify-end mb-5">{archivedLink}</div>
+						)}
+						{(visibleVideos.length > 0 || showUploadPlaceholder) && (
 							<>
-								{archivedLink}
-								<PageSizeSelect pageSize={pageSize} />
+								<CapListHeader
+									title={kind ? CAP_KIND_LABEL[kind] : "Archived"}
+									count={shownCount}
+									selectionState={selection.pageState}
+									onToggleSelectAll={selection.togglePage}
+									actions={
+										<>
+											{archivedLink}
+											<PageSizeSelect pageSize={pageSize} />
+										</>
+									}
+								/>
+								<div className={GRID_CLASS}>
+									{showUploadPlaceholder && (
+										<UploadPlaceholderCard key={"upload-placeholder"} />
+									)}
+									<AnimatePresence
+										initial={false}
+										mode="popLayout"
+										custom={leavingCaps.leaving}
+									>
+										{visibleVideos.map((video) => renderCap(video))}
+									</AnimatePresence>
+								</div>
 							</>
-						}
-					/>
-
-					<SeededThumbnailsProvider value={thumbnails}>
-						<div className="grid relative grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-							{!isArchivedView && isUploading && (
-								<UploadPlaceholderCard key={"upload-placeholder"} />
+						)}
+						{kind &&
+							visibleVideos.length === 0 &&
+							!showUploadPlaceholder &&
+							page === 1 && (
+								<>
+									<CapListHeader title={CAP_KIND_LABEL[kind]} />
+									{kind === "notes" ? (
+										<NotesEmptyState />
+									) : (
+										<div className="flex flex-col gap-3 items-center px-6 py-12 text-center rounded-2xl border border-dashed animate-in fade-in border-gray-5 bg-gray-1">
+											<div className="flex flex-col gap-1 items-center">
+												<p className="text-base font-medium text-gray-12">
+													{kind === "videos"
+														? "No videos yet"
+														: "No images yet"}
+												</p>
+												<p className="max-w-sm text-sm text-gray-10 text-pretty">
+													{kind === "videos"
+														? "Record or upload a video and it shows up here."
+														: "Screenshots you take with Cap show up here."}
+												</p>
+											</div>
+											<Link
+												href="/dashboard/caps"
+												className={clsx(listControlClass, "px-3 mt-1")}
+											>
+												Back to My Caps
+											</Link>
+										</div>
+									)}
+								</>
 							)}
-							<AnimatePresence
-								initial={false}
-								mode="popLayout"
-								custom={leavingCaps.leaving}
-							>
-								{visibleVideos.map((video) => {
-									const videoAnalytics = analytics[video.id];
-									return (
-										<CapGridItem
-											key={video.id}
-											id={video.id}
-											layoutDependency={visibleVideos}
-											returning={leavingCaps.returning.has(video.id)}
-										>
-											<CapCard
-												key={video.id}
-												cap={video}
-												analytics={videoAnalytics ?? 0}
-												onDelete={() => {
-													if (selectedCaps.length > 0) {
-														deleteCaps(selectedCaps);
-													} else {
-														deleteCap(video.id);
-													}
-												}}
-												userId={user?.id}
-												isLoadingAnalytics={isLoadingAnalytics}
-												isSelected={selectedCaps.includes(video.id)}
-												anyCapSelected={anyCapSelected}
-												onSelectToggle={(options) =>
-													selection.toggle(video.id, options)
-												}
-												selectedIds={selectedCaps}
-												canMove={!isArchivedView}
-												moveLocation={moveLocation}
-												moveRootLabel="My Caps"
-												isArchived={isArchivedView}
-												onArchiveToggle={() =>
-													void archiveCaps.mutate({
-														ids: [video.id],
-														archived: !isArchivedView,
-													})
-												}
-											/>
-										</CapGridItem>
-									);
-								})}
-							</AnimatePresence>
-						</div>
-					</SeededThumbnailsProvider>
-				</>
-			)}
-			{(data.length >= pageSize || page !== 1) && (
+					</>
+				)}
+			</SeededThumbnailsProvider>
+			{!isOverview && (data.length >= pageSize || page !== 1) && (
 				<div className="mt-7">
 					<CapPagination
 						currentPage={page}
 						totalPages={totalPages}
-						hrefForPage={
-							isArchivedView
-								? (target) => `/dashboard/caps/archived?page=${target}`
-								: undefined
+						hrefForPage={(target) =>
+							`${isArchivedView ? "/dashboard/caps/archived" : kind ? capKindHref(kind) : "/dashboard/caps"}?page=${target}`
 						}
 					/>
 				</div>

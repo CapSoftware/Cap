@@ -27,6 +27,7 @@ export function DashboardContexts({
 	activeOrganization,
 	spacesData,
 	userCapsCount,
+	userCapKindCounts = null,
 	organizationSettings,
 	userPreferences,
 	anyNewNotifications,
@@ -40,6 +41,7 @@ export function DashboardContexts({
 	activeOrganization: SharedContext["activeOrganization"];
 	spacesData: SharedContext["spacesData"];
 	userCapsCount: SharedContext["userCapsCount"];
+	userCapKindCounts?: SharedContext["userCapKindCounts"];
 	organizationSettings: SharedContext["organizationSettings"];
 	userPreferences: SharedContext["userPreferences"];
 	anyNewNotifications: boolean;
@@ -143,6 +145,7 @@ export function DashboardContexts({
 					activeOrganization,
 					spacesData,
 					userCapsCount,
+					userCapKindCounts,
 					anyNewNotifications,
 					userPreferences,
 					organizationSettings,

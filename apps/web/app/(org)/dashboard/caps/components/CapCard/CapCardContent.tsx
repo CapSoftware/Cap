@@ -69,7 +69,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 		try {
 			await editTitle(cap.id, next);
 			setSavedTitle(next);
-			toast.success("Video title updated");
+			toast.success(cap.isNote ? "Title updated" : "Video title updated");
 			if (!editingRef.current || draftRef.current.trim() === next) {
 				setDraft(next);
 				setEditing(false);
@@ -139,7 +139,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 
 		try {
 			await editDate(cap.id, selectedDate.toISOString());
-			toast.success("Video date updated");
+			toast.success(cap.isNote ? "Date updated" : "Video date updated");
 			setIsDateEditing(false);
 			router.refresh();
 		} catch (error) {

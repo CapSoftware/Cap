@@ -72,6 +72,7 @@ import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics, capAnalyticsHref } from "./CapCardAnalytics";
 import { CapCardButton } from "./CapCardButton";
 import { CapCardContent } from "./CapCardContent";
+import { NoteThumbnail } from "./NoteThumbnail";
 
 const CustomThumbnailDialog = dynamic(
 	() => import("@/components/custom-thumbnail/CustomThumbnailDialog"),
@@ -125,6 +126,8 @@ export interface CapCardProps extends PropsWithChildren {
 		metadata?: VideoMetadata;
 		source?: typeof videosSchema.$inferSelect.source;
 		isScreenshot?: boolean;
+		isNote?: boolean;
+		noteExcerpt?: string | null;
 		hasPassword?: boolean;
 		hasInheritedPassword?: boolean;
 		inheritedPasswordSources?: SpaceRuleSource[];
@@ -265,6 +268,7 @@ export const CapCard = ({
 	};
 
 	const isOwner = userId === cap.ownerId;
+	const isNote = cap.isNote === true;
 	const customThumbnail = getCustomThumbnailMetadata(cap.metadata);
 	const moveEnabled = Boolean(canMove && moveLocation && moveRootLabel);
 	// A drag carries at most MAX_MOVE_ITEMS ids; larger selections ("Select
@@ -339,11 +343,13 @@ export const CapCard = ({
 
 	const handleCopy = async (text: string) => {
 		try {
-			await copyRichVideoLink({
-				url: text,
-				title: cap.name || "Cap Recording",
-				previewImageUrl: videoPreviewImageUrl(webUrl, cap.id),
-			});
+			if (isNote) await navigator.clipboard.writeText(text);
+			else
+				await copyRichVideoLink({
+					url: text,
+					title: cap.name || "Cap Recording",
+					previewImageUrl: videoPreviewImageUrl(webUrl, cap.id),
+				});
 		} catch (error) {
 			console.error("Failed to copy link:", error);
 			toast.error("Couldn't copy the link. Please try again.");
@@ -388,6 +394,7 @@ export const CapCard = ({
 		isOwner &&
 		!sharedCapCard &&
 		cap.isScreenshot !== true &&
+		!isNote &&
 		!cap.hasActiveUpload &&
 		(cap.source?.type === "desktopMP4" || cap.source?.type === "webMP4") &&
 		Boolean(cap.duration && cap.duration > 0);
@@ -418,6 +425,7 @@ export const CapCard = ({
 				hasPassword={passwordProtected}
 				inheritedPasswordSources={cap.inheritedPasswordSources}
 				onPasswordUpdated={handlePasswordUpdated}
+				isNote={isNote}
 			/>
 			<SettingsDialog
 				isOpen={isSettingsDialogOpen}
@@ -426,6 +434,7 @@ export const CapCard = ({
 				capId={cap.id}
 				onClose={() => setIsSettingsDialogOpen(false)}
 				onSaved={() => router.refresh()}
+				isNote={isNote}
 			/>
 			<PasswordDialog
 				isOpen={isPasswordDialogOpen}
@@ -567,16 +576,18 @@ export const CapCard = ({
 									</DropdownMenuItem>
 								</>
 							)}
-							<DropdownMenuItem
-								onClick={(e) => {
-									e.stopPropagation();
-									handleDownload();
-								}}
-								className="flex gap-2 items-center rounded-lg"
-							>
-								<FontAwesomeIcon icon={faDownload} />
-								<p className="text-sm text-gray-12">Download</p>
-							</DropdownMenuItem>
+							{!isNote && (
+								<DropdownMenuItem
+									onClick={(e) => {
+										e.stopPropagation();
+										handleDownload();
+									}}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FontAwesomeIcon icon={faDownload} />
+									<p className="text-sm text-gray-12">Download</p>
+								</DropdownMenuItem>
+							)}
 							<DropdownMenuItem
 								onClick={(e) => {
 									e.stopPropagation();
@@ -643,25 +654,27 @@ export const CapCard = ({
 							)}
 							{isOwner && (
 								<>
-									<DropdownMenuItem
-										onClick={() => {
-											toast.promise(
-												duplicateMutation.mutateAsync().then(rejectOnFailure),
-												{
-													loading: "Duplicating cap...",
-													success: "Cap duplicated successfully",
-													error: "Failed to duplicate cap",
-												},
-											);
-										}}
-										disabled={
-											duplicateMutation.isPending || cap.hasActiveUpload
-										}
-										className="flex gap-2 items-center rounded-lg"
-									>
-										<FontAwesomeIcon className="size-3" icon={faCopy} />
-										<p className="text-sm text-gray-12">Duplicate</p>
-									</DropdownMenuItem>
+									{!isNote && (
+										<DropdownMenuItem
+											onClick={() => {
+												toast.promise(
+													duplicateMutation.mutateAsync().then(rejectOnFailure),
+													{
+														loading: "Duplicating cap...",
+														success: "Cap duplicated successfully",
+														error: "Failed to duplicate cap",
+													},
+												);
+											}}
+											disabled={
+												duplicateMutation.isPending || cap.hasActiveUpload
+											}
+											className="flex gap-2 items-center rounded-lg"
+										>
+											<FontAwesomeIcon className="size-3" icon={faCopy} />
+											<p className="text-sm text-gray-12">Duplicate</p>
+										</DropdownMenuItem>
+									)}
 									{canEditVideo && (
 										<DropdownMenuItem
 											onClick={(e) => {
@@ -674,7 +687,7 @@ export const CapCard = ({
 											<p className="text-sm text-gray-12">Edit video</p>
 										</DropdownMenuItem>
 									)}
-									{cap.isScreenshot !== true && (
+									{cap.isScreenshot !== true && !isNote && (
 										<DropdownMenuItem
 											onClick={(e) => {
 												e.stopPropagation();
@@ -905,37 +918,50 @@ export const CapCard = ({
 							</>
 						)}
 
-						<VideoThumbnail
-							videoDuration={
-								hasVisibleUploadProgress || cap.isScreenshot
-									? undefined
-									: cap.duration
-							}
-							imageClass={clsx(
-								anyCapSelected && !isSelected && "opacity-60",
-								"transition-[opacity,transform] duration-300 ease-out group-hover:scale-[1.015]",
-							)}
-							containerClass="absolute inset-0"
-							videoId={cap.id}
-							alt={`${cap.name} Thumbnail`}
-							imageStatus={imageStatus}
-							setImageStatus={setImageStatus}
-							showPreview={cap.isScreenshot !== true}
-							hasActiveUpload={
-								uploadProgress !== null &&
-								uploadProgress.status !== "fetching" &&
-								uploadProgress.status !== "failed" &&
-								uploadProgress.status !== "error"
-							}
-						/>
-						<div
-							aria-hidden
-							className={clsx(
-								"absolute inset-x-0 top-0 z-[11] h-16 bg-gradient-to-b to-transparent transition-opacity duration-200 pointer-events-none from-black/30",
-								isDropdownOpen && !anyCapSelected ? "opacity-100" : "opacity-0",
-								!anyCapSelected && "group-hover:opacity-100",
-							)}
-						/>
+						{isNote ? (
+							<NoteThumbnail
+								excerpt={cap.noteExcerpt}
+								duration={cap.duration}
+								dimmed={anyCapSelected && !isSelected}
+								controlsShown={isDropdownOpen || anyCapSelected}
+							/>
+						) : (
+							<>
+								<VideoThumbnail
+									videoDuration={
+										hasVisibleUploadProgress || cap.isScreenshot
+											? undefined
+											: cap.duration
+									}
+									imageClass={clsx(
+										anyCapSelected && !isSelected && "opacity-60",
+										"transition-[opacity,transform] duration-300 ease-out group-hover:scale-[1.015]",
+									)}
+									containerClass="absolute inset-0"
+									videoId={cap.id}
+									alt={`${cap.name} Thumbnail`}
+									imageStatus={imageStatus}
+									setImageStatus={setImageStatus}
+									showPreview={cap.isScreenshot !== true}
+									hasActiveUpload={
+										uploadProgress !== null &&
+										uploadProgress.status !== "fetching" &&
+										uploadProgress.status !== "failed" &&
+										uploadProgress.status !== "error"
+									}
+								/>
+								<div
+									aria-hidden
+									className={clsx(
+										"absolute inset-x-0 top-0 z-[11] h-16 bg-gradient-to-b to-transparent transition-opacity duration-200 pointer-events-none from-black/30",
+										isDropdownOpen && !anyCapSelected
+											? "opacity-100"
+											: "opacity-0",
+										!anyCapSelected && "group-hover:opacity-100",
+									)}
+								/>
+							</>
+						)}
 						{cap.isScreenshot === true && !hasVisibleUploadProgress && (
 							<span
 								title="Screenshot"

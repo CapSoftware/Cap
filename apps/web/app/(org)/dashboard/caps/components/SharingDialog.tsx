@@ -72,6 +72,7 @@ interface SharingDialogProps {
 	user?: CurrentUser | null;
 	onUpgradeRequest?: (open: boolean) => void;
 	shareUrl?: string;
+	isNote?: boolean;
 }
 
 export const SharingDialog: React.FC<SharingDialogProps> = ({
@@ -92,6 +93,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	user: propUser,
 	onUpgradeRequest: propOnUpgradeRequest,
 	shareUrl: propShareUrl,
+	isNote = false,
 }) => {
 	const {
 		spacesData: contextSpacesData,
@@ -441,7 +443,12 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 					</DialogTitle>
 				</DialogHeader>
 
-				<div className="flex w-full h-12 border-b bg-gray-1 border-gray-4">
+				<div
+					className={clsx(
+						"flex w-full h-12 border-b bg-gray-1 border-gray-4",
+						isNote && "hidden",
+					)}
+				>
 					{tabs.map((tab) => (
 						<button
 							type="button"
@@ -688,8 +695,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 									<div className="min-w-0">
 										<p className="text-sm font-medium text-gray-12">Spaces</p>
 										<p className="text-xs text-gray-10 text-pretty">
-											Members of a space can watch it there. It also stays in My
-											Caps. To file it in a folder, use Move.
+											Members of a space can {isNote ? "read" : "watch"} it
+											there. It also stays in My Caps. To file it in a folder,
+											use Move.
 										</p>
 									</div>
 								</div>

@@ -29,11 +29,12 @@ interface SettingsDialogProps {
 	user?: CurrentUser | null;
 	organizationSettings?: OrganizationSettings | null;
 	onSaved?: () => void;
+	isNote?: boolean;
 }
 
 type SettingKey = ViewerSettingKey | "disableDownloads";
 
-const options: {
+const allOptions: {
 	label: string;
 	value: SettingKey;
 	description: string;
@@ -79,6 +80,23 @@ const options: {
 	},
 ];
 
+const NOTE_SETTINGS: SettingKey[] = [
+	"disableComments",
+	"disableReactions",
+	"disableTranscript",
+];
+
+const noteOptions = allOptions
+	.filter((option) => NOTE_SETTINGS.includes(option.value))
+	.map((option) =>
+		option.value === "disableTranscript"
+			? {
+					...option,
+					description: "Show the meeting transcript beside this note",
+				}
+			: option,
+	);
+
 export const SettingsDialog = ({
 	isOpen,
 	onClose,
@@ -88,7 +106,9 @@ export const SettingsDialog = ({
 	user: propUser,
 	organizationSettings: propOrganizationSettings,
 	onSaved,
+	isNote = false,
 }: SettingsDialogProps) => {
+	const options = isNote ? noteOptions : allOptions;
 	const contextData = useDashboardContext();
 	const user = propUser ?? contextData.user;
 	const organizationSettings =
@@ -260,7 +280,7 @@ export const SettingsDialog = ({
 						);
 					})}
 				</div>
-				<div className="px-5 pb-5">
+				<div className={clsx("px-5 pb-5", isNote && "hidden")}>
 					<div className="flex flex-col gap-3 p-4 rounded-xl border border-gray-3 bg-gray-1">
 						<div className="flex flex-col gap-1">
 							<div className="flex gap-1.5 items-center flex-wrap">

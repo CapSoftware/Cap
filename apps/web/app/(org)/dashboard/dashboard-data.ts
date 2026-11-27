@@ -372,6 +372,14 @@ async function loadActiveOrganizationData(
 				? db()
 						.select({
 							value: sql<number>`COUNT(DISTINCT ${videos.id})`,
+							images:
+								sql<number>`COUNT(CASE WHEN ${videos.isNote} = false AND ${videos.isScreenshot} = true THEN 1 END)`.mapWith(
+									Number,
+								),
+							notes:
+								sql<number>`COUNT(CASE WHEN ${videos.isNote} = true THEN 1 END)`.mapWith(
+									Number,
+								),
 						})
 						.from(videos)
 						.where(
@@ -380,7 +388,9 @@ async function loadActiveOrganizationData(
 								eq(videos.ownerId, user.id),
 							),
 						)
-				: Promise.resolve<{ value: number }[]>([]),
+				: Promise.resolve<{ value: number; images: number; notes: number }[]>(
+						[],
+					),
 			currentOrganizationRole,
 		]);
 
@@ -389,6 +399,14 @@ async function loadActiveOrganizationData(
 		organizationSettings: activeOrgInfo?.settings || null,
 		spacesData: allSpacesEntry ? [allSpacesEntry, ...spacesRows] : spacesRows,
 		userCapsCount: userCapsCountResult[0]?.value || 0,
+		userCapKindCounts: {
+			videos:
+				(userCapsCountResult[0]?.value || 0) -
+				(userCapsCountResult[0]?.images || 0) -
+				(userCapsCountResult[0]?.notes || 0),
+			images: userCapsCountResult[0]?.images || 0,
+			notes: userCapsCountResult[0]?.notes || 0,
+		},
 	};
 }
 
@@ -627,6 +645,7 @@ export async function getDashboardData(
 			activeData?.organizationSettings ?? null;
 		const anyNewNotifications = activeData?.anyNewNotifications ?? false;
 		const userCapsCount = activeData?.userCapsCount ?? 0;
+		const userCapKindCounts = activeData?.userCapKindCounts ?? null;
 		const userPreferences = { preferences: user.preferences };
 
 		return {
@@ -637,6 +656,7 @@ export async function getDashboardData(
 			anyNewNotifications,
 			userPreferences,
 			userCapsCount,
+			userCapKindCounts,
 		};
 	} catch (error) {
 		console.error("Failed to fetch dashboard data", error);
@@ -645,6 +665,7 @@ export async function getDashboardData(
 			organizationSelect: [],
 			spacesData: [],
 			userCapsCount: null,
+			userCapKindCounts: null,
 			anyNewNotifications: false,
 			userPreferences: null,
 			organizationSettings: null,

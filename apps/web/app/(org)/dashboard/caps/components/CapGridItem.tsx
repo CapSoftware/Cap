@@ -23,11 +23,13 @@ export function CapGridItem({
 	children,
 	layoutDependency,
 	returning,
+	className,
 }: {
 	id: string;
 	children: ReactNode;
 	layoutDependency: unknown;
 	returning: boolean;
+	className?: string;
 }) {
 	const reduceMotion = useReducedMotion();
 	return (
@@ -50,7 +52,7 @@ export function CapGridItem({
 				opacity: { duration: 0.2, ease: "easeOut" },
 				scale: { duration: 0.2, ease: "easeOut" },
 			}}
-			className="min-w-0"
+			className={className ? `min-w-0 ${className}` : "min-w-0"}
 		>
 			{children}
 		</motion.div>
