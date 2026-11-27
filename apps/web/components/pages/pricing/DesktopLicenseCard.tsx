@@ -44,11 +44,6 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 	const offer = codeApplied && !offerEnded;
 
 	useEffect(() => {
-		const promo = new URLSearchParams(window.location.search).get("promo");
-		if (parsePromotionCode(promo) === CODE) setCodeApplied(true);
-	}, []);
-
-	useEffect(() => {
 		if (enteringCode) {
 			codeInput.current?.focus();
 		} else if (refocusCodeToggle.current) {
