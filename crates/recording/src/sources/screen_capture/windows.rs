@@ -421,6 +421,7 @@ struct PacingFacts {
 }
 
 const NVIDIA_VENDOR_ID: u32 = 0x10DE;
+const MICROSOFT_VENDOR_ID: u32 = 0x1414;
 
 fn refresh_pacing(facts: &PacingFacts) -> Result<(), KeptPacing> {
     match facts.min_update_interval {
@@ -449,6 +450,7 @@ fn refresh_pacing(facts: &PacingFacts) -> Result<(), KeptPacing> {
         facts.adapter.drives_monitor,
     ) {
         (Some(true), _, _) => Ok(()),
+        (Some(false), Some(MICROSOFT_VENDOR_ID), _) => Ok(()),
         (Some(false), Some(NVIDIA_VENDOR_ID), Some(true)) => Ok(()),
         (Some(false), Some(NVIDIA_VENDOR_ID), Some(false)) => {
             Err(KeptPacing::DisplayOnOtherAdapter)
@@ -1892,6 +1894,8 @@ mod update_interval_tests {
                                         && uniform_dpi == Some(true)
                                         && (software == Some(true)
                                             || (software == Some(false)
+                                                && vendor_id == Some(0x1414))
+                                            || (software == Some(false)
                                                 && vendor_id == Some(0x10DE)
                                                 && drives_monitor == Some(true)));
                                     assert_eq!(
@@ -1907,7 +1911,7 @@ mod update_interval_tests {
                 }
             }
         }
-        assert_eq!(enabled, 3 * 5 + 1);
+        assert_eq!(enabled, 3 * 5 + 3 + 1);
     }
 
     #[test]
