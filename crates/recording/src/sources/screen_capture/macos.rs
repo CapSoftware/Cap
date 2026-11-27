@@ -935,7 +935,13 @@ impl output_pipeline::VideoSource for VideoSource {
                             .ok()
                             .and_then(|guard| guard.clone())
                             .unwrap_or_else(|| original_capturer.clone());
+                        let previous = exclusion.windows.clone();
                         match refresh_hidden_sink_filter(&rebuild_params, &capturer, writers).await {
+                            Ok(exclusion) if exclusion.windows == previous => {
+                                // Nothing else to move to; stop rather than re-apply the same filter.
+                                warn!("Hidden audio sink exclusion could not move; no longer watching it");
+                                hidden_sink_watch = None;
+                            }
                             Ok(exclusion) => {
                                 info!(
                                     excluded = exclusion.windows.len(),
@@ -1321,8 +1327,11 @@ impl HiddenSinkExclusion {
     /// Watched while a window is excluded, so the exclusion can move off it
     /// once it is shown.
     fn watch(self) -> Option<(Self, tokio::time::Interval)> {
-        (!self.windows.is_empty())
-            .then(|| (self, tokio::time::interval(HIDDEN_SINK_WATCH_INTERVAL)))
+        (!self.windows.is_empty()).then(|| {
+            let mut interval = tokio::time::interval(HIDDEN_SINK_WATCH_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            (self, interval)
+        })
     }
 }
 
