@@ -112,6 +112,14 @@ export const Caps = ({
 	const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
 	const totalPages = Math.ceil(count / pageSize);
 	const moveLocation = { type: "personal" } as const;
+	const selectionPageRef = useRef(page);
+
+	useEffect(() => {
+		if (selectionPageRef.current !== page) {
+			selectionPageRef.current = page;
+			setSelectedCaps([]);
+		}
+	}, [page]);
 
 	const [isUploading, uploadingCapId] = useUploadingStatus();
 	const listedVideos = useMemo(
