@@ -517,14 +517,53 @@ fn the_links_own_app_takes_the_call_over_from_a_browser() {
     s.at(10_000)
         .call_started("chrome")
         .expect(&[(10_000, "joined chrome")]);
-    s.at(30_000)
-        .call_started("zoom")
-        .expect(&[(30_000, "joined zoom")]);
-    s.at(35_000).call_ended("chrome").quiet();
+    s.at(30_000).call_started("zoom").quiet();
+    // the browser lets go while Zoom is on the call: the meeting is Zoom's
+    s.at(35_000)
+        .call_ended("chrome")
+        .expect(&[(35_000, "joined zoom")]);
     assert_eq!(s.session.attached_app(), Some("zoom"));
     s.at(90_000)
         .call_ended("zoom")
         .expect(&[(90_000, "ending 110000")]);
+}
+
+#[test]
+fn the_links_own_app_takes_the_call_over_from_a_browser_however_late() {
+    let mut s = Sim::with(SessionConfig {
+        inactivity_warn_ms: None,
+        ..SessionConfig::default()
+    });
+    s.recording(None);
+    own(&mut s, joining(Some("zoom")));
+    s.at(10_000).call_started("chrome").take();
+    s.at(6 * MIN).call_started("zoom").quiet();
+    s.at(7 * MIN)
+        .call_ended("chrome")
+        .expect(&[(420_000, "joined zoom")]);
+    assert_eq!(s.session.state(), SessionState::Recording);
+    s.at(8 * MIN)
+        .call_ended("zoom")
+        .expect(&[(480_000, "ending 500000")]);
+}
+
+#[test]
+fn another_call_in_the_links_app_leaves_a_browsers_meeting_alone() {
+    let mut s = Sim::with(SessionConfig {
+        inactivity_warn_ms: None,
+        ..SessionConfig::default()
+    });
+    s.recording(None);
+    own(&mut s, joining(Some("zoom")));
+    s.at(10_000).call_started("chrome").take();
+    s.at(20 * MIN).call_started("zoom").quiet();
+    s.at(22 * MIN).call_ended("zoom").quiet();
+    assert_eq!(s.session.attached_app(), Some("chrome"));
+    assert_eq!(s.session.state(), SessionState::Recording);
+    // the browser's own meeting ending is the meeting's end
+    s.at(30 * MIN)
+        .call_ended("chrome")
+        .expect(&[(1_800_000, "ending 1820000")]);
 }
 
 #[test]
@@ -558,9 +597,6 @@ fn only_the_links_own_app_takes_the_call_over_from_a_browser() {
     s.at(10_000).call_started("chrome").take();
     s.at(30_000).call_started("slack").quiet();
     assert_eq!(s.session.attached_app(), Some("chrome"));
-    // past the join window the link's app starting is another call
-    s.at(6 * MIN).call_started("zoom").quiet();
-    assert_eq!(s.session.attached_app(), Some("chrome"));
 
     // a native call app holds the call: a browser never takes it over
     let mut s = Sim::with(SessionConfig {
@@ -585,9 +621,10 @@ fn a_linked_meeting_moves_from_a_browser_to_its_own_app() {
     s.at(10_000)
         .call_started("chrome")
         .expect(&[(10_000, "joined chrome")]);
-    s.at(20_000)
-        .call_started("zoom")
-        .expect(&[(20_000, "joined zoom")]);
+    s.at(20_000).call_started("zoom").quiet();
+    s.at(25_000)
+        .call_ended("chrome")
+        .expect(&[(25_000, "joined zoom")]);
     s.at(80_000)
         .call_ended("zoom")
         .expect(&[(80_000, "ending 100000")]);

@@ -158,6 +158,9 @@ pub struct Session {
     /// The call was joined after the meeting started without one.
     joined_late: bool,
     own_call: OwnCall,
+    /// The linked event's own app is on a call while a browser holds the
+    /// meeting's.
+    link_call_live: bool,
     resume_offer_until: Option<Millis>,
     resume_queued: bool,
     has_meeting: bool,
@@ -189,6 +192,7 @@ impl Session {
             call_end_suppressed: false,
             joined_late: false,
             own_call: OwnCall::default(),
+            link_call_live: false,
             resume_offer_until: None,
             resume_queued: false,
             has_meeting: false,
@@ -278,6 +282,7 @@ impl Session {
         self.app_id = app_id;
         self.joined_late = false;
         self.own_call = OwnCall::default();
+        self.link_call_live = false;
         self.event_end = None;
         self.recorded_before_ms = 0;
         self.mic_speech_ms = 0;
@@ -439,21 +444,14 @@ impl Session {
                 out.push(SessionAction::JoinedCall {
                     app_id: app_id.to_string(),
                 });
-            } else if self.hands_over_to(app_id) {
-                // A browser held the meeting's call (a pre-join page, the web
-                // client) and the linked event's own app now takes it: the
-                // meeting is that app's call, and the browser letting go
-                // does not end it.
-                self.app_id = Some(app_id.to_string());
-                self.joined_late = false;
-                self.call_end_suppressed = false;
-                if let Some(Warning::Ending { .. }) = self.warning {
-                    self.warning = None;
-                    out.push(SessionAction::ClearWarning);
+            } else if self.is_link_app_beside_browser(app_id) {
+                // The linked event's own app is on a call while a browser holds
+                // the meeting's: it takes the meeting over when the browser's
+                // call ends, or now if that end is already counting down.
+                self.link_call_live = true;
+                if matches!(self.warning, Some(Warning::Ending { .. })) {
+                    self.take_over_from_browser(app_id, &mut out);
                 }
-                out.push(SessionAction::JoinedCall {
-                    app_id: app_id.to_string(),
-                });
             }
             return out;
         }
@@ -465,11 +463,10 @@ impl Session {
         out
     }
 
-    /// The linked event's own call app takes over a meeting whose call a
-    /// browser holds, inside the join window like any first call.
-    fn hands_over_to(&self, app_id: &str) -> bool {
+    /// The linked event's own call app, while a browser holds the meeting's
+    /// call (a pre-join page, the web client).
+    fn is_link_app_beside_browser(&self, app_id: &str) -> bool {
         matches!(self.state, SessionState::Starting | SessionState::Recording)
-            && self.recorded_ms() < self.config.join_window_ms
             && self.own_call.link_app.as_deref() == Some(app_id)
             && self
                 .app_id
@@ -478,11 +475,42 @@ impl Session {
                 .is_some_and(|app| app.kind == crate::apps::AppKind::Browser)
     }
 
+    /// The meeting becomes the call in the linked event's own app: the
+    /// browser letting go of it does not end the meeting.
+    fn take_over_from_browser(&mut self, app_id: &str, out: &mut Vec<SessionAction>) {
+        self.app_id = Some(app_id.to_string());
+        self.joined_late = false;
+        self.call_end_suppressed = false;
+        self.link_call_live = false;
+        if let Some(Warning::Ending { .. }) = self.warning {
+            self.warning = None;
+            out.push(SessionAction::ClearWarning);
+        }
+        out.push(SessionAction::JoinedCall {
+            app_id: app_id.to_string(),
+        });
+    }
+
     pub fn on_call_ended(&mut self, now: Millis, app_id: &str) -> Vec<SessionAction> {
         let now = self.clamp(now);
         let mut out = self.advance(now);
+        if self.app_id.as_deref() != Some(app_id) {
+            if self.own_call.link_app.as_deref() == Some(app_id) {
+                self.link_call_live = false;
+            }
+            return out;
+        }
+        if self.state == SessionState::Recording && self.link_call_live {
+            // the browser let go while the linked event's own app is still
+            // on the call: the meeting goes on as that app's call
+            if let Some(link_app) = self.own_call.link_app.clone()
+                && self.is_link_app_beside_browser(&link_app)
+            {
+                self.take_over_from_browser(&link_app, &mut out);
+                return out;
+            }
+        }
         if self.state != SessionState::Recording
-            || self.app_id.as_deref() != Some(app_id)
             || !self.config.stop_when_call_ends
             || self.call_end_suppressed
             || matches!(self.warning, Some(Warning::Ending { .. }))
