@@ -169,7 +169,7 @@ fn build() -> Guide {
             CommandDoc {
                 requires_duration: false,
                 notes: Some(
-                    "The `started` then `stopped` sequence applies to the foreground run. With `--detach` the stream emits only `started` (or `error`) and returns immediately with recordingId+pid; the `stopped` event is delivered by `cap record stop`.",
+                    "--window <id> captures a screen region by default. Add --window-only for Focus (window content only) on macOS/Windows; requires --window, and rejects --mode instant with --camera. Studio can record a separate camera track. Focus does not guarantee background rendering or input/privacy isolation. The `started` then `stopped` sequence applies to the foreground run. With `--detach` the stream emits only `started` (or `error`) and returns immediately with recordingId+pid; the `stopped` event is delivered by `cap record stop`.",
                 ),
                 ..cmd(
                     "record start",
