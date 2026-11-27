@@ -85,8 +85,6 @@ export function encodeCapForRequestedLength(maxSeconds: number): number {
 	return maxSeconds + LENGTH_LIMIT_ENCODE_MARGIN_SECONDS;
 }
 
-// Whether an output encoded with encodeCapForRequestedLength runs past the
-// requested length.
 export function runsPastRequestedLength(
 	outputSeconds: number,
 	maxSeconds: number,
