@@ -321,6 +321,19 @@ def deep_link(action, app_pid, action_sender):
 	)
 
 
+def start_recording(targets, args, app_pid, action_sender):
+	deep_link(start_action(targets, args), app_pid, action_sender)
+	result = run(
+		[
+			"osascript",
+			str(REPO_ROOT / "scripts" / "confirm-desktop-link-start.applescript"),
+			f"pid:{app_pid}",
+			"15",
+		]
+	)
+	print(f"start confirmation: {result.stdout.strip()}", flush=True)
+
+
 def app_windows(app_pid, action_sender):
 	result = run([action_sender, app_pid, "--windows"])
 	return json.loads(result.stdout)
@@ -1367,8 +1380,9 @@ def main():
 				sampler_binary,
 					app_pid,
 					args.interval_ms,
-					trigger=lambda: deep_link(
-						start_action(targets, args),
+					trigger=lambda: start_recording(
+						targets,
+						args,
 						app_pid,
 						action_sender,
 					),

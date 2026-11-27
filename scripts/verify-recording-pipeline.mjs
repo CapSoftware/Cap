@@ -586,6 +586,7 @@ async function verifyDesktop(selected, desktopLogSnapshot) {
 		},
 	};
 	await openDeepLink("desktop-start-recording", startAction);
+	await confirmDesktopLinkStart();
 	await sleep(desktopRecordingSeconds * 1000);
 	await openDeepLink("desktop-stop-recording", "stop_recording");
 
@@ -667,6 +668,18 @@ async function openDeepLink(name, action) {
 		? ["-a", desktopAppPath, url]
 		: ["-b", desktopBundleId, url];
 	await runCommand(name, "open", args);
+}
+
+async function confirmDesktopLinkStart() {
+	const target = summary.desktop.execPid
+		? `pid:${summary.desktop.execPid}`
+		: desktopBundleId;
+	const result = await runCommand("desktop-confirm-start", "osascript", [
+		path.join(root, "scripts", "confirm-desktop-link-start.applescript"),
+		target,
+		process.env.CAP_VERIFY_CONFIRM_WAIT_SECONDS || "15",
+	]);
+	summary.desktop.startConfirmation = result.stdout.trim();
 }
 
 async function launchDesktopApp() {
