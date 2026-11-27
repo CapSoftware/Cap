@@ -26,6 +26,8 @@ use tokio_util::{
 };
 use tracing::{debug, error, info, warn};
 
+mod hidden_sink;
+
 const MAX_CAPTURE_RESTARTS: u32 = 3;
 const RESTART_DELAY: Duration = Duration::from_secs(2);
 // Each check is a WindowServer round trip that measured several percent of an
@@ -36,6 +38,9 @@ const WINDOW_FOLLOW_IDLE_INTERVAL: Duration = Duration::from_millis(500);
 const WINDOW_FOLLOW_ACTIVE_FOR: Duration = Duration::from_secs(2);
 const WINDOW_WATCH_INTERVAL: Duration = Duration::from_secs(1);
 const WINDOW_GONE_CHECKS: u32 = 2;
+// How often a window excluded to leave out a hidden audio sink's app is
+// checked; once it is shown, the exclusion moves so the video stays complete.
+const HIDDEN_SINK_WATCH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The window server still lists a minimized, hidden or off-Space window; only
 /// a closed window (or one whose app quit) disappears.
@@ -466,14 +471,31 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             .transpose()?;
         let captures_window = window_filter.is_some();
 
+        let mut hidden_sink = HiddenSinkExclusion::default();
         let content_filter = match window_filter {
             Some(filter) => filter,
             None => {
-                let excluded_sc_windows = excluded_shareable_windows(
+                let mut excluded_sc_windows = excluded_shareable_windows(
                     &self.excluded_windows,
                     &self.shareable_content,
                     "initial",
                 );
+                if self.system_audio && self.leave_out_hidden_sinks {
+                    let writers = hidden_sink::writers();
+                    let windows =
+                        hidden_sink::off_screen_windows(&self.shareable_content, &writers, true);
+                    hidden_sink = HiddenSinkExclusion::new(writers, &windows);
+                    if !windows.is_empty() {
+                        hidden_sink.fallback = display
+                            .raw_handle()
+                            .as_content_filter_excluding_windows(
+                                self.shareable_content.clone(),
+                                excluded_sc_windows.clone(),
+                            )
+                            .map(FallbackFilter);
+                    }
+                    excluded_sc_windows.extend(windows);
+                }
 
                 display
                     .raw_handle()
@@ -515,6 +537,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             display_id: self.config.display.clone(),
             config: self.config.clone(),
             system_audio: self.system_audio,
+            leave_out_hidden_sinks: self.leave_out_hidden_sinks,
             excluded_windows: self.excluded_windows.clone(),
             video_info: self.video_info,
             video_tx: video_tx.clone(),
@@ -747,6 +770,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 rebuild_params: rebuild_params.clone(),
                 stall_health_rx: Some(stall_health_rx),
                 frame_accounting,
+                hidden_sink,
             },
             audio_rx.map(|rx| {
                 SystemAudioSourceConfig(
@@ -864,6 +888,7 @@ pub struct VideoSourceConfig {
     rebuild_params: Arc<CapturerRebuildParams>,
     stall_health_rx: Option<tokio::sync::mpsc::Receiver<output_pipeline::PipelineHealthEvent>>,
     frame_accounting: Arc<ScreenFrameAccounting>,
+    hidden_sink: HiddenSinkExclusion,
 }
 
 impl VideoSourceConfig {
@@ -906,6 +931,7 @@ impl output_pipeline::VideoSource for VideoSource {
             rebuild_params,
             stall_health_rx,
             frame_accounting: _,
+            hidden_sink,
         } = config;
 
         let monitor_cancel = cancel_token.clone();
@@ -1009,10 +1035,62 @@ impl output_pipeline::VideoSource for VideoSource {
             let mut window_watch =
                 window_to_watch(&rebuild_params.config, &rebuild_params.excluded_windows)
                     .map(|window| (window, tokio::time::interval(WINDOW_WATCH_INTERVAL), 0u32));
+            let mut hidden_sink_watch = hidden_sink.watch();
 
             loop {
                 select! {
                     _ = monitor_cancel.cancelled() => break Ok(()),
+                    _ = async {
+                        match hidden_sink_watch.as_mut() {
+                            Some(watch) => watch.interval.tick().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        let Some(watch) = hidden_sink_watch.as_mut() else {
+                            continue;
+                        };
+                        if !hidden_sink::any_shown_or_closed(&watch.exclusion.windows) {
+                            watch.retry.reset();
+                            continue;
+                        }
+                        let capturer = active_capturer
+                            .lock()
+                            .ok()
+                            .and_then(|guard| guard.clone())
+                            .unwrap_or_else(|| original_capturer.clone());
+                        let released = match move_hidden_sink_exclusion(
+                            &rebuild_params,
+                            &capturer,
+                            watch,
+                        )
+                        .await
+                        {
+                            HiddenSinkMove::Moved => {
+                                info!(
+                                    excluded = watch.exclusion.windows.len(),
+                                    "Moved the hidden audio sink exclusion off a window that is now shown"
+                                );
+                                watch.retry.reset();
+                                false
+                            }
+                            HiddenSinkMove::Released => {
+                                info!(
+                                    "Hidden audio sink exclusion released; no window is left out of the video"
+                                );
+                                true
+                            }
+                            HiddenSinkMove::Waiting | HiddenSinkMove::NeedsFallback => false,
+                            HiddenSinkMove::Failed(error) => {
+                                if watch.retry.failed() {
+                                    warn!(%error, "Could not move the hidden audio sink exclusion; retrying");
+                                }
+                                false
+                            }
+                        };
+                        if released {
+                            hidden_sink_watch = None;
+                        }
+                    }
                     _ = async {
                         match window_watch.as_mut() {
                             Some((_, interval, _)) => interval.tick().await,
@@ -1154,11 +1232,16 @@ impl output_pipeline::VideoSource for VideoSource {
                                 ));
                             }
 
-                            match rebuild_capturer(&rebuild_params).await {
-                                Ok(new_capturer) => {
+                            let writers = hidden_sink_watch
+                                .take()
+                                .map(|watch| watch.exclusion.writers)
+                                .unwrap_or_default();
+                            match rebuild_capturer(&rebuild_params, writers).await {
+                                Ok((new_capturer, exclusion)) => {
                                     if let Ok(mut guard) = active_capturer.lock() {
                                         *guard = Some(new_capturer);
                                     }
+                                    hidden_sink_watch = exclusion.watch();
                                     info!(
                                         restart_count,
                                         "macOS screen capture restarted successfully"
@@ -1344,6 +1427,7 @@ struct CapturerRebuildParams {
     display_id: DisplayId,
     config: Config,
     system_audio: bool,
+    leave_out_hidden_sinks: bool,
     excluded_windows: Vec<WindowId>,
     video_info: VideoInfo,
     video_tx: flume::Sender<VideoFrame>,
@@ -1363,7 +1447,137 @@ struct CapturerRebuildParams {
 unsafe impl Send for CapturerRebuildParams {}
 unsafe impl Sync for CapturerRebuildParams {}
 
-async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capturer> {
+/// The display filter without hidden-sink exclusions, as `main` builds it.
+/// Applying it needs no fresh shareable content, so it still works when a
+/// refresh cannot get one.
+struct FallbackFilter(arc::R<sc::ContentFilter>);
+
+// Only handed to ScreenCaptureKit from the monitor task, never mutated.
+unsafe impl Send for FallbackFilter {}
+unsafe impl Sync for FallbackFilter {}
+
+#[derive(Default)]
+struct HiddenSinkExclusion {
+    writers: Vec<sys::Pid>,
+    windows: Vec<u32>,
+    fallback: Option<FallbackFilter>,
+}
+
+impl HiddenSinkExclusion {
+    fn new(writers: Vec<sys::Pid>, windows: &[arc::R<sc::Window>]) -> Self {
+        Self {
+            writers,
+            windows: windows.iter().map(|window| window.id()).collect(),
+            fallback: None,
+        }
+    }
+
+    /// Watched while a window is excluded, so the exclusion can move off it
+    /// once it is shown.
+    fn watch(self) -> Option<HiddenSinkWatch> {
+        (!self.windows.is_empty()).then(|| {
+            let mut interval = tokio::time::interval(HIDDEN_SINK_WATCH_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            HiddenSinkWatch {
+                exclusion: self,
+                interval,
+                retry: hidden_sink::Retry::default(),
+            }
+        })
+    }
+}
+
+struct HiddenSinkWatch {
+    exclusion: HiddenSinkExclusion,
+    interval: tokio::time::Interval,
+    retry: hidden_sink::Retry,
+}
+
+enum HiddenSinkMove {
+    Waiting,
+    Moved,
+    /// A filter without hidden-sink exclusions is in place; nothing to watch.
+    Released,
+    NeedsFallback,
+    Failed(anyhow::Error),
+}
+
+/// One watcher tick while an excluded window is shown or closed.
+async fn move_hidden_sink_exclusion(
+    params: &CapturerRebuildParams,
+    capturer: &Capturer,
+    watch: &mut HiddenSinkWatch,
+) -> HiddenSinkMove {
+    let attempt = match watch.retry.step() {
+        hidden_sink::Step::Wait => return HiddenSinkMove::Waiting,
+        hidden_sink::Step::Refresh => {
+            match refresh_hidden_sink_filter(params, capturer, watch.exclusion.writers.clone())
+                .await
+            {
+                Ok(next) if next.windows.is_empty() => HiddenSinkMove::Released,
+                Ok(next) => {
+                    // The filter excluding these windows is applied now, so they
+                    // are what the watcher checks even if the fallback fails.
+                    watch.exclusion.windows = next.windows;
+                    if hidden_sink::any_shown_or_closed(&watch.exclusion.windows) {
+                        // The window server and ScreenCaptureKit disagree on
+                        // what is shown; never leave a shown window excluded.
+                        HiddenSinkMove::NeedsFallback
+                    } else {
+                        HiddenSinkMove::Moved
+                    }
+                }
+                Err(error) => HiddenSinkMove::Failed(error),
+            }
+        }
+        hidden_sink::Step::Fallback => HiddenSinkMove::NeedsFallback,
+    };
+    let HiddenSinkMove::NeedsFallback = attempt else {
+        return attempt;
+    };
+    let Some(fallback) = watch.exclusion.fallback.as_ref() else {
+        return HiddenSinkMove::Failed(anyhow!("No filter without the hidden-sink exclusion"));
+    };
+    let update = capturer.capturer.update_content_filter(&fallback.0);
+    match update.await {
+        Ok(()) => HiddenSinkMove::Released,
+        Err(e) => HiddenSinkMove::Failed(anyhow!("Failed to update content filter: {e}")),
+    }
+}
+
+async fn refresh_hidden_sink_filter(
+    params: &CapturerRebuildParams,
+    capturer: &Capturer,
+    writers: Vec<sys::Pid>,
+) -> anyhow::Result<HiddenSinkExclusion> {
+    let shareable_content = sc::ShareableContent::current()
+        .await
+        .map_err(|e| anyhow!("Failed to get shareable content: {e}"))?;
+    let (exclusion, update) = {
+        let display = Display::from_id(&params.display_id)
+            .ok_or_else(|| anyhow!("Display not found: {:?}", params.display_id))?;
+        let windows = hidden_sink::off_screen_windows(&shareable_content, &writers, false);
+        let exclusion = HiddenSinkExclusion::new(writers, &windows);
+        let mut excluded_sc_windows =
+            excluded_shareable_windows(&params.excluded_windows, &shareable_content, "hidden-sink");
+        excluded_sc_windows.extend(windows);
+        let filter = display
+            .raw_handle()
+            .as_content_filter_excluding_windows(shareable_content, excluded_sc_windows)
+            .ok_or_else(|| anyhow!("Failed to create content filter"))?;
+        (exclusion, capturer.capturer.update_content_filter(&filter))
+    };
+    update
+        .await
+        .map_err(|e| anyhow!("Failed to update content filter: {e}"))?;
+    Ok(exclusion)
+}
+
+/// `writers` are the apps already left out of System Audio; they stay left out.
+async fn rebuild_capturer(
+    params: &CapturerRebuildParams,
+    mut writers: Vec<sys::Pid>,
+) -> anyhow::Result<(Capturer, HiddenSinkExclusion)> {
     let shareable_content = sc::ShareableContent::current()
         .await
         .map_err(|e| anyhow!("Failed to get shareable content during restart: {e}"))?;
@@ -1384,11 +1598,31 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
         .and_then(|id| current_window_crop(id, display.raw_handle().scale().unwrap_or(1.0)))
         .or(params.config.crop_bounds);
 
+    let mut hidden_sink = HiddenSinkExclusion::default();
     let content_filter = match window_filter {
         Some(filter) => filter,
         None => {
-            let excluded_sc_windows =
+            let mut excluded_sc_windows =
                 excluded_shareable_windows(&params.excluded_windows, &shareable_content, "restart");
+            if params.system_audio && params.leave_out_hidden_sinks {
+                for pid in hidden_sink::writers() {
+                    if !writers.contains(&pid) {
+                        writers.push(pid);
+                    }
+                }
+                let windows = hidden_sink::off_screen_windows(&shareable_content, &writers, true);
+                hidden_sink = HiddenSinkExclusion::new(writers, &windows);
+                if !windows.is_empty() {
+                    hidden_sink.fallback = display
+                        .raw_handle()
+                        .as_content_filter_excluding_windows(
+                            shareable_content.clone(),
+                            excluded_sc_windows.clone(),
+                        )
+                        .map(FallbackFilter);
+                }
+                excluded_sc_windows.extend(windows);
+            }
 
             display
                 .raw_handle()
@@ -1605,7 +1839,7 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
 
     let capturer = Capturer::new(Arc::new(builder.build()?), crop_bounds);
     capturer.start().await?;
-    Ok(capturer)
+    Ok((capturer, hidden_sink))
 }
 
 pub struct SystemAudioSourceConfig(

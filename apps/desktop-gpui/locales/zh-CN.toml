@@ -4323,11 +4323,6 @@ try_free = "登录免费试用"
 write = "写纪要"
 too_short = "这次通话太短，无法写纪要。"
 unavailable_title = "此服务器不提供 Cap AI 笔记"
-free_left = { other = "还剩 {count} 次免费" }
-
-[cap_ai.footer]
-last = "由 Cap AI 撰写。这是你最后一次免费使用"
-left = { other = "由 Cap AI 撰写。还剩 {count} 次免费" }
 
 [cap_ai.live]
 sign_in = "登录后，会议结束时 Cap AI 会写好纪要"
@@ -4338,6 +4333,11 @@ upgrade = "有了 Cap Pro，会议结束时 Cap AI 会写好纪要"
 several = "{a}、{b} 等人"
 three = "{a}、{b} 和 {c}"
 two = "{a} 和 {b}"
+
+[cap_ai.row]
+left = { other = "还剩 {count} 次免费 Cap\u00A0AI 笔记" }
+pro = "Cap\u00A0AI 笔记是 Cap\u00A0Pro 的功能"
+signed_out = "免费试用 Cap\u00A0AI 笔记"
 
 [cap_ai.settings]
 get_pro = "获取 Cap Pro"

@@ -48,6 +48,8 @@ recordings, or upload profiling artifacts separately.
 - The repository's existing debug desktop app and `target/debug/cap` CLI
 - Camera, microphone, screen-recording, and Automation permissions for the
   process running the local app
+- Accessibility permission for the terminal running the harness, so it can
+  press Start recording on the confirmation a start link shows
 - A camera and microphone available to the local development app
 
 Do not start another desktop development server for the harness. Use the

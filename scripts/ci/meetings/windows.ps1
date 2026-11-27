@@ -91,7 +91,7 @@ Get-ChildItem $Models | ForEach-Object {
 function Meeting($Case, $Engine, $Ask) {
   $R = "$Work\$Case"
   New-Item -ItemType Directory -Force "$R\data\meetings", "$R\shots" | Out-Null
-  "{`"enabled`": true, `"setupCompleted`": true, `"transcription`": {`"engine`": `"$Engine`", `"live`": true}}" | Set-Content -Encoding ascii "$R\data\meetings\settings.json"
+  "{`"enabled`": true, `"setupCompleted`": true, `"transcription`": {`"engine`": `"$Engine`", `"live`": true, `"nameSpeakersFromApps`": true}}" | Set-Content -Encoding ascii "$R\data\meetings\settings.json"
   "{`"general_settings`":{`"hasCompletedOnboarding`":true,`"hasCompletedStartup`":true,`"enableNotifications`":false,`"enableTelemetry`":false,`"recordingCountdown`":0,`"serverUrl`":`"http://127.0.0.1:8899`"},`"auth`":{`"secret`":{`"api_key`":`"ci-test-key`"},`"user_id`":`"citestuser0001`",`"plan`":{`"upgraded`":true,`"manual`":false,`"last_checked`":$([DateTimeOffset]::Now.ToUnixTimeSeconds())},`"organizations`":[]}}" | Set-Content -Encoding ascii "$R\data\store"
   "3000 $Meet\mic.f32" | Set-Content -Encoding ascii "$R\mic_script.txt"
   $stub = Start-Process -PassThru -WindowStyle Hidden $py -ArgumentList "`"$Here\stub_server.py`" 8899 `"$R\stub.jsonl`""
@@ -146,7 +146,7 @@ function Meeting($Case, $Engine, $Ask) {
   $doc = & $py -c "import json;print(json.load(open(r'$R\summary.json'))['docDir'])" 2>$null
   & $py "$Here\offsets.py" $R $doc | Set-Content -Encoding ascii "$R\offsets.json"
   & $py "$Here\score.py" "$doc\transcript.jsonl" "$Meet\truth.json" "$R\offsets.json" 2> "$R\score.err" | Set-Content -Encoding ascii "$R\score.json"
-  $env:CAP_EXPECT_APP_NAMES = '1'; $env:CAP_EXPECT_QUESTION = $Ask
+  $env:CAP_EXPECT_APP_NAMES = '0'; $env:CAP_EXPECT_QUESTION = $Ask
   & $py "$Here\check.py" $R $doc $Engine $Meet | Tee-Object "$R\check.txt"
   Remove-Item Env:CAP_EXPECT_APP_NAMES, Env:CAP_EXPECT_QUESTION -ErrorAction SilentlyContinue
 }

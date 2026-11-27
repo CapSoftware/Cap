@@ -4323,11 +4323,6 @@ try_free = "Anmelden und kostenlos testen"
 write = "Notizen schreiben"
 too_short = "Dieses Gespräch war zu kurz für Notizen."
 unavailable_title = "Cap AI-Notizen sind auf diesem Server nicht verfügbar"
-free_left = { one = "Noch {count} kostenlose Notiz", other = "Noch {count} kostenlose Notizen" }
-
-[cap_ai.footer]
-last = "Geschrieben von Cap AI. Das war Ihre letzte kostenlose Notiz"
-left = { one = "Geschrieben von Cap AI. Noch {count} kostenlose Notiz", other = "Geschrieben von Cap AI. Noch {count} kostenlose Notizen" }
 
 [cap_ai.live]
 sign_in = "Melden Sie sich an, und Cap AI fasst das Meeting am Ende zusammen"
@@ -4338,6 +4333,11 @@ upgrade = "Mit Cap Pro fasst Cap AI das Meeting am Ende zusammen"
 several = "{a}, {b} und weiteren"
 three = "{a}, {b} und {c}"
 two = "{a} und {b}"
+
+[cap_ai.row]
+left = { one = "Noch {count} kostenlose Cap\u00A0AI-Notiz", other = "Noch {count} kostenlose Cap\u00A0AI-Notizen" }
+pro = "Cap\u00A0AI-Notizen gehören zu Cap\u00A0Pro"
+signed_out = "Cap\u00A0AI-Notizen gratis testen"
 
 [cap_ai.settings]
 get_pro = "Cap Pro holen"

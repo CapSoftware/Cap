@@ -632,6 +632,23 @@ fn the_ask_body_keeps_the_latest_history() {
     )
     .unwrap();
     assert_eq!(with["vocabulary"], serde_json::json!(["Cap"]));
+    assert!(body.get("selfName").is_none(), "no name sends nothing new");
+    let named = generate::ask_body(
+        "20261113T101500123Z-abc123",
+        "Sync",
+        &transcript,
+        "",
+        "Draft a follow-up email",
+        &[],
+        Some(" Alex "),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(named["selfName"], "Alex");
+    assert!(
+        named["transcript"].as_str().unwrap().starts_with("Alex: "),
+        "the name matches the label on the user's lines"
+    );
     let kept = body["history"].as_array().unwrap();
     assert_eq!(kept.len(), 20);
     assert_eq!(kept[0]["content"], "turn 10");
@@ -883,6 +900,91 @@ fn the_opus_file_has_the_right_duration_and_survives_a_crash() {
 }
 
 #[test]
+fn ask_names_the_user_by_the_label_their_lines_carry() {
+    use cap_diarize::{SpeakerId, SpeakerInfo, SpeakerNames, Track};
+    let ask = |transcript: &Transcript, self_name: Option<&str>| {
+        generate::ask_body(
+            "20261113T101500123Z-abc123",
+            "Sync",
+            transcript,
+            "",
+            "Draft a follow-up email",
+            &[],
+            self_name,
+            &[],
+        )
+        .unwrap()
+    };
+    let voice = |id: &str, source, start_ms, text: &str, speaker| Utterance {
+        speaker_id: Some(speaker),
+        ..utterance(id, source, start_ms, text)
+    };
+    let mut transcript = Transcript::new();
+    transcript.upsert(voice("m1", Source::Mic, 0, "I'll send the recap.", 1));
+    transcript.upsert(voice("s1", Source::System, 1_500, "Thanks.", 2));
+
+    // A name, no rename: the stored name labels their lines.
+    let named = ask(&transcript, Some("Ada"));
+    assert_eq!(named["selfName"], "Ada");
+    assert!(named["transcript"].as_str().unwrap().starts_with("Ada: "));
+
+    // No name: no selfName, and their lines say "You".
+    let unnamed = ask(&transcript, None);
+    assert!(unnamed.get("selfName").is_none());
+    assert!(unnamed["transcript"].as_str().unwrap().starts_with("You: "));
+
+    // "Me" renamed through the microphone track's name.
+    let mut track = transcript.clone();
+    track.apply(LogLine::SourceLabel {
+        source: Source::Mic,
+        label: Some("Alexandra".into()),
+    });
+    let renamed = ask(&track, Some("Ada"));
+    assert_eq!(renamed["selfName"], "Alexandra");
+    assert!(
+        renamed["transcript"]
+            .as_str()
+            .unwrap()
+            .starts_with("Alexandra: ")
+    );
+
+    // "Me" renamed as a voice: the rename wins over the stored name, for Ask
+    // and for the notes' participant list.
+    let info = |id, track, first_ms, is_user| SpeakerInfo {
+        id: SpeakerId(id),
+        track,
+        first_ms,
+        speech_ms: 5_000,
+        is_user,
+    };
+    let mut names = SpeakerNames::new(None);
+    names.observe(&[
+        info(1, Track::Mic, 0, true),
+        info(2, Track::System, 1_500, false),
+    ]);
+    names.rename(SpeakerId(1), "Lexi");
+    names.rename(SpeakerId(2), "Sam");
+    let mut voiced = transcript.clone();
+    voiced.apply(LogLine::SpeakerNames { names });
+    // A microphone line the voices never placed is still the user's.
+    voiced.upsert(utterance("m2", Source::Mic, 9_000, "I'll book the room."));
+    let renamed = ask(&voiced, Some("Ada"));
+    assert_eq!(renamed["selfName"], "Lexi");
+    let text = renamed["transcript"].as_str().unwrap();
+    assert!(
+        text.starts_with("Lexi: ")
+            && text.contains("Sam: Thanks.")
+            && text.contains("Lexi: I'll book the room."),
+        "{text}"
+    );
+    assert!(!text.contains("Ada:") && !text.contains("You:"), "{text}");
+    assert_eq!(
+        voiced.named_speakers(Some("Ada")),
+        vec![("Lexi".to_string(), true), ("Sam".to_string(), false)]
+    );
+}
+
+#[test]
 fn notes_without_a_calendar_list_name_the_voices_the_transcript_heard() {
     use cap_diarize::{SpeakerId, SpeakerInfo, SpeakerNames, Track};
     let voice = |id: &str, source, start_ms, text: &str, speaker| Utterance {
@@ -946,6 +1048,30 @@ fn notes_without_a_calendar_list_name_the_voices_the_transcript_heard() {
     assert_eq!(b["participants"][0]["isSelf"], true);
     assert_eq!(b["participants"][1]["name"], "Dana");
     assert_eq!(b["participants"].as_array().unwrap().len(), 2);
+
+    // A plain list of names still marks the user.
+    if let Some(meeting) = meta.meeting.as_mut() {
+        meeting.participants = vec!["Dana".into(), "ada".into()];
+    }
+    let body = generate::notes_body(generate::NotesInput {
+        meta: &meta,
+        transcript: &transcript,
+        user_notes_markdown: String::new(),
+        template: &templates[0],
+        vocabulary: &[],
+        summary_language: None,
+        previous_markdown: None,
+        instruction: None,
+        time_zone: None,
+        self_name: Some("Ada"),
+    })
+    .unwrap();
+    let listed = &body.body["participants"];
+    assert_eq!(listed[0], serde_json::json!({ "name": "Dana" }));
+    assert_eq!(
+        listed[1],
+        serde_json::json!({ "name": "ada", "isSelf": true })
+    );
 }
 
 #[test]

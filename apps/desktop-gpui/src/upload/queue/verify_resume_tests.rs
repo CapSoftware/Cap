@@ -735,6 +735,102 @@ fn verification_pending_past_the_fast_rechecks_still_verifies() {
     });
 }
 
+/// The owner deletes a camera-only Instant cap on the web before its upload
+/// finishes. The queue's next try must not bring the cap back under the same
+/// link: it stops as deleted on the web and keeps the local recording.
+#[test]
+fn camera_only_instant_upload_does_not_recreate_a_cap_deleted_on_the_web() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_camera_only_deleted_on_web");
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        let mut meta = RecordingMeta::load_for_project(&project).unwrap();
+        let Some(UploadMeta::SegmentUpload {
+            pre_created_video, ..
+        }) = meta.upload.take()
+        else {
+            panic!("fixture is not a saved Instant upload");
+        };
+        meta.upload = Some(UploadMeta::MultipartUpload {
+            video_id: VIDEO_ID.into(),
+            file_path: project.join("content/output.mp4"),
+            pre_created_video,
+            recording_dir: project.clone(),
+        });
+        meta.save_for_project().unwrap();
+        let mut state = read_state(&project).unwrap().unwrap();
+        state.kind = UploadKind::Mp4;
+        write_state(&project, &state).unwrap();
+        mock.delete_on_web(VIDEO_ID);
+
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        run_queue(&manager, &project, Duration::from_secs(20 * 60)).await;
+
+        let state = read_state(&project).unwrap().unwrap();
+        assert!(mock.recreated().is_empty(), "{}", mock.timeline());
+        assert_eq!(mock.count("POST", "multipart/initiate"), 0);
+        assert_eq!(mock.count("POST", "recording-complete"), 0);
+        assert_eq!(state.phase, UploadPhase::Failed, "{state:?}");
+        assert_eq!(
+            state.last_error.as_deref(),
+            Some(RECORDING_DELETED_ON_WEB),
+            "{state:?}"
+        );
+        assert!(state.next_retry_at.is_none() && !state.is_pending());
+        assert_eq!(
+            std::fs::read(project.join("content/output.mp4")).unwrap(),
+            SAMPLE_MP4
+        );
+    });
+}
+
+/// A recovered camera-only Instant recording has no saved share link yet,
+/// only the id of the cap created when it started. A delete on the web before
+/// the recovered upload must still not bring the cap back.
+#[test]
+fn recovered_camera_only_upload_does_not_recreate_a_cap_deleted_on_the_web() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_recovered_camera_only_deleted_on_web");
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        let mut meta = RecordingMeta::load_for_project(&project).unwrap();
+        let Some(UploadMeta::SegmentUpload {
+            pre_created_video, ..
+        }) = meta.upload.take()
+        else {
+            panic!("fixture is not a saved Instant upload");
+        };
+        meta.sharing = None;
+        meta.upload = Some(UploadMeta::MultipartUpload {
+            video_id: VIDEO_ID.into(),
+            file_path: project.join("content/output.mp4"),
+            pre_created_video,
+            recording_dir: project.clone(),
+        });
+        meta.save_for_project().unwrap();
+        let mut state = read_state(&project).unwrap().unwrap();
+        state.kind = UploadKind::Mp4;
+        write_state(&project, &state).unwrap();
+        mock.delete_on_web(VIDEO_ID);
+
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        run_queue(&manager, &project, Duration::from_secs(20 * 60)).await;
+
+        let state = read_state(&project).unwrap().unwrap();
+        assert!(mock.recreated().is_empty(), "{}", mock.timeline());
+        assert_eq!(mock.count("POST", "recording-complete"), 0);
+        assert_eq!(
+            state.last_error.as_deref(),
+            Some(RECORDING_DELETED_ON_WEB),
+            "{state:?}"
+        );
+    });
+}
+
 /// A camera-only Instant recording saves its share link when it stops and
 /// uploads one MP4 through the queue. That upload is the recording itself,
 /// not a replacement of a published video, so it verifies once and is never

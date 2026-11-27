@@ -11,6 +11,7 @@ import re
 import statistics
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 from datetime import datetime
@@ -319,6 +320,58 @@ def deep_link(action, app_pid, action_sender):
 			f"cap-desktop://action?{query}",
 		]
 	)
+
+
+def link_start_titles():
+	titles = []
+	for path in sorted((REPO_ROOT / "apps" / "desktop-gpui" / "locales").glob("*.toml")):
+		parts = path.read_text().split("[main.link_start]\n", 1)
+		if len(parts) == 2:
+			match = re.search(r'^start = "(.*)"$', parts[1].split("\n[", 1)[0], re.M)
+			if match:
+				titles.append(match.group(1))
+	return titles
+
+
+def confirm_link_start(app_pid, confirmation):
+	try:
+		confirmation["result"] = run_link_confirmation(app_pid)
+	except Exception as error:
+		confirmation["error"] = error
+
+
+def run_link_confirmation(app_pid):
+	result = run(
+		[
+			"osascript",
+			REPO_ROOT / "scripts" / "confirm-desktop-link-start.applescript",
+			f"pid:{app_pid}",
+			"15",
+			*link_start_titles(),
+		],
+		timeout=30,
+	)
+	return result.stdout.strip()
+
+
+def start_recording(targets, args, app_pid, action_sender, confirmation):
+	deep_link(start_action(targets, args), app_pid, action_sender)
+	confirmation["thread"] = threading.Thread(
+		target=confirm_link_start, args=(app_pid, confirmation), daemon=True
+	)
+	confirmation["thread"].start()
+
+
+def finish_link_start(confirmation):
+	confirmation["thread"].join(timeout=30)
+	if confirmation["thread"].is_alive():
+		raise RuntimeError("The start confirmation helper did not finish")
+	if "error" in confirmation:
+		raise RuntimeError(f"The start confirmation helper failed: {confirmation['error']}")
+	result = confirmation["result"]
+	print(f"start confirmation: {result}", flush=True)
+	if result.startswith("permission:"):
+		raise RuntimeError(result)
 
 
 def app_windows(app_pid, action_sender):
@@ -1359,6 +1412,7 @@ def main():
 		before = project_snapshot(args.recordings_dir)
 		started_ns = time.time_ns()
 		print(f"run {index}/{args.repetitions}: start", flush=True)
+		confirmation = {}
 		phases.append(
 			measure_phase(
 				"start",
@@ -1367,13 +1421,16 @@ def main():
 				sampler_binary,
 					app_pid,
 					args.interval_ms,
-					trigger=lambda: deep_link(
-						start_action(targets, args),
+					trigger=lambda: start_recording(
+						targets,
+						args,
 						app_pid,
 						action_sender,
+						confirmation,
 					),
 				)
 		)
+		finish_link_start(confirmation)
 		project = wait_for_project(args.recordings_dir, before, started_ns)
 		if not args.no_camera:
 			print(f"run {index}/{args.repetitions}: verify camera", flush=True)
