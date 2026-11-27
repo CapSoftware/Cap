@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const updates: Record<string, unknown>[] = [];
 
-const mockDbChain: Record<string, ReturnType<typeof vi.fn>> = {
+const mockDbChain = {
 	select: vi.fn(),
 	from: vi.fn(),
 	innerJoin: vi.fn(),
