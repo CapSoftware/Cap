@@ -739,6 +739,18 @@ drawn (synthetic drags are dropped without Accessibility). The area variant
 was verified end to end: a seeded 800×500 crop recorded a 1600×1000 (2×)
 display track.
 
+`CAP_GPUI_FAIL=<name>[,<name>…]` switches on the recording crates' `cap_fail`
+failure points, which only debug builds compile in, so a recording's error
+paths can be reached without patching code. Names are written in full, crate
+first: `cap-recording::ScreenCaptureSource::init` panics while a capture is set
+up, and `cap-recording::media::feeds::camera::set_input` fails selecting a
+camera. On macOS, `cap-recording::macos::ScreenCaptureActor::new` also makes
+ScreenCaptureKit refuse to start, and
+`cap-recording::screen_capture video frame skip` and
+`cap-recording::screen_capture audio frame skip` drop every screen or system
+audio frame. A name that matches no failure point is logged with the ones that
+exist.
+
 ## Recents and the recordings library
 
 The expanded window's carousel reads the same library the shipping app does,

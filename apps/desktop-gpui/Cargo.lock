@@ -1584,6 +1584,7 @@ dependencies = [
  "cap-editor",
  "cap-enc-ffmpeg",
  "cap-export",
+ "cap-fail",
  "cap-glass",
  "cap-gpui-kernels",
  "cap-i18n-build",

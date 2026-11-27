@@ -64,6 +64,7 @@ cap-enc-ffmpeg = { path = "../../crates/enc-ffmpeg" }
 # can construct `NativeCameraFrame.timestamp` for its synthetic frames.
 cap-timestamp = { path = "../../crates/timestamp" }
 cap-utils = { path = "../../crates/utils" }
+cap-fail = { path = "../../crates/fail" }
 cap-project = { path = "../../crates/project" }
 cap-automation = { path = "../../crates/automation" }
 # The cursor style picker draws the same SVG assets the renderer composites.
