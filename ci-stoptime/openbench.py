@@ -8,10 +8,16 @@ rows = []
 for top in sys.argv[1:]:
     for f in sorted(glob.glob(os.path.join(top, "*", "rec.cap", "content", "segments", "segment-0", "display.mp4"))):
         a, b = [], []
-        for _ in range(N):
-            t = time.perf_counter(); c = av.open(f); d1 = c.duration; c.close(); a.append(time.perf_counter() - t)
-            t = time.perf_counter(); c = av.open(f, options={"fpsprobesize": "0"}); d2 = c.duration; c.close(); b.append(time.perf_counter() - t)
-            assert d1 == d2, (f, d1, d2)
+        for i in range(N):
+            for k in ((0, 1) if i % 2 else (1, 0)):
+                t = time.perf_counter()
+                c = av.open(f, options={"fpsprobesize": "0"}) if k else av.open(f)
+                dur = c.duration
+                c.close()
+                (b if k else a).append(time.perf_counter() - t)
+                durs = locals().setdefault("durs", set()); durs.add(dur)
+            assert len(durs) == 1, (f, durs)
+            durs.clear()
         rows.append((f, st.median(a) * 1000, st.median(b) * 1000))
         print(f"{f.split(os.sep)[-6]}/{f.split(os.sep)[-5]} default {st.median(a)*1000:.2f} ms  fps0 {st.median(b)*1000:.2f} ms  same duration")
 if rows:
