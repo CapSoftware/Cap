@@ -315,6 +315,8 @@ pub struct ScreenCaptureConfig<TCaptureFormat: ScreenCaptureFormat> {
     shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
     #[cfg(target_os = "macos")]
     pub excluded_windows: Vec<WindowId>,
+    #[cfg(target_os = "macos")]
+    leave_out_hidden_sinks: bool,
 }
 
 fn constrain_capture_size(size: PhysicalSize, max_size: Option<(u32, u32)>) -> PhysicalSize {
@@ -383,6 +385,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureConfig<TCapture
             shareable_content: self.shareable_content.clone(),
             #[cfg(target_os = "macos")]
             excluded_windows: self.excluded_windows.clone(),
+            #[cfg(target_os = "macos")]
+            leave_out_hidden_sinks: self.leave_out_hidden_sinks,
         }
     }
 }
@@ -558,6 +562,9 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
         #[cfg(target_os = "macos")] shareable_content: SendableShareableContent,
         #[cfg(target_os = "macos")] excluded_windows: Vec<WindowId>,
+        // Display and area recordings leave out the audio of apps that only
+        // play to a hidden virtual device; audio-only recordings keep it.
+        #[cfg(target_os = "macos")] leave_out_hidden_sinks: bool,
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
@@ -641,6 +648,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
             shareable_content: shareable_content.retained(),
             #[cfg(target_os = "macos")]
             excluded_windows,
+            #[cfg(target_os = "macos")]
+            leave_out_hidden_sinks,
         })
     }
 

@@ -4220,6 +4220,8 @@ async fn create_segment_pipeline(
                 .ok_or_else(|| anyhow!("Missing shareable content"))?,
             #[cfg(target_os = "macos")]
             base_inputs.excluded_windows.clone(),
+            #[cfg(target_os = "macos")]
+            true,
         )
         .await
         .context("screen capture init")?;
@@ -4546,6 +4548,7 @@ async fn audio_only_system_audio(
                 .clone()
                 .ok_or_else(|| anyhow!("Missing shareable content"))?,
             Vec::new(),
+            false,
         )
         .await
         .context("system audio capture init")?;
