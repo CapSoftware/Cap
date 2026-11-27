@@ -305,7 +305,8 @@ jobs:
             dbus-run-session -- "$(cat "$RUNNER_TEMP/test-binary")" --ignored --test-threads=1 --nocapture \
             real_app_instant_recording_uploads_and_verifies real_app_recovered_recording_uploads \
             real_app_start_cue_waits_for_a_slow_server_video real_app_cancelled_start_deletes_its_video \
-            real_app_crashes_never_delete_a_recording_with_media
+            real_app_crashes_never_delete_a_recording_with_media \
+            real_app_instant_upload_replaced_on_the_web_stops_quietly
 
       - name: Upload sandboxes
         if: failure()
