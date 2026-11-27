@@ -246,31 +246,32 @@ async fn watch_storage(
                 continue;
             }
         };
-        match storage.status() {
-            DiskSpaceStatus::Exhausted => {
-                log_storage(
-                    storage,
-                    "Recording storage is low; stopping to save the recording",
-                );
-                return;
-            }
-            status => {
-                let low = status == DiskSpaceStatus::Low;
-                if low != warning {
-                    warning = low;
-                    log_storage(
-                        storage,
-                        if low {
-                            "Recording storage is low; stopping soon to save the recording"
-                        } else {
-                            "Recording storage warning cleared"
-                        },
-                    );
-                    on_warning(low, storage);
-                }
-            }
+        let status = storage.status();
+        if let Some(low) = storage_warning_change(warning, status) {
+            warning = low;
+            log_storage(
+                storage,
+                if low {
+                    "Recording storage is low; stopping soon to save the recording"
+                } else {
+                    "Recording storage warning cleared"
+                },
+            );
+            on_warning(low, storage);
+        }
+        if status == DiskSpaceStatus::Exhausted {
+            log_storage(
+                storage,
+                "Recording storage is low; stopping to save the recording",
+            );
+            return;
         }
     }
+}
+
+fn storage_warning_change(warning: bool, status: DiskSpaceStatus) -> Option<bool> {
+    let low = status != DiskSpaceStatus::Ok;
+    (low != warning).then_some(low)
 }
 
 fn log_storage(storage: RecordingStorage, event: &'static str) {
@@ -2188,6 +2189,28 @@ mod tests {
         assert_eq!(
             row.error.as_deref(),
             Some("recording process is not running")
+        );
+    }
+
+    #[test]
+    fn storage_warning_is_reported_once_and_before_a_stop() {
+        assert_eq!(storage_warning_change(false, DiskSpaceStatus::Ok), None);
+        assert_eq!(
+            storage_warning_change(false, DiskSpaceStatus::Low),
+            Some(true)
+        );
+        assert_eq!(storage_warning_change(true, DiskSpaceStatus::Low), None);
+        assert_eq!(
+            storage_warning_change(false, DiskSpaceStatus::Exhausted),
+            Some(true)
+        );
+        assert_eq!(
+            storage_warning_change(true, DiskSpaceStatus::Exhausted),
+            None
+        );
+        assert_eq!(
+            storage_warning_change(true, DiskSpaceStatus::Ok),
+            Some(false)
         );
     }
 
