@@ -378,11 +378,24 @@ pub fn window_capture_size(window: &WindowId) -> Option<PhysicalSize> {
 // MinUpdateInterval after the last frame it delivered. Set to exactly one
 // frame interval, a refresh arriving a hair early is refused and the next one
 // is a whole refresh later: 30 fps on a 60 Hz display recorded about 26 fps
-// with frames 50 ms apart. Half an interval never refuses the refresh a frame
-// needs at any frame rate up to the refresh rate; the cadence gate in the
-// capture callback drops the surplus before any copy.
-fn wgc_min_update_interval(fps: u32) -> Duration {
-    Duration::from_secs_f64(0.5 / f64::from(fps.max(1)))
+// with frames 50 ms apart. The interval sits half a refresh away from every
+// refresh it could clash with: when the display rate is a whole multiple of
+// the frame rate, Windows keeps every k-th refresh itself; otherwise it offers
+// every refresh and the cadence gate keeps the one nearest each frame slot,
+// before any copy.
+fn wgc_min_update_interval(fps: u32, refresh_hz: f64) -> Duration {
+    let fps = f64::from(fps.max(1));
+    if !refresh_hz.is_finite() || refresh_hz < fps * 0.98 {
+        return Duration::from_secs_f64(0.5 / fps);
+    }
+    let ratio = refresh_hz / fps;
+    let whole = ratio.round();
+    let refreshes = if (ratio - whole).abs() <= 0.02 * whole {
+        whole - 0.5
+    } else {
+        0.5
+    };
+    Duration::from_secs_f64(refreshes / refresh_hz)
 }
 
 fn even_capture_size(width: i32, height: i32) -> Option<PhysicalSize> {
@@ -448,7 +461,11 @@ impl ScreenCaptureConfig<Direct3DCapture> {
         }
 
         if let Ok(true) = scap_direct3d::Settings::can_min_update_interval() {
-            settings.min_update_interval = Some(wgc_min_update_interval(self.config.fps));
+            let refresh_hz = Display::from_id(&self.config.display)
+                .map(|display| display.refresh_rate())
+                .unwrap_or(0.0);
+            settings.min_update_interval =
+                Some(wgc_min_update_interval(self.config.fps, refresh_hz));
         }
 
         settings.fps = Some(self.config.fps);
@@ -1653,27 +1670,44 @@ impl output_pipeline::AudioSource for SystemAudioSource {
 mod update_interval_tests {
     use super::*;
 
-    fn refreshes_between_frames(interval: f64, refresh: f64) -> f64 {
-        let early = 0.000_2;
-        ((interval + early) / refresh).ceil()
+    const EARLY_OR_LATE: f64 = 0.000_2;
+
+    fn refreshes_taken(interval: f64, refresh: f64, jitter: f64) -> f64 {
+        ((interval - jitter) / refresh).floor() + 1.0
     }
 
     #[test]
-    fn no_refresh_a_frame_needs_is_refused_at_any_rate_up_to_the_display() {
-        for refresh_hz in [50.0, 59.94, 60.0, 75.0, 120.0, 144.0, 165.0, 240.0] {
-            let refresh = 1.0 / refresh_hz;
+    fn windows_keeps_whole_multiples_itself_and_offers_every_refresh_otherwise() {
+        for (reported, actual) in [
+            (50.0, 50.0),
+            (59.0, 59.94),
+            (60.0, 59.94),
+            (60.0, 60.0),
+            (75.0, 75.0),
+            (120.0, 120.0),
+            (144.0, 144.0),
+            (165.0, 165.0),
+            (240.0, 240.0),
+        ] {
+            let refresh = 1.0 / actual;
             for fps in [15u32, 24, 25, 30, 48, 50, 60, 90, 100, 120, 144, 165, 240] {
-                if f64::from(fps) > refresh_hz {
+                if f64::from(fps) > reported {
                     continue;
                 }
-                let frame = 1.0 / f64::from(fps);
-                let usable = (frame / refresh * 1.01).floor();
-                let taken =
-                    refreshes_between_frames(wgc_min_update_interval(fps).as_secs_f64(), refresh);
-                assert!(
-                    taken <= usable,
-                    "{fps} fps on {refresh_hz} Hz: waits {taken} refreshes, a frame lasts {usable}"
-                );
+                let interval = wgc_min_update_interval(fps, reported).as_secs_f64();
+                let ratio = actual / f64::from(fps);
+                let expected = if (ratio - ratio.round()).abs() <= 0.03 * ratio.round() {
+                    ratio.round()
+                } else {
+                    1.0
+                };
+                for jitter in [EARLY_OR_LATE, -EARLY_OR_LATE] {
+                    let taken = refreshes_taken(interval, refresh, jitter);
+                    assert_eq!(
+                        taken, expected,
+                        "{fps} fps on {actual} Hz (reported {reported}): takes every {taken} refreshes"
+                    );
+                }
             }
         }
     }
@@ -1681,16 +1715,20 @@ mod update_interval_tests {
     #[test]
     fn a_full_frame_interval_skips_a_refresh_at_30_fps_on_60_hz() {
         let refresh = 1.0 / 60.0;
-        assert_eq!(refreshes_between_frames(1.0 / 30.0, refresh), 3.0);
-        assert_eq!(
-            refreshes_between_frames(wgc_min_update_interval(30).as_secs_f64(), refresh),
-            2.0
-        );
+        assert_eq!(refreshes_taken(1.0 / 30.0, refresh, EARLY_OR_LATE), 2.0);
+        assert_eq!(refreshes_taken(1.0 / 30.0, refresh, -EARLY_OR_LATE), 3.0);
     }
 
     #[test]
-    fn a_zero_rate_does_not_panic() {
-        assert_eq!(wgc_min_update_interval(0), Duration::from_millis(500));
+    fn an_unknown_refresh_rate_keeps_half_a_frame() {
+        assert_eq!(
+            wgc_min_update_interval(30, 0.0),
+            Duration::from_secs_f64(0.5 / 30.0)
+        );
+        assert_eq!(
+            wgc_min_update_interval(0, f64::NAN),
+            Duration::from_millis(500)
+        );
     }
 }
 
