@@ -215,6 +215,8 @@ export const RATE_LIMIT_IDS = {
 	DESKTOP_FEEDBACK: "rl_desktop_feedback",
 	/** Desktop app keys issued per account, counted apart from the keys that sign-out deletes. Suggested: 20 / 1h per key (user). */
 	DESKTOP_KEY_MINT: "rl_desktop_key_mint",
+	/** Authenticated desktop upload speed and storage health probes. Suggested: 4 / 1m per key (user). */
+	DESKTOP_UPLOAD_HEALTH: "rl_desktop_upload_health",
 	/** Mobile share password attempts (brute-force guard). Suggested: 20 / 10m per key (user). */
 	MOBILE_VIDEO_PASSWORD: "rl_mobile_video_password",
 	/** Unauthed docs Ask AI questions (Anthropic cost). Suggested: 10 / 1m per IP. */
@@ -304,6 +306,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.DESKTOP_LOGS]: { limit: 10, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.DESKTOP_FEEDBACK]: { limit: 10, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.DESKTOP_KEY_MINT]: { limit: 20, windowMs: 60 * MINUTE_MS },
+	[RATE_LIMIT_IDS.DESKTOP_UPLOAD_HEALTH]: { limit: 4, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MOBILE_VIDEO_PASSWORD]: {
 		limit: 20,
 		windowMs: 10 * MINUTE_MS,

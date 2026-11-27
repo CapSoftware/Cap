@@ -878,6 +878,7 @@ describe("GET /create", () => {
 		const body = await response.json();
 		expect(getDesktopShareUrl).toHaveBeenCalledWith("org-2", body.id);
 		expect(body).toMatchObject({
+			organizationId: "org-2",
 			share_url: "https://videos.team.test/s/new-video",
 		});
 	});

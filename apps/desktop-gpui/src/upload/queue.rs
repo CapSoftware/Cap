@@ -802,6 +802,7 @@ impl<B: UploadBackend> Manager<B> {
         upload: &mut InstantUpload,
         state: &mut UploadState,
     ) -> Result<Option<Duration>, String> {
+        let _transfer = crate::network_health::acquire_transfer();
         validate_local(project, state)?;
         self.backend.check_account(state)?;
         if state
