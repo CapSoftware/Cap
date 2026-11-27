@@ -1,0 +1,184 @@
+name: Scratch reclock desktop
+
+on:
+  push:
+    branches:
+      - ci/reclock-desk
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  BUILD_RUN: "46033815453"
+  DELAY_RUN: "46033820370"
+
+jobs:
+  macos:
+    name: macOS ${{ matrix.group }}
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [pairing, regress]
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Binaries
+        run: |
+          set -euo pipefail
+          R="$RUNNER_TEMP/rl"; mkdir -p "$R/bin"
+          for a in base head; do
+            gh run download "$BUILD_RUN" -R "$GITHUB_REPOSITORY" -n "rl-macos-$a" -D "$R/dl-$a"
+            tar -xzf "$R/dl-$a/macos-$a.tgz" -C "$R/bin"
+            mkdir -p "$R/bin/macos-$a/x" && mv "$R/bin/macos-$a/cap" "$R/bin/macos-$a/cap-gpui" "$R/bin/macos-$a/x/"
+            python3 .github/reclock/fixlinks.py "$R/bin/macos-$a/Frameworks"
+            cat "$R/bin/macos-$a/head.sha"
+          done
+      - name: Display, tools, permissions
+        run: |
+          set -euo pipefail
+          R="$RUNNER_TEMP/rl"
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          brew install ffmpeg >/dev/null
+          python3 -m pip install --user --break-system-packages psutil >/dev/null 2>&1 || python3 -m pip install --user psutil
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          user_db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist"
+          mkdir -p "$(dirname "$approvals")"
+          now=$(date +%s); until=$(date -u -v+1y '+%a %b %d %H:%M:%S GMT %Y')
+          { for a in base head; do echo "$R/bin/macos-$a/x/cap-gpui"; echo "$R/bin/macos-$a/x/cap"; done
+            command -v python3; readlink -f "$(command -v python3)"; python3 -c 'import sys; print(sys.executable)'
+            p=$$; while [ "$p" -gt 1 ]; do ps -o comm= -p "$p"; p=$(ps -o ppid= -p "$p" | tr -d ' '); done
+          } | sort -u | grep '^/' | while read -r client; do
+            for service in kTCCServiceScreenCapture kTCCServiceMicrophone kTCCServiceCamera; do
+              row="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
+              sudo sqlite3 "$db" "$row"; sqlite3 "$user_db" "$row"
+            done
+            /usr/libexec/PlistBuddy -c "Add :$client date $until" "$approvals" >/dev/null 2>&1 || true
+          done
+          killall tccd || true; sudo killall tccd || true; sleep 2
+      - name: Cases
+        run: |
+          R="$RUNNER_TEMP/rl"
+          ffplay -loglevel error -f lavfi -i "color=c=gray:s=960x540:r=60,noise=alls=100:allf=t+u" -fs -an -window_title capnoise > /dev/null 2>&1 &
+          sleep 3
+          python3 .github/reclock/mkdesk.py "$R" macos ${{ matrix.group }} > "$R/cfg.json"
+          python3 .github/reclock/desk.py "$R/cfg.json"
+      - name: Pack
+        if: always()
+        run: tar -czf "$RUNNER_TEMP/desk.tgz" -C "$RUNNER_TEMP/rl" out || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rl-desk-macos-${{ matrix.group }}
+          path: ${{ runner.temp }}/desk.tgz
+          retention-days: 3
+
+  linux:
+    name: Linux ${{ matrix.group }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [pairing, regress]
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: ./.github/actions/install-desktop-deps
+      - name: Binaries and tools
+        run: |
+          set -euo pipefail
+          R="$RUNNER_TEMP/rl"; mkdir -p "$R/bin"
+          for a in base head; do
+            gh run download "$BUILD_RUN" -R "$GITHUB_REPOSITORY" -n "rl-linux-$a" -D "$R/dl-$a"
+            tar -xzf "$R/dl-$a/linux-$a.tgz" -C "$R/bin"
+            cat "$R/bin/linux-$a/head.sha"
+          done
+          sudo apt-get install -y -qq xvfb openbox ffmpeg dbus python3-psutil pulseaudio >/dev/null
+      - name: Cases
+        run: |
+          R="$RUNNER_TEMP/rl"
+          unset WAYLAND_DISPLAY
+          export DISPLAY=:78 XDG_SESSION_TYPE=x11
+          Xvfb :78 -screen 0 1920x1080x24 -noreset >/dev/null 2>&1 &
+          sleep 1
+          openbox >/dev/null 2>&1 &
+          sleep 1
+          ffplay -loglevel error -f lavfi -i "color=c=gray:s=960x540:r=60,noise=alls=100:allf=t+u" -x 1920 -y 1080 -left 0 -top 0 -noborder -an -window_title capnoise > /dev/null 2>&1 &
+          sleep 2
+          python3 .github/reclock/mkdesk.py "$R" linux ${{ matrix.group }} > "$R/cfg.json"
+          dbus-run-session -- python3 .github/reclock/desk.py "$R/cfg.json"
+      - name: Pack
+        if: always()
+        run: tar -czf "$RUNNER_TEMP/desk.tgz" -C "$RUNNER_TEMP/rl" out || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rl-desk-linux-${{ matrix.group }}
+          path: ${{ runner.temp }}/desk.tgz
+          retention-days: 3
+
+  windows:
+    name: Windows ${{ matrix.group }}
+    runs-on: windows-2022
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [pairing, regress, late]
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Binaries and tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          R="$(cygpath -m "$RUNNER_TEMP")/rl"; mkdir -p "$R/bin"
+          for a in base head; do
+            gh run download "$BUILD_RUN" -R "$GITHUB_REPOSITORY" -n "rl-windows-$a" -D "$R/dl-$a"
+            tar -xzf "$R/dl-$a/windows-$a.tgz" -C "$R/bin"
+            cat "$R/bin/windows-$a/head.sha"
+            if [ "${{ matrix.group }}" = late ]; then
+              gh run download "$DELAY_RUN" -R "$GITHUB_REPOSITORY" -n "rl-windows-$a-delay" -D "$R/dl-$a-delay"
+              tar -xzf "$R/dl-$a-delay/windows-$a-delay.tgz" -C "$R/bin"
+              cat "$R/bin/windows-$a-delay/head.sha"
+            fi
+          done
+          curl -sSL -o ff.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip
+          mkdir -p "$RUNNER_TEMP/ff" && unzip -q ff.zip -d "$RUNNER_TEMP/ff"
+          echo "$(cygpath -w "$(ls -d "$RUNNER_TEMP"/ff/*/bin)")" >> "$GITHUB_PATH"
+          python -m pip install psutil >/dev/null
+      - name: Cases
+        shell: bash
+        run: |
+          R="$(cygpath -m "$RUNNER_TEMP")/rl"
+          ffplay -loglevel error -f lavfi -i "color=c=gray:s=960x540:r=60,noise=alls=100:allf=t+u" -fs -an -window_title capnoise > /dev/null 2>&1 &
+          sleep 3
+          python .github/reclock/mkdesk.py "$R" windows ${{ matrix.group }} > "$R/cfg.json"
+          python .github/reclock/desk.py "$R/cfg.json"
+      - name: Pack
+        if: always()
+        shell: bash
+        run: tar -czf "$RUNNER_TEMP/desk.tgz" -C "$(cygpath -m "$RUNNER_TEMP")/rl" out || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rl-desk-windows-${{ matrix.group }}
+          path: ${{ runner.temp }}/desk.tgz
+          retention-days: 3
