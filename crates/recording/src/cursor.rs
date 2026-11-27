@@ -994,9 +994,11 @@ pub fn spawn_cursor_recorder(
                     };
                     response.clicks.push(mouse_event);
                 }
-            }
 
-            last_mouse_state = mouse_state;
+                // Mouse state only advances once a shape is known, so a button
+                // change made before the first shape is still written with it.
+                last_mouse_state = mouse_state;
+            }
 
             let current_keys = held_keys();
             push_key_changes(
