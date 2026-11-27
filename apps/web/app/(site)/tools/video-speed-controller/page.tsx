@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 	title:
 		"Video Speed Controller Online – Speed Up or Slow Down Videos Free | Cap",
 	description:
-		"Free online video speed controller. Adjust playback from 0.25× to 3× without quality loss, processed locally in your browser for complete privacy. No uploads required.",
+		"Free online video speed controller. Adjust playback from 0.25× to 3×, processed locally in your browser for complete privacy. No uploads required.",
 	keywords: [
 		"video speed controller",
 		"speed up video online",
