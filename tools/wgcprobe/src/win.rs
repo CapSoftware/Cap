@@ -87,6 +87,8 @@ struct Args {
     ring: usize,
     adapter: Option<u32>,
     map_mode: String,
+    memload: bool,
+    gpucopy: bool,
 }
 
 fn parse_args() -> Args {
@@ -105,6 +107,8 @@ fn parse_args() -> Args {
         ring: 8,
         adapter: None,
         map_mode: "sync".into(),
+        memload: false,
+        gpucopy: false,
     };
     let v: Vec<String> = std::env::args().collect();
     let mut i = 1;
@@ -125,6 +129,8 @@ fn parse_args() -> Args {
             "--ring" => a.ring = val.parse().unwrap(),
             "--adapter" => a.adapter = Some(val.parse().unwrap()),
             "--map" => a.map_mode = val,
+            "--memload" => a.memload = val != "0",
+            "--gpucopy" => a.gpucopy = val != "0",
             _ => panic!("unknown arg {k}"),
         }
         i += 2;
@@ -383,6 +389,7 @@ struct FullReader {
     map_mode: String,
     pipe: VecDeque<(ID3D11Texture2D, Rec, Option<Direct3D11CaptureFrame>)>,
     pipe_free: Vec<ID3D11Texture2D>,
+    small: Option<CodeReader>,
 }
 
 impl FullReader {
@@ -447,6 +454,13 @@ impl FullReader {
         }
         let st = self.stage.as_ref().unwrap().0.clone();
         unsafe { self.ctx.CopyResource(&st, tex) };
+        if self.map_mode == "nomap" {
+            if self.small.is_none() {
+                self.small = Some(CodeReader::new(&self.device, &self.ctx, self.code, self.fmt).unwrap());
+            }
+            self.small.as_mut().unwrap().push(tex, rec, sink);
+            return;
+        }
         let mut m = D3D11_MAPPED_SUBRESOURCE::default();
         let mapped = if self.map_mode == "poll" {
             unsafe { self.ctx.Flush() };
@@ -470,9 +484,11 @@ impl FullReader {
             let len = pitch * d.Height as usize;
             let data = unsafe { std::slice::from_raw_parts(m.pData as *const u8, len) };
             let row = d.Width as usize * 4;
-            self.buf.resize(row * d.Height as usize, 0);
-            for y in 0..d.Height as usize {
-                self.buf[y * row..(y + 1) * row].copy_from_slice(&data[y * pitch..y * pitch + row]);
+            if self.map_mode != "nocopy" {
+                self.buf.resize(row * d.Height as usize, 0);
+                for y in 0..d.Height as usize {
+                    self.buf[y * row..(y + 1) * row].copy_from_slice(&data[y * pitch..y * pitch + row]);
+                }
             }
             rec.idx = decode(data, pitch, self.code.rx as usize, self.code.ry as usize, self.code.cell as usize)
                 .map(i64::from)
@@ -634,6 +650,7 @@ pub fn run() -> anyhow_lite::R {
                 map_mode: a.map_mode.clone(),
                 pipe: VecDeque::new(),
                 pipe_free: Vec::new(),
+                small: None,
             };
             let sink = sink.clone();
             let free = free.clone();
@@ -654,6 +671,28 @@ pub fn run() -> anyhow_lite::R {
             }))
         };
         let reader = Arc::new(Mutex::new(CodeReader::new(&device, &ctx, code, fmt)?));
+        if a.memload {
+            let secs = a.secs;
+            std::thread::spawn(move || {
+                let src = vec![7u8; 1920 * 1080 * 4];
+                let mut dst = vec![0u8; 1920 * 1080 * 4];
+                let t0 = Instant::now();
+                while t0.elapsed().as_secs_f64() < secs + 1.0 {
+                    let tick = Instant::now();
+                    dst.copy_from_slice(&src);
+                    std::hint::black_box(&dst);
+                    let spent = tick.elapsed();
+                    if spent < Duration::from_micros(16_667) {
+                        std::thread::sleep(Duration::from_micros(16_667) - spent);
+                    }
+                }
+            });
+        }
+        let gpu_sink: Option<ID3D11Texture2D> = if a.gpucopy {
+            Some(default_tex(&device, size.Width as u32, size.Height as u32, fmt)?)
+        } else {
+            None
+        };
         let release = a.release.clone();
         let ctx2 = ctx.clone();
         let (sink2, seq2, dropped2, reader2, free2) =
@@ -675,6 +714,9 @@ pub fn run() -> anyhow_lite::R {
                 let rec = Rec { seq: s, cb_ns: cb, src_ns: src, idx: -1, ..Default::default() };
                 match release.as_str() {
                     "immediate" => {
+                        if let Some(g) = gpu_sink.as_ref() {
+                            unsafe { ctx2.CopyResource(g, &tex) };
+                        }
                         reader2.lock().unwrap().push(&tex, rec, &sink2);
                         drop(frame);
                     }
