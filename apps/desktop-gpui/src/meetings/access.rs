@@ -60,6 +60,25 @@ pub struct AccessInput<'a> {
     pub pro: bool,
     pub caps: Option<&'a Capabilities>,
     pub error: Option<&'a CloudError>,
+    /// Signed in to a server other than Cap's own.
+    pub custom_server: bool,
+}
+
+/// A server other than Cap's own, as the app talks to it (an empty setting is
+/// Cap's own).
+pub fn custom_server(server_url: &str) -> bool {
+    !server_url.trim().is_empty()
+        && !crate::auth::has_same_origin(server_url, crate::store::DEFAULT_SERVER_URL)
+}
+
+/// Cap AI can be bought here. Cap's own server always sells it; another
+/// server only shows it is set up by counting free notes, which it does only
+/// when Cap AI is configured there.
+fn sells_cap_ai(input: &AccessInput<'_>) -> bool {
+    !input.custom_server
+        || input
+            .caps
+            .is_some_and(|c| c.notes_trial_remaining.is_some())
 }
 
 pub fn resolve(input: AccessInput<'_>) -> AiAccess {
@@ -78,6 +97,7 @@ pub fn resolve(input: AccessInput<'_>) -> AiAccess {
         Some(remaining) if remaining > 0 => AiAccess::Trial { remaining },
         _ => match input.error {
             Some(CloudError::NotConfigured) => AiAccess::Unavailable,
+            _ if input.caps.is_some() && !sells_cap_ai(&input) => AiAccess::Unavailable,
             _ => AiAccess::NeedsUpgrade,
         },
     }
@@ -198,6 +218,7 @@ impl Meetings {
             pro: auth.is_upgraded(),
             caps: self.capabilities(),
             error: self.capabilities_error(),
+            custom_server: custom_server(&auth.server_url),
         })
     }
 
@@ -208,6 +229,7 @@ impl Meetings {
             pro: auth.is_upgraded(),
             caps: self.capabilities(),
             error: self.capabilities_error(),
+            custom_server: custom_server(&auth.server_url),
         })
     }
 
@@ -447,6 +469,7 @@ mod tests {
             pro,
             caps,
             error,
+            custom_server: false,
         }
     }
 
@@ -505,6 +528,89 @@ mod tests {
             resolve(input(true, false, None, Some(&unconfigured))),
             AiAccess::Unavailable
         );
+    }
+
+    fn on_custom<'a>(
+        pro: bool,
+        caps: Option<&'a Capabilities>,
+        error: Option<&'a CloudError>,
+    ) -> AccessInput<'a> {
+        AccessInput {
+            custom_server: true,
+            ..input(true, pro, caps, error)
+        }
+    }
+
+    #[test]
+    fn a_server_without_cap_ai_sells_nothing() {
+        // What a self-hosted Cap answers when Cap AI isn't set up there: notes
+        // off and no free count.
+        let off = caps(false, None);
+        assert_eq!(
+            resolve(on_custom(false, Some(&off), None)),
+            AiAccess::Unavailable
+        );
+        assert_eq!(
+            resolve(on_custom(true, Some(&off), None)),
+            AiAccess::Unavailable
+        );
+        assert!(!sells_cap_ai(&on_custom(false, Some(&off), None)));
+        // Cap's own server: the same answer is a free count it could not look
+        // up, so Cap Pro is still offered.
+        assert_eq!(
+            resolve(input(true, false, Some(&off), None)),
+            AiAccess::NeedsUpgrade
+        );
+        assert!(sells_cap_ai(&input(true, false, Some(&off), None)));
+        let mut state = AiState::default();
+        assert_eq!(
+            state.decide("a", resolve(on_custom(false, Some(&off), None)), true),
+            AutoDecision::Skip
+        );
+    }
+
+    #[test]
+    fn a_server_that_counts_free_notes_sells_cap_ai() {
+        let two = caps(false, Some(2));
+        let spent = caps(false, Some(0));
+        assert_eq!(
+            resolve(on_custom(false, Some(&two), None)),
+            AiAccess::Trial { remaining: 2 }
+        );
+        assert_eq!(
+            resolve(on_custom(false, Some(&spent), None)),
+            AiAccess::NeedsUpgrade
+        );
+        assert!(sells_cap_ai(&on_custom(false, Some(&spent), None)));
+        assert_eq!(
+            resolve(on_custom(true, Some(&caps(true, None)), None)),
+            AiAccess::Ready
+        );
+    }
+
+    #[test]
+    fn a_custom_server_not_yet_answered_still_waits_for_its_answer() {
+        // Offline or still asking: nothing is known, so auto notes keep waiting
+        // and nothing is sold until the server says it counts free notes.
+        let offline = CloudError::Offline("no route".into());
+        let waiting = on_custom(false, None, Some(&offline));
+        assert_eq!(resolve(waiting), AiAccess::NeedsUpgrade);
+        assert!(!settled(waiting));
+        assert!(!sells_cap_ai(&waiting));
+        let mut state = AiState::default();
+        assert_eq!(
+            state.decide("a", resolve(waiting), false),
+            AutoDecision::Wait
+        );
+    }
+
+    #[test]
+    fn only_cap_s_own_server_counts_as_cap_s() {
+        assert!(!custom_server("https://cap.so"));
+        assert!(!custom_server("https://cap.so/"));
+        assert!(!custom_server(""));
+        assert!(custom_server("https://cap.example.com"));
+        assert!(custom_server("http://127.0.0.1:3000"));
     }
 
     #[test]
