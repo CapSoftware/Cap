@@ -13025,6 +13025,10 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let camera3d_preview = self.camera3d_auto_preview();
+        // The ghost trim and its release animation draw from a patched copy
+        // of the model; everything else draws the real one.
+        let display = self.display_timeline_model();
+        let model = display.as_ref().unwrap_or(&self.timeline);
         let keyboard_prompt = model.segments(TrackKind::Keyboard).is_empty()
             && self
                 .summary()
@@ -13046,10 +13050,6 @@ impl EditorWindow {
             camera3d_preview: &camera3d_preview,
             camera3d_editing_end: self.sidebar.editing_end_pose,
         };
-        // The ghost trim and its release animation draw from a patched copy
-        // of the model; everything else draws the real one.
-        let display = self.display_timeline_model();
-        let model = display.as_ref().unwrap_or(&self.timeline);
         let mut rows = div()
             .flex()
             .flex_col()
