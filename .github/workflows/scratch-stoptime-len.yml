@@ -51,7 +51,7 @@ jobs:
           B="$RUNNER_TEMP/bins"; R="$RUNNER_TEMP/rig"
           S=$("$B/main/bin/cap" targets screens --format json | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
           for d in 60 300 1800; do
-            python3 "$R/run.py" --stim "$R/stim.py" --screen "$S" --out "$RUNNER_TEMP/len$d" --dur $d --reps 1 --keep \
+            python3 "$R/run.py" --stim "$R/stim.py" --screen "$S" --out "$RUNNER_TEMP/len$d" --dur $d --reps 1 --keep --level debug \
               --arm "c062=$B/c062/bin/cap" --arm "main=$B/main/bin/cap"
             find "$RUNNER_TEMP/len$d" -name '*.mp4' -size +1M -delete
           done
@@ -102,7 +102,7 @@ jobs:
           B="$RUNNER_TEMP/bins"; R="$RUNNER_TEMP/rig"
           S=$("$B/main/cap.exe" targets screens --format json | python -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
           for d in 60 300 1800; do
-            python "$R/run.py" --stim "$R/stim.py" --screen "$S" --out "$RUNNER_TEMP/len$d" --dur $d --reps 1 --keep \
+            python "$R/run.py" --stim "$R/stim.py" --screen "$S" --out "$RUNNER_TEMP/len$d" --dur $d --reps 1 --keep --level debug \
               --arm "c062=$B/c062/cap.exe" --arm "main=$B/main/cap.exe"
             find "$RUNNER_TEMP/len$d" -name '*.mp4' -size +1M -delete
           done
