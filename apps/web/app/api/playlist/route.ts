@@ -725,10 +725,15 @@ const getPlaylistResponse = (
 
 		return yield* Effect.gen(function* () {
 			if (video.source.type === "local") {
+				const playlistKey = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 				const playlistText =
-					(yield* bucket.getObject(
-						`${video.ownerId}/${video.id}/combined-source/stream.m3u8`,
-					)).pipe(Option.getOrNull) ?? "";
+					(yield* bucket.getObject(playlistKey)).pipe(Option.getOrNull) ?? "";
+				yield* holdDeclaredOverLength(
+					video,
+					playlistKey,
+					() => declaredPlaylistSeconds(playlistText),
+					viewerIsOwner,
+				);
 
 				const lines = playlistText.split("\n");
 				const streamValidity = streamUrlValidity();
@@ -834,6 +839,12 @@ const getPlaylistResponse = (
 			);
 
 			const generatedPlaylist = generateM3U8Playlist(chunksUrls);
+			yield* holdDeclaredOverLength(
+				video,
+				prefix,
+				() => declaredPlaylistSeconds(generatedPlaylist),
+				viewerIsOwner,
+			);
 
 			return HttpServerResponse.text(generatedPlaylist, {
 				headers: {
