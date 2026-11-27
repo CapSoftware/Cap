@@ -900,6 +900,86 @@ fn the_opus_file_has_the_right_duration_and_survives_a_crash() {
 }
 
 #[test]
+fn ask_names_the_user_by_the_label_their_lines_carry() {
+    use cap_diarize::{SpeakerId, SpeakerInfo, SpeakerNames, Track};
+    let ask = |transcript: &Transcript, self_name: Option<&str>| {
+        generate::ask_body(
+            "20261113T101500123Z-abc123",
+            "Sync",
+            transcript,
+            "",
+            "Draft a follow-up email",
+            &[],
+            self_name,
+            &[],
+        )
+        .unwrap()
+    };
+    let voice = |id: &str, source, start_ms, text: &str, speaker| Utterance {
+        speaker_id: Some(speaker),
+        ..utterance(id, source, start_ms, text)
+    };
+    let mut transcript = Transcript::new();
+    transcript.upsert(voice("m1", Source::Mic, 0, "I'll send the recap.", 1));
+    transcript.upsert(voice("s1", Source::System, 1_500, "Thanks.", 2));
+
+    // A name, no rename: the stored name labels their lines.
+    let named = ask(&transcript, Some("Ada"));
+    assert_eq!(named["selfName"], "Ada");
+    assert!(named["transcript"].as_str().unwrap().starts_with("Ada: "));
+
+    // No name: no selfName, and their lines say "You".
+    let unnamed = ask(&transcript, None);
+    assert!(unnamed.get("selfName").is_none());
+    assert!(unnamed["transcript"].as_str().unwrap().starts_with("You: "));
+
+    // "Me" renamed through the microphone track's name.
+    let mut track = transcript.clone();
+    track.apply(LogLine::SourceLabel {
+        source: Source::Mic,
+        label: Some("Alexandra".into()),
+    });
+    let renamed = ask(&track, Some("Ada"));
+    assert_eq!(renamed["selfName"], "Alexandra");
+    assert!(
+        renamed["transcript"]
+            .as_str()
+            .unwrap()
+            .starts_with("Alexandra: ")
+    );
+
+    // "Me" renamed as a voice: the rename wins over the stored name, for Ask
+    // and for the notes' participant list.
+    let info = |id, track, first_ms, is_user| SpeakerInfo {
+        id: SpeakerId(id),
+        track,
+        first_ms,
+        speech_ms: 5_000,
+        is_user,
+    };
+    let mut names = SpeakerNames::new(None);
+    names.observe(&[
+        info(1, Track::Mic, 0, true),
+        info(2, Track::System, 1_500, false),
+    ]);
+    names.rename(SpeakerId(1), "Lexi");
+    names.rename(SpeakerId(2), "Sam");
+    let mut voiced = transcript.clone();
+    voiced.apply(LogLine::SpeakerNames { names });
+    let renamed = ask(&voiced, Some("Ada"));
+    assert_eq!(renamed["selfName"], "Lexi");
+    let text = renamed["transcript"].as_str().unwrap();
+    assert!(
+        text.starts_with("Lexi: ") && text.contains("Sam: Thanks."),
+        "{text}"
+    );
+    assert_eq!(
+        voiced.named_speakers(Some("Ada")),
+        vec![("Lexi".to_string(), true), ("Sam".to_string(), false)]
+    );
+}
+
+#[test]
 fn notes_without_a_calendar_list_name_the_voices_the_transcript_heard() {
     use cap_diarize::{SpeakerId, SpeakerInfo, SpeakerNames, Track};
     let voice = |id: &str, source, start_ms, text: &str, speaker| Utterance {

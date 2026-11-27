@@ -377,6 +377,7 @@ pub fn ask_body(
     self_name: Option<&str>,
     vocabulary: &[String],
 ) -> Result<Value, NotesError> {
+    let user_label = transcript.user_label(self_name);
     let transcript = transcript
         .labelled_for_prompt(TRANSCRIPT_MAX_CHARS, self_name)
         .text;
@@ -408,8 +409,8 @@ pub fn ask_body(
     }
     // The label the transcript gives the user's lines, so Ask knows which
     // speaker is asking. Without a name those lines say "You".
-    if let Some(name) = self_name.map(str::trim).filter(|n| !n.is_empty()) {
-        body["selfName"] = json!(clip_chars(name, 200));
+    if let Some(name) = user_label {
+        body["selfName"] = json!(clip_chars(&name, 200));
     }
     if !vocabulary.is_empty() {
         body["vocabulary"] = json!(
