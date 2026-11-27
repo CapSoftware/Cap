@@ -1108,7 +1108,7 @@ impl RecordingSession {
             self.limit_owner = LimitOwner {
                 started_at: chrono::Utc::now().timestamp(),
                 server_url: auth.server_url,
-                token: auth.token,
+                user_id: auth.user_id,
             };
             self.monitor_recording_limit(project_dir.clone(), Duration::ZERO, cx);
         }
@@ -3257,7 +3257,7 @@ const LIMIT_CHECK_AFTER_FAILED_STOP: Duration = Duration::from_secs(10);
 struct LimitOwner {
     started_at: i64,
     server_url: String,
-    token: Option<String>,
+    user_id: Option<String>,
 }
 
 /// The server only sets a recording limit for a free account, so a Pro plan
@@ -3265,8 +3265,9 @@ struct LimitOwner {
 /// after it started, for the account it started under, can lift the limit.
 fn upgrade_lifts_limit(auth: &crate::store::AuthSnapshot, owner: &LimitOwner) -> bool {
     auth.plan_upgraded
-        && auth.token.is_some()
-        && auth.token == owner.token
+        && auth.signed_in()
+        && auth.user_id.is_some()
+        && auth.user_id == owner.user_id
         && auth.server_url == owner.server_url
         && auth
             .plan_checked_at
@@ -3282,14 +3283,15 @@ mod recording_limit_tests {
         LimitOwner {
             started_at: 1_000,
             server_url: "https://cap.so".into(),
-            token: Some("free-account".into()),
+            user_id: Some("free-account".into()),
         }
     }
 
     fn plan(upgraded: bool, checked_at: Option<i64>) -> AuthSnapshot {
         AuthSnapshot {
             server_url: "https://cap.so".into(),
-            token: Some("free-account".into()),
+            user_id: Some("free-account".into()),
+            token: Some("credential".into()),
             plan_upgraded: upgraded,
             plan_checked_at: checked_at,
             ..AuthSnapshot::default()
@@ -3314,10 +3316,15 @@ mod recording_limit_tests {
     fn only_the_account_the_recording_started_under_lifts_the_limit() {
         let owner = owner();
         let other_account = AuthSnapshot {
-            token: Some("pro-account".into()),
+            user_id: Some("pro-account".into()),
             ..plan(true, Some(1_010))
         };
         assert!(!upgrade_lifts_limit(&other_account, &owner));
+        let signed_in_again = AuthSnapshot {
+            token: Some("new-credential".into()),
+            ..plan(true, Some(1_010))
+        };
+        assert!(upgrade_lifts_limit(&signed_in_again, &owner));
         let signed_out = AuthSnapshot {
             token: None,
             ..plan(true, Some(1_010))

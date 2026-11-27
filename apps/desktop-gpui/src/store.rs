@@ -2070,6 +2070,7 @@ pub fn mirror_transcription_hints(spellings: &[String]) {
 #[derive(Debug, Clone, Default)]
 pub struct AuthSnapshot {
     pub server_url: String,
+    pub user_id: Option<String>,
     pub token: Option<String>,
     pub plan_upgraded: bool,
     pub plan_manual: bool,
@@ -2121,6 +2122,10 @@ pub fn auth_snapshot() -> AuthSnapshot {
                 .and_then(Value::as_str)
         })
         .map(str::to_string);
+    let user_id = auth
+        .get("user_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let plan = auth.get("plan").and_then(Value::as_object);
     let plan_upgraded = plan
         .and_then(|plan| plan.get("upgraded"))
@@ -2159,6 +2164,7 @@ pub fn auth_snapshot() -> AuthSnapshot {
     }
     AuthSnapshot {
         server_url,
+        user_id,
         token,
         plan_upgraded,
         plan_manual,
