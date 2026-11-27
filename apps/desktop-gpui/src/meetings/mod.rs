@@ -38,7 +38,7 @@ use cap_meetings::{
     detect::{DetectConfig, DetectEvent, Detector, MicClient},
     library::{DocKind, DocMeta, Library, MeetingDetails, TitleHint, auto_title_from, lock_meta},
     prompt::{Prompt, PromptAction, PromptPlanner, RecordSource, RecordingState},
-    session::{Session, SessionAction, SessionState, Warning},
+    session::{OwnCall, Session, SessionAction, SessionState, Warning},
     settings::{Engine, Language, MeetingSettings, Microphone},
     templates::{self, Template},
     transcript::{EchoConfig, LogLine, Transcript, Utterance, append_jsonl},
@@ -462,6 +462,8 @@ struct Origin {
     event_id: Option<String>,
     resume_doc: Option<String>,
     automatic: bool,
+    /// Cap opened the event's meeting link as these notes started.
+    joining: bool,
 }
 
 struct Watch {
@@ -629,6 +631,8 @@ pub struct Meetings {
     /// An accept is starting the prompt's recording: its failure goes back
     /// to the accept, not to a system notification.
     accepting: bool,
+    /// That accept also opened the meeting's link ("Join and take notes").
+    accepting_join: bool,
     pending_restore_mic: Option<(Option<String>, Option<String>)>,
     #[cfg(debug_assertions)]
     pub(crate) dev_mic: Option<flume::Receiver<capture::RawBatch>>,
@@ -700,6 +704,19 @@ fn linux_monitor_missing() -> bool {
     {
         false
     }
+}
+
+/// The call app a calendar event's meeting link opens in, when that link
+/// belongs to one (a browser call is only known by the tab it is in).
+fn link_call_app(provider: cap_calendar::link::Provider) -> Option<&'static str> {
+    use cap_calendar::link::Provider;
+    let id = match provider {
+        Provider::GoToMeeting | Provider::GoToWebinar => "goto",
+        provider => provider.slug(),
+    };
+    apps::app_by_id(id)
+        .filter(|app| app.kind != apps::AppKind::Browser)
+        .map(|app| app.id)
 }
 
 fn platform() -> Platform {
@@ -862,6 +879,7 @@ impl Meetings {
             last_start_error: None,
             prompt_start_error: None,
             accepting: false,
+            accepting_join: false,
             pending_restore_mic: None,
             #[cfg(debug_assertions)]
             dev_mic: None,
@@ -1306,6 +1324,7 @@ impl Meetings {
                 event_id: event_id.clone(),
                 resume_doc: None,
                 automatic: true,
+                joining: false,
             },
             RecordSource::Scheduled { event_id } => {
                 let call = self.detector.active_calls().last();
@@ -1315,6 +1334,7 @@ impl Meetings {
                     event_id: Some(event_id.clone()),
                     resume_doc: None,
                     automatic: true,
+                    joining: self.accepting && self.accepting_join,
                 }
             }
         }
@@ -1322,13 +1342,21 @@ impl Meetings {
 
     /// Accepts a prompt. `Err` when the meeting it started could not start,
     /// so the person can be told; an earlier failure (an automatic start)
-    /// never counts for this accept.
-    pub fn accept_prompt(&mut self, id: u64, cx: &mut Context<Self>) -> Result<(), MeetingError> {
+    /// never counts for this accept. `joining` when the accept also opened
+    /// the meeting's link.
+    pub fn accept_prompt(
+        &mut self,
+        id: u64,
+        joining: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), MeetingError> {
         self.prompt_start_error = None;
         let actions = self.planner.accept(self.now_pair(), id);
         self.accepting = true;
+        self.accepting_join = joining;
         self.apply_prompt_actions(actions, cx);
         self.accepting = false;
+        self.accepting_join = false;
         self.rearm(cx);
         match self.prompt_start_error.take() {
             Some(error) => Err(error),
@@ -1471,11 +1499,20 @@ impl Meetings {
             origin.event_id =
                 calendar::auto_link(agenda.events(), Utc::now()).map(calendar::event_key);
         }
-        let event_end = origin
-            .event_id
-            .as_ref()
-            .and_then(|id| self.calendar.find(id))
-            .map(|e| e.end);
+        let event = origin.event_id.as_ref().and_then(|id| self.calendar.find(id));
+        let event_end = event.map(|e| e.end);
+        let own_call = if origin.joining {
+            OwnCall::Joining
+        } else {
+            OwnCall::Apps(
+                event
+                    .and_then(|e| e.link.as_ref())
+                    .and_then(|link| link_call_app(link.provider))
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            )
+        };
         self.pending_start = Some(origin.clone());
         let actions = self.session.start(self.now(), origin.app_id.clone());
         if let Some(end) = event_end {
@@ -1487,6 +1524,7 @@ impl Meetings {
             };
             self.session.set_linked_event_end(Some(at));
         }
+        self.session.set_own_call(own_call);
         self.apply_session_actions(actions, cx);
         self.pending_start = None;
         match &self.recording {
