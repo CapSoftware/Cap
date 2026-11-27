@@ -2978,6 +2978,7 @@ mod stop_cut_input_tests {
                 crop_bounds,
                 display,
                 window: None,
+                frame_size: None,
             },
             dir.join("cursors"),
             Cursors::default(),
