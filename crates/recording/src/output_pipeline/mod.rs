@@ -1,4 +1,6 @@
 mod async_camera;
+#[cfg(any(windows, test))]
+mod camera_rgb;
 mod core;
 pub mod ffmpeg;
 #[cfg(any(windows, test))]
