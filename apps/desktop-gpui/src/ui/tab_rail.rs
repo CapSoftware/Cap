@@ -138,6 +138,7 @@ impl RenderOnce for TabRail {
 
         div()
             .id(id)
+            .role(gpui::Role::TabList)
             .relative()
             .flex()
             .flex_row()
@@ -159,6 +160,9 @@ impl RenderOnce for TabRail {
 
                 div()
                     .id(SharedString::from(format!("{prefix}-{index}")))
+                    .role(gpui::Role::Tab)
+                    .aria_label(item.label.clone())
+                    .aria_selected(selected)
                     .flex()
                     .flex_none()
                     .items_center()
