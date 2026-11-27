@@ -1217,6 +1217,91 @@ impl WindowsLoopback {
 #[cfg(windows)]
 const REFUSED_RETRY: Duration = Duration::from_secs(30);
 
+/// A process loopback (reader-free or call-only) that delivers only exact
+/// digital silence, or nothing at all, for this long...
+#[cfg_attr(not(windows), allow(dead_code))]
+const SILENCE_NET_AFTER_MS: u64 = 8_000;
+/// ...while what it reads was heard (its audio session's meter) at this many
+/// looks of the call output watch, is not hearing the meeting.
+#[cfg_attr(not(windows), allow(dead_code))]
+const SILENCE_NET_LOOKS: u64 = 2;
+
+/// Whether a running process loopback has gone silent while what it reads
+/// plays (see [`SILENCE_NET_AFTER_MS`]). A quiet meeting never trips it:
+/// nothing it reads is heard then.
+#[derive(Debug, Default)]
+#[cfg_attr(not(windows), allow(dead_code))]
+struct SilenceNet {
+    sound_ms: u64,
+    base: u64,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl SilenceNet {
+    /// `sound_ms`: when the capture last delivered a sample that was not
+    /// silence, or opened; `audible_looks`: a running count of looks that
+    /// heard what it reads.
+    fn observe(&mut self, now_ms: u64, sound_ms: u64, audible_looks: u64) -> bool {
+        if sound_ms != self.sound_ms {
+            self.sound_ms = sound_ms;
+            self.base = audible_looks;
+        }
+        now_ms.saturating_sub(sound_ms) >= SILENCE_NET_AFTER_MS
+            && audible_looks.saturating_sub(self.base) >= SILENCE_NET_LOOKS
+    }
+}
+
+/// Windows: only the default output's capture, exactly as before (no
+/// followed output, no screen reader left out): in a remote desktop session,
+/// whose audio is redirected, and for the rest of a meeting once a process
+/// loopback went silent while what it reads played.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn plain_only(remote: bool, gone_silent: bool) -> bool {
+    remote || gone_silent
+}
+
+/// The meeting runs in a remote desktop session. Test builds:
+/// `CAP_GPUI_TEST_REMOTE_SESSION=<path>` makes it one while that file exists.
+#[cfg(windows)]
+fn remote_session() -> bool {
+    #[cfg(debug_assertions)]
+    if let Some(path) = std::env::var_os("CAP_GPUI_TEST_REMOTE_SESSION") {
+        return std::path::Path::new(&path).exists();
+    }
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_REMOTESESSION};
+    unsafe { GetSystemMetrics(SM_REMOTESESSION) != 0 }
+}
+
+/// When a process loopback last delivered a sample that was not digital
+/// silence (or opened), in ms since `epoch`.
+#[cfg(windows)]
+struct LastSound {
+    epoch: Instant,
+    at_ms: AtomicU64,
+}
+
+#[cfg(windows)]
+impl LastSound {
+    fn new() -> Self {
+        Self {
+            epoch: Instant::now(),
+            at_ms: AtomicU64::new(0),
+        }
+    }
+
+    fn now_ms(&self) -> u64 {
+        self.epoch.elapsed().as_millis() as u64
+    }
+
+    fn mark(&self) {
+        self.at_ms.store(self.now_ms(), Ordering::Relaxed);
+    }
+
+    fn at_ms(&self) -> u64 {
+        self.at_ms.load(Ordering::Relaxed)
+    }
+}
+
 #[cfg(windows)]
 impl SystemPlatform {
     fn start() -> Result<(Self, flume::Receiver<SystemChunk>), HealthIssue> {
@@ -1294,11 +1379,27 @@ impl SystemPlatform {
             dropped: Arc<AtomicU64>,
             callbacks: Arc<AtomicU64>,
             failed: Arc<AtomicBool>,
+            sound: Arc<LastSound>,
         ) -> Result<cap_meeting_platform::ReaderFreeLoopback, String> {
+            // Test builds: `CAP_GPUI_TEST_READER_FREE_ZEROS` makes the capture
+            // deliver silence, to prove the silence net.
+            #[cfg(debug_assertions)]
+            let zeroed = std::env::var_os("CAP_GPUI_TEST_READER_FREE_ZEROS").is_some();
+            #[cfg(not(debug_assertions))]
+            let zeroed = false;
+            sound.mark();
             let sink = move |samples: &[f32], sample_rate: u32| {
                 callbacks.fetch_add(1, Ordering::Relaxed);
+                let samples = if zeroed {
+                    vec![0.0; samples.len()]
+                } else {
+                    samples.to_vec()
+                };
+                if samples.iter().any(|sample| *sample != 0.0) {
+                    sound.mark();
+                }
                 let message = SystemChunk::Samples {
-                    samples: samples.to_vec(),
+                    samples,
                     sample_rate,
                     synthetic: false,
                     received: Instant::now(),
@@ -1338,7 +1439,14 @@ impl SystemPlatform {
         };
         let mut refused: Option<(String, Instant)> = None;
         let mut first = None;
-        if let Some(id) = target.as_deref() {
+        let remote = remote_session();
+        if remote {
+            tracing::info!(
+                "a remote desktop session: computer audio is read from the default output as before"
+            );
+        }
+        let sound = Arc::new(LastSound::new());
+        if !remote && let Some(id) = target.as_deref() {
             match follower(
                 id,
                 tx.clone(),
@@ -1365,6 +1473,7 @@ impl SystemPlatform {
         let mut call_only_refused: Option<((u32, u32), Instant)> = None;
         let mut call_only_told = false;
         if first.is_none()
+            && !remote
             && let Some(reader) = cap_meeting_platform::running_reader()
         {
             match reader_free(
@@ -1374,6 +1483,7 @@ impl SystemPlatform {
                 dropped.clone(),
                 callbacks.clone(),
                 failed.clone(),
+                sound.clone(),
             ) {
                 Ok(loopback) => {
                     tracing::info!(
@@ -1414,6 +1524,12 @@ impl SystemPlatform {
         let call_info = watch
             .as_ref()
             .map(cap_meeting_platform::CallOutputWatch::followed);
+        let meter = watch
+            .as_ref()
+            .map(cap_meeting_platform::CallOutputWatch::meter);
+        let audible_looks = watch
+            .as_ref()
+            .map(cap_meeting_platform::CallOutputWatch::audible_looks);
         let (stop_tx, stop_rx) = flume::bounded::<()>(1);
         let thread = std::thread::Builder::new()
             .name("cap-meeting-loopback".into())
@@ -1432,6 +1548,9 @@ impl SystemPlatform {
                     let mut targets = watching.then_some(target_rx);
                     let mut current = Some(first);
                     let mut name = device_name();
+                    let mut was_remote = remote;
+                    let mut net = SilenceNet::default();
+                    let mut gone_silent = false;
                     loop {
                         let selector = flume::Selector::new().recv(&stop_rx, |_| Woke::Stop);
                         let selector = match targets.as_ref() {
@@ -1451,13 +1570,52 @@ impl SystemPlatform {
                             Err(_) => {}
                         }
                         let errored = failed.swap(false, Ordering::Relaxed);
+                        let remote = remote_session();
+                        if remote != was_remote {
+                            was_remote = remote;
+                            if remote {
+                                tracing::info!("a remote desktop session: computer audio is read from the default output as before");
+                            } else {
+                                tracing::info!("the remote desktop session ended");
+                            }
+                        }
+                        // A process loopback that stays silent while what it
+                        // reads plays: the default output for the rest of the
+                        // meeting.
+                        let meant = match &current {
+                            Some(WindowsLoopback::ReaderFree(free)) => {
+                                Some(cap_meeting_platform::Meant::AllBut(free.reader()))
+                            }
+                            Some(WindowsLoopback::CallOnly(only, _, _)) => {
+                                only.call().map(cap_meeting_platform::Meant::Tree)
+                            }
+                            _ => None,
+                        };
+                        if let Some(meter) = &meter
+                            && let Ok(mut slot) = meter.lock()
+                        {
+                            *slot = meant;
+                        }
+                        if meant.is_some()
+                            && !gone_silent
+                            && let Some(audible) = &audible_looks
+                            && net.observe(
+                                sound.now_ms(),
+                                sound.at_ms(),
+                                audible.load(Ordering::Relaxed),
+                            )
+                        {
+                            gone_silent = true;
+                            tracing::warn!("computer audio stayed silent while the meeting played; the default output is read as before for the rest of the meeting");
+                        }
+                        let plain = plain_only(remote, gone_silent);
                         if refused
                             .as_ref()
                             .is_some_and(|(id, at)| Some(id) != target.as_ref() || at.elapsed() >= REFUSED_RETRY)
                         {
                             refused = None;
                         }
-                        let wanted = target.clone().filter(|_| refused.is_none());
+                        let wanted = target.clone().filter(|_| refused.is_none() && !plain);
                         // A screen reader matters only while the default
                         // output is read: a followed call's output does not
                         // carry the reader's speech.
@@ -1467,7 +1625,7 @@ impl SystemPlatform {
                         {
                             reader_refused = None;
                         }
-                        let reader = if wanted.is_none() {
+                        let reader = if wanted.is_none() && !plain {
                             cap_meeting_platform::running_reader().filter(|pid| {
                                 reader_refused.as_ref().is_none_or(|(refused, _)| refused != pid)
                             })
@@ -1485,6 +1643,7 @@ impl SystemPlatform {
                         }
                         let there = call_info
                             .as_ref()
+                            .filter(|_| !plain)
                             .and_then(|info| info.lock().ok()?.clone());
                         // The default output read while a reader runs and
                         // another output plays: leaving out only the reader
@@ -1538,6 +1697,7 @@ impl SystemPlatform {
                                 dropped.clone(),
                                 callbacks.clone(),
                                 failed.clone(),
+                                sound.clone(),
                             ) {
                                 Ok(loopback) => {
                                     if let Some(old) = current.take() {
@@ -1572,9 +1732,12 @@ impl SystemPlatform {
                             {
                                 continue;
                             }
-                            (Some(WindowsLoopback::ReaderFree(_)), None, None) if !errored => {
+                            (Some(WindowsLoopback::ReaderFree(_)), None, None)
+                                if !errored && !plain =>
+                            {
                                 // The reader quit: the default output opens
-                                // before the reader-free loopback stops.
+                                // before the reader-free loopback stops. (Main's
+                                // capture only: the loopback stops first, below.)
                                 if let Ok(next) = capturer(
                                     tx.clone(),
                                     dropped.clone(),
@@ -1607,6 +1770,7 @@ impl SystemPlatform {
                                     dropped.clone(),
                                     callbacks.clone(),
                                     failed.clone(),
+                                    sound.clone(),
                                 ) {
                                     Ok(loopback) => {
                                         if let Some(old) = current.take() {
@@ -2305,6 +2469,42 @@ impl Drop for SystemPlatform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_loopback_silent_while_its_audio_plays_falls_back() {
+        // Opened at 1 s; what it reads is heard at two looks; it delivers
+        // nothing that is not silence: at 9 s, not before, it falls back.
+        let mut net = SilenceNet::default();
+        assert!(!net.observe(1_000, 1_000, 10));
+        assert!(!net.observe(3_000, 1_000, 11));
+        assert!(!net.observe(5_000, 1_000, 12));
+        assert!(!net.observe(8_999, 1_000, 12));
+        assert!(net.observe(9_000, 1_000, 12));
+        // The same silence while nothing it reads is heard (a quiet
+        // meeting): never.
+        let mut quiet = SilenceNet::default();
+        for at in (1_000..120_000).step_by(2_000) {
+            assert!(!quiet.observe(at, 1_000, 10));
+        }
+        // Heard once only: not enough.
+        let mut once = SilenceNet::default();
+        assert!(!once.observe(1_000, 1_000, 10));
+        assert!(!once.observe(20_000, 1_000, 11));
+        // Sound delivered meanwhile starts the count again.
+        let mut working = SilenceNet::default();
+        assert!(!working.observe(1_000, 1_000, 10));
+        assert!(!working.observe(7_000, 6_500, 13));
+        assert!(!working.observe(14_000, 6_500, 14));
+        assert!(working.observe(14_500, 6_500, 15));
+    }
+
+    #[test]
+    fn a_remote_session_or_a_silent_loopback_reads_only_the_default_output() {
+        assert!(!plain_only(false, false));
+        assert!(plain_only(true, false));
+        assert!(plain_only(false, true));
+        assert!(plain_only(true, true));
+    }
 
     fn shared(
         segments: flume::Sender<SegmentJob>,

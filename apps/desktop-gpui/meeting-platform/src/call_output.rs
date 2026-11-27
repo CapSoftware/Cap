@@ -211,6 +211,40 @@ fn call_root(pids: &[u32], procs: &HashMap<u32, Proc>) -> Option<u32> {
     }
 }
 
+/// What a process loopback reads, for telling whether it should be hearing
+/// something: everything but a screen reader's process tree, or only a
+/// call's process tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Meant {
+    AllBut(u32),
+    Tree(u32),
+}
+
+/// Whether a process heard in one look (`heard`, without Cap and the system
+/// sounds) is one `meant` reads. `procs` is asked for only when a process
+/// other than the root itself was heard.
+pub(crate) fn meant_audible(
+    heard: &[u32],
+    meant: Meant,
+    procs: impl FnOnce() -> HashMap<u32, Proc>,
+) -> bool {
+    let (root, inside) = match meant {
+        Meant::AllBut(reader) => (reader, false),
+        Meant::Tree(call) => (call, true),
+    };
+    if heard.contains(&root) && inside {
+        return true;
+    }
+    let others: Vec<u32> = heard.iter().copied().filter(|pid| *pid != root).collect();
+    if others.is_empty() {
+        return false;
+    }
+    let procs = procs();
+    others
+        .iter()
+        .any(|pid| chain(*pid, &procs).contains(&root) == inside)
+}
+
 /// The output to loop back from one look, or `None` for the default output,
 /// remembering what the call app was last heard on.
 #[derive(Debug, Default)]
@@ -449,6 +483,32 @@ mod tests {
         let there = followed(SPEAKERS, &playing, &recording, &tree, OURS);
         assert_eq!(there.call, Some(4100));
         assert!(!there.call_elsewhere);
+    }
+
+    #[test]
+    fn what_a_process_loopback_reads_is_audible() {
+        let tree = procs(&[
+            (4000, 1, "chrome.exe"),
+            (4100, 4000, "chrome.exe"),
+            (4150, 4100, "chrome.exe"),
+            (700, 1, "nvda.exe"),
+            (710, 700, "nvda_slave.exe"),
+            (800, 1, "music.exe"),
+        ]);
+        let all_but_nvda = Meant::AllBut(700);
+        // Only the reader (or its helper) speaks: nothing the capture reads.
+        assert!(!meant_audible(&[700], all_but_nvda, || tree.clone()));
+        assert!(!meant_audible(&[700, 710], all_but_nvda, || tree.clone()));
+        assert!(!meant_audible(&[], all_but_nvda, || tree.clone()));
+        // The call or other sound plays.
+        assert!(meant_audible(&[700, 4100], all_but_nvda, || tree.clone()));
+        assert!(meant_audible(&[800], all_but_nvda, || tree.clone()));
+        let call = Meant::Tree(4100);
+        // The call itself or a process it started.
+        assert!(meant_audible(&[4100], call, || unreachable!()));
+        assert!(meant_audible(&[4150], call, || tree.clone()));
+        // Music, the reader, or the browser above the call's audio service.
+        assert!(!meant_audible(&[800, 700, 4000], call, || tree.clone()));
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::JoinHandle,
     time::Duration,
@@ -37,7 +37,7 @@ use windows::{
     core::{Interface, PCWSTR},
 };
 
-use crate::call_output::{Chooser, Followed, Session, followed};
+use crate::call_output::{Chooser, Followed, Meant, Session, followed, meant_audible};
 
 pub(crate) struct ComGuard(bool);
 
@@ -233,17 +233,43 @@ pub struct CallOutputWatch {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     followed: Arc<std::sync::Mutex<Option<Followed>>>,
+    meter: Arc<std::sync::Mutex<Option<Meant>>>,
+    audible: Arc<AtomicU64>,
+}
+
+/// Whether the sessions `meant` reads are heard in this look, on any output.
+fn audible(enumerator: &IMMDeviceEnumerator, managers: &mut Managers, meant: Meant) -> bool {
+    let mut sessions = Vec::new();
+    for (id, device) in active_endpoints(enumerator, eRender) {
+        managers.sessions(&id, &device, true, &mut sessions);
+    }
+    let ours = std::process::id();
+    let look = managers.looks;
+    let heard: Vec<u32> = sessions
+        .iter()
+        .filter(|s| {
+            s.pid != 0
+                && s.pid != ours
+                && managers.heard.get(&(s.endpoint.clone(), s.pid)) == Some(&look)
+        })
+        .map(|s| s.pid)
+        .collect();
+    meant_audible(&heard, meant, super::procs::tree)
 }
 
 impl CallOutputWatch {
     pub fn start(every: Duration, changes: flume::Sender<Option<String>>) -> std::io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let there = Arc::new(std::sync::Mutex::new(None));
+        let meter = Arc::new(std::sync::Mutex::new(None));
+        let audible_looks = Arc::new(AtomicU64::new(0));
         let thread = std::thread::Builder::new()
             .name("cap-meeting-call-output".into())
             .spawn({
                 let stop = stop.clone();
                 let there = there.clone();
+                let meter = meter.clone();
+                let audible_looks = audible_looks.clone();
                 move || {
                     let _com = ComGuard::init();
                     let enumerator: windows::core::Result<IMMDeviceEnumerator> =
@@ -265,6 +291,12 @@ impl CallOutputWatch {
                             *slot = seen.clone();
                         }
                         last_seen = Some(seen);
+                        let meant = meter.lock().ok().and_then(|meant| *meant);
+                        if let Some(meant) = meant
+                            && audible(&enumerator, &mut managers, meant)
+                        {
+                            audible_looks.fetch_add(1, Ordering::Relaxed);
+                        }
                         if last.as_ref() != Some(&now) || moved {
                             if changes.send(now.clone()).is_err() {
                                 return;
@@ -279,12 +311,25 @@ impl CallOutputWatch {
             stop,
             thread: Some(thread),
             followed: there,
+            meter,
+            audible: audible_looks,
         })
     }
 
     /// What plays on the followed output, as the latest look saw it.
     pub fn followed(&self) -> Arc<std::sync::Mutex<Option<Followed>>> {
         self.followed.clone()
+    }
+
+    /// What a running process loopback reads (`None`: none runs). While set,
+    /// each look counts whether any of it was heard ([`Self::audible_looks`]).
+    pub fn meter(&self) -> Arc<std::sync::Mutex<Option<Meant>>> {
+        self.meter.clone()
+    }
+
+    /// How many looks heard what [`Self::meter`] names, so far.
+    pub fn audible_looks(&self) -> Arc<AtomicU64> {
+        self.audible.clone()
     }
 }
 
