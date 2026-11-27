@@ -26,6 +26,7 @@ describe.skipIf(!url)(
 		async function signals(
 			options: {
 				screenshot?: boolean;
+				note?: boolean;
 				upload?: boolean;
 				state?: string;
 				output?: string | null;
@@ -37,7 +38,7 @@ describe.skipIf(!url)(
 		) {
 			const query = `WITH
 			videos AS (SELECT 'video' AS id, ? AS ownerId, ? AS isScreenshot,
-				? AS duration, JSON_OBJECT('type', 'desktopMP4', 'outputKey', ?) AS source,
+				? AS isNote, ? AS duration, JSON_OBJECT('type', 'desktopMP4', 'outputKey', ?) AS source,
 				? AS jobStatus, CAST('2026-09-12 01:00:00' AS DATETIME) AS createdAt,
 				CAST(? AS DATETIME) AS firstViewEmailSentAt),
 			video_uploads AS (SELECT 'video' AS video_id WHERE ?),
@@ -46,6 +47,7 @@ describe.skipIf(!url)(
 			const [rows] = await database.query<RowDataPacket[]>(query, [
 				options.otherOwner ? "other" : "owner",
 				options.screenshot ? 1 : 0,
+				options.note ? 1 : 0,
 				options.duration ?? 30,
 				options.output === undefined
 					? "owner/video/result.mp4"
@@ -62,6 +64,7 @@ describe.skipIf(!url)(
 
 		for (const [name, options] of [
 			["screenshot", { screenshot: true }],
+			["note", { note: true }],
 			["another owner", { otherOwner: true }],
 			["active upload", { upload: true }],
 			["queued job with upload row already removed", { state: "queued" }],

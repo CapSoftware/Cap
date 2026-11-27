@@ -136,7 +136,7 @@ app.post(
 				const policy = yield* VideosPolicy;
 				const db = yield* Database;
 				const owned = yield* policy.getOwnedById(videoId);
-				if (Option.isNone(owned))
+				if (Option.isNone(owned) || owned.value[0].isNote)
 					return c.json({ error: "Video not found" }, 404);
 				const [video] = owned.value;
 				const [bucket] = yield* Storage.getAccessForVideo(video, {
@@ -203,7 +203,8 @@ app.post(
 			const db = yield* Database;
 
 			const video = yield* policy.getOwnedById(videoId);
-			if (Option.isNone(video)) return yield* new Video.NotFoundError();
+			if (Option.isNone(video) || video.value[0].isNote)
+				return yield* new Video.NotFoundError();
 
 			yield* db.use((db) =>
 				db

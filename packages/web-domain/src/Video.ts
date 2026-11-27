@@ -68,6 +68,7 @@ export class Video extends Schema.Class<Video>("Video")({
 	width: Schema.OptionFromNullOr(Schema.Number),
 	height: Schema.OptionFromNullOr(Schema.Number),
 	duration: Schema.OptionFromNullOr(Schema.Number),
+	isNote: Schema.optional(Schema.Boolean),
 	createdAt: Schema.Date,
 	updatedAt: Schema.Date,
 }) {

@@ -93,6 +93,10 @@ export async function transcribeVideo(
 		return { success: false, message: "Video information is missing" };
 	}
 
+	if (video.isNote) {
+		return { success: true, message: "Note does not need transcription" };
+	}
+
 	if (
 		video.settings?.disableTranscript ??
 		result.orgSettings?.disableTranscript

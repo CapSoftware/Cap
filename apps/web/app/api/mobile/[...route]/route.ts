@@ -1196,6 +1196,7 @@ const getRootFolders = Effect.fn("Mobile.getRootFolders")(function* (
 					eq(Db.videos.folderId, Db.folders.id),
 					eq(Db.videos.ownerId, user.id),
 					eq(Db.videos.orgId, organizationId),
+					eq(Db.videos.isNote, false),
 				),
 			);
 
@@ -1232,19 +1233,23 @@ const getSpaceRootFolders = Effect.fn("Mobile.getSpaceRootFolders")(function* (
 				? db
 						.select({ value: count() })
 						.from(Db.sharedVideos)
+						.innerJoin(Db.videos, eq(Db.sharedVideos.videoId, Db.videos.id))
 						.where(
 							and(
 								eq(Db.sharedVideos.folderId, Db.folders.id),
 								eq(Db.sharedVideos.organizationId, user.activeOrganizationId),
+								eq(Db.videos.isNote, false),
 							),
 						)
 				: db
 						.select({ value: count() })
 						.from(Db.spaceVideos)
+						.innerJoin(Db.videos, eq(Db.spaceVideos.videoId, Db.videos.id))
 						.where(
 							and(
 								eq(Db.spaceVideos.folderId, Db.folders.id),
 								eq(Db.spaceVideos.spaceId, space.id),
+								eq(Db.videos.isNote, false),
 							),
 						);
 
@@ -1654,6 +1659,7 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 		const collectionWhereClause = and(
 			eq(Db.videos.ownerId, user.id),
 			eq(Db.videos.orgId, user.activeOrganizationId),
+			eq(Db.videos.isNote, false),
 			isNull(Db.organizations.tombstoneAt),
 		);
 		const whereClause = and(collectionWhereClause, folderFilter);
@@ -1704,6 +1710,7 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 			: isNull(Db.sharedVideos.folderId);
 		const collectionWhereClause = and(
 			eq(Db.sharedVideos.organizationId, user.activeOrganizationId),
+			eq(Db.videos.isNote, false),
 			isNull(Db.organizations.tombstoneAt),
 		);
 		const whereClause = and(collectionWhereClause, folderFilter);
@@ -1761,6 +1768,7 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 		: isNull(Db.spaceVideos.folderId);
 	const collectionWhereClause = and(
 		eq(Db.spaceVideos.spaceId, space.id),
+		eq(Db.videos.isNote, false),
 		isNull(Db.organizations.tombstoneAt),
 	);
 	const whereClause = and(collectionWhereClause, folderFilter);
@@ -2127,7 +2135,7 @@ const resolveMobileVideoAccess = Effect.fn("Mobile.resolveVideoAccess")(
 				})
 				.from(Db.videos)
 				.leftJoin(Db.users, eq(Db.videos.ownerId, Db.users.id))
-				.where(eq(Db.videos.id, videoId))
+				.where(and(eq(Db.videos.id, videoId), eq(Db.videos.isNote, false)))
 				.limit(1);
 		});
 
@@ -3206,7 +3214,13 @@ const getCapAnalytics = Effect.fn("Mobile.getCapAnalytics")(function* (
 		db
 			.select({ name: Db.videos.name, orgId: Db.videos.orgId })
 			.from(Db.videos)
-			.where(and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)))
+			.where(
+				and(
+					eq(Db.videos.id, videoId),
+					eq(Db.videos.ownerId, user.id),
+					eq(Db.videos.isNote, false),
+				),
+			)
 			.limit(1),
 	);
 	if (!video) return yield* Effect.fail(new HttpApiError.NotFound());
@@ -3587,7 +3601,7 @@ const getOwnedRecording = Effect.fn("Mobile.getOwnedRecording")(function* (
 		return yield* Effect.fail(new HttpApiError.NotFound());
 	}
 	const [video] = maybeVideo.value;
-	if (video.ownerId !== user.id) {
+	if (video.ownerId !== user.id || video.isNote) {
 		return yield* Effect.fail(new HttpApiError.NotFound());
 	}
 	return video;
@@ -4291,6 +4305,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 											and(
 												eq(Db.videos.id, path.id),
 												eq(Db.videos.ownerId, user.id),
+												eq(Db.videos.isNote, false),
 											),
 										),
 								);
@@ -4324,6 +4339,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 											and(
 												eq(Db.videos.id, path.id),
 												eq(Db.videos.ownerId, user.id),
+												eq(Db.videos.isNote, false),
 											),
 										),
 								);

@@ -20,7 +20,7 @@ export async function triggerInstantRecordingProcessing({
 		.from(videos)
 		.where(eq(videos.id, videoId));
 
-	if (!video) throw new Error("Video not found");
+	if (!video || video.isNote) throw new Error("Video not found");
 	if (video.ownerId !== user.id) throw new Error("Unauthorized");
 
 	const rawFileKey = `${user.id}/${videoId}/result.mp4`;

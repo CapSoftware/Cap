@@ -22,6 +22,7 @@ export type PublicShareVideoCandidate = {
 	allowedEmailDomain: string | null;
 	linkOpenToAnyone: boolean;
 	isScreenshot: boolean;
+	isNote: boolean;
 	hasActiveUpload: boolean;
 	sourceType:
 		| "MediaConvert"
@@ -45,6 +46,7 @@ export type PublicShareVideo = Omit<
 	| "allowedEmailDomain"
 	| "linkOpenToAnyone"
 	| "isScreenshot"
+	| "isNote"
 	| "hasActiveUpload"
 	| "jobStatus"
 	| "skipProcessing"
@@ -59,6 +61,7 @@ export const isPublicShareVideoCandidateEligible = (
 	((video.allowedEmailDomain?.trim().length ?? 0) === 0 ||
 		video.linkOpenToAnyone) &&
 	!video.isScreenshot &&
+	!video.isNote &&
 	!video.hasActiveUpload &&
 	(video.sourceType !== "MediaConvert" ||
 		video.jobStatus === "COMPLETE" ||
@@ -81,6 +84,7 @@ export async function getPublicShareVideo(
 			videoSettings: videos.settings,
 			organizationSettings: organizations.settings,
 			isScreenshot: videos.isScreenshot,
+			isNote: videos.isNote,
 			hasActiveUpload:
 				sql<boolean>`${videoUploads.videoId} IS NOT NULL AND ${videoUploads.phase} <> 'complete'`.mapWith(
 					Boolean,

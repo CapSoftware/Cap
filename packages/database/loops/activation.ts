@@ -38,11 +38,11 @@ const activationSignals = `
 
 export const activationQuery = `
 	SELECT ${activationSignals}
-	WHERE v.ownerId = ? AND v.isScreenshot = 0
+	WHERE v.ownerId = ? AND v.isScreenshot = 0 AND v.isNote = 0
 `;
 
 export const batchActivationQuery = (users: number) => `
 	SELECT v.ownerId AS userId, ${activationSignals}
-	WHERE v.ownerId IN (${placeholders(users)}) AND v.isScreenshot = 0
+	WHERE v.ownerId IN (${placeholders(users)}) AND v.isScreenshot = 0 AND v.isNote = 0
 	GROUP BY v.ownerId
 `;

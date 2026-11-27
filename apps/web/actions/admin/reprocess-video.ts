@@ -17,11 +17,12 @@ export async function adminReprocessVideo(input: string) {
 			id: videos.id,
 			ownerId: videos.ownerId,
 			name: videos.name,
+			isNote: videos.isNote,
 		})
 		.from(videos)
 		.where(eq(videos.id, videoId));
 
-	if (!video) {
+	if (!video || video.isNote) {
 		throw new Error("Video not found");
 	}
 

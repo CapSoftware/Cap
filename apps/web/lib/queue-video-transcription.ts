@@ -46,6 +46,7 @@ export async function queueVideoTranscription(
 		.select({
 			id: videos.ownerId,
 			isScreenshot: videos.isScreenshot,
+			isNote: videos.isNote,
 			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
 			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
 		})
@@ -58,6 +59,9 @@ export async function queueVideoTranscription(
 	}
 	if (owner.isScreenshot) {
 		return { success: true, message: "Screenshot does not need transcription" };
+	}
+	if (owner.isNote) {
+		return { success: true, message: "Note does not need transcription" };
 	}
 
 	return transcribeVideo(

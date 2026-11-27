@@ -45,6 +45,7 @@ export async function getSpaceRootVideoOrder(
 		.select({
 			id: videos.id,
 			isScreenshot: videos.isScreenshot,
+			isNote: videos.isNote,
 			position: spaceVideoPositionSql,
 		})
 		.from(spaceVideos)
@@ -57,7 +58,12 @@ export async function getSpaceRootVideoOrder(
 				isNull(organizations.tombstoneAt),
 			),
 		)
-		.groupBy(videos.id, videos.isScreenshot, videos.effectiveCreatedAt)
+		.groupBy(
+			videos.id,
+			videos.isScreenshot,
+			videos.isNote,
+			videos.effectiveCreatedAt,
+		)
 		.orderBy(
 			...spaceVideoOrderBy(order, {
 				position: spaceVideoPositionSql,
@@ -71,6 +77,6 @@ export async function getSpaceRootVideoOrder(
 		: query.limit(options.limit));
 
 	return options.includeScreenshots === false
-		? rows.filter((row) => !row.isScreenshot)
+		? rows.filter((row) => !row.isScreenshot && !row.isNote)
 		: rows;
 }

@@ -95,7 +95,8 @@ app.post(
 				.from(Db.videos)
 				.where(eq(Db.videos.id, Video.VideoId.make(videoId)));
 
-			if (!video) return c.json({ error: "Video not found" }, 404);
+			if (!video || video.isNote)
+				return c.json({ error: "Video not found" }, 404);
 			if (video.ownerId !== user.id) return c.json({ error: "Forbidden" }, 403);
 			const videoDomain = decodeVideo(video);
 
@@ -193,7 +194,8 @@ app.post(
 				.from(Db.videos)
 				.where(eq(Db.videos.id, Video.VideoId.make(videoIdToUse)));
 
-			if (!video) return c.json({ error: "Video not found" }, 404);
+			if (!video || video.isNote)
+				return c.json({ error: "Video not found" }, 404);
 			if (video.ownerId !== user.id) return c.json({ error: "Forbidden" }, 403);
 			const videoDomain = decodeVideo(video);
 
