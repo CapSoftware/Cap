@@ -28,13 +28,7 @@ import {
 	getCustomThumbnailVersion,
 } from "@cap/web-backend/src/Storage/custom-thumbnail";
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
-import {
-	Comment,
-	type ImageUpload,
-	type Organisation,
-	type Policy,
-	Video,
-} from "@cap/web-domain";
+import { Comment, type ImageUpload, type Policy, Video } from "@cap/web-domain";
 import { and, eq, type InferSelectModel, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
@@ -444,9 +438,6 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					fps: videos.fps,
 					firstViewEmailSentAt: videos.firstViewEmailSentAt,
 					hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
-					sharedOrganization: {
-						organizationId: sharedVideos.organizationId,
-					},
 					orgSettings: organizations.settings,
 					allowedEmailDomain: organizations.allowedEmailDomain,
 					organizationName: organizations.name,
@@ -464,7 +455,6 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					organizationTombstoneAt: organizations.tombstoneAt,
 				})
 				.from(videos)
-				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 				.innerJoin(users, eq(videos.ownerId, users.id))
 				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 				.leftJoin(organizations, eq(videos.orgId, organizations.id))
@@ -531,7 +521,6 @@ async function AuthorizedContent({
 		"password" | "settings" | "ownerId" | "archivedAt"
 	> & {
 		owner: InferSelectModel<typeof users>;
-		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasPassword: boolean;
 		hasActiveUpload: boolean;
 		activeUploadRawFileKey: string | null;
@@ -606,12 +595,16 @@ async function AuthorizedContent({
 	// Everything below is an independent round trip (DB or storage); each is
 	// started here and awaited together further down, so the page pays for the
 	// slowest one instead of the sum of all of them.
-	const spacesDataPromise: Promise<Spaces[] | null> = user
-		? getDashboardSpacesData(user).catch((error) => {
-				console.error("Failed to fetch spaces data for sharing dialog:", error);
-				return [];
-			})
-		: Promise.resolve(null);
+	const spacesDataPromise: Promise<Spaces[] | null> =
+		user && user.id === video.owner.id
+			? getDashboardSpacesData(user).catch((error) => {
+					console.error(
+						"Failed to fetch spaces data for sharing dialog:",
+						error,
+					);
+					return [];
+				})
+			: Promise.resolve(null);
 
 	const sharedSpacesPromise = getSharedSpacesForVideo(videoId);
 	const viewerCountPromise =
@@ -799,46 +792,6 @@ async function AuthorizedContent({
 		return { customDomain: null, domainVerified: false };
 	})();
 
-	const userOrganizationsPromise = (async () => {
-		if (!userId) return [];
-
-		const [ownedOrganizations, memberOrganizations] = await Promise.all([
-			db()
-				.select({ id: organizations.id, name: organizations.name })
-				.from(organizations)
-				.where(eq(organizations.ownerId, userId)),
-			db()
-				.select({ id: organizations.id, name: organizations.name })
-				.from(organizations)
-				.innerJoin(
-					organizationMembers,
-					eq(organizations.id, organizationMembers.organizationId),
-				)
-				.where(eq(organizationMembers.userId, userId)),
-		]);
-
-		const allOrganizations = [...ownedOrganizations, ...memberOrganizations];
-		const uniqueOrganizationIds = new Set();
-
-		return allOrganizations.filter((organization) => {
-			if (uniqueOrganizationIds.has(organization.id)) return false;
-			uniqueOrganizationIds.add(organization.id);
-			return true;
-		});
-	})();
-
-	const membersListPromise = video.sharedOrganization?.organizationId
-		? db()
-				.select({ userId: organizationMembers.userId })
-				.from(organizationMembers)
-				.where(
-					eq(
-						organizationMembers.organizationId,
-						video.sharedOrganization.organizationId,
-					),
-				)
-		: Promise.resolve([]);
-
 	const commentsPromise = Effect.gen(function* () {
 		const db = yield* Database;
 		const imageUploads = yield* ImageUploads;
@@ -1025,8 +978,6 @@ async function AuthorizedContent({
 		viewerCount,
 		aiGenerationEnabled,
 		screenshotImageUrl,
-		membersList,
-		userOrganizations,
 		{ customDomain, domainVerified },
 		videoOrganizationRole,
 		canDownloadVideo,
@@ -1044,8 +995,6 @@ async function AuthorizedContent({
 		viewerCountPromise,
 		aiGenerationEnabledPromise,
 		screenshotImageUrlPromise,
-		membersListPromise,
-		userOrganizationsPromise,
 		customDomainPromise,
 		videoOrganizationRolePromise,
 		canDownloadVideoPromise,
@@ -1142,10 +1091,6 @@ async function AuthorizedContent({
 			isPro: ownerIsPro,
 			image: resolvedImages.owner,
 		},
-		organization: {
-			organizationMembers: membersList.map((member) => member.userId),
-			organizationId: video.sharedOrganization?.organizationId ?? undefined,
-		},
 		sharedOrganizations: sharedOrganizations,
 		password: null,
 		folderId: user?.id === video.owner.id ? video.folderId : null,
@@ -1219,7 +1164,6 @@ async function AuthorizedContent({
 						}
 						sharedSpaces={sharedSpaces}
 						viewerCount={viewerCount}
-						userOrganizations={userOrganizations}
 						spacesData={spacesData}
 						branding={getSharePageBranding(videoWithOrganizationInfo)}
 						canManageSharePageBranding={canManageOrganizationSettings(
@@ -1254,7 +1198,6 @@ async function AuthorizedContent({
 				views={viewsPromise}
 				customDomain={customDomain}
 				domainVerified={domainVerified}
-				userOrganizations={userOrganizations}
 				viewerId={user?.id ?? null}
 				viewerSignedIn={user !== null}
 				initialView={initialShareView}

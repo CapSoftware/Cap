@@ -184,7 +184,6 @@ export const ShareHeader = ({
 	linkOpenToAnyone?: boolean;
 	sharedOrganizations?: { id: string; name: string }[];
 	viewerCount?: number;
-	userOrganizations?: { id: string; name: string }[];
 	sharedSpaces?: {
 		id: string;
 		name: string;
