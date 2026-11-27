@@ -98,6 +98,10 @@ pub struct EncoderBase {
     /// capture gap that lands on a fragment cut, playing post-gap content
     /// during the gap. The bool records whether the duration was synthesized.
     held_packet: Option<(Packet, bool)>,
+    frames_sent: u64,
+    packets_received: u64,
+    #[cfg(test)]
+    leave_packets_in_codec: bool,
 }
 
 impl EncoderBase {
@@ -110,7 +114,23 @@ impl EncoderBase {
             stream_index,
             last_written_dts: None,
             held_packet: None,
+            frames_sent: 0,
+            packets_received: 0,
+            #[cfg(test)]
+            leave_packets_in_codec: false,
         }
+    }
+
+    pub fn frames_in_codec(&self) -> u64 {
+        self.frames_sent.saturating_sub(self.packets_received)
+    }
+
+    /// The pts [`Self::update_pts`] would give a frame captured at
+    /// `timestamp`, without changing any state.
+    pub fn next_pts(&self, timestamp: Duration, time_base: ffmpeg::Rational) -> i64 {
+        let rate = time_base.denominator() as f64 / time_base.numerator() as f64;
+        let pts = (timestamp.as_secs_f64() * rate).round() as i64;
+        normalize_input_pts(pts - self.first_pts.unwrap_or(pts), self.last_frame_pts)
     }
 
     pub fn set_packet_stats(&mut self, stats: Arc<EncodedPacketStats>) {
@@ -203,8 +223,45 @@ impl EncoderBase {
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
         encoder.send_frame(frame)?;
+        self.frames_sent += 1;
 
         self.process_packets(output, encoder)
+    }
+
+    /// Ends `encoder`'s stream and writes everything it still held, keeping
+    /// the last packet back so the next encoder's first packet stamps its
+    /// real duration and the timeline stays continuous across the change.
+    /// A failure returns the error with the frames that never came back.
+    pub fn drain_for_handover<S: PacketSink + ?Sized>(
+        &mut self,
+        output: &mut S,
+        encoder: &mut encoder::encoder::Encoder,
+    ) -> Result<(), (ffmpeg::Error, u64)> {
+        let result = encoder
+            .send_eof()
+            .and_then(|()| self.process_packets(output, encoder))
+            .map_err(|error| (error, self.frames_in_codec()));
+        self.frames_sent = 0;
+        self.packets_received = 0;
+        result
+    }
+
+    /// Drops the codec's state the way a failed drain does, returning the
+    /// frames that never came back.
+    #[cfg(test)]
+    pub(crate) fn abandon_for_handover(&mut self) -> u64 {
+        let lost = self.frames_in_codec();
+        self.frames_sent = 0;
+        self.packets_received = 0;
+        self.leave_packets_in_codec = false;
+        lost
+    }
+
+    /// Discards the packets of the frames sent from now on, so they never
+    /// come back from the codec, like frames a hardware encoder still holds.
+    #[cfg(test)]
+    pub(crate) fn leave_packets_in_codec(&mut self) {
+        self.leave_packets_in_codec = true;
     }
 
     fn process_packets<S: PacketSink + ?Sized>(
@@ -213,6 +270,11 @@ impl EncoderBase {
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
         while packet_available(encoder.receive_packet(&mut self.packet))? {
+            #[cfg(test)]
+            if self.leave_packets_in_codec {
+                continue;
+            }
+            self.packets_received += 1;
             self.packet.set_stream(self.stream_index);
             self.packet.rescale_ts(
                 encoder.time_base(),

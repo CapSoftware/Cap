@@ -1,3 +1,4 @@
+use cap_enc_ffmpeg::h264::VideoEncoderChoice;
 use cap_project::{
     InstantRecordingMeta, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
 };
@@ -65,6 +66,11 @@ pub struct RecordParams {
     /// Maximum fps to record at, never above the display's refresh rate (Studio 1-240 on macOS and 1-120 elsewhere, Instant 1-120; camera recordings follow the desktop camera cap)
     #[arg(long)]
     fps: Option<u32>,
+    /// Video encoder for macOS Studio recordings without a camera: hardware keeps the hardware
+    /// encoder at sizes and frame rates where auto switches to the software encoder. On Windows
+    /// and Linux, hardware behaves like auto
+    #[arg(long, value_enum, default_value_t = VideoEncoderArg::Auto)]
+    video_encoder: VideoEncoderArg,
     /// Studio screen video bitrate in Mbps, replacing the quality preset's target (2-400)
     #[arg(long, value_name = "MBPS")]
     video_bitrate: Option<f64>,
@@ -129,6 +135,10 @@ impl RecordParams {
         if let Some(fps) = self.fps {
             args.push("--fps".to_string());
             args.push(fps.to_string());
+        }
+        if self.video_encoder == VideoEncoderArg::Hardware {
+            args.push("--video-encoder".to_string());
+            args.push("hardware".to_string());
         }
         if let Some(mbps) = self.video_bitrate {
             args.push("--video-bitrate".to_string());
@@ -291,6 +301,21 @@ fn storage_event(low: bool, storage: RecordingStorage) -> RecordEvent<'static> {
         reserved_bytes: storage
             .finalization_bytes()
             .saturating_add(disk_space::RECORDING_DISK_RESERVE_BYTES),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum VideoEncoderArg {
+    Auto,
+    Hardware,
+}
+
+impl From<VideoEncoderArg> for VideoEncoderChoice {
+    fn from(value: VideoEncoderArg) -> Self {
+        match value {
+            VideoEncoderArg::Auto => Self::Automatic,
+            VideoEncoderArg::Hardware => Self::Hardware,
+        }
     }
 }
 
@@ -1139,6 +1164,7 @@ async fn start_recording(
         RecordMode::Studio => {
             let builder = cap_recording::RecordingDefaults::default()
                 .apply_to_studio_builder(studio_builder, camera_active, params.fps)
+                .with_video_encoder(params.video_encoder.into())
                 .with_video_bitrate(params.video_bitrate.map(video_bitrate_bps));
 
             builder
@@ -1691,6 +1717,34 @@ fn emit_record_event(format: OutputFormat, event: &RecordEvent<'_>) -> Result<()
 mod tests {
     use super::*;
 
+    #[test]
+    fn detached_worker_receives_the_video_encoder_choice() {
+        #[derive(clap::Parser)]
+        struct Record {
+            #[command(flatten)]
+            params: RecordParams,
+        }
+        for (flag, choice) in [
+            (None, VideoEncoderArg::Auto),
+            (Some("auto"), VideoEncoderArg::Auto),
+            (Some("hardware"), VideoEncoderArg::Hardware),
+        ] {
+            let args = flag.map(|flag| vec!["--video-encoder".to_string(), flag.to_string()]);
+            let parsed = <Record as clap::Parser>::try_parse_from(
+                std::iter::once("record".to_string()).chain(args.unwrap_or_default()),
+            )
+            .unwrap()
+            .params;
+            assert_eq!(parsed.video_encoder, choice);
+            let forwarded = <Record as clap::Parser>::try_parse_from(
+                std::iter::once("record".to_string()).chain(parsed.to_cli_args()),
+            )
+            .unwrap()
+            .params;
+            assert_eq!(forwarded.video_encoder, choice, "{flag:?}");
+        }
+    }
+
     fn studio_params(mode: RecordMode, video_bitrate: Option<f64>) -> RecordParams {
         RecordParams {
             target: RecordTargets {
@@ -1703,6 +1757,7 @@ mod tests {
             system_audio: false,
             path: None,
             fps: None,
+            video_encoder: VideoEncoderArg::Auto,
             video_bitrate,
             duration: None,
         }
@@ -1760,6 +1815,7 @@ mod tests {
             system_audio: false,
             path: Some(path.clone()),
             fps: None,
+            video_encoder: VideoEncoderArg::Auto,
             video_bitrate: None,
             duration: None,
         };
@@ -1794,6 +1850,7 @@ mod tests {
                 system_audio: false,
                 path: Some(path.clone()),
                 fps: None,
+                video_encoder: VideoEncoderArg::Auto,
                 video_bitrate: None,
                 duration: Some(1.0),
             };
