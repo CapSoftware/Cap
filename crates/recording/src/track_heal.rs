@@ -852,6 +852,35 @@ mod tests {
         assert_eq!(stored_display_fps(project.path()), 30);
     }
 
+    #[test]
+    fn a_jittered_variable_rate_display_at_its_average_is_healed() {
+        let timestamps: Vec<Duration> = (0..24u64)
+            .flat_map(|burst| (0..5).map(move |i| (burst, burst * 20 + i)))
+            .map(|(burst, slot)| {
+                let jitter_us = (burst * 7919 + slot * 104_729) % 2_000;
+                Duration::from_nanos(slot * 1_000_000_000 / 30 + jitter_us * 1_000)
+            })
+            .collect();
+        let project = display_project(&timestamps, |display| get_video_fps(display).unwrap());
+        let average = stored_display_fps(project.path());
+        assert!(average < 10, "fixture averages {average} fps");
+
+        assert!(heal_average_display_fps(project.path()).unwrap());
+        assert_eq!(stored_display_fps(project.path()), 30);
+        assert!(!heal_average_display_fps(project.path()).unwrap());
+        assert_eq!(stored_display_fps(project.path()), 30);
+    }
+
+    #[test]
+    fn a_display_fps_that_differs_from_its_track_is_left_alone() {
+        let timestamps: Vec<Duration> = (0..180u64)
+            .map(|i| Duration::from_nanos(i * 1_000_000_000 / 60))
+            .collect();
+        let project = display_project(&timestamps, |_| 30);
+        assert!(!heal_average_display_fps(project.path()).unwrap());
+        assert_eq!(stored_display_fps(project.path()), 30);
+    }
+
     const USER_REPORT_CAMERA_SECS: f64 = 13.666;
 
     fn user_report_references() -> Vec<(&'static str, f64)> {
