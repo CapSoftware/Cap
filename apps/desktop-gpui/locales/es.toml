@@ -1429,6 +1429,7 @@ permissions_needed = "Concede los permisos necesarios para continuar"
 relaunch = "Reiniciar Cap"
 skip = "Omitir el recorrido"
 start = "Empezar a usar Cap"
+step = "Paso {current} de {total}"
 
 [onboarding.overview]
 subtitle = "Ya busques rapidez, calidad de estudio o una captura rápida, Cap tiene un modo para ello."
@@ -1441,6 +1442,7 @@ title = "Cambia de modo cuando quieras"
 [onboarding.welcome]
 click_or_press = "Haz clic aquí o pulsa"
 get_started = "Empezar"
+mute = "Silenciar"
 space_key = "Espacio"
 tagline = "La app de código abierto para compartir pantalla, para todo el mundo."
 

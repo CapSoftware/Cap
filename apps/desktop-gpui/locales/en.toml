@@ -1431,6 +1431,7 @@ permissions_needed = "Allow the required permissions to continue"
 relaunch = "Relaunch Cap"
 skip = "Skip the tour"
 start = "Start Using Cap"
+step = { text = "Step {current} of {total}", context = "Onboarding progress read by screen readers; {current} and {total} are whole numbers." }
 
 [onboarding.overview]
 subtitle = "Whether you need speed, studio quality, or a quick screenshot — Cap has a mode for it."
@@ -1443,6 +1444,7 @@ title = "Switch modes anytime"
 [onboarding.welcome]
 click_or_press = "Click here, or press"
 get_started = "Get Started"
+mute = "Mute"
 space_key = "Space"
 tagline = "The open source screen sharing app for everyone."
 

@@ -1429,6 +1429,7 @@ permissions_needed = "请授予所需权限以继续"
 relaunch = "重新启动 Cap"
 skip = "跳过导览"
 start = "开始使用 Cap"
+step = "第 {current} 步，共 {total} 步"
 
 [onboarding.overview]
 subtitle = "无论你需要速度、专业画质，还是快速截图，Cap 都有对应的模式。"
@@ -1441,6 +1442,7 @@ title = "随时切换模式"
 [onboarding.welcome]
 click_or_press = "点击此处，或按下"
 get_started = "开始使用"
+mute = "静音"
 space_key = "空格"
 tagline = "人人可用的开源屏幕分享应用。"
 

@@ -39,6 +39,7 @@ const FORMATTED: &[&str] = &[
     "main.storage.can_start",
     "main.storage.check_failed",
     "controls.settings.switch_failed",
+    "onboarding.nav.step",
 ];
 
 #[test]
@@ -611,6 +612,7 @@ fn main_surfaces_match_the_literals_they_replaced() {
             "Could not save the sound preference.",
         ),
         (tr::onboarding::welcome::get_started(), "Get Started"),
+        (tr::onboarding::welcome::mute(), "Mute"),
         (
             tr::onboarding::welcome::click_or_press(),
             "Click here, or press",
@@ -742,6 +744,7 @@ fn main_surfaces_match_the_literals_they_replaced() {
     for (translated, literal) in assembled {
         assert_eq!(*translated, literal.as_str());
     }
+    assert_eq!(tr::onboarding::nav::step(2, 6), "Step 2 of 6");
     let mut access = Vec::new();
     for noun in ["camera", "microphone"] {
         access.push(format!(

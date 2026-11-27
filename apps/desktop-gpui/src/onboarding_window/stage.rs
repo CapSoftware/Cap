@@ -454,6 +454,9 @@ impl OnboardingWindow {
                 "perm-row-{}",
                 permission.label()
             )))
+            .role(gpui::Role::Button)
+            .aria_label(permission.display_name())
+            .aria_description(caption)
             .flex()
             .flex_row()
             .items_center()
@@ -810,7 +813,7 @@ fn stage_title(paper: &Paper, title: &'static str) -> Div {
         .font_weight(FontWeight::MEDIUM)
         .text_color(paper.ink)
         .text_center()
-        .child(title)
+        .child(gpui::Text::new("stage-title".into(), title.into()))
 }
 
 fn stage_body(paper: &Paper, body: &'static str) -> Div {
@@ -822,7 +825,7 @@ fn stage_body(paper: &Paper, body: &'static str) -> Div {
         .font_weight(FontWeight::NORMAL)
         .text_color(paper.soft)
         .text_center()
-        .child(body)
+        .child(gpui::Text::new("stage-body".into(), body.into()))
 }
 
 fn allowed_pill(paper: &Paper, shown_at: Instant, still: bool) -> Div {
@@ -847,7 +850,10 @@ fn allowed_pill(paper: &Paper, shown_at: Instant, still: bool) -> Div {
             22.,
             22.,
         ))
-        .child(tr::permission::onboarding::status::allowed())
+        .child(gpui::Text::new(
+            "stage-allowed".into(),
+            tr::permission::onboarding::status::allowed().into(),
+        ))
 }
 
 /// The extension's `.cta`: an ink pill. Primary is filled; secondary is the
@@ -868,6 +874,8 @@ pub(crate) fn paper_button(
     };
     div()
         .id(id.into())
+        .role(gpui::Role::Button)
+        .aria_label(label)
         .flex()
         .items_center()
         .justify_center()
@@ -911,14 +919,18 @@ pub(crate) fn paper_heading(
         .items_center()
         .max_w(px(500.))
         .text_center()
-        .child(
+        .child({
+            let title: SharedString = title.into();
             div()
+                .id("paper-heading")
+                .role(gpui::Role::Heading)
+                .aria_label(title.clone())
                 .text_size(px(28.))
                 .text_color(paper.ink)
                 .font_weight(FontWeight::MEDIUM)
                 .line_height(px(34.))
-                .child(title.into()),
-        )
+                .child(title)
+        })
         .child(div().mt(px(4.)).child(doodle::doodle(
             &art::UNDERLINE,
             paper.palette(),
@@ -934,7 +946,7 @@ pub(crate) fn paper_heading(
                 .text_color(paper.soft)
                 .font_weight(FontWeight::NORMAL)
                 .line_height(px(22.))
-                .child(subtitle)
+                .child(gpui::Text::new("paper-heading-subtitle".into(), subtitle))
         }))
 }
 

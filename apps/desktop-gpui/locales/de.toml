@@ -1429,6 +1429,7 @@ permissions_needed = "Erteilen Sie die erforderlichen Berechtigungen, um fortzuf
 relaunch = "Cap neu starten"
 skip = "Tour überspringen"
 start = "Cap verwenden"
+step = "Schritt {current} von {total}"
 
 [onboarding.overview]
 subtitle = "Ob Tempo, Studioqualität oder ein schnelles Bildschirmfoto: Cap hat den passenden Modus."
@@ -1441,6 +1442,7 @@ title = "Modus jederzeit wechseln"
 [onboarding.welcome]
 click_or_press = "Hier klicken oder drücken:"
 get_started = "Los geht’s"
+mute = "Stummschalten"
 space_key = "Leertaste"
 tagline = "Die Open-Source-App zum Teilen des Bildschirms für alle."
 

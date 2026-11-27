@@ -1429,6 +1429,7 @@ permissions_needed = "जारी रखने के लिए ज़रूर
 relaunch = "Cap फिर से खोलें"
 skip = "टूर छोड़ें"
 start = "Cap इस्तेमाल करना शुरू करें"
+step = "चरण {current} / {total}"
 
 [onboarding.overview]
 subtitle = "चाहे आपको रफ़्तार चाहिए, स्टूडियो जैसी क्वालिटी या झटपट स्क्रीनशॉट, Cap में हर ज़रूरत के लिए एक मोड है।"
@@ -1441,6 +1442,7 @@ title = "कभी भी मोड बदलें"
 [onboarding.welcome]
 click_or_press = "यहाँ क्लिक करें, या दबाएँ"
 get_started = "शुरू करें"
+mute = "म्यूट करें"
 space_key = "स्पेस"
 tagline = "सबके लिए ओपन सोर्स स्क्रीन शेयरिंग ऐप।"
 
