@@ -48,6 +48,7 @@ function serveFixture(request: Request, body: Buffer): Response {
 
 const previousSecret = process.env.MEDIA_SERVER_WEBHOOK_SECRET;
 const previousInternalHosts = process.env.MEDIA_SERVER_INTERNAL_MEDIA_HOSTS;
+const previousAllowPrivateUrls = process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS;
 let server: ReturnType<typeof Bun.serve>;
 let origin = "";
 
@@ -77,6 +78,9 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+	if (previousAllowPrivateUrls === undefined)
+		delete process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS;
+	else process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = previousAllowPrivateUrls;
 	if (previousInternalHosts === undefined)
 		delete process.env.MEDIA_SERVER_INTERNAL_MEDIA_HOSTS;
 	else process.env.MEDIA_SERVER_INTERNAL_MEDIA_HOSTS = previousInternalHosts;
@@ -132,11 +136,12 @@ describe("POST /video/thumbnail with a remote video", () => {
 		expect((await response.json()).code).toBe("UNREADABLE_INPUT");
 	}, 30_000);
 
-	test("answers 422 for an address the server may not fetch", async () => {
+	test("answers 400 for an address the server may not fetch", async () => {
 		process.env.MEDIA_SERVER_INTERNAL_MEDIA_HOSTS = "";
+		process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = "false";
 		const response = await app.fetch(thumbnailRequest(`${origin}/video.mp4`));
-		expect(response.status).toBe(422);
-		expect((await response.json()).code).toBe("input-policy-violation");
+		expect(response.status).toBe(400);
+		expect((await response.json()).code).toBe("URL_NOT_ALLOWED");
 	}, 30_000);
 
 	test("a size request that fails is not taken for an unreadable file", async () => {

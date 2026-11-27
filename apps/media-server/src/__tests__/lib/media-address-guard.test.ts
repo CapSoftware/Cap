@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	assertMediaUrlAllowed,
 	classifyHostLiteral,
@@ -11,6 +11,7 @@ import {
 import { getSourceSize } from "../../lib/media-common";
 import { MediaInputPolicyError } from "../../lib/media-input-policy";
 import { childProcessEnv } from "../../lib/media-spawn";
+import { BlockedUrlError } from "../../lib/url-policy";
 
 const NONE: ReadonlySet<string> = new Set();
 const ANY: ReadonlySet<string> = new Set(["*"]);
@@ -21,12 +22,89 @@ function resolvesTo(...addresses: string[]): MediaAddressPolicy["resolveHost"] {
 
 const servers: { stop(force?: boolean): Promise<void> }[] = [];
 const savedHosts = process.env.MEDIA_SERVER_INTERNAL_MEDIA_HOSTS;
+const savedAllowedHosts = process.env.MEDIA_SERVER_ALLOWED_HOSTS;
+const savedAllowPrivate = process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS;
+const savedS3Endpoint = process.env.S3_INTERNAL_ENDPOINT;
+
+beforeEach(() => {
+	process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = "false";
+});
 
 afterEach(async () => {
 	await Promise.all(servers.splice(0).map((server) => server.stop(true)));
 	if (savedHosts === undefined)
 		delete process.env.MEDIA_SERVER_INTERNAL_MEDIA_HOSTS;
 	else process.env.MEDIA_SERVER_INTERNAL_MEDIA_HOSTS = savedHosts;
+	for (const [key, value] of [
+		["MEDIA_SERVER_ALLOWED_HOSTS", savedAllowedHosts],
+		["MEDIA_SERVER_ALLOW_PRIVATE_URLS", savedAllowPrivate],
+		["S3_INTERNAL_ENDPOINT", savedS3Endpoint],
+	] as const) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
+});
+
+describe("media address and URL policies", () => {
+	test("applies the host allowlist to each redirect without resolving twice", async () => {
+		process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = "false";
+		process.env.MEDIA_SERVER_ALLOWED_HOSTS = "allowed.example";
+		const lookups: string[] = [];
+		const requests: string[] = [];
+		const url = "https://allowed.example/video.mp4";
+		const guarded = createGuardedMediaFetch(url, {
+			resolveHost: async (host) => {
+				lookups.push(host);
+				return ["93.184.216.34"];
+			},
+			fetchImpl: Object.assign(
+				async (
+					input: Parameters<typeof fetch>[0],
+					init?: Parameters<typeof fetch>[1],
+				) => {
+					requests.push(String(input));
+					expect(new Headers(init?.headers).get("host")).toBe(
+						"allowed.example",
+					);
+					expect(init).toHaveProperty("proxy", false);
+					return new Response(null, {
+						status: 302,
+						headers: { location: "https://unlisted.example/video.mp4" },
+					});
+				},
+				{ preconnect: fetch.preconnect },
+			),
+		});
+		await expect(guarded(url)).rejects.toBeInstanceOf(BlockedUrlError);
+		expect(requests).toEqual(["https://93.184.216.34/video.mp4"]);
+		expect(lookups).toEqual(["allowed.example", "unlisted.example"]);
+	});
+
+	test("reads private storage configured through either host setting", async () => {
+		process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = "false";
+		const origin = serve(() => new Response("media"));
+		const port = new URL(origin.url).port;
+		const url = `http://storage.internal:${port}/video.mp4`;
+		const policy = { resolveHost: resolvesTo("127.0.0.1") };
+		process.env.MEDIA_SERVER_INTERNAL_MEDIA_HOSTS = "storage.internal";
+		let response = await createGuardedMediaFetch(url, policy)(url);
+		expect(await response.text()).toBe("media");
+		process.env.MEDIA_SERVER_INTERNAL_MEDIA_HOSTS = "";
+		process.env.S3_INTERNAL_ENDPOINT = `http://storage.internal:${port}`;
+		response = await createGuardedMediaFetch(url, policy)(url);
+		expect(await response.text()).toBe("media");
+		expect(origin.hits).toEqual(["/video.mp4", "/video.mp4"]);
+	});
+
+	test("does not grant a trusted storage host access to metadata", async () => {
+		process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = "false";
+		process.env.S3_INTERNAL_ENDPOINT = "http://storage.internal";
+		await expect(
+			assertMediaUrlAllowed("http://storage.internal/latest/meta-data/", {
+				resolveHost: resolvesTo("169.254.169.254"),
+			}),
+		).rejects.toBeInstanceOf(MediaAddressError);
+	});
 });
 
 function serve(handler: (request: Request) => Response) {

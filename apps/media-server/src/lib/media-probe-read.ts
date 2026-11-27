@@ -26,6 +26,7 @@ import {
 	looksLikeTextContainer,
 	MediaInputPolicyError,
 } from "./media-input-policy";
+import { BlockedUrlError } from "./url-policy";
 
 // What the parser reads out of a file. It runs in a probe worker, never in
 // the server process: see media-probe-pool.ts.
@@ -121,6 +122,7 @@ function asUnreadable(
 			error !== null &&
 			sourceReadErrors.has(error)) ||
 		isUnreadableMediaInput(error) ||
+		error instanceof BlockedUrlError ||
 		error instanceof MediaAddressError ||
 		isTimeout(error) ||
 		mediaInputTransportFailed(input)
@@ -132,11 +134,16 @@ function asUnreadable(
 
 // The first bytes of a remote input, an empty array for an empty file, or
 // null when it cannot be fetched.
-async function readHttpHead(path: string): Promise<Uint8Array | null> {
+async function readHttpHead(
+	path: string,
+	abortSignal?: AbortSignal,
+): Promise<Uint8Array | null> {
 	try {
 		const response = await createGuardedMediaFetch(path)(path, {
 			headers: { Range: `bytes=0-${SNIFF_BYTES - 1}` },
-			signal: AbortSignal.timeout(10_000),
+			signal: abortSignal
+				? AbortSignal.any([abortSignal, AbortSignal.timeout(10_000)])
+				: AbortSignal.timeout(10_000),
 		});
 		if (response.status === 416) {
 			await response.body?.cancel();
@@ -162,6 +169,7 @@ async function readHttpHead(path: string): Promise<Uint8Array | null> {
 	} catch (error) {
 		if (
 			error instanceof MediaInputPolicyError ||
+			error instanceof BlockedUrlError ||
 			error instanceof MediaAddressError ||
 			error instanceof MediaInputNotAccessibleError
 		)
@@ -213,10 +221,14 @@ export function playlistReferences(playlist: string): string[] {
 export async function assertRemotePlaylistStaysOnHost(
 	rootUrl: string,
 	timeoutMs = PLAYLIST_WALK_TIMEOUT_MS,
+	abortSignal?: AbortSignal,
 ): Promise<void> {
 	// One budget for the whole walk, shorter than the probe's own timeout, so
 	// no request from it is still running once the probe has given up.
-	const signal = AbortSignal.timeout(timeoutMs);
+	const timeout = AbortSignal.timeout(timeoutMs);
+	const signal = abortSignal
+		? AbortSignal.any([abortSignal, timeout])
+		: timeout;
 	const root = new URL(rootUrl);
 	const fetchPlaylist = createGuardedMediaFetch(rootUrl);
 	const queue = [rootUrl];
@@ -273,9 +285,12 @@ export interface ProbedMedia {
 	mayTrim: boolean;
 }
 
-export async function probeMedia(path: string): Promise<ProbedMedia> {
+export async function probeMedia(
+	path: string,
+	abortSignal?: AbortSignal,
+): Promise<ProbedMedia> {
 	if (isHttpUrl(path)) {
-		const head = await readHttpHead(path);
+		const head = await readHttpHead(path, abortSignal);
 		if (!head) throw new MediaInputNotAccessibleError();
 		if (head.length === 0) {
 			throw new UnreadableMediaInputError("Media input is empty");
@@ -287,7 +302,12 @@ export async function probeMedia(path: string): Promise<ProbedMedia> {
 				"the file is a playlist or resource list, not a media file",
 			);
 		}
-		if (isHlsPath(path)) await assertRemotePlaylistStaysOnHost(path);
+		if (isHlsPath(path))
+			await assertRemotePlaylistStaysOnHost(
+				path,
+				PLAYLIST_WALK_TIMEOUT_MS,
+				abortSignal,
+			);
 	}
 
 	const input = createMediaInput(path);

@@ -36,7 +36,15 @@ export type ProgressCallback = (progress: number, message: string) => void;
 export const PROCESS_TIMEOUT_MS = 45 * 60 * 1000;
 export const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 export const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
-const mediaFetch: typeof fetch = globalThis.fetch.bind(globalThis);
+const mediaFetch = ((input: string | URL | Request, init?: RequestInit) => {
+	const url =
+		typeof input === "string"
+			? input
+			: input instanceof URL
+				? input.toString()
+				: input.url;
+	return createGuardedMediaFetch(url)(url, init);
+}) as typeof fetch;
 
 const ENCODE_LENGTH_MARGIN_SECONDS = 2;
 const ENCODE_LENGTH_MARGIN_RATIO = 0.02;

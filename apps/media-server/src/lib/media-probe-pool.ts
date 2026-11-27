@@ -19,6 +19,7 @@ import {
 	UnreadableMediaInputError,
 } from "./media-probe-read";
 import { childProcessEnv } from "./media-spawn";
+import { BlockedUrlError, getUrlPolicy, type UrlPolicy } from "./url-policy";
 
 // The parser that reads a file's structure runs in the same language runtime
 // as the server, so a file that makes it allocate without bound or loop
@@ -33,12 +34,14 @@ export interface ProbeWorkerRequest {
 	op: ProbeWorkerOp;
 	path: string;
 	internalMediaHosts: string | null;
+	urlPolicy: UrlPolicy;
 }
 
 export interface ProbeWorkerFailure {
 	kind:
 		| "policy"
 		| "address"
+		| "url"
 		| "unreadable"
 		| "not-accessible"
 		| "unsupported-format"
@@ -46,6 +49,8 @@ export interface ProbeWorkerFailure {
 	message: string;
 	cause?: string;
 	status?: number | null;
+	url?: string;
+	reason?: string;
 }
 
 interface ProbeResults {
@@ -81,6 +86,11 @@ function failureToError(failure: ProbeWorkerFailure): Error {
 		return error;
 	}
 	if (failure.kind === "address") return new MediaAddressError(failure.message);
+	if (failure.kind === "url")
+		return new BlockedUrlError(
+			failure.url ?? "",
+			failure.reason ?? failure.message,
+		);
 	if (failure.kind === "not-accessible") {
 		return new MediaInputNotAccessibleError(failure.status ?? null);
 	}
@@ -138,7 +148,7 @@ function inProcess<Op extends ProbeWorkerOp>(
 		: stopped.signal;
 	const run =
 		op === "metadata"
-			? probeMedia(path)
+			? probeMedia(path, combined)
 			: op === "trackSpans"
 				? computeTrackSpans(path)
 				: measureFastestFrameRate(path, combined);
@@ -158,6 +168,7 @@ function inWorker<Op extends ProbeWorkerOp>(
 			op,
 			path,
 			internalMediaHosts: process.env.MEDIA_SERVER_INTERNAL_MEDIA_HOSTS ?? null,
+			urlPolicy: getUrlPolicy(),
 		},
 		timeoutMs,
 		signal,
