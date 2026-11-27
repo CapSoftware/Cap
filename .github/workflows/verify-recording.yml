@@ -462,6 +462,103 @@ jobs:
             ${{ github.workspace }}/verify-scratch
           if-no-files-found: ignore
 
+  real-capture-windows-audio:
+    name: real-capture (windows-2022, system audio)
+    continue-on-error: true
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      CAP_VERIFY_CAPTURE: display
+      CAP_VERIFY_REQUIRE_CAPTURE: "1"
+      CAP_VERIFY_TIER: ${{ needs.scope.outputs.tier }}
+      CAP_VERIFY_REPEAT: ${{ inputs.repeat || (github.event_name == 'schedule' && '3') || '1' }}
+      CAP_VERIFY_CASE: ${{ inputs.case_filter || '' }}
+      CAP_VERIFY_KEEP: ${{ inputs.keep_artifacts && '1' || '' }}
+      CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
+      CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
+      CAP_VERIFY_DUMP: ${{ github.workspace }}/verify-dump
+      CAP_VERIFY_HOST: github-hosted
+      CAP_VERIFY_REQUIRE_SUPPORTED: "1"
+      CAP_VERIFY_REQUIRE_SYSTEM_AUDIO: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup
+        id: setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-pc-windows-msvc
+          tier: fast
+
+      - name: Build
+        shell: bash
+        run: |
+          start=$(date +%s)
+          cargo build --locked --profile ci-verify -p cap-verify-stimulus
+          cargo test --locked --profile ci-verify -p cap-verify --test recording --no-run
+          echo "build seconds: $(( $(date +%s) - start ))"
+
+      # Without the manifest the next restore cannot tell which sources the
+      # cached build came from (scripts/verify/mtime.py).
+      - name: Record sources of the cached build
+        if: false
+        shell: bash
+        run: |
+          "$(command -v python3 || command -v python)" scripts/verify/mtime.py record target/ci-verify/verify-src-manifest.txt
+
+      - name: Save build cache
+        if: false
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/ci-verify/
+          key: ${{ steps.setup.outputs.build-cache-key }}
+
+      - name: Install virtual audio device (Windows)
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/duncanthrax/scream/releases/download/3.6/Scream3.6.zip -OutFile Scream3.6.zip
+          $expected = "25ea5e778b4e6995a98d448b9b5f6d321f681663f1aeeec69d8e63183d008b19"
+          $actual = (Get-FileHash -Algorithm SHA256 Scream3.6.zip).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Scream3.6.zip SHA-256 mismatch: got $actual, expected $expected" }
+          Expand-Archive -Path Scream3.6.zip -DestinationPath Scream
+          $cert = (Get-AuthenticodeSignature Scream\Install\driver\Scream.sys).SignerCertificate
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new("TrustedPublisher", "LocalMachine")
+          $store.Open("ReadWrite")
+          $store.Add($cert)
+          $store.Close()
+          Scream\Install\helpers\devcon.exe install Scream\Install\driver\Scream.inf *Scream
+          if ($LASTEXITCODE -gt 1) { throw "devcon install failed with exit code $LASTEXITCODE" }
+          Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
+          Get-CimInstance Win32_SoundDevice | Format-Table Name, Status
+      - name: Real-capture recording oracle
+        shell: bash
+        run: cargo test --locked --profile ci-verify -p cap-verify --test recording -- --nocapture
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: python scripts/verify/summary.py --title "real capture windows-2022 system audio ${{ needs.scope.outputs.tier }}" "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-recording-windows-2022-audio
+          path: |
+            ${{ github.workspace }}/verify-report
+            ${{ github.workspace }}/verify-dump
+            ${{ github.workspace }}/verify-scratch
+          if-no-files-found: ignore
+
   # The check to require: green when the change is out of scope or every
   # planned runner passed with at least the tier's case count.
   gate:
