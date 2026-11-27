@@ -371,7 +371,7 @@ impl Render for Sidebar {
                 tr::documents::home::title().into(),
                 is(&Scope::All),
             )
-            .role(gpui::Role::ListItem)
+            .role(gpui::Role::Tab)
             .aria_selected(is(&Scope::All))
             .on_click(show(Scope::All)),
         );
@@ -383,7 +383,7 @@ impl Render for Sidebar {
                     tr::documents::sidebar::pinned().into(),
                     is(&Scope::Pinned),
                 )
-                .role(gpui::Role::ListItem)
+                .role(gpui::Role::Tab)
                 .aria_selected(is(&Scope::Pinned))
                 .on_click(show(Scope::Pinned)),
             );
@@ -415,7 +415,7 @@ impl Render for Sidebar {
                     let id = row.id.clone();
                     div()
                         .id(SharedString::from(format!("recent-{}", row.id)))
-                        .role(gpui::Role::ListItem)
+                        .role(gpui::Role::Tab)
                         .aria_selected(active)
                         .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                         .aria_label(row.title.clone())
@@ -489,7 +489,7 @@ impl Render for Sidebar {
                     folder.name.clone().into(),
                     is(&target),
                 )
-                .role(gpui::Role::ListItem)
+                .role(gpui::Role::Tab)
                 .aria_selected(is(&target))
                 .on_click(show(target.clone()))
                 .on_mouse_down(
@@ -568,7 +568,7 @@ impl Render for Sidebar {
             .child(
                 div()
                     .id("documents-nav")
-                    .role(gpui::Role::List)
+                    .role(gpui::Role::TabList)
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
@@ -581,7 +581,7 @@ impl Render for Sidebar {
             .child(
                 div()
                     .id("documents-nav-end")
-                    .role(gpui::Role::List)
+                    .role(gpui::Role::TabList)
                     .pt(px(6.))
                     .pb(px(12.))
                     .child(
@@ -591,7 +591,7 @@ impl Render for Sidebar {
                             tr::documents::sidebar::trash().into(),
                             is(&Scope::Trash),
                         )
-                        .role(gpui::Role::ListItem)
+                        .role(gpui::Role::Tab)
                         .aria_selected(is(&Scope::Trash))
                         .when(trashed > 0, |el| {
                             el.child(
