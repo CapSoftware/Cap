@@ -1493,6 +1493,8 @@ async fn build_instant_recording_actor(
                     .ok_or_else(|| anyhow::anyhow!("Missing shareable content"))?,
                 #[cfg(target_os = "macos")]
                 inputs.excluded_windows,
+                #[cfg(target_os = "macos")]
+                true,
             )
             .await
             .context("screen capture init")?;
