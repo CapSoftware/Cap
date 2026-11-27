@@ -37,7 +37,7 @@ use windows::{
     core::{Interface, PCWSTR},
 };
 
-use crate::call_output::{Chooser, Followed, Meant, Session, followed, meant_audible};
+use crate::call_output::{Chooser, Followed, Heard, Meant, Session, followed, meant_audible};
 
 pub(crate) struct ComGuard(bool);
 
@@ -79,30 +79,26 @@ fn active_endpoints(enumerator: &IMMDeviceEnumerator, flow: EDataFlow) -> Vec<(S
         .collect()
 }
 
-/// A session is heard when its peak is above this (about -60 dBFS): a
-/// silent stream kept open plays exact zeros.
-const AUDIBLE_PEAK: f32 = 0.001;
-
-/// For how many looks a session counts as heard after its last sound. The
-/// peak is read at each look, so pauses between words are bridged.
-const HEARD_LOOKS: u64 = 3;
+/// How often the watch looks while only a call's process tree is read: a
+/// tab of the call's app that starts playing on another output is left out
+/// within this.
+const CALL_ONLY_LOOK: Duration = Duration::from_millis(500);
 
 /// The audio sessions of every endpoint looked at, by endpoint id. A
 /// session manager is kept for as long as its endpoint is there.
 #[derive(Default)]
 struct Managers {
     managers: HashMap<String, IAudioSessionManager2>,
-    /// The look a playing session (endpoint, process) was last heard in.
-    heard: HashMap<(String, u32), u64>,
-    looks: u64,
+    /// When each playing session (endpoint, process) was last heard.
+    heard: Heard,
+    epoch: Option<std::time::Instant>,
 }
 
 impl Managers {
     /// Starts a look: sessions not heard for a while are forgotten.
     fn next_look(&mut self) {
-        self.looks += 1;
-        let now = self.looks;
-        self.heard.retain(|_, at| now - *at < HEARD_LOOKS);
+        let epoch = *self.epoch.get_or_insert_with(std::time::Instant::now);
+        self.heard.next_look(epoch.elapsed().as_millis() as u64);
     }
 
     /// The sessions of one endpoint. `meter`: whether to read how loud
@@ -141,19 +137,17 @@ impl Managers {
                 continue;
             };
             let active = unsafe { control.GetState() }.is_ok_and(|s| s == AudioSessionStateActive);
-            let key = (id.to_string(), pid);
-            if meter
-                && active
-                && control
-                    .cast::<IAudioMeterInformation>()
-                    .and_then(|m| unsafe { m.GetPeakValue() })
-                    .is_ok_and(|peak| peak > AUDIBLE_PEAK)
-            {
-                self.heard.insert(key.clone(), self.looks);
-            }
-            let heard = meter && self.heard.contains_key(&key);
+            let peak = (meter && active)
+                .then(|| {
+                    control
+                        .cast::<IAudioMeterInformation>()
+                        .and_then(|m| unsafe { m.GetPeakValue() })
+                        .ok()
+                })
+                .flatten();
+            let heard = meter && self.heard.note(id, pid, peak);
             out.push(Session {
-                endpoint: key.0,
+                endpoint: id.to_string(),
                 pid,
                 active,
                 heard,
@@ -244,14 +238,9 @@ fn audible(enumerator: &IMMDeviceEnumerator, managers: &mut Managers, meant: Mea
         managers.sessions(&id, &device, true, &mut sessions);
     }
     let ours = std::process::id();
-    let look = managers.looks;
     let heard: Vec<u32> = sessions
         .iter()
-        .filter(|s| {
-            s.pid != 0
-                && s.pid != ours
-                && managers.heard.get(&(s.endpoint.clone(), s.pid)) == Some(&look)
-        })
+        .filter(|s| s.pid != 0 && s.pid != ours && managers.heard.now(&s.endpoint, s.pid))
         .map(|s| s.pid)
         .collect();
     meant_audible(&heard, meant, super::procs::tree)
@@ -282,7 +271,10 @@ impl CallOutputWatch {
                     let mut chooser = Chooser::default();
                     let mut last: Option<Option<String>> = None;
                     let mut last_seen: Option<Option<Followed>> = None;
+                    // What looks cost, logged every 30 looks (debug).
+                    let (mut spent_us, mut slowest_us, mut timed) = (0u128, 0u128, 0u32);
                     while !stop.load(Ordering::Acquire) {
+                        let started = std::time::Instant::now();
                         let (now, seen) = look(&enumerator, &mut managers, &mut chooser);
                         // What plays there changing is sent too (the same
                         // output again), so the reader acts on it at once.
@@ -297,13 +289,30 @@ impl CallOutputWatch {
                         {
                             audible_looks.fetch_add(1, Ordering::Relaxed);
                         }
+                        let took = started.elapsed().as_micros();
+                        spent_us += took;
+                        slowest_us = slowest_us.max(took);
+                        timed += 1;
+                        if timed == 30 {
+                            tracing::debug!(
+                                mean_us = spent_us / 30,
+                                max_us = slowest_us,
+                                call_only = matches!(meant, Some(Meant::Tree(_))),
+                                "call output looks"
+                            );
+                            (spent_us, slowest_us, timed) = (0, 0, 0);
+                        }
                         if last.as_ref() != Some(&now) || moved {
                             if changes.send(now.clone()).is_err() {
                                 return;
                             }
                             last = Some(now);
                         }
-                        std::thread::park_timeout(every);
+                        std::thread::park_timeout(if matches!(meant, Some(Meant::Tree(_))) {
+                            CALL_ONLY_LOOK
+                        } else {
+                            every
+                        });
                     }
                 }
             })?;

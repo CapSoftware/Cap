@@ -145,8 +145,8 @@ pub struct Followed {
     /// Processes playing on other outputs right now (not Cap, not the
     /// system sounds).
     pub elsewhere: Vec<u32>,
-    /// `call` or a process it started plays on another output too. Reading
-    /// the call's process tree would then take that output in as well.
+    /// `call` or a process it started is heard on another output too.
+    /// Reading the call's process tree would then take that output in.
     pub call_elsewhere: bool,
 }
 
@@ -167,10 +167,16 @@ pub fn followed(
         .collect();
     elsewhere.sort_unstable();
     elsewhere.dedup();
+    // Heard there, not only open: a browser keeps a silent stream open on
+    // the default output while its call plays elsewhere.
     let call_elsewhere = call.is_some_and(|root| {
-        elsewhere
-            .iter()
-            .any(|pid| chain(*pid, procs).contains(&root))
+        playing.iter().any(|s| {
+            s.endpoint != endpoint
+                && s.heard
+                && s.pid != 0
+                && s.pid != ours
+                && chain(s.pid, procs).contains(&root)
+        })
     });
     Followed {
         endpoint: endpoint.to_string(),
@@ -208,6 +214,48 @@ fn call_root(pids: &[u32], procs: &HashMap<u32, Proc>) -> Option<u32> {
                 .is_some_and(|exe| !exe.is_empty() && !LAUNCHERS.contains(&exe))
                 .then_some(root)
         }
+    }
+}
+
+/// A session is heard when its peak is above this (about -60 dBFS): a
+/// silent stream kept open plays exact zeros.
+pub(crate) const AUDIBLE_PEAK: f32 = 0.001;
+
+/// How long a session counts as heard after its last sound, so pauses
+/// between words are bridged. It counts as heard from the first look its
+/// peak is above [`AUDIBLE_PEAK`].
+pub(crate) const HEARD_FOR_MS: u64 = 6_000;
+
+/// When each playing session (endpoint, process) was last heard.
+#[derive(Debug, Default)]
+pub(crate) struct Heard {
+    at: HashMap<(String, u32), u64>,
+    look_ms: u64,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl Heard {
+    /// Starts a look at `now_ms`: sessions not heard for a while are
+    /// forgotten.
+    pub(crate) fn next_look(&mut self, now_ms: u64) {
+        self.look_ms = now_ms;
+        self.at
+            .retain(|_, at| now_ms.saturating_sub(*at) < HEARD_FOR_MS);
+    }
+
+    /// One session's peak in this look (`None`: not read); whether it counts
+    /// as heard.
+    pub(crate) fn note(&mut self, endpoint: &str, pid: u32, peak: Option<f32>) -> bool {
+        let key = (endpoint.to_string(), pid);
+        if peak.is_some_and(|peak| peak > AUDIBLE_PEAK) {
+            self.at.insert(key.clone(), self.look_ms);
+        }
+        self.at.contains_key(&key)
+    }
+
+    /// Heard in this very look.
+    pub(crate) fn now(&self, endpoint: &str, pid: u32) -> bool {
+        self.at.get(&(endpoint.to_string(), pid)) == Some(&self.look_ms)
     }
 }
 
@@ -450,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn the_call_playing_on_another_output_too_is_marked() {
+    fn the_call_heard_on_another_output_too_is_marked() {
         let recording = [session(HEADSET_MIC, 4100)];
         let tree = procs(&[
             (4000, 1, "chrome.exe"),
@@ -459,30 +507,69 @@ mod tests {
             (800, 1, "music.exe"),
         ]);
         // The browser's audio service plays the call on the speakers and
-        // another tab on the headset: its tree is on both outputs.
-        let playing = [session(SPEAKERS, 4100), session(HEADSET, 4100)];
+        // another tab on the headset: its tree is heard on both outputs.
+        let playing = [session(SPEAKERS, 4100), heard(HEADSET, 4100)];
         let there = followed(SPEAKERS, &playing, &recording, &tree, OURS);
         assert_eq!(there.call, Some(4100));
         assert!(there.call_elsewhere);
-        // Another app elsewhere, the call only on this output: as before.
-        let playing = [session(SPEAKERS, 4100), session(HEADSET, 800)];
+        // A process the call started is heard elsewhere.
+        let playing = [session(SPEAKERS, 4100), heard(HEADSET, 4150)];
+        let there = followed(SPEAKERS, &playing, &recording, &tree, OURS);
+        assert!(there.call_elsewhere);
+        // The call followed to the headset, the same audio service keeping a
+        // silent stream open on the speakers (a page's audio context): only
+        // open there, not heard, so the call alone can still be read.
+        let playing = [heard(HEADSET, 4100), session(SPEAKERS, 4100)];
+        let there = followed(HEADSET, &playing, &recording, &tree, OURS);
+        assert_eq!(
+            (there.call, there.elsewhere.clone()),
+            (Some(4100), vec![4100])
+        );
+        assert!(!there.call_elsewhere);
+        // Another app heard elsewhere, the call only on this output: as before.
+        let playing = [session(SPEAKERS, 4100), heard(HEADSET, 800)];
         let there = followed(SPEAKERS, &playing, &recording, &tree, OURS);
         assert_eq!(
             (there.call, there.elsewhere.clone()),
             (Some(4100), vec![800])
         );
         assert!(!there.call_elsewhere);
-        // A process the call started plays elsewhere.
-        let playing = [session(SPEAKERS, 4100), session(HEADSET, 4150)];
-        let there = followed(SPEAKERS, &playing, &recording, &tree, OURS);
-        assert_eq!(there.call, Some(4100));
-        assert!(there.call_elsewhere);
         // The browser that started the call's audio service (not in the
-        // call's tree) plays elsewhere: the call alone can still be read.
-        let playing = [session(SPEAKERS, 4100), session(HEADSET, 4000)];
+        // call's tree) is heard elsewhere: the call alone can still be read.
+        let playing = [session(SPEAKERS, 4100), heard(HEADSET, 4000)];
         let there = followed(SPEAKERS, &playing, &recording, &tree, OURS);
         assert_eq!(there.call, Some(4100));
         assert!(!there.call_elsewhere);
+    }
+
+    #[test]
+    fn a_session_is_heard_from_its_first_audible_look_and_bridged_after() {
+        let mut heard = Heard::default();
+        heard.next_look(0);
+        // Open but silent (exact zeros), or not read: not heard.
+        assert!(!heard.note("a", 1, Some(0.0)));
+        assert!(!heard.note("a", 1, None));
+        // Heard from the first look with sound.
+        heard.next_look(500);
+        assert!(heard.note("a", 1, Some(0.01)));
+        assert!(heard.now("a", 1));
+        // A pause is bridged...
+        heard.next_look(1_000);
+        assert!(heard.note("a", 1, Some(0.0)));
+        assert!(!heard.now("a", 1));
+        heard.next_look(6_499);
+        assert!(heard.note("a", 1, None));
+        // ...for 6 s.
+        heard.next_look(6_500);
+        assert!(!heard.note("a", 1, Some(0.0)));
+        // As before at one look every 2 s: heard at 0, 2 and 4 s, not at 6 s.
+        let mut slow = Heard::default();
+        slow.next_look(10_000);
+        assert!(slow.note("b", 2, Some(0.5)));
+        for (at, still) in [(12_000, true), (14_000, true), (16_000, false)] {
+            slow.next_look(at);
+            assert_eq!(slow.note("b", 2, Some(0.0)), still, "{at}");
+        }
     }
 
     #[test]
