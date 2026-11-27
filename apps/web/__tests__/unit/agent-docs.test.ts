@@ -32,6 +32,7 @@ const correctedReferenceSlugs = [
 	"s3-config",
 	"s3-config/aws-s3",
 	"s3-config/cloudflare-r2",
+	"s3-config/neon",
 	"api/rest-api",
 	"api/webhooks",
 ];

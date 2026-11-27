@@ -175,7 +175,25 @@ describe("organization storage S3 endpoint policy", () => {
 		};
 		expect(requestHandler.httpAgent).toBeInstanceOf(HttpAgent);
 		expect(requestHandler.httpsAgent).toBeInstanceOf(HttpsAgent);
+		expect(state.s3Configs[0]?.forcePathStyle).toBeUndefined();
 		expect(state.send).toHaveBeenCalledTimes(1);
+	});
+
+	it("tests Neon endpoints with path-style requests through public-only agents", async () => {
+		await expect(
+			testOrganizationS3Config(
+				input(
+					"https://br-cool-darkness-a1b2c3d4.storage.c-2.us-east-2.aws.neon.tech",
+				),
+			),
+		).resolves.toEqual({ success: true });
+
+		expect(state.s3Configs).toHaveLength(1);
+		expect(state.s3Configs[0]?.forcePathStyle).toBe(true);
+		const requestHandler = state.s3Configs[0]?.requestHandler as {
+			httpsAgent?: unknown;
+		};
+		expect(requestHandler.httpsAgent).toBeInstanceOf(HttpsAgent);
 	});
 
 	it.each([
