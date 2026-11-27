@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
 	mediaJobFailed: vi.fn(),
 	mediaRejection: vi.fn(),
 	sleep: vi.fn(),
+	freePlanLimit: vi.fn(),
+	set: vi.fn(),
 	env: {} as Record<string, string>,
 	loomSourceUrl: "https://cdn.loom.com/original.mp4",
 }));
@@ -30,7 +32,12 @@ vi.mock("@cap/database", () => ({
 				innerJoin: () => ({ where: mocks.where }),
 			}),
 		}),
-		update: () => ({ set: () => ({ where: mocks.write }) }),
+		update: () => ({
+			set: (values: unknown) => {
+				mocks.set(values);
+				return { where: mocks.write };
+			},
+		}),
 		delete: () => ({ where: mocks.write }),
 	}),
 }));
@@ -41,6 +48,7 @@ vi.mock("@cap/database/schema", () => ({
 	agentApiOperations: {},
 }));
 vi.mock("@cap/env", () => ({
+	buildEnv: {},
 	serverEnv: () => ({
 		MEDIA_SERVER_URL: "https://worker.example.com",
 		WEB_URL: "https://cap.example.com",
@@ -50,6 +58,8 @@ vi.mock("@cap/env", () => ({
 }));
 vi.mock("@cap/web-domain", () => ({
 	Video: {
+		FREE_PLAN_MAX_RECORDING_SECONDS: 300,
+		FREE_PLAN_DURATION_ERROR_PREFIX: "free-plan-duration-exceeded",
 		VideoId: { make: (id: string) => id },
 		Video: { decodeSync: (value: unknown) => value },
 	},
@@ -81,11 +91,20 @@ vi.mock("@/lib/media-processing-policy", async (importOriginal) => ({
 	getMediaProcessingRejection: mocks.mediaRejection,
 }));
 
+vi.mock("@/lib/free-plan-duration", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/free-plan-duration")>()),
+	getFreePlanDurationLimit: mocks.freePlanLimit,
+}));
+
 vi.mock("@/lib/loom-media-dispatch", () => ({
 	recordLoomMediaDispatch: mocks.dispatch,
 	isLoomMediaJobFailed: mocks.mediaJobFailed,
 }));
 
+import {
+	freePlanDurationExceededError,
+	freePlanDurationExceededMessage,
+} from "@/lib/free-plan-duration";
 import { transcribeVideo } from "@/lib/transcribe";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 import { processVideoWorkflow } from "@/workflows/process-video";
@@ -129,6 +148,8 @@ describe("media processing workflows", () => {
 		mocks.rows = [];
 		mocks.env = {};
 		mocks.mediaRejection.mockReset().mockResolvedValue(null);
+		mocks.freePlanLimit.mockReset().mockResolvedValue(null);
+		mocks.set.mockReset();
 		mocks.loomSourceUrl = "https://cdn.loom.com/original.mp4";
 		mocks.where
 			.mockReset()
@@ -355,6 +376,74 @@ describe("media processing workflows", () => {
 		);
 		expect(mocks.fetch).toHaveBeenCalledOnce();
 		expect(mocks.sleep).not.toHaveBeenCalledWith(15_000);
+	});
+
+	describe("free plan duration limit", () => {
+		const uploadStartedAt = new Date("2026-11-27T09:00:00Z");
+		const dispatchedRows = (limited = false) => [
+			[video],
+			[{ ...pending, rawFileKey: payload.rawFileKey }],
+			[video],
+			...(limited ? [[{ startedAt: uploadStartedAt }]] : []),
+			[pending],
+			[],
+			[metadata],
+			[video],
+			[],
+		];
+		const dispatchBody = () =>
+			JSON.parse(String(mocks.fetch.mock.calls[0]?.[1]?.body));
+
+		it("asks the media server to measure a free plan upload against the limit", async () => {
+			mocks.freePlanLimit.mockResolvedValue(330);
+			mocks.rows = dispatchedRows(true);
+			await expect(processVideoWorkflow(payload)).resolves.toMatchObject({
+				success: true,
+			});
+			expect(mocks.freePlanLimit).toHaveBeenCalledWith(video);
+			const body = dispatchBody();
+			expect(body.maxOutputSeconds).toBe(330);
+			expect(new URL(body.webhookUrl).searchParams.get("freePlanLimit")).toBe(
+				String(uploadStartedAt.getTime()),
+			);
+		});
+
+		it("sends Pro and self-hosted uploads exactly as before", async () => {
+			mocks.rows = dispatchedRows();
+			await expect(processVideoWorkflow(payload)).resolves.toMatchObject({
+				success: true,
+			});
+			const body = dispatchBody();
+			expect(body).not.toHaveProperty("maxOutputSeconds");
+			expect(body.webhookUrl).toBe(
+				"https://cap.example.com/api/webhooks/media-server/progress?retryable=true",
+			);
+		});
+
+		it("stops at the first over-limit result and keeps the upgrade message", async () => {
+			mocks.freePlanLimit.mockResolvedValue(330);
+			const processingError = freePlanDurationExceededError;
+			mocks.rows = [
+				[video],
+				[{ ...pending, rawFileKey: payload.rawFileKey }],
+				[video],
+				[{ startedAt: uploadStartedAt }],
+				[{ ...pending, phase: "error", processingError }],
+			];
+			await expect(processVideoWorkflow(payload)).rejects.toThrow(
+				"free-plan-duration-exceeded",
+			);
+			expect(mocks.fetch).toHaveBeenCalledOnce();
+			expect(mocks.sleep).not.toHaveBeenCalledWith(15_000);
+			expect(mocks.set).toHaveBeenLastCalledWith(
+				expect.objectContaining({
+					phase: "error",
+					processingError,
+					processingMessage: freePlanDurationExceededMessage,
+				}),
+			);
+			expect(mocks.remove).not.toHaveBeenCalled();
+		});
 	});
 
 	it("does not dispatch Loom imports that fail the processing gate", async () => {

@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
 	createUploadTargetForUser: vi.fn(),
 	createUploadTargetForVideo: vi.fn(),
 	revalidatePath: vi.fn(),
+	isPro: true,
 }));
 
 vi.mock("@cap/database", () => {
@@ -102,7 +103,7 @@ vi.mock("@cap/database/video-sharing-default", () => ({
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ CAP_VIDEOS_DEFAULT_PUBLIC: true }),
 }));
-vi.mock("@cap/utils", () => ({ userIsPro: () => true }));
+vi.mock("@cap/utils", () => ({ userIsPro: () => mocks.isPro }));
 vi.mock("@cap/web-backend", () => ({
 	Storage: {
 		createUploadTargetForUser: mocks.createUploadTargetForUser,
@@ -174,6 +175,7 @@ beforeEach(() => {
 	mocks.store = { videos: new Map(), uploads: new Map(), folders: new Map() };
 	mocks.rejectUpload = false;
 	mocks.transactionCalls = 0;
+	mocks.isPro = true;
 	mocks.currentUser.mockResolvedValue({ id: "fixture-user" });
 	mocks.organizationAccess.mockResolvedValue(undefined);
 	mocks.createUploadTargetForUser.mockReturnValue(
@@ -231,6 +233,60 @@ describe("video creation with upload progress", () => {
 		expect(mocks.store.videos.size).toBe(0);
 		expect(mocks.transactionCalls).toBe(0);
 		expect(mocks.createUploadTargetForUser).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		"abc\\',sleep(2)",
+		"ABCDEFGHJKMNPQR",
+		"0123456789abcd",
+		"0123456789abcdef",
+		"0123456789abcdi",
+	])("rejects a new recording with id %s", async (id) => {
+		await expect(
+			createVideoAndGetUploadUrl({
+				orgId,
+				videoId: Video.VideoId.make(id),
+				supportsUploadProgress: true,
+			}),
+		).rejects.toThrow("Invalid video id");
+		expect(mocks.store.videos.size).toBe(0);
+		expect(mocks.store.uploads.size).toBe(0);
+		expect(mocks.transactionCalls).toBe(0);
+		expect(mocks.createUploadTargetForUser).not.toHaveBeenCalled();
+	});
+
+	it("accepts a new recording with a Cap video id", async () => {
+		const videoId = Video.VideoId.make("0123456789abcde");
+		const result = await createVideoAndGetUploadUrl({ orgId, videoId });
+		expect(result.id).toBe(videoId);
+		expect(mocks.store.videos.get(videoId)?.ownerId).toBe("fixture-user");
+	});
+
+	it("signs an existing owned recording without creating one", async () => {
+		const videoId = Video.VideoId.make("fixture-video");
+		const existingVideo = {
+			id: videoId,
+			ownerId: "fixture-user",
+			orgId,
+			name: "Fixture recording",
+			public: true,
+			source: { type: "webMP4" },
+			bucket: null,
+			storageIntegrationId: null,
+			metadata: null,
+			folderId: null,
+			transcriptionStatus: null,
+			width: null,
+			height: null,
+			duration: null,
+			createdAt: new Date(0),
+			updatedAt: new Date(0),
+		};
+		mocks.store.videos.set(videoId, existingVideo);
+		const result = await createVideoAndGetUploadUrl({ orgId, videoId });
+		expect(result.id).toBe(videoId);
+		expect(mocks.transactionCalls).toBe(0);
+		expect(mocks.createUploadTargetForVideo).toHaveBeenCalledOnce();
 	});
 
 	it("rolls back a recording when the progress insert fails", async () => {
@@ -402,5 +458,65 @@ describe.each([
 
 		expect(mocks.store.videos.get(result.id)?.folderId).toBeUndefined();
 		expect(mocks.createUploadTargetForUser).toHaveBeenCalledOnce();
+	});
+});
+
+describe("dashboard imports on the free plan", () => {
+	beforeEach(() => {
+		mocks.isPro = false;
+	});
+
+	it.each([
+		{ name: "no duration", duration: undefined },
+		{ name: "an understated duration", duration: 120 },
+		{ name: "an honest five minutes", duration: 300 },
+		{ name: "a duration over the limit", duration: 301 },
+	])("refuses a processed upload with $name", async ({ duration }) => {
+		await expect(
+			createVideoForServerProcessing({ orgId, duration }),
+		).rejects.toThrow("upgrade_required");
+		expect(mocks.createUploadTargetForUser).not.toHaveBeenCalled();
+		expect(mocks.store.videos.size).toBe(0);
+	});
+
+	it.each([
+		{ name: "no duration", duration: undefined },
+		{ name: "an understated duration", duration: 120 },
+		{ name: "an honest duration", duration: 299 },
+	])("refuses a video upload URL with $name", async ({ duration }) => {
+		await expect(
+			createVideoAndGetUploadUrl({ orgId, duration, isUpload: true }),
+		).rejects.toThrow("upgrade_required");
+		await expect(
+			createVideoAndGetUploadUrl({
+				orgId,
+				duration,
+				videoId: Video.VideoId.make("existing-video"),
+			}),
+		).rejects.toThrow("upgrade_required");
+		expect(mocks.createUploadTargetForUser).not.toHaveBeenCalled();
+		expect(mocks.createUploadTargetForVideo).not.toHaveBeenCalled();
+		expect(mocks.store.videos.size).toBe(0);
+	});
+
+	it("refuses screenshot imports", async () => {
+		await expect(
+			createVideoAndGetUploadUrl({
+				orgId,
+				isUpload: true,
+				isScreenshot: true,
+			}),
+		).rejects.toThrow("upgrade_required");
+		expect(mocks.store.videos.size).toBe(0);
+	});
+
+	it("leaves Pro uploads unlimited", async () => {
+		mocks.isPro = true;
+		await expect(
+			createVideoAndGetUploadUrl({ orgId, duration: 3_600, isUpload: true }),
+		).resolves.toMatchObject({ id: "fixture-video" });
+		await expect(
+			createVideoForServerProcessing({ orgId, duration: 3_600 }),
+		).resolves.toMatchObject({ id: "fixture-video" });
 	});
 });

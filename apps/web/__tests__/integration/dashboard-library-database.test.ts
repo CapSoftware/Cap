@@ -29,6 +29,10 @@ vi.mock("@cap/database/auth/session", () => ({
 	},
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("next/headers", () => ({
+	cookies: async () => ({ get: () => undefined }),
+}));
+vi.mock("@/app/(org)/dashboard/caps/Caps", () => ({ Caps: () => null }));
 
 const databaseUrl = process.env.CAP_INFRA_TEST_DATABASE_URL;
 const id = () => randomUUID().replaceAll("-", "").slice(0, 15);
@@ -196,6 +200,37 @@ describe.runIf(Boolean(databaseUrl))(
 			expect((await listCapIdsInView({ type: "personal" })).ids.sort()).toEqual(
 				[mine, kept].sort(),
 			);
+		});
+
+		it("shows a Cap as shared on My Caps only when it was shared with the organization", async () => {
+			const { CapsPageView } = await import(
+				"@/app/(org)/dashboard/caps/caps-page-data"
+			);
+			const { orgId, ownerId } = await createOrg();
+			const unshared = await createVideo(ownerId, orgId, { public: false });
+			const shared = await createVideo(ownerId, orgId, { public: false });
+			await database()
+				.insert(Db.sharedVideos)
+				.values({
+					id: id(),
+					videoId: shared,
+					organizationId: orgId as never,
+					sharedByUserId: ownerId as never,
+				});
+			fixture.sessionUserId = ownerId;
+
+			const page = await CapsPageView({ searchParams: {}, view: "library" });
+			const caps: { id: string; sharedOrganizations: { id: string }[] }[] =
+				page.props.data;
+
+			expect(
+				Object.fromEntries(
+					caps.map((cap) => [
+						cap.id,
+						cap.sharedOrganizations.map((org) => org.id),
+					]),
+				),
+			).toEqual({ [unshared]: [], [shared]: [orgId] });
 		});
 
 		it("persists a custom space order for everyone and only lets managers change it", async () => {

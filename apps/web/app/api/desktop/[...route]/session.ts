@@ -8,6 +8,7 @@ import { and, count, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import {
+	buildDesktopCallbackParams,
 	buildLoopbackCallbackUrl,
 	createDesktopRedirectPage,
 	desktopSessionRequestQuerySchema,
@@ -22,7 +23,7 @@ app.get(
 	"/request",
 	zValidator("query", desktopSessionRequestQuerySchema),
 	async (c) => {
-		const { port, platform, type } = c.req.valid("query");
+		const { port, platform, type, state } = c.req.valid("query");
 
 		const secret = serverEnv().NEXTAUTH_SECRET;
 
@@ -81,7 +82,7 @@ app.get(
 			data = { type: "api_key", api_key: apiKey };
 		}
 
-		const params = new URLSearchParams({ ...data, user_id: user.id });
+		const params = buildDesktopCallbackParams(data, user.id, state);
 		const localhostUrl =
 			port !== undefined ? buildLoopbackCallbackUrl(port, params) : undefined;
 		const deepLinkUrl = `cap-desktop://signin?${params}`;

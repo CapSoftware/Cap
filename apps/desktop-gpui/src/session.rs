@@ -438,6 +438,8 @@ pub struct RecordingSession {
     pub storage_notice: Option<String>,
     /// The last recording stopped because what it captured went away.
     pub capture_source_lost: bool,
+    /// Stop handed the app back while the last recording was still saving.
+    pub recording_still_saving: bool,
     stopped_for_low_storage: bool,
     stopped_elapsed: Option<Duration>,
     /// The config of the live (or last) recording, kept for restart.
@@ -528,6 +530,7 @@ impl RecordingSession {
             storage_warning: false,
             storage_notice: None,
             capture_source_lost: false,
+            recording_still_saving: false,
             stopped_for_low_storage: false,
             stopped_elapsed: None,
             last_config: None,
@@ -837,6 +840,7 @@ impl RecordingSession {
         self.storage_warning = false;
         self.storage_notice = None;
         self.capture_source_lost = false;
+        self.recording_still_saving = false;
         self.stopped_for_low_storage = false;
         self.stopped_elapsed = None;
         self.last_config = Some(config.clone());
@@ -1427,6 +1431,8 @@ impl RecordingSession {
         let Some(active) = self.active.as_ref() else {
             return;
         };
+        #[cfg(windows)]
+        active.mark_stop_requested();
         let instant_share_url = active.instant_share_url().map(ToString::to_string);
         let instant_video_id = active.instant_video_id().map(ToString::to_string);
         let instant_rules_hold = instant_share_url
@@ -1669,6 +1675,16 @@ impl RecordingSession {
                             }
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
                         }
+                    }
+                    #[cfg(windows)]
+                    Ok(Err(error))
+                        if error
+                            .chain()
+                            .any(|cause| cause.is::<crate::recording::StudioStillSaving>()) =>
+                    {
+                        tracing::warn!("Studio recording is still saving; the app is free for a new recording");
+                        this.capture_source_lost = false;
+                        this.recording_still_saving = true;
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to stop cleanly: {error:#}");
