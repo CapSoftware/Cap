@@ -511,7 +511,6 @@ async fn real_app_instant_upload_replaced_on_the_web_stops_quietly() {
         },
     )
     .await;
-    tokio::time::sleep(Duration::from_secs(5)).await;
     kill(app);
     let log = sandbox.log("record");
     let state = state(&project).unwrap();
