@@ -713,6 +713,82 @@ fn export_batch_json_streams_file_events_and_summary() {
 }
 
 #[test]
+#[ignore = "requires ffmpeg and a wgpu adapter"]
+fn export_succeeds_when_project_config_is_missing() {
+    // `cap project validate` treats a missing project-config.json as fine
+    // (it's reported as an optional check), and `project inspect`/`config get`
+    // both fall back to defaults for it. `export` must not be the odd one out.
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("recording.cap");
+    write_test_media(&project.join("content/display.mp4"));
+    write_single_segment_meta(&project);
+    assert!(!project.join("project-config.json").exists());
+
+    let validate = run(&[
+        "project",
+        "validate",
+        project.to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    assert!(validate.status.success(), "stderr: {}", stderr(&validate));
+    assert_eq!(parse_json(&validate)["valid"], true);
+
+    let output_path = dir.path().join("out.mp4");
+    let export = run(&[
+        "export",
+        project.to_str().unwrap(),
+        "--output",
+        output_path.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(
+        export.status.success(),
+        "export should fall back to a default config like validate/inspect/config-get do, \
+         but failed with stderr: {}",
+        stderr(&export)
+    );
+    assert!(
+        output_path.exists(),
+        "export reported success but wrote no file"
+    );
+}
+
+#[test]
+#[ignore = "requires ffmpeg and a wgpu adapter"]
+fn export_succeeds_when_project_config_is_corrupted() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("recording.cap");
+    write_test_media(&project.join("content/display.mp4"));
+    write_single_segment_meta(&project);
+    std::fs::write(project.join("project-config.json"), b"{not valid json").unwrap();
+
+    let output_path = dir.path().join("out.mp4");
+    let export = run(&[
+        "export",
+        project.to_str().unwrap(),
+        "--output",
+        output_path.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(
+        export.status.success(),
+        "export should fall back to a default config on an unreadable project-config.json, \
+         but failed with stderr: {}",
+        stderr(&export)
+    );
+    assert!(
+        output_path.exists(),
+        "export reported success but wrote no file"
+    );
+    assert!(stderr(&export).contains("exporting with default settings"));
+    assert_eq!(
+        std::fs::read(project.join("project-config.json")).unwrap(),
+        b"{not valid json"
+    );
+}
+
+#[test]
 fn targets_mics_json_is_parseable() {
     let output = run(&["targets", "mics", "--format", "json"]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
