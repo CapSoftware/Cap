@@ -171,10 +171,12 @@ pub(super) fn probe(project: &Path) -> Result<RecordingProbe, RecoveryError> {
         }
     }
     match LockFile::shared(&path) {
-        Ok(file) => {
+        Ok(lock) => {
             #[cfg(unix)]
-            remove_stale(&path);
-            Ok(RecordingProbe { _file: Some(file) })
+            if let Some(file) = &lock.file {
+                remove_stale(&path, file);
+            }
+            Ok(RecordingProbe { _file: Some(lock) })
         }
         Err(error) if is_busy(&error) => Err(RecoveryError::RecordingInProgress),
         Err(error) => {
@@ -189,7 +191,10 @@ pub(super) fn probe(project: &Path) -> Result<RecordingProbe, RecoveryError> {
 /// Nobody holds a lock this probe could take, so its recorder ended without
 /// dropping it (a crash on unix, where the file is not removed on close).
 #[cfg(unix)]
-fn remove_stale(path: &Path) {
+fn remove_stale(path: &Path, locked: &File) {
+    if !same_file(locked, path) {
+        return;
+    }
     if let Err(error) = std::fs::remove_file(path) {
         tracing::debug!(path = %path.display(), %error, "Stale recording lock kept");
         return;
@@ -281,6 +286,55 @@ struct OwnedLock {
 
 impl LockFile {
     fn exclusive(path: &Path) -> io::Result<Self> {
+        Self::exclusive_with(path, &mut || {})
+    }
+
+    /// On unix the lock is retaken once if the file at `path` changed
+    /// between the open and the lock (a probe removed a stale file then), so
+    /// a recorder never holds a lock no later probe can find.
+    fn exclusive_with(path: &Path, after_open: &mut dyn FnMut()) -> io::Result<Self> {
+        let file = Self::lock_exclusive(path, after_open)?;
+        #[cfg(unix)]
+        let file = if same_file(&file, path) {
+            file
+        } else {
+            drop(file);
+            let file = Self::lock_exclusive(path, after_open)?;
+            if !same_file(&file, path) {
+                return Err(io::Error::other(
+                    "Recording lock was replaced while taking it",
+                ));
+            }
+            file
+        };
+        Ok(Self {
+            file: Some(file),
+            owned: Some(OwnedLock {
+                path: path.to_path_buf(),
+                #[cfg(unix)]
+                pid: unsafe { libc::getpid() },
+            }),
+        })
+    }
+
+    fn lock_exclusive(path: &Path, after_open: &mut dyn FnMut()) -> io::Result<File> {
+        let file = Self::open_exclusive(path)?;
+        after_open();
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+                let error = io::Error::last_os_error();
+                if !is_busy(&error) {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err(error);
+            }
+        }
+        Ok(file)
+    }
+
+    fn open_exclusive(path: &Path) -> io::Result<File> {
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
         #[cfg(unix)]
@@ -310,26 +364,12 @@ impl LockFile {
         }
         #[cfg(unix)]
         {
-            use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
+            use std::os::unix::fs::MetadataExt;
             if metadata.nlink() != 1 || metadata.uid() != unsafe { libc::geteuid() } {
                 return Err(io::Error::other("Recording lock is not exclusively owned"));
             }
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-                let error = io::Error::last_os_error();
-                if !is_busy(&error) {
-                    let _ = std::fs::remove_file(path);
-                }
-                return Err(error);
-            }
         }
-        Ok(Self {
-            file: Some(file),
-            owned: Some(OwnedLock {
-                path: path.to_path_buf(),
-                #[cfg(unix)]
-                pid: unsafe { libc::getpid() },
-            }),
-        })
+        Ok(file)
     }
 
     fn shared(path: &Path) -> io::Result<Self> {
@@ -393,6 +433,15 @@ impl Drop for LockFile {
         {
             tracing::debug!(path = %directory.display(), %error, "Recording lock directory kept");
         }
+    }
+}
+
+#[cfg(unix)]
+fn same_file(file: &File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (file.metadata(), path.symlink_metadata()) {
+        (Ok(open), Ok(current)) => open.dev() == current.dev() && open.ino() == current.ino(),
+        _ => false,
     }
 }
 
@@ -852,5 +901,87 @@ mod tests {
         assert!(!is_recording_elsewhere(&project));
         assert!(RecoveryManager::remux_if_needed(&project).unwrap());
         assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 1);
+    }
+
+    const CHILD_PROBE: &str = "CAP_RECORDING_LOCK_PROBE";
+    const CHILD_VERDICT: &str = "CAP_RECORDING_LOCK_VERDICT";
+
+    #[test]
+    fn recording_lock_child_prober() {
+        let (Some(project), Some(verdict)) = (
+            std::env::var_os(CHILD_PROBE),
+            std::env::var_os(CHILD_VERDICT),
+        ) else {
+            return;
+        };
+        let busy = is_recording_elsewhere(Path::new(&project));
+        std::fs::write(verdict, if busy { "busy" } else { "free" }).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn probe_in_child(project: &Path, verdict: &Path) -> String {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "recovery::recording_lock::tests::recording_lock_child_prober",
+                "--nocapture",
+            ])
+            .env(CHILD_PROBE, project)
+            .env(CHILD_VERDICT, verdict)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::read_to_string(verdict).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_is_never_left_on_a_file_that_was_replaced() {
+        use std::os::fd::AsRawFd;
+        let recordings = tempfile::tempdir().unwrap();
+        let signals = tempfile::tempdir().unwrap();
+        let project = recordings.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let (_, path) = lock_path(&project).unwrap();
+        super::create_lock_dir(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"").unwrap();
+
+        let mut replaced = false;
+        let lock = super::LockFile::exclusive_with(&path, &mut || {
+            if !replaced {
+                replaced = true;
+                std::fs::remove_file(&path).unwrap();
+            }
+        })
+        .unwrap();
+        assert!(replaced);
+        assert!(super::same_file(lock.file.as_ref().unwrap(), &path));
+        assert_eq!(
+            probe_in_child(&project, &signals.path().join("held")),
+            "busy"
+        );
+        drop(lock);
+        assert_eq!(
+            probe_in_child(&project, &signals.path().join("dropped")),
+            "free"
+        );
+
+        super::create_lock_dir(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"").unwrap();
+        let old = std::fs::File::open(&path).unwrap();
+        assert_eq!(
+            unsafe { libc::flock(old.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) },
+            0
+        );
+        std::fs::remove_file(&path).unwrap();
+        let child = record_in_child(&[project.as_path()], &signals.path().join("ready"));
+        super::remove_stale(&path, &old);
+        assert!(path.exists());
+        assert_eq!(
+            probe_in_child(&project, &signals.path().join("recorder")),
+            "busy"
+        );
+        drop(child);
     }
 }
