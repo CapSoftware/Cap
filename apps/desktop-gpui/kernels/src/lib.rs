@@ -1,3 +1,4 @@
+pub mod camera_bgra;
 pub mod codec;
 pub mod frame;
 pub mod mask_cache;

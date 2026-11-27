@@ -11,11 +11,23 @@
 //! Metal-compatible IOSurface-backed BGRA buffer from a fixed ring, ready for
 //! `paint_surface` with zero further CPU touches.
 //!
-//! Run: cargo run -p cap-desktop-gpui --example camera-preview-convert-benchmark --release
+//! Run from `apps/desktop-gpui` (macOS keeps the IOSurface comparison above;
+//! Linux and Windows compare swscale with the BT.601 kernel):
+//!   cargo run --release --example camera-preview-convert-benchmark
+//!
+//! From the repo root the same example is:
+//!   cargo run --manifest-path apps/desktop-gpui/Cargo.toml --release --example camera-preview-convert-benchmark
+//!
+//! Windows: `node scripts/setup.js` first, then put `target\ffmpeg\bin` on `PATH`
+//! so the example can load the shared FFmpeg the desktop app is built against.
+//! The command is unchanged. `CAP_CAMERA_BGRA_SIMD=portable`, `sse4.1`, `avx2`, or
+//! `swscale` selects the kernel. `swscale` skips it and times only the swscale
+//! columns. The CSV reports median, p90, and spread for mirrored and unmirrored
+//! frames. No display and no GPU.
 
 #[cfg(not(target_os = "macos"))]
 fn main() {
-    eprintln!("macOS only");
+    portable::run();
 }
 
 #[cfg(target_os = "macos")]
@@ -247,6 +259,276 @@ mod macos {
                 max_delta <= 2,
                 "IOSurface destination diverges from the CPU destination"
             );
+        }
+    }
+}
+
+/// Linux and Windows. Each column is timed alone. `sws_convert` is `scaler.run`
+/// into a reused BGRA frame (plus a reused-buffer mirror when `mirrored=1`).
+/// `sws_app` is the old preview: `Video::empty` plus `copy_rows` every frame.
+/// `CAP_CAMERA_BGRA_SIMD=portable`, `sse4.1`, `avx2`, or `swscale`.
+#[cfg(not(target_os = "macos"))]
+mod portable {
+    use std::{hint::black_box, time::Instant};
+
+    use cap_gpui_kernels::{
+        camera_bgra::{self, Packed422},
+        frame,
+    };
+    use ffmpeg::{
+        format::Pixel,
+        software::scaling::{Context, Flags},
+    };
+
+    const REPS: usize = 7;
+    const WARMUP: usize = 12;
+    const SAMPLES: usize = 40;
+
+    pub fn run() {
+        ffmpeg::init().expect("ffmpeg");
+        burn_in();
+        println!("cpu,{}", cpu_model());
+        println!("arch,{}", std::env::consts::ARCH);
+        println!("simd,{}", camera_bgra::simd_path());
+        println!(
+            "case,width,height,mirrored,reps,sws_convert_median_ms,sws_convert_p90_ms,sws_convert_spread_ms,sws_app_median_ms,sws_app_p90_ms,sws_app_spread_ms,kernel_median_ms,kernel_p90_ms,kernel_spread_ms,speedup_vs_convert,speedup_vs_app,max_abs_diff"
+        );
+        println!(
+            "# {REPS} reps x {SAMPLES} frames after {WARMUP} warmup, each column alone. spread_ms is max(rep median) - min(rep median). sws_convert reuses its BGRA frame. sws_app allocates every frame."
+        );
+        for (name, pixel, width, height) in [
+            ("YUYV", Pixel::YUYV422, 1280, 720),
+            ("YUYV", Pixel::YUYV422, 1920, 1080),
+            ("UYVY", Pixel::UYVY422, 1280, 720),
+            ("UYVY", Pixel::UYVY422, 1920, 1080),
+            ("NV12", Pixel::NV12, 1280, 720),
+            ("NV12", Pixel::NV12, 1920, 1080),
+        ] {
+            for mirrored in [false, true] {
+                bench(name, pixel, width, height, mirrored);
+            }
+        }
+    }
+
+    fn cpu_model() -> String {
+        #[cfg(target_os = "linux")]
+        if let Ok(text) = std::fs::read_to_string("/proc/cpuinfo") {
+            for line in text.lines() {
+                if let Some(model) = line.strip_prefix("model name") {
+                    return model.trim_start_matches([' ', ':', '\t']).to_string();
+                }
+            }
+        }
+        std::env::consts::ARCH.to_string()
+    }
+
+    fn burn_in() {
+        let mut frame = ffmpeg::frame::Video::new(Pixel::YUYV422, 1920, 1080);
+        fill(&mut frame);
+        let mut scaler = Context::get(
+            Pixel::YUYV422,
+            1920,
+            1080,
+            Pixel::BGRA,
+            1920,
+            1080,
+            Flags::BILINEAR,
+        )
+        .expect("swscale context");
+        for _ in 0..12 {
+            black_box(swscale_app(&mut scaler, &frame, false));
+            black_box(kernel_bgra(&frame, false));
+        }
+    }
+
+    fn bench(name: &str, pixel: Pixel, width: u32, height: u32, mirrored: bool) {
+        let mut frame = ffmpeg::frame::Video::new(pixel, width, height);
+        fill(&mut frame);
+        let mut scaler = Context::get(
+            pixel,
+            width,
+            height,
+            Pixel::BGRA,
+            width,
+            height,
+            Flags::BILINEAR,
+        )
+        .expect("swscale context");
+        let mut reused = ffmpeg::frame::Video::new(Pixel::BGRA, width, height);
+        let mut tight = vec![0u8; width as usize * height as usize * 4];
+        scaler.run(&frame, &mut reused).expect("swscale");
+        blit(&reused, &mut tight, mirrored);
+        let kernel_frame = kernel_bgra(&frame, mirrored);
+        let max_abs_diff = kernel_frame.as_ref().map(|kernel_frame| {
+            assert_eq!(tight.len(), kernel_frame.len());
+            tight
+                .iter()
+                .zip(kernel_frame)
+                .map(|(before, after)| before.abs_diff(*after))
+                .max()
+                .unwrap_or(0)
+        });
+
+        let convert_stats = time_path(|| {
+            scaler.run(&frame, &mut reused).expect("swscale");
+            if mirrored {
+                blit(&reused, &mut tight, true);
+                black_box(tight[0]);
+            } else {
+                black_box(reused.data(0)[0]);
+            }
+        });
+        let app_stats = time_path(|| {
+            black_box(swscale_app(&mut scaler, &frame, mirrored));
+        });
+        let flag = u8::from(mirrored);
+        let Some(max_abs_diff) = max_abs_diff else {
+            println!(
+                "{name},{width},{height},{flag},{REPS},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},fallback,fallback,fallback,,,",
+                convert_stats.median,
+                convert_stats.p90,
+                convert_stats.spread,
+                app_stats.median,
+                app_stats.p90,
+                app_stats.spread,
+            );
+            return;
+        };
+        let kernel_stats = time_path(|| {
+            black_box(kernel_bgra(&frame, mirrored));
+        });
+        println!(
+            "{name},{width},{height},{flag},{REPS},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.2},{:.2},{max_abs_diff}",
+            convert_stats.median,
+            convert_stats.p90,
+            convert_stats.spread,
+            app_stats.median,
+            app_stats.p90,
+            app_stats.spread,
+            kernel_stats.median,
+            kernel_stats.p90,
+            kernel_stats.spread,
+            convert_stats.median / kernel_stats.median,
+            app_stats.median / kernel_stats.median,
+        );
+    }
+
+    struct PathStats {
+        median: f64,
+        p90: f64,
+        spread: f64,
+    }
+
+    fn time_path(mut body: impl FnMut()) -> PathStats {
+        let mut pooled = Vec::with_capacity(REPS * SAMPLES);
+        let mut rep_medians = Vec::with_capacity(REPS);
+        for _ in 0..REPS {
+            for _ in 0..WARMUP {
+                body();
+            }
+            let mut rep = Vec::with_capacity(SAMPLES);
+            for _ in 0..SAMPLES {
+                rep.push(elapsed_ms(&mut body));
+            }
+            pooled.extend_from_slice(&rep);
+            rep_medians.push(percentile(&mut rep, 50));
+        }
+        let median = percentile(&mut pooled, 50);
+        let p90 = percentile(&mut pooled, 90);
+        rep_medians.sort_by(f64::total_cmp);
+        let spread = rep_medians[rep_medians.len() - 1] - rep_medians[0];
+        PathStats {
+            median,
+            p90,
+            spread,
+        }
+    }
+
+    fn elapsed_ms(body: impl FnOnce()) -> f64 {
+        let started = Instant::now();
+        body();
+        started.elapsed().as_secs_f64() * 1_000.0
+    }
+
+    fn percentile(samples: &mut [f64], pct: usize) -> f64 {
+        samples.sort_by(f64::total_cmp);
+        let index = (samples.len() - 1) * pct / 100;
+        samples[index]
+    }
+
+    fn fill(frame: &mut ffmpeg::frame::Video) {
+        let planes = if frame.format() == Pixel::NV12 { 2 } else { 1 };
+        for plane in 0..planes {
+            for (index, byte) in frame.data_mut(plane).iter_mut().enumerate() {
+                *byte = index.wrapping_mul(17).wrapping_add(plane * 41) as u8;
+            }
+        }
+    }
+
+    fn blit(frame: &ffmpeg::frame::Video, dst: &mut [u8], mirrored: bool) {
+        let width = frame.width() as usize;
+        let height = frame.height() as usize;
+        let stride = frame.stride(0);
+        let row_bytes = width * 4;
+        let src = frame.data(0);
+        for row in 0..height {
+            let input = &src[row * stride..row * stride + row_bytes];
+            let output = &mut dst[row * row_bytes..(row + 1) * row_bytes];
+            if mirrored {
+                let (dst_px, _) = output.as_chunks_mut::<4>();
+                let (src_px, _) = input.as_chunks::<4>();
+                for (slot, pixel) in dst_px.iter_mut().zip(src_px.iter().rev()) {
+                    *slot = *pixel;
+                }
+            } else {
+                output.copy_from_slice(input);
+            }
+        }
+    }
+
+    fn swscale_app(scaler: &mut Context, frame: &ffmpeg::frame::Video, mirrored: bool) -> Vec<u8> {
+        let mut converted = ffmpeg::frame::Video::empty();
+        scaler.run(frame, &mut converted).expect("swscale");
+        frame::copy_rows(
+            converted.data(0),
+            converted.width() as usize * 4,
+            converted.stride(0),
+            converted.height() as usize,
+            mirrored,
+        )
+        .expect("tight bgra rows")
+    }
+
+    fn kernel_bgra(frame: &ffmpeg::frame::Video, mirrored: bool) -> Option<Vec<u8>> {
+        let width = frame.width() as usize;
+        let height = frame.height() as usize;
+        match frame.format() {
+            Pixel::YUYV422 => camera_bgra::packed422_to_bgra(
+                frame.data(0),
+                width,
+                height,
+                frame.stride(0),
+                Packed422::Yuyv,
+                mirrored,
+            ),
+            Pixel::UYVY422 => camera_bgra::packed422_to_bgra(
+                frame.data(0),
+                width,
+                height,
+                frame.stride(0),
+                Packed422::Uyvy,
+                mirrored,
+            ),
+            Pixel::NV12 => camera_bgra::nv12_to_bgra(
+                frame.data(0),
+                frame.data(1),
+                width,
+                height,
+                frame.stride(0),
+                frame.stride(1),
+                mirrored,
+            ),
+            _ => None,
         }
     }
 }
