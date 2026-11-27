@@ -1,0 +1,253 @@
+name: gate064 device run (0.6.2 / 0.6.3 / 2bffa46a4d)
+
+on:
+  push:
+    branches: ["ci/gate064-app-probe"]
+    paths: ["rc064/dev-trigger"]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  run:
+    name: run ${{ matrix.os.slug }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - slug: macos
+            runner: blacksmith-6vcpu-macos-15
+          - slug: windows
+            runner: windows-2022
+          - slug: linux
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.os.runner }}
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gate
+        id: gate
+        shell: bash
+        run: |
+          if grep -qw "${{ matrix.os.slug }}" rc064/run-os; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "go=false" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: actions/checkout@v4
+        if: runner.os == 'Linux' && steps.gate.outputs.go == 'true'
+        with:
+          ref: 2bffa46a4de88647354bc162e730e2bce0a12792
+          path: cap
+          persist-credentials: false
+          sparse-checkout: .github
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux' && steps.gate.outputs.go == 'true'
+        uses: ./cap/.github/actions/install-desktop-deps
+
+      - name: Download builds
+        if: steps.gate.outputs.go == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id=$(cat rc064/build-run-id-${{ matrix.os.slug }} 2>/dev/null || cat rc064/build-run-id)
+          echo "builds from run $run_id"
+          mkdir -p "$RUNNER_TEMP/dl2"
+          TARFLAGS=""
+          if [ "$RUNNER_OS" = "Windows" ]; then TARFLAGS="--force-local"; fi
+          for name in app-${{ matrix.os.slug }}-base app-${{ matrix.os.slug }}-head harness-${{ matrix.os.slug }}; do
+            gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n "$name" -D "$RUNNER_TEMP/dl2/$name"
+          done
+          if [ -f rc064/build-run-id-v062 ]; then
+            gh run download "$(cat rc064/build-run-id-v062)" -R "$GITHUB_REPOSITORY" -n app-${{ matrix.os.slug }}-v062 -D "$RUNNER_TEMP/dl2/app-${{ matrix.os.slug }}-v062"
+            mkdir -p "$RUNNER_TEMP/apps/v062"
+            (cd "$RUNNER_TEMP/apps/v062" && tar $TARFLAGS -xzf "$RUNNER_TEMP/dl2/app-${{ matrix.os.slug }}-v062/app-${{ matrix.os.slug }}-v062.tgz")
+            cat "$RUNNER_TEMP/apps/v062/commit.txt"
+          fi
+          mkdir -p "$RUNNER_TEMP/apps/base" "$RUNNER_TEMP/apps/head" "$RUNNER_TEMP/harness"
+          (cd "$RUNNER_TEMP/apps/base" && tar $TARFLAGS -xzf "$RUNNER_TEMP/dl2/app-${{ matrix.os.slug }}-base/app-${{ matrix.os.slug }}-base.tgz")
+          (cd "$RUNNER_TEMP/apps/head" && tar $TARFLAGS -xzf "$RUNNER_TEMP/dl2/app-${{ matrix.os.slug }}-head/app-${{ matrix.os.slug }}-head.tgz")
+          (cd "$RUNNER_TEMP/harness" && tar $TARFLAGS -xzf "$RUNNER_TEMP/dl2/harness-${{ matrix.os.slug }}/harness-${{ matrix.os.slug }}.tgz")
+          cat "$RUNNER_TEMP/apps/base/commit.txt" "$RUNNER_TEMP/apps/head/commit.txt"
+          ls -la "$RUNNER_TEMP/apps/head/bin" "$RUNNER_TEMP/harness/deps" | head -60
+
+      - name: macOS permissions, display and audio
+        if: runner.os == 'macOS' && steps.gate.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0
+          caffeinate -u -t 2
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          brew install --cask blackhole-2ch
+          brew install switchaudio-osx ffmpeg
+          sudo killall coreaudiod || true
+          for _ in $(seq 1 30); do
+            SwitchAudioSource -a -t output | grep -qx "BlackHole 2ch" && break
+            sleep 1
+          done
+          SwitchAudioSource -s "BlackHole 2ch" -t output
+          SwitchAudioSource -s "BlackHole 2ch" -t input
+          {
+            echo "$RUNNER_TEMP/apps/base/bin/cap-gpui"
+            echo "$RUNNER_TEMP/apps/head/bin/cap-gpui"
+            echo "$RUNNER_TEMP/apps/v062/bin/cap-gpui"
+            echo "$RUNNER_TEMP/harness/deps/harness"
+            command -v python3
+            python3 -c 'import sys; print(sys.executable)'
+            echo /usr/sbin/screencapture
+            echo "$RUNNER_TEMP/rc064-click"
+          } > "$RUNNER_TEMP/capture-binaries"
+          p=$$
+          while [ "$p" -gt 1 ]; do
+            ps -o comm= -p "$p"
+            p=$(ps -o ppid= -p "$p" | tr -d ' ')
+          done >> "$RUNNER_TEMP/capture-binaries"
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          user_db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist"
+          mkdir -p "$(dirname "$approvals")"
+          now=$(date +%s)
+          until=$(date -u -v+1y '+%a %b %d %H:%M:%S GMT %Y')
+          sort -u "$RUNNER_TEMP/capture-binaries" | grep '^/' | while read -r client; do
+            for service in kTCCServiceScreenCapture kTCCServiceMicrophone kTCCServiceAccessibility; do
+              row="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
+              sudo sqlite3 "$db" "$row"
+              sqlite3 "$user_db" "$row" || true
+            done
+            /usr/libexec/PlistBuddy -c "Add :$client date $until" "$approvals" >/dev/null 2>&1 || true
+            echo "granted $client"
+          done
+          killall tccd || true
+          sudo killall tccd || true
+          sleep 2
+          python3 -m pip install --break-system-packages -q psutil || python3 -m pip install -q psutil
+          system_profiler SPDisplaysDataType | grep -i resolution || true
+
+      - name: Windows audio and tools
+        if: runner.os == 'Windows' && steps.gate.outputs.go == 'true'
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/duncanthrax/scream/releases/download/3.6/Scream3.6.zip -OutFile Scream3.6.zip
+          $expected = "25ea5e778b4e6995a98d448b9b5f6d321f681663f1aeeec69d8e63183d008b19"
+          $actual = (Get-FileHash -Algorithm SHA256 Scream3.6.zip).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Scream3.6.zip SHA-256 mismatch" }
+          Expand-Archive -Path Scream3.6.zip -DestinationPath Scream
+          $cert = (Get-AuthenticodeSignature Scream\Install\driver\Scream.sys).SignerCertificate
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new("TrustedPublisher", "LocalMachine")
+          $store.Open("ReadWrite"); $store.Add($cert); $store.Close()
+          Scream\Install\helpers\devcon.exe install Scream\Install\driver\Scream.inf *Scream
+          Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
+          choco install ffmpeg -y --no-progress | Out-Null
+          python -m pip install -q psutil pillow
+          Get-CimInstance Win32_VideoController | Select-Object Name, CurrentHorizontalResolution, CurrentVerticalResolution
+
+      - name: Linux display and audio
+        if: runner.os == 'Linux' && steps.gate.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq xvfb x11-utils xdotool openbox dbus pulseaudio pulseaudio-utils libasound2-plugins ffmpeg python3-psutil mesa-vulkan-drivers >/dev/null
+          pulse_dir=$(mktemp -d)
+          pulseaudio -n --daemonize=yes --exit-idle-time=-1 \
+            -L "module-native-protocol-unix socket=$pulse_dir/native auth-anonymous=1" \
+            -L "module-null-sink sink_name=cap_output" -L "module-always-sink"
+          echo "PULSE_SERVER=unix:$pulse_dir/native" >> "$GITHUB_ENV"
+          export PULSE_SERVER="unix:$pulse_dir/native"
+          for _ in $(seq 40); do pactl info >/dev/null 2>&1 && break; sleep 0.25; done
+          pactl set-default-sink cap_output
+          pactl set-default-source cap_output.monitor
+          Xvfb :78 -screen 0 1920x1080x24 >/dev/null 2>&1 &
+          sleep 1
+          DISPLAY=:78 openbox >/dev/null 2>&1 &
+          sleep 1
+          DISPLAY=:78 xmessage -geometry 900x500+500+300 "A window to record" >/dev/null 2>&1 &
+          echo "DISPLAY=:78" >> "$GITHUB_ENV"
+          echo "XDG_SESSION_TYPE=x11" >> "$GITHUB_ENV"
+
+      - name: Device rig (macOS)
+        if: runner.os == 'macOS' && steps.gate.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          swiftc -O rc064/aggdev.swift -o "$RUNNER_TEMP/aggdev"
+          "$RUNNER_TEMP/aggdev" create "Cap Test Mic B" cap-test-mic-b
+          sleep 2
+          "$RUNNER_TEMP/aggdev" list || true
+          ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=440:duration=95" -af volume=0.5 "$RUNNER_TEMP/tone.wav"
+          {
+            echo "DEV_MIC=Cap Test Mic B"
+            echo "DEV_MIC_UNPLUG=$RUNNER_TEMP/aggdev destroy cap-test-mic-b"
+            echo "DEV_MIC_REPLUG=$RUNNER_TEMP/aggdev create 'Cap Test Mic B' cap-test-mic-b"
+            echo "DEV_STIM=afplay $RUNNER_TEMP/tone.wav"
+          } >> "$GITHUB_ENV"
+
+      - name: Device rig (Windows)
+        if: runner.os == 'Windows' && steps.gate.outputs.go == 'true'
+        shell: pwsh
+        run: |
+          pwsh -File rc064/win-audio.ps1 -Action install
+          $base = "SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
+          foreach ($root in @("HKLM:", "HKCU:")) {
+            foreach ($key in @("$root\$base", "$root\$base\NonPackaged")) {
+              New-Item -Path $key -Force | Out-Null
+              Set-ItemProperty -Path $key -Name Value -Value Allow -Type String
+            }
+          }
+          New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" -Force | Out-Null
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" -Name LetAppsAccessMicrophone -Value 1 -Type DWord
+          python -m pip install -q sounddevice numpy
+          $cap = Get-PnpDevice -Class AudioEndpoint | Where-Object { $_.FriendlyName -like "*Hi-Fi Cable Output*" } | Select-Object -First 1
+          if (-not $cap) { Get-PnpDevice -Class AudioEndpoint | Format-Table -AutoSize Status, FriendlyName | Out-String -Width 200 | Write-Host; throw "no Hi-Fi capture endpoint" }
+          Write-Host "mic: $($cap.FriendlyName)"
+          $w = $env:GITHUB_WORKSPACE -replace '\\', '/'
+          Add-Content $env:GITHUB_ENV "DEV_MIC=$($cap.FriendlyName)"
+          Add-Content $env:GITHUB_ENV "DEV_MIC_UNPLUG=pwsh -File $w/rc064/win-audio.ps1 -Action unplug -Target Hi-Fi"
+          Add-Content $env:GITHUB_ENV "DEV_MIC_REPLUG=pwsh -File $w/rc064/win-audio.ps1 -Action replug -Target Hi-Fi"
+          Add-Content $env:GITHUB_ENV ('DEV_STIM=python ' + $w + '/rc064/win-stimulus.py click 95 0 "Hi-Fi Cable Input"')
+
+      - name: Device rig (Linux)
+        if: runner.os == 'Linux' && steps.gate.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq "linux-headers-$(uname -r)" v4l2loopback-dkms v4l-utils >/dev/null
+          sudo modprobe v4l2loopback devices=2 video_nr=42,43 card_label="Cap Test Camera A","Cap Test Camera B" exclusive_caps=1,1
+          sudo udevadm settle --timeout=10
+          sudo chmod 666 /dev/video42 /dev/video43
+          bash rc064/linux-feeds.sh start
+          v4l2-ctl --list-devices || true
+          {
+            echo "DEV_CAM_ID=auto"
+            echo "DEV_CAM_UNPLUG=bash $GITHUB_WORKSPACE/rc064/linux-feeds.sh stop"
+            echo "DEV_CAM_REPLUG=bash $GITHUB_WORKSPACE/rc064/linux-feeds.sh start"
+          } >> "$GITHUB_ENV"
+
+      - name: Drive both builds
+        if: steps.gate.outputs.go == 'true'
+        shell: bash
+        timeout-minutes: 110
+        env:
+          RC064_CLICK: ${{ runner.temp }}/rc064-click
+        run: |
+          set -uo pipefail
+          PY=$(command -v python3 || command -v python)
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            dbus-run-session -- env -u WAYLAND_DISPLAY "$PY" -u rc064/drive.py "$RUNNER_TEMP/apps" "$RUNNER_TEMP/harness" "$GITHUB_WORKSPACE/out/${{ matrix.os.slug }}" devices
+          else
+            "$PY" -u rc064/drive.py "$RUNNER_TEMP/apps" "$RUNNER_TEMP/harness" "$GITHUB_WORKSPACE/out/${{ matrix.os.slug }}" devices
+          fi
+
+      - name: Publish results
+        if: always() && steps.gate.outputs.go == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          ls -la out/${{ matrix.os.slug }} || true
+          git config user.name "rc064 probe"
+          git config user.email "rc064-probe@users.noreply.github.com"
+          git checkout -q --orphan media
+          git rm -r -q --cached . > /dev/null
+          git add -f out/${{ matrix.os.slug }}
+          git commit -q -m "rc064 results ${{ matrix.os.slug }}"
+          git push -q origin "HEAD:refs/heads/ci/gate064-dev-media-${{ matrix.os.slug }}-${{ github.run_id }}-${{ github.run_attempt }}"

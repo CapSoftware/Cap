@@ -1440,6 +1440,126 @@ def flow_perf():
                 log("perf", label, side, rnd, rr.get("cpu_mean_pct"), rr.get("rss_mean_mb"), entry.get("stop_to_complete_s") or entry.get("stop_to_verified_s"))
 
 
+def rms_per_second(path):
+    """dBFS per whole second of the first audio stream (mono 16 kHz decode)."""
+    import array
+    import math
+
+    try:
+        raw = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(path), "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
+            capture_output=True,
+            timeout=120,
+        ).stdout
+    except Exception:  # noqa: BLE001
+        return []
+    a = array.array("h")
+    a.frombytes(raw[: len(raw) // 2 * 2])
+    out = []
+    for i in range(0, len(a) - 15999, 16000):
+        chunk = a[i : i + 16000]
+        ms = sum(x * x for x in chunk) / len(chunk)
+        out.append(round(10 * math.log10(ms / (32768.0**2)) if ms > 0 else -120.0, 1))
+    return out
+
+
+def mic_sources(project):
+    """(label, playable path) of each microphone track, fragmented ones joined."""
+    found = []
+    content = project / "content"
+    for p in sorted(content.rglob("*")):
+        low = str(p.relative_to(project)).lower()
+        if not ("audio-input" in low or "mic" in low or p.name == "output.mp4"):
+            continue
+        if p.is_file() and p.suffix in (".ogg", ".m4a", ".mp4") and not p.name.startswith("init"):
+            found.append((str(p.relative_to(project)), p))
+        elif p.is_dir() and (p / "init.mp4").exists():
+            segs = sorted(p.glob("segment_*.m4s"))
+            if segs:
+                dest = WORK / f"mic-{abs(hash(str(p)))}.mp4"
+                concat([p / "init.mp4"] + segs, dest)
+                found.append((str(p.relative_to(project)) + "/(joined)", dest))
+    for p in sorted(project.glob("*.mp4")):
+        found.append((p.name, p))
+    return found[:4]
+
+
+def shell(cmd):
+    if not cmd:
+        return None
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+    return {"rc": r.returncode, "out": (r.stdout + r.stderr)[-300:]}
+
+
+def flow_devices():
+    """Mic (and camera) unplugged 20 s into a 60 s recording, back at 30 s.
+    Env: DEV_MIC (input name), DEV_MIC_UNPLUG / DEV_MIC_REPLUG (shell),
+    DEV_CAM_ID / DEV_CAM_UNPLUG / DEV_CAM_REPLUG, DEV_STIM (shell, starts a
+    tone into the mic for ~90 s), DEV_ROUNDS."""
+    mic = os.environ.get("DEV_MIC")
+    cam = os.environ.get("DEV_CAM_ID")
+    rounds = int(os.environ.get("DEV_ROUNDS", "1"))
+    for rnd in range(rounds):
+        order = SIDES[rnd % len(SIDES):] + SIDES[: rnd % len(SIDES)]
+        for mode in ("studio", "instant"):
+            for kind in [k for k, on in (("mic", mic), ("camera", cam)) if on]:
+                for side in order:
+                    rs = {}
+                    if mic:
+                        rs["micName"] = mic
+                    if (kind == "camera" or os.environ.get("DEV_CAM_ALWAYS")) and cam != "auto":
+                        rs["cameraId"] = {"DeviceID": cam}
+                    server = Mock(f"dev-{kind}-{mode}-{side}-{rnd}") if mode == "instant" else None
+                    sb = Sandbox(f"dev-{kind}-{mode}-{side}-{rnd}", server=server.url if server else None, store={"recording_settings": rs})
+                    env = {} if OS != "Linux" else {"CAP_GPUI_AUTO_OVERLAY": "window", "CAP_GPUI_AUTO_WINDOW": "xmessage"}
+                    env["CAP_GPUI_AUTO_RECORD"] = f"{mode}:60"
+                    if kind == "camera" and cam == "auto":
+                        env["CAP_GPUI_AUTO_CAMERA"] = "1"
+                    if not mic:
+                        env["CAP_GPUI_AUTO_NO_MIC"] = "1"
+                    env["RUST_LOG"] = "cap_gpui=info,cap_desktop_gpui=info,cap_recording=info,cap_camera=info,cap_editor=info"
+                    stim = subprocess.Popen(os.environ["DEV_STIM"], shell=True) if os.environ.get("DEV_STIM") else None
+                    proc = sb.launch(side, f"dev-{kind}-{mode}", env)
+                    entry = {"kind": kind, "mode": mode, "round": rnd}
+                    t_start = wait_log(proc, "auto-record start requested", 90)
+                    entry["started"] = t_start is not None
+                    if t_start:
+                        time.sleep(max(0, t_start + 20 - time.monotonic()))
+                        entry["unplug"] = shell(os.environ.get("DEV_MIC_UNPLUG" if kind == "mic" else "DEV_CAM_UNPLUG"))
+                        time.sleep(4)
+                        if rnd == 0:
+                            entry["shot_unplugged"] = screenshot(f"dev-{kind}-{mode}-unplugged-{side}")
+                        time.sleep(max(0, t_start + 30 - time.monotonic()))
+                        entry["replug"] = shell(os.environ.get("DEV_MIC_REPLUG" if kind == "mic" else "DEV_CAM_REPLUG"))
+                        time.sleep(6)
+                        if rnd == 0:
+                            entry["shot_replugged"] = screenshot(f"dev-{kind}-{mode}-replugged-{side}")
+                        t_stop = wait_log(proc, "auto-record stop requested", 60)
+                        entry["stop_seen"] = t_stop is not None
+                        if mode == "studio":
+                            done = wait_finalized(sb, 120)
+                            entry["stop_to_complete_s"] = round(done - t_stop, 2) if (done and t_stop) else None
+                        else:
+                            time.sleep(20)
+                    entry["device_log"] = tail(proc, 14, grep=["disconnect", "reconnect", "unplug", "gone", "lost", "fallback", "replacement", "switch", "Disconnected", "Reconnected"])
+                    entry["log_errors"] = tail(proc, 12, grep=["ERROR", "panicked"])
+                    kill(proc)
+                    if stim:
+                        kill(stim)
+                    shell(os.environ.get("DEV_MIC_REPLUG" if kind == "mic" else "DEV_CAM_REPLUG"))
+                    if server:
+                        server.finish()
+                    projects = sb.projects()
+                    if projects:
+                        entry["status"] = meta_status(projects[0])
+                        media = local_media(projects[0])
+                        entry["media"] = {k: {"duration": v.get("duration"), "streams": [(s.get("codec_type"), s.get("duration"), s.get("nb_frames")) for s in v.get("streams", [])], "decodes": (v.get("decodes") or {}).get("ok")} for k, v in media.items()}
+                        for p in mic_sources(projects[0]):
+                            entry.setdefault("rms_db", {})[p[0]] = rms_per_second(p[1])
+                    record("devices", side, entry)
+                    log("devices", kind, mode, side, rnd, entry.get("status"))
+
+
 def main():
     build_helpers()
     flows = {
@@ -1458,6 +1578,7 @@ def main():
         "ux": flow_ux,
         "editor_ux": flow_editor_ux,
         "perf": flow_perf,
+        "devices": flow_devices,
     }
     for name, fn in flows.items():
         if "all" not in FLOWS and name not in FLOWS:
