@@ -1,0 +1,154 @@
+name: Default path proof (scratch)
+
+on:
+  push:
+    branches: [ci/encfb-default-proof]
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  BASE_SHA: 2bffa46a4de88647354bc162e730e2bce0a12792
+
+jobs:
+  linux:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/install-desktop-deps
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-release
+          save-cache: "false"
+      - name: Native dependencies
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+      - name: Build head CLI
+        run: |
+          git log -1 --format='head %H %s'
+          cargo build --locked --release -p cap
+          mkdir -p "$RUNNER_TEMP/bins" && cp target/release/cap "$RUNNER_TEMP/bins/cap-head"
+      - name: Build base CLI
+        env:
+          RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE_SHA"
+          (cd "$RUNNER_TEMP/base" && node scripts/setup.js)
+          cargo build --locked --release -p cap --manifest-path "$RUNNER_TEMP/base/Cargo.toml" --target-dir "$RUNNER_TEMP/base/target"
+          cp "$RUNNER_TEMP/base/target/release/cap" "$RUNNER_TEMP/bins/cap-base"
+          cp "$RUNNER_TEMP/bins/cap-base" "$RUNNER_TEMP/bins/cap-base2"
+      - name: Tools
+        run: sudo apt-get install -y -qq ffmpeg >/dev/null
+      - name: Real Studio recordings (Xvfb), base vs head and base vs base
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/native-deps/lib
+        run: |
+          unset WAYLAND_DISPLAY
+          export DISPLAY=:90 XDG_SESSION_TYPE=x11
+          Xvfb :90 -screen 0 1920x1080x24 >/dev/null 2>&1 &
+          sleep 2
+          mkdir -p "$RUNNER_TEMP/results/linux"
+          SDL_AUDIODRIVER=dummy ffplay -loglevel error -an -noborder -left 0 -top 0 -x 1920 -y 1080 \
+            -f lavfi -i "testsrc2=s=1920x1080:r=60,noise=alls=10:allf=t" > /dev/null 2>&1 &
+          sleep 4
+          b="$RUNNER_TEMP/bins"
+          python3 .github/quality-proof/rec.py --base "$b/cap-base" --head "$b/cap-head" --cases default \
+            --work "$RUNNER_TEMP/rec" --out "$RUNNER_TEMP/results/linux/rec.json" --pairs 3 --secs 10 --unique --label linux-xvfb
+          python3 .github/quality-proof/rec.py --base "$b/cap-base" --head "$b/cap-base2" --cases default \
+            --work "$RUNNER_TEMP/rec" --out "$RUNNER_TEMP/results/linux/rec-noise.json" --pairs 2 --secs 10 --unique --label linux-xvfb-noise
+          kill %1 %2 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-linux
+          path: ${{ runner.temp }}/results
+          retention-days: 3
+
+  windows-bins:
+    runs-on: blacksmith-8vcpu-windows-2025
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+          prefix-key: v1-rust-release
+          save-cache: "false"
+      - name: Native dependencies
+        shell: bash
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+        run: node scripts/setup.js
+      - name: Build head CLI
+        shell: bash
+        run: |
+          git log -1 --format='head %H %s'
+          cargo build --locked --release -p cap
+          out="$RUNNER_TEMP/bins"; mkdir -p "$out"
+          cp target/release/cap.exe "$out/cap-head.exe"
+          cp target/ffmpeg/bin/*.dll target/ffmpeg/bin/*.exe "$out/"
+      - name: Build base CLI
+        shell: bash
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE_SHA"
+          (cd "$RUNNER_TEMP/base" && node scripts/setup.js)
+          cargo build --locked --release -p cap --manifest-path "$RUNNER_TEMP/base/Cargo.toml" --target-dir "$RUNNER_TEMP/base/target"
+          cp "$RUNNER_TEMP/base/target/release/cap.exe" "$RUNNER_TEMP/bins/cap-base.exe"
+          cp "$RUNNER_TEMP/bins/cap-base.exe" "$RUNNER_TEMP/bins/cap-base2.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-bins
+          path: ${{ runner.temp }}/bins
+          retention-days: 3
+
+  windows-rec:
+    needs: windows-bins
+    runs-on: windows-2022
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/quality-proof
+      - uses: actions/download-artifact@v4
+        with:
+          name: win-bins
+          path: ${{ runner.temp }}/bins
+      - name: Display
+        shell: pwsh
+        run: |
+          New-Item -Force -ItemType Directory "$env:RUNNER_TEMP\results\windows" | Out-Null
+          & .github/quality-proof/res.ps1 -Width 1920 -Height 1080 | Tee-Object "$env:RUNNER_TEMP\results\windows\display.txt"
+      - name: Real Studio recordings, base vs head and base vs base
+        shell: bash
+        run: |
+          b="$RUNNER_TEMP/bins"
+          "$b/ffplay.exe" -loglevel error -an -noborder -left 0 -top 0 -x 1920 -y 1080 \
+            -f lavfi -i "testsrc2=s=1920x1080:r=60,noise=alls=10:allf=t" > /dev/null 2>&1 &
+          sleep 5
+          python .github/quality-proof/rec.py --base "$b/cap-base.exe" --head "$b/cap-head.exe" --cases default \
+            --work "$RUNNER_TEMP/rec" --out "$RUNNER_TEMP/results/windows/rec.json" --pairs 3 --secs 10 --unique \
+            --ffprobe "$b/ffprobe.exe" --ffmpeg "$b/ffmpeg.exe" --label windows-hosted
+          python .github/quality-proof/rec.py --base "$b/cap-base.exe" --head "$b/cap-base2.exe" --cases default \
+            --work "$RUNNER_TEMP/rec" --out "$RUNNER_TEMP/results/windows/rec-noise.json" --pairs 2 --secs 10 --unique \
+            --ffprobe "$b/ffprobe.exe" --ffmpeg "$b/ffmpeg.exe" --label windows-hosted-noise
+          taskkill //F //IM ffplay.exe || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-windows
+          path: ${{ runner.temp }}/results
+          retention-days: 3
