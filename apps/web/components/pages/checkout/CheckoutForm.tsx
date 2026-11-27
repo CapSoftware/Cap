@@ -243,6 +243,10 @@ function OrderSummary({
 		lineItem?.recurring?.interval === "year" ? "yearly" : "monthly";
 	const [pendingPlan, setPendingPlan] = useState<CheckoutPlan | null>(null);
 	const [planError, setPlanError] = useState(false);
+	const [yearlyOnly, setYearlyOnly] = useState(false);
+	const capFridayApplied = (checkout.discountAmounts ?? []).some(
+		(discount) => discount.promotionCode?.toUpperCase() === CAP_FRIDAY_CODE,
+	);
 
 	if (!lineItem) return <SummarySkeleton />;
 
@@ -253,8 +257,13 @@ function OrderSummary({
 
 	const changePlan = async (next: CheckoutPlan) => {
 		if (next === plan || pendingPlan) return;
-		setPendingPlan(next);
 		setPlanError(false);
+		if (next !== "yearly" && capFridayApplied) {
+			setYearlyOnly(true);
+			return;
+		}
+		setYearlyOnly(false);
+		setPendingPlan(next);
 		try {
 			const result = await checkout.runServerUpdate(async () => {
 				const update = await changeProCheckoutPlan({
@@ -322,6 +331,12 @@ function OrderSummary({
 						Couldn't switch plans. Please try again.
 					</p>
 				) : null}
+				{yearlyOnly && capFridayApplied ? (
+					<p role="alert" className="text-[13px] text-[#B4322E]">
+						{CAP_FRIDAY_CODE} is for annual plans only. Remove it to pay
+						monthly.
+					</p>
+				) : null}
 			</div>
 
 			<dl className="mt-6 flex flex-col gap-2.5 border-t border-[#E1E7EE] pt-5 text-[14px]">
@@ -357,7 +372,7 @@ function OrderSummary({
 				/>
 			</dl>
 
-			<PromotionCode checkout={checkout} />
+			<PromotionCode checkout={checkout} plan={plan} />
 
 			{renewal ? (
 				<p className="mt-4 text-[13px] leading-[1.5] text-[rgba(17,17,17,0.5)]">
@@ -595,7 +610,13 @@ function SeatControl({
 	);
 }
 
-function PromotionCode({ checkout }: { checkout: Checkout }) {
+function PromotionCode({
+	checkout,
+	plan,
+}: {
+	checkout: Checkout;
+	plan: CheckoutPlan;
+}) {
 	const applied = checkout.discountAmounts?.find(
 		(discount) => discount.promotionCode,
 	);
@@ -651,6 +672,12 @@ function PromotionCode({ checkout }: { checkout: Checkout }) {
 		event.preventDefault();
 		const value = code.trim();
 		if (!value || busy) return;
+		if (plan !== "yearly" && value.toUpperCase() === CAP_FRIDAY_CODE) {
+			setError(
+				`${CAP_FRIDAY_CODE} is for annual plans only. Switch to Annual to use it.`,
+			);
+			return;
+		}
 		setBusy(true);
 		setError(null);
 		const result = await checkout.applyPromotionCode(value);

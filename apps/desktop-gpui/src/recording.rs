@@ -487,7 +487,10 @@ async fn finalize_studio(
     let claim_progress = progress.clone();
     let completed = tokio::task::spawn_blocking(move || {
         if needs_remux {
-            ensure_finalization_storage(&project_path)?;
+            ensure_finalization_storage(
+                &project_path,
+                cap_utils::disk_space::FinalizationKind::Studio,
+            )?;
         }
         let preparing = claim_progress
             .as_ref()
@@ -1455,7 +1458,10 @@ impl ActiveRecording {
                         let muxed = output_path.clone();
                         let project_path = project_path.clone();
                         tokio::task::spawn_blocking(move || {
-                            ensure_finalization_storage(&project_path)?;
+                            ensure_finalization_storage(
+                                &project_path,
+                                cap_utils::disk_space::FinalizationKind::Instant,
+                            )?;
                             match completion {
                                 Some(completion) => cap_recording::recovery::RecoveryManager::finalize_completed_instant_output(
                                     &display_dir,
@@ -1593,13 +1599,17 @@ pub fn available_recording_storage() -> std::io::Result<cap_utils::disk_space::R
     Ok(cap_utils::disk_space::RecordingStorage {
         available_bytes: cap_utils::disk_space::free_bytes_for_path(&recordings_dir())?,
         recording_bytes: 0,
+        finalization_copies: 3,
     })
 }
 
-pub(crate) fn ensure_finalization_storage(project_path: &std::path::Path) -> anyhow::Result<()> {
+pub(crate) fn ensure_finalization_storage(
+    project_path: &std::path::Path,
+    kind: cap_utils::disk_space::FinalizationKind,
+) -> anyhow::Result<()> {
     finalization_storage_verdict(
         project_path,
-        cap_utils::disk_space::recording_storage(project_path),
+        cap_utils::disk_space::recording_storage(project_path, kind),
     )
 }
 
@@ -1623,6 +1633,12 @@ fn finalization_storage_verdict(
         }
     };
     if !storage.can_finalize() {
+        tracing::warn!(
+            available_bytes = storage.available_bytes,
+            recording_bytes = storage.recording_bytes,
+            finalization_bytes = storage.finalization_bytes(),
+            "Not enough storage to save the recording; keeping its files"
+        );
         return Err(anyhow!(
             "Low storage. Your recording files are preserved at {}. Free up space, then recover the recording in Cap.",
             project_path.display()
@@ -1644,7 +1660,10 @@ pub fn recover_instant_recording(project_path: &std::path::Path) -> anyhow::Resu
             "This instant recording is not waiting to be saved."
         ));
     }
-    ensure_finalization_storage(project_path)?;
+    ensure_finalization_storage(
+        project_path,
+        cap_utils::disk_space::FinalizationKind::Instant,
+    )?;
     let output = project_path.join("content/output.mp4");
     cap_recording::recovery::RecoveryManager::finalize_instant_output(
         &project_path.join("content/display"),
@@ -2864,6 +2883,7 @@ async fn start_attempt_with_upload(
         crash_recovery_recording: settings.crash_recovery_recording,
         max_fps: settings.max_fps,
         studio_recording_quality: settings.studio_recording_quality.into(),
+        studio_video_bitrate: settings.studio_video_bitrate(),
         out_of_process_muxer: settings.out_of_process_muxer,
         instant_mode_max_resolution: cap_recording::DEFAULT_INSTANT_MODE_MAX_RESOLUTION,
     };
@@ -4875,6 +4895,7 @@ mod studio_finalization_tests {
             .unwrap(),
             cursor_data: Default::default(),
             clean_stopped: None,
+            screen_frames: None,
         }
     }
 
@@ -5157,6 +5178,7 @@ mod studio_finalization_tests {
             meta,
             cursor_data: Default::default(),
             clean_stopped: None,
+            screen_frames: None,
         }
     }
 
@@ -5259,7 +5281,12 @@ mod finalization_storage_tests {
     #[test]
     fn finalization_storage_check_that_cannot_run_does_not_block_the_save() {
         let directory = tempfile::tempdir().unwrap();
-        ensure_finalization_storage(&directory.path().join("missing.cap")).unwrap();
+        for kind in [
+            cap_utils::disk_space::FinalizationKind::Studio,
+            cap_utils::disk_space::FinalizationKind::Instant,
+        ] {
+            ensure_finalization_storage(&directory.path().join("missing.cap"), kind).unwrap();
+        }
         finalization_storage_verdict(
             directory.path(),
             Err(std::io::Error::other(
@@ -5274,24 +5301,28 @@ mod finalization_storage_tests {
         use cap_utils::disk_space::{RECORDING_DISK_RESERVE_BYTES, RecordingStorage};
         let directory = tempfile::tempdir().unwrap();
         let recording_bytes = 1024 * 1024 * 1024;
-        let needed = recording_bytes * 3 + RECORDING_DISK_RESERVE_BYTES / 2;
-        let error = finalization_storage_verdict(
-            directory.path(),
-            Ok(RecordingStorage {
-                available_bytes: needed,
-                recording_bytes,
-            }),
-        )
-        .unwrap_err();
-        assert!(error.to_string().starts_with("Low storage."), "{error}");
-        finalization_storage_verdict(
-            directory.path(),
-            Ok(RecordingStorage {
-                available_bytes: needed + 1,
-                recording_bytes,
-            }),
-        )
-        .unwrap();
+        for finalization_copies in [2, 3] {
+            let needed = recording_bytes * finalization_copies + RECORDING_DISK_RESERVE_BYTES / 2;
+            let error = finalization_storage_verdict(
+                directory.path(),
+                Ok(RecordingStorage {
+                    available_bytes: needed,
+                    recording_bytes,
+                    finalization_copies,
+                }),
+            )
+            .unwrap_err();
+            assert!(error.to_string().starts_with("Low storage."), "{error}");
+            finalization_storage_verdict(
+                directory.path(),
+                Ok(RecordingStorage {
+                    available_bytes: needed + 1,
+                    recording_bytes,
+                    finalization_copies,
+                }),
+            )
+            .unwrap();
+        }
     }
 
     #[cfg(windows)]
@@ -5305,7 +5336,11 @@ mod finalization_storage_tests {
         project.push("content");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("segment_000.m4s"), [0; 128]).unwrap();
-        ensure_finalization_storage(project.parent().unwrap()).unwrap();
+        ensure_finalization_storage(
+            project.parent().unwrap(),
+            cap_utils::disk_space::FinalizationKind::Studio,
+        )
+        .unwrap();
     }
 }
 

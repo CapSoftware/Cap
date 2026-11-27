@@ -198,16 +198,6 @@ label = "Capture keyboard presses"
 description = "Automatically restores the notch for new screen and area recordings when the selected region contains the complete notch. External displays, partial areas, and window recordings are left alone. Each recording can override it in the editor."
 label = "Draw the MacBook notch on screen recordings"
 
-[settings.general.recording.max_fps]
-description = "Maximum framerate for screen capture."
-description_high = { text = "Maximum framerate for screen capture. Higher values may cause drops or increased CPU usage on some systems.", context = "Shown instead of the short description when more than 60 FPS is selected." }
-fps_120 = { text = "120 FPS", max_px = 180, size = 12 }
-fps_24 = { text = "24 FPS", max_px = 180, size = 12 }
-fps_25 = { text = "25 FPS", max_px = 180, size = 12 }
-fps_30 = { text = "30 FPS", max_px = 180, size = 12 }
-fps_60 = { text = "60 FPS (Recommended)", max_px = 180, size = 12 }
-label = "Max capture framerate"
-
 [settings.general.recording.keep_drawings]
 description = "Drawings stay until you clear them. When off, each one fades a few seconds after you draw it."
 label = "Keep drawings on screen"
@@ -335,23 +325,48 @@ save_failed = "Couldn't save your recording settings. Please try again."
 [settings.quality.studio]
 balanced = "Balanced"
 balanced_description = "Sharp detail at a sensible file size. Right for most recordings."
+bitrate = "Bitrate"
+bitrate_description = "Higher keeps more detail and makes larger files. Very high values can be more than your computer's encoder delivers."
+bitrate_value = { text = "{value} Mbps", context = "{value} is a whole number of megabits per second, for example 30." }
 compatibility = "Smaller files"
 compatibility_description = "Saves disk space. Fine detail can soften, most of all on camera."
-description = "Saved to your computer for editing. You choose the export size later, in the editor."
+custom = "Custom"
+custom_description = "Set the screen recording bitrate yourself."
+description = "Records your screen at full resolution, up to 4K, in the highest quality, and saves it to your computer for editing. You choose the export size later, in the editor."
 recommended = "Recommended"
-title = "Studio recordings"
+resolution = "Resolution"
+resolution_description = "Your screen's full resolution, up to 4K. Windows and areas record at their own size."
+resolution_description_compatibility = "Each screen records at its full resolution, up to 4K. With a camera on, the Smaller files setting records at up to 1600 × 1000."
+resolution_description_several = "Each screen records at its own full resolution, up to 4K. Windows and areas record at their own size."
+resolution_up_to = { text = "Up to {resolution}", context = "Shown with several displays connected. {resolution} is the largest size Studio Mode records, such as 4K or 3456 × 2234." }
+title = "Studio Mode"
 ultra = "Maximum detail"
 ultra_description = "Keeps the most detail for heavy editing. Uses the most disk space."
 
+[settings.quality.studio.frame_rate]
+description = "Studio Mode records up to this rate and never faster than your display refreshes. With a camera on, it records at 30 FPS or less."
+description_high = "Recording above 60 FPS uses more CPU and disk space, and some computers encode it in software. Studio Mode never records faster than your display refreshes. With a camera on, it records at 30 FPS or less."
+description_match = { text = "Records at your display's refresh rate, up to {fps} FPS. Recording above 60 FPS uses more CPU and disk space. With a camera on, Studio Mode records at 30 FPS or less.", context = "{fps} is the highest frame rate Studio Mode records on this computer: 240 on macOS, 120 on Windows and Linux." }
+fps_120 = { text = "120 FPS", max_px = 180, size = 12 }
+fps_144 = { text = "144 FPS", max_px = 180, size = 12 }
+fps_165 = { text = "165 FPS", max_px = 180, size = 12 }
+fps_24 = { text = "24 FPS", max_px = 180, size = 12 }
+fps_240 = { text = "240 FPS", max_px = 180, size = 12 }
+fps_25 = { text = "25 FPS", max_px = 180, size = 12 }
+fps_30 = { text = "30 FPS", max_px = 180, size = 12 }
+fps_60 = { text = "60 FPS (Recommended)", max_px = 180, size = 12 }
+label = "Frame rate"
+match_display = { text = "Match display", max_px = 180, size = 12 }
+
 [settings.quality.instant]
-description = "Uploaded while you record, so the link is ready the moment you stop. For the best quality, use Studio mode: it records at the highest quality your screen allows, and you can export up to 4K."
+description = "Uploaded while you record, so the link is ready the moment you stop. For the best quality, use Studio Mode: it records at the highest quality your screen allows, and you can export up to 4K."
 free_plan = "720p on the free plan. Cap Pro records up to 4K."
 max_resolution = "Maximum resolution"
 res_1080p = "Sharp text at a practical upload size."
 res_1440p = "Extra detail for large, high-resolution screens."
 res_4k = "The most detail. Best on a fast connection."
 res_720p = "Smallest uploads, so links are ready fastest."
-title = "Instant recordings"
+title = "Instant Mode"
 
 [settings.quality.sharing]
 auto_open = "Open share links automatically"
@@ -2857,6 +2872,7 @@ position = "Position"
 refining_word_timings = "Refining word timings…"
 regenerate = "Regenerate Captions"
 reset_position = "Reset Position"
+show_existing = "Show Captions"
 show_filler_words = "Show Filler Words"
 size_label = "Size"
 style = "Style"

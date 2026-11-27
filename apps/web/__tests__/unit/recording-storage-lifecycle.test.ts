@@ -1163,6 +1163,18 @@ describe("recording storage lifecycle", () => {
 		}
 	});
 
+	it("removes the deleted recording's notifications with it", async () => {
+		const database = databaseFixture();
+		await storageFixture([[outputKey, "verified-video"]]);
+
+		expect(Exit.isSuccess(await runVideoOperation("delete"))).toBe(true);
+		expect(database.mutations).toContainEqual({
+			operation: "delete",
+			table: Db.notifications,
+			id: videoId,
+		});
+	});
+
 	it("waits for job deletion before deleting any dependent database row", async () => {
 		const database = databaseFixture();
 		let release: (() => void) | undefined;

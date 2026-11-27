@@ -158,6 +158,18 @@ describe("buildNotesPrompt", () => {
 		expect(buildNotes({ transcriptTruncated: true }).system).toContain(
 			"stops before the meeting ended",
 		);
+		const middle = buildNotes({
+			transcriptTruncated: true,
+			transcript: `Speaker 1: agenda\n${prompts.TRANSCRIPT_MIDDLE_LEFT_OUT}\nSpeaker 2: decision`,
+		}).system;
+		expect(middle).toContain(
+			"part of the middle of the meeting is not covered",
+		);
+		expect(middle).not.toContain("stops before the meeting ended");
+		expect(
+			buildNotes({ transcript: `a\n${prompts.TRANSCRIPT_MIDDLE_LEFT_OUT}\nb` })
+				.system,
+		).not.toContain("middle of the meeting is not covered");
 		expect(buildNotes({ summaryLanguage: "de" }).system).toContain("in German");
 		expect(buildNotes().system).toContain(
 			"the language most of the meeting was held in",
@@ -193,6 +205,41 @@ describe("buildNotesPrompt", () => {
 		);
 	});
 
+	it("carries every part's decisions and tasks into the final notes", () => {
+		const sections = [
+			"- agenda: invoices to Lisbon\nDecisions:\n- Code freeze is March 3\nAction items:\n- Ben: cutover checklist",
+			"- filler talk\nDecisions:\n- none\nAction items:\n- none",
+			"- launch review\nDECISIONS:\n* Launch the Orion beta on April 17\n- Code freeze is March 3\nAction items:\n- Priya: rollback plan by Friday",
+		];
+		expect(prompts.carriedItems(sections)).toEqual({
+			decisions: [
+				"Code freeze is March 3",
+				"Launch the Orion beta on April 17",
+			],
+			tasks: ["Ben: cutover checklist", "Priya: rollback plan by Friday"],
+		});
+		const input = notesInput();
+		const { system, user } = prompts.buildNotesPrompt({
+			...input,
+			boundary: B,
+			source: { kind: "sections", sections },
+			titleRequested: false,
+		});
+		expect(system).toContain(`<decisions_and_tasks_${B}>`);
+		expect(between(user, "decisions_and_tasks")).toBe(
+			"Decisions\n- Code freeze is March 3\n- Launch the Orion beta on April 17\n\nAction items\n- Ben: cutover checklist\n- Priya: rollback plan by Friday",
+		);
+
+		const none = prompts.buildNotesPrompt({
+			...input,
+			boundary: B,
+			source: { kind: "sections", sections: ["- only talk"] },
+			titleRequested: false,
+		});
+		expect(none.system).not.toContain("decisions_and_tasks");
+		expect(between(none.user, "decisions_and_tasks")).toBeNull();
+	});
+
 	it("builds delimited chunk prompts", () => {
 		const { system, user } = prompts.buildNotesChunkPrompt({
 			boundary: B,
@@ -207,6 +254,8 @@ describe("buildNotesPrompt", () => {
 		expect(between(user, "transcript_part")).toBe(`Speaker 1: ${INJECTION}`);
 		expect(user).toContain("This is part 2 of 3.");
 		expect(between(user, "vocabulary")).toBeNull();
+		expect(system).toContain(`"${prompts.CARRIED_DECISIONS_LABEL}"`);
+		expect(system).toContain(`"${prompts.CARRIED_TASKS_LABEL}"`);
 	});
 });
 
@@ -354,6 +403,46 @@ describe("buildAskPrompt", () => {
 		expect(result.text).toContain("part 0 ");
 		expect(result.text).toContain("part 399 ");
 		expect(result.text).not.toContain("part 200 ");
+	});
+
+	it("keeps excerpts within a byte budget", () => {
+		const transcript = Array.from(
+			{ length: 100 },
+			(_, index) => `Speaker 1: 第${index}部分 ${"预算".repeat(600)}`,
+		).join("\n");
+		const bytes = (text: string) => Buffer.byteLength(text);
+		const result = prompts.selectTranscriptExcerpts(
+			transcript,
+			"预算",
+			50_000,
+			bytes,
+		);
+		expect(result.excerpted).toBe(true);
+		expect(bytes(result.text)).toBeLessThanOrEqual(50_000);
+		expect(bytes(result.text)).toBeGreaterThan(30_000);
+	});
+
+	it("shortens the most related excerpt when no whole one fits", () => {
+		const transcript = [
+			`Speaker 1: ${"roadmap ".repeat(495)}`,
+			`Speaker 2: the code word is PINEAPPLE ${"€".repeat(1_500)}`,
+		].join("\n");
+		const result = prompts.selectTranscriptExcerpts(
+			transcript,
+			"code word",
+			200,
+			(text) => Buffer.byteLength(text),
+		);
+		expect(
+			result.text.startsWith("Speaker 2: the code word is PINEAPPLE"),
+		).toBe(true);
+		expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(200);
+	});
+
+	it("never splits a character between excerpts", () => {
+		const line = `a${"\u{20000}".repeat(3_000)}`;
+		for (const chunk of prompts.chunkTranscript(line, 4_000))
+			expect(chunk).not.toMatch(/[\uD800-\uDBFF]$|^[\uDC00-\uDFFF]/);
 	});
 
 	it("ranks non-Latin questions too", () => {

@@ -664,12 +664,57 @@ pub fn frame_image(frame: &RenderedFrame) -> Option<Arc<RenderImage>> {
     ])))
 }
 
-/// What the frame pump hands the window.
 #[derive(Clone)]
 pub(crate) enum EditorPreviewFrame {
     Image(Arc<RenderImage>),
+    #[cfg(not(target_os = "macos"))]
+    Stream(gpui::StreamingImage),
     #[cfg(target_os = "macos")]
     Surface(CVPixelBuffer),
+}
+
+/// What the frame pump hands the window.
+pub(crate) enum ArrivingFrame {
+    Ready(EditorPreviewFrame),
+    /// Readback rows as the renderer produced them. They reach the preview
+    /// texture only once the window accepts the frame, so a frame it turns
+    /// away is never painted.
+    #[cfg(not(target_os = "macos"))]
+    Rgba(RenderedFrame),
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn frame_can_stream(frame: &RenderedFrame) -> bool {
+    let stride = frame.padded_bytes_per_row as usize;
+    let Some(row_bytes) = (frame.width as usize).checked_mul(4) else {
+        return false;
+    };
+    frame.width > 0
+        && frame.height > 0
+        && i32::try_from(frame.width).is_ok()
+        && i32::try_from(frame.height).is_ok()
+        && stride >= row_bytes
+        && stride.is_multiple_of(4)
+        && stride
+            .checked_mul(frame.height as usize)
+            .is_some_and(|bytes| frame.data.len() >= bytes)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn stream_frame(stream: &gpui::StreamingImage, frame: RenderedFrame) -> bool {
+    let size = gpui::size(
+        gpui::DevicePixels(frame.width as i32),
+        gpui::DevicePixels(frame.height as i32),
+    );
+    let stride = frame.padded_bytes_per_row as usize;
+    let streamed = match Arc::try_unwrap(frame.data) {
+        Ok(rows) => stream.set_frame(size, stride, rows).map(drop),
+        Err(rows) => stream.copy_frame(size, stride, &rows),
+    };
+    if let Err(error) = &streamed {
+        tracing::warn!(%error, "a rendered frame could not be streamed to the preview");
+    }
+    streamed.is_ok()
 }
 
 impl EditorPreviewFrame {
@@ -678,6 +723,10 @@ impl EditorPreviewFrame {
         match self {
             Self::Image(image) => {
                 let _ = window.paint_image(bounds, corners, Arc::clone(image), 0, false);
+            }
+            #[cfg(not(target_os = "macos"))]
+            Self::Stream(stream) => {
+                let _ = window.paint_streaming_image(bounds, corners, stream, false);
             }
             #[cfg(target_os = "macos")]
             Self::Surface(surface) => {
@@ -720,11 +769,80 @@ pub(crate) enum SharpPreview {
 
 pub(crate) type PreviewCanvasPx = Rc<std::cell::Cell<Option<[u32; 2]>>>;
 
+#[derive(Default)]
+pub(crate) struct PreviewPaints {
+    painted: std::cell::Cell<u64>,
+    waiting: std::cell::Cell<bool>,
+}
+
+/// The playback frame that waits for the one before it to be painted.
+///
+/// The engine's frame clock and the display's refresh are not in step, so
+/// with their phases close two frames can reach the window inside one
+/// refresh and none inside the next: the first was replaced unseen and the
+/// second stayed up for two refreshes, for as long as the phases stayed
+/// close. Showing the newer one only after the older is painted puts each on
+/// its own refresh, one refresh later than it would have been shown.
+///
+/// A lone collision (the first frames of a playback) is left as it was, the
+/// older frame replaced, so playback whose frames arrive apart is never
+/// delayed. Only a second collision within [`COLLISION_WINDOW`] frames, a
+/// second of playback, starts the waiting. At most one frame waits, frames
+/// are never reordered, and a third arrival shows the waiting one at once,
+/// so the picture is never more than one frame behind.
+struct WaitingFrame<T> {
+    waiting: Option<T>,
+    since_collision: u32,
+}
+
+const COLLISION_WINDOW: u32 = 60;
+
+impl<T> Default for WaitingFrame<T> {
+    fn default() -> Self {
+        Self {
+            waiting: None,
+            since_collision: u32::MAX,
+        }
+    }
+}
+
+impl<T> WaitingFrame<T> {
+    fn arrive(&mut self, frame: T, may_wait: bool, previous_unpainted: bool) -> [Option<T>; 2] {
+        let earlier = self.waiting.take();
+        if !may_wait {
+            self.since_collision = u32::MAX;
+            return [earlier, Some(frame)];
+        }
+        let collided = previous_unpainted || earlier.is_some();
+        let repeated = earlier.is_some() || self.since_collision < COLLISION_WINDOW;
+        self.since_collision = if collided {
+            0
+        } else {
+            self.since_collision.saturating_add(1)
+        };
+        if collided && repeated {
+            self.waiting = Some(frame);
+            [earlier, None]
+        } else {
+            [earlier, Some(frame)]
+        }
+    }
+
+    fn take(&mut self) -> Option<T> {
+        self.waiting.take()
+    }
+
+    fn is_some(&self) -> bool {
+        self.waiting.is_some()
+    }
+}
+
 struct PreviewFrameView {
     frame: Option<EditorPreviewFrame>,
     frame_size: (f32, f32),
     frame_rect: crate::editor_canvas::CanvasRect,
     canvas_px: PreviewCanvasPx,
+    paints: Rc<PreviewPaints>,
     editor: WeakEntity<EditorWindow>,
     stats: Option<Arc<PumpStats>>,
     frame_sequence: u64,
@@ -738,6 +856,7 @@ impl PreviewFrameView {
     fn new(
         frame_rect: crate::editor_canvas::CanvasRect,
         canvas_px: PreviewCanvasPx,
+        paints: Rc<PreviewPaints>,
         editor: WeakEntity<EditorWindow>,
     ) -> Self {
         Self {
@@ -745,6 +864,7 @@ impl PreviewFrameView {
             frame_size: (1920., 1080.),
             frame_rect,
             canvas_px,
+            paints,
             editor,
             stats: None,
             frame_sequence: 0,
@@ -788,6 +908,7 @@ impl Render for PreviewFrameView {
         let frame_size = self.frame_size;
         let frame_rect = self.frame_rect.clone();
         let canvas_px = self.canvas_px.clone();
+        let paints = self.paints.clone();
         let editor = self.editor.clone();
         let painted = self.stats.clone();
         let frame_sequence = self.frame_sequence;
@@ -850,6 +971,15 @@ impl Render for PreviewFrameView {
                     frame_number,
                     frame_sequence,
                 );
+                paints.painted.set(frame_sequence);
+                if paints.waiting.get() {
+                    let editor = editor.clone();
+                    window.defer(cx, move |window, cx| {
+                        let _ = editor.update(cx, |editor, cx| {
+                            editor.show_waiting_frame(window, cx);
+                        });
+                    });
+                }
             },
         )
         .size_full()
@@ -932,7 +1062,7 @@ impl Render for EditorSectionView {
 }
 
 pub struct EditorFrame {
-    pub(crate) frame: EditorPreviewFrame,
+    pub(crate) frame: ArrivingFrame,
     pub layout: FrameLayout,
     /// `RenderedFrame.frame_number` -- which frame this picture actually is.
     /// Logged at debug so a seek can be checked against what it asked for.
@@ -1551,7 +1681,11 @@ pub struct EditorWindow {
     preparing_frame_presented: bool,
     preparing_seed: Option<Arc<crate::editor_preparing::presentation::PreparingTimelineSeed>>,
     pub(crate) latest_frame: Option<EditorPreviewFrame>,
+    #[cfg(not(target_os = "macos"))]
+    preview_stream: gpui::StreamingImage,
     preview: Entity<PreviewFrameView>,
+    preview_paints: Rc<PreviewPaints>,
+    waiting_frame: WaitingFrame<(std::sync::Weak<EditorInstance>, EditorFrame)>,
     preview_canvas_px: PreviewCanvasPx,
     sharp_preview: Option<gpui::Task<()>>,
     /// Subscribed when playback stops: changed once a paused request has been
@@ -2307,11 +2441,13 @@ impl EditorWindow {
         let markers_state = markers::MarkersState::new(window, cx, &mut text_events);
         let player_frame_rect = crate::editor_canvas::canvas_rect_cell();
         let preview_canvas_px = PreviewCanvasPx::default();
+        let preview_paints = Rc::new(PreviewPaints::default());
         let preview = cx.new({
             let frame_rect = player_frame_rect.clone();
             let canvas_px = preview_canvas_px.clone();
+            let paints = preview_paints.clone();
             let editor = cx.entity().downgrade();
-            move |_| PreviewFrameView::new(frame_rect, canvas_px, editor)
+            move |_| PreviewFrameView::new(frame_rect, canvas_px, paints, editor)
         });
         let editor = cx.entity();
         let header = cx.new({
@@ -2366,7 +2502,11 @@ impl EditorWindow {
             preparing_frame_presented: false,
             preparing_seed: None,
             latest_frame: None,
+            #[cfg(not(target_os = "macos"))]
+            preview_stream: gpui::StreamingImage::new(gpui::StreamingImageFormat::Rgba8),
             preview,
+            preview_paints,
+            waiting_frame: WaitingFrame::default(),
             preview_canvas_px,
             sharp_preview: None,
             paused_requests: None,
@@ -7707,7 +7847,58 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.display_frame(frame, true, window, cx);
+        let Some(instance) = self.instance.as_ref() else {
+            self.display_frame(frame, true, window, cx);
+            return;
+        };
+        let may_wait = self.playing
+            && self.ordinary_handoff_frame.is_none()
+            && self.preparing_candidate_frame.is_none()
+            && instance.preparing_adoption().is_none();
+        let previous_unpainted = {
+            let preview = self.preview.read(cx);
+            preview.frame.is_some() && preview.frame_sequence != self.preview_paints.painted.get()
+        };
+        let frame = (Arc::downgrade(instance), frame);
+        let show = self
+            .waiting_frame
+            .arrive(frame, may_wait, previous_unpainted);
+        self.preview_paints
+            .waiting
+            .set(self.waiting_frame.is_some());
+        for (instance, frame) in show.into_iter().flatten() {
+            if self.holds_instance(&instance) {
+                self.display_frame(frame, true, window, cx);
+            }
+        }
+    }
+
+    fn show_waiting_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.preview_paints.waiting.set(false);
+        if let Some((instance, frame)) = self.waiting_frame.take()
+            && self.holds_instance(&instance)
+        {
+            self.display_frame(frame, true, window, cx);
+        }
+    }
+
+    /// The only place the preview texture is written.
+    fn accepted_picture(&mut self, frame: ArrivingFrame) -> Option<EditorPreviewFrame> {
+        match frame {
+            ArrivingFrame::Ready(picture) => Some(picture),
+            #[cfg(not(target_os = "macos"))]
+            ArrivingFrame::Rgba(rgba) => {
+                let started = Instant::now();
+                let streamed = stream_frame(&self.preview_stream, rgba);
+                if let Some(stats) = &self.stats {
+                    stats
+                        .convert_nanos
+                        .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    stats.convert_samples.fetch_add(1, Ordering::Relaxed);
+                }
+                streamed.then(|| EditorPreviewFrame::Stream(self.preview_stream.clone()))
+            }
+        }
     }
 
     fn display_frame(
@@ -7748,6 +7939,9 @@ impl EditorWindow {
         {
             return;
         }
+        let Some(picture) = self.accepted_picture(frame.frame) else {
+            return;
+        };
         let handoff_target = self.transport.as_ref().and(self.ordinary_handoff_frame);
         let first_frame = self.latest_frame.is_none();
         let overlay_live = self.player_panel_hovered || self.canvas_drag.is_some();
@@ -7776,15 +7970,9 @@ impl EditorWindow {
             frame.layout.output_size[0] as f32,
             frame.layout.output_size[1] as f32,
         );
-        self.latest_frame = Some(frame.frame.clone());
+        self.latest_frame = Some(picture.clone());
         let previous = self.preview.update(cx, |preview, cx| {
-            preview.set_frame(
-                frame.frame,
-                frame.number,
-                frame_size,
-                self.stats.clone(),
-                cx,
-            )
+            preview.set_frame(picture, frame.number, frame_size, self.stats.clone(), cx)
         });
         if let Some(EditorPreviewFrame::Image(previous)) = previous {
             let _ = window.drop_image(previous);
@@ -8836,7 +9024,7 @@ impl EditorWindow {
         timeline::scene_available(&self.project, self.has_camera)
     }
 
-    fn toggle_track(
+    pub(crate) fn toggle_track(
         &mut self,
         kind: TrackKind,
         next: bool,
@@ -14339,6 +14527,7 @@ pub(crate) fn surface_preview_frame(frame: cap_rendering::SurfaceFrame) -> Edito
 
 /// [`frame_image`], timed. The pump calls this so the CPU conversion's cost is
 /// a number rather than a hunch.
+#[cfg(target_os = "macos")]
 pub fn frame_image_timed(frame: &RenderedFrame, stats: &PumpStats) -> Option<Arc<RenderImage>> {
     let started = Instant::now();
     let image = frame_image(frame);
@@ -17875,6 +18064,92 @@ mod tests {
     }
 
     #[test]
+    fn a_lone_collision_replaces_the_unpainted_frame_as_before() {
+        let mut waiting = WaitingFrame::default();
+        assert_eq!(waiting.arrive(1, true, false), [None, Some(1)]);
+        assert_eq!(waiting.arrive(2, true, true), [None, Some(2)]);
+        assert!(!waiting.is_some());
+        for frame in 3..3 + COLLISION_WINDOW {
+            assert_eq!(waiting.arrive(frame, true, false), [None, Some(frame)]);
+        }
+        let later = 3 + COLLISION_WINDOW;
+        assert_eq!(waiting.arrive(later, true, true), [None, Some(later)]);
+        assert!(!waiting.is_some());
+        assert_eq!(
+            waiting.arrive(later + 1, true, false),
+            [None, Some(later + 1)]
+        );
+        assert_eq!(waiting.arrive(later + 2, true, true), [None, None]);
+        assert!(waiting.is_some());
+    }
+
+    #[test]
+    fn a_repeated_collision_waits_for_the_paint() {
+        let mut waiting = WaitingFrame::default();
+        assert_eq!(waiting.arrive(1, true, true), [None, Some(1)]);
+        assert_eq!(waiting.arrive(2, true, false), [None, Some(2)]);
+        assert_eq!(waiting.arrive(3, true, true), [None, None]);
+        assert!(waiting.is_some());
+        assert_eq!(waiting.take(), Some(3));
+        assert_eq!(waiting.arrive(4, true, true), [None, None]);
+        assert_eq!(waiting.take(), Some(4));
+        assert_eq!(waiting.take(), None);
+    }
+
+    #[test]
+    fn a_third_arrival_shows_the_waiting_frame_and_waits_in_its_place() {
+        let mut waiting = WaitingFrame::default();
+        assert_eq!(waiting.arrive(1, true, true), [None, Some(1)]);
+        assert_eq!(waiting.arrive(2, true, true), [None, None]);
+        assert_eq!(waiting.arrive(3, true, true), [Some(2), None]);
+        assert_eq!(waiting.arrive(4, true, false), [Some(3), None]);
+        assert_eq!(waiting.take(), Some(4));
+    }
+
+    #[test]
+    fn frames_that_may_not_wait_follow_the_waiting_one_and_forget_collisions() {
+        let mut waiting = WaitingFrame::default();
+        assert_eq!(waiting.arrive(1, true, true), [None, Some(1)]);
+        assert_eq!(waiting.arrive(2, true, true), [None, None]);
+        assert_eq!(waiting.arrive(3, false, true), [Some(2), Some(3)]);
+        assert!(!waiting.is_some());
+        assert_eq!(waiting.arrive(4, true, true), [None, Some(4)]);
+        assert!(!waiting.is_some());
+    }
+
+    /// Frames arrive in order and every frame handed back is in order too,
+    /// whatever the paints do: nothing is shown twice, out of turn or left
+    /// behind.
+    #[test]
+    fn waiting_never_reorders_duplicates_or_loses_frames() {
+        let mut waiting = WaitingFrame::default();
+        let mut shown = Vec::new();
+        let mut unpainted = false;
+        let mut state = 0x9e37_79b9_u32;
+        for frame in 0..10_000_u32 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            if state >> 30 != 0 {
+                unpainted = false;
+                if let Some(next) = waiting.take() {
+                    shown.push(next);
+                    unpainted = true;
+                }
+            }
+            let may_wait = (state >> 20) & 7 != 0;
+            for next in waiting
+                .arrive(frame, may_wait, unpainted)
+                .into_iter()
+                .flatten()
+            {
+                shown.push(next);
+                unpainted = true;
+            }
+        }
+        shown.extend(waiting.take());
+        assert_eq!(shown, (0..10_000).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn painted_frames_exclude_repaints_and_frames_replaced_before_paint() {
         let stats = PumpStats::default();
         stats.record_paint(1);
@@ -17976,6 +18251,71 @@ mod tests {
         // BGRA out: the red and blue channels are swapped, no 99 anywhere.
         assert_eq!(&bytes[0..4], &[30, 20, 10, 255]);
         assert!(!bytes.contains(&99));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn padded_frame(width: u32, height: u32, padded: u32, rows: usize) -> RenderedFrame {
+        RenderedFrame {
+            data: Arc::new((0..padded as usize * rows).map(|i| i as u8).collect()),
+            width,
+            height,
+            padded_bytes_per_row: padded,
+            frame_number: 7,
+            target_time_ns: 0,
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_streamed_frame_keeps_its_padded_rows_and_moves_an_unshared_buffer() {
+        let stream = gpui::StreamingImage::new(gpui::StreamingImageFormat::Rgba8);
+        let frame = padded_frame(1080, 2, 4352, 2);
+        let expected = frame.data.as_ref().clone();
+        let buffer = frame.data.as_ptr();
+        assert!(frame_can_stream(&frame));
+        assert!(stream_frame(&stream, frame));
+
+        let current = stream.current().expect("the stream holds the frame");
+        assert_eq!(current.size().width.0, 1080);
+        assert_eq!(current.size().height.0, 2);
+        assert_eq!(current.stride(), 4352);
+        assert_eq!(current.bytes(), expected.as_slice());
+        assert_eq!(current.bytes().as_ptr(), buffer);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_streamed_frame_whose_buffer_is_shared_is_copied() {
+        let stream = gpui::StreamingImage::new(gpui::StreamingImageFormat::Rgba8);
+        let frame = padded_frame(64, 2, 256, 2);
+        let held = Arc::clone(&frame.data);
+        assert!(stream_frame(&stream, frame));
+
+        let current = stream.current().expect("the stream holds the frame");
+        assert_eq!(current.bytes(), held.as_slice());
+        assert_ne!(current.bytes().as_ptr(), held.as_ptr());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_frame_without_its_rows_leaves_the_stream_as_it_was() {
+        let stream = gpui::StreamingImage::new(gpui::StreamingImageFormat::Rgba8);
+        assert!(stream_frame(&stream, padded_frame(64, 2, 256, 2)));
+        let shown = stream.current().expect("the stream holds the frame");
+
+        for refused in [
+            padded_frame(64, 2, 256, 1),
+            padded_frame(64, 2, 252, 2),
+            padded_frame(64, 2, 258, 2),
+            padded_frame(0, 2, 256, 2),
+            padded_frame(64, 0, 256, 2),
+        ] {
+            assert!(!frame_can_stream(&refused));
+            assert!(!stream_frame(&stream, refused));
+            let current = stream.current().expect("the stream still holds a frame");
+            assert_eq!(current.generation(), shown.generation());
+            assert_eq!(current.bytes(), shown.bytes());
+        }
     }
 }
 
