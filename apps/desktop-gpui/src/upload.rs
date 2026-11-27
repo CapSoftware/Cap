@@ -282,11 +282,16 @@ async fn alongside<T>(main: impl Future<Output = T>, side: impl Future<Output = 
     }
 }
 
+pub struct PreparedInstantUpload {
+    pub video: VideoUploadInfo,
+    pub recording_limit: Option<std::time::Duration>,
+}
+
 pub async fn prepare_instant_upload(
     camera_only: bool,
     project_name: String,
     organization_id: Option<String>,
-) -> Result<VideoUploadInfo, String> {
+) -> Result<PreparedInstantUpload, String> {
     if store_auth_missing() {
         return Err("Please sign in to use instant recording".to_string());
     }
@@ -314,11 +319,15 @@ pub async fn prepare_instant_upload(
     })?;
 
     let link = created.link();
+    let recording_limit = created.recording_limit;
     let config = created.config;
-    Ok(VideoUploadInfo {
-        id: config.id.clone(),
-        link,
-        config,
+    Ok(PreparedInstantUpload {
+        video: VideoUploadInfo {
+            id: config.id.clone(),
+            link,
+            config,
+        },
+        recording_limit,
     })
 }
 
@@ -1662,6 +1671,7 @@ async fn create_or_get_video_with_mode(
 struct CreatedVideo {
     config: S3UploadMeta,
     share_url: Option<String>,
+    recording_limit: Option<std::time::Duration>,
 }
 
 impl CreatedVideo {
@@ -1678,15 +1688,24 @@ fn parse_created_video(body: &str) -> Result<CreatedVideo, serde_json::Error> {
         id: String,
         #[serde(default)]
         share_url: Option<String>,
+        #[serde(default)]
+        recording_limit_secs: Option<serde_json::Value>,
     }
 
     let response = serde_json::from_str::<CreateVideoResponse>(body)?;
+    let recording_limit = response
+        .recording_limit_secs
+        .as_ref()
+        .and_then(serde_json::Value::as_u64)
+        .filter(|secs| *secs > 0)
+        .map(std::time::Duration::from_secs);
     let share_url = response
         .share_url
         .filter(|share_url| is_share_url_for(share_url, &response.id));
     Ok(CreatedVideo {
         config: S3UploadMeta { id: response.id },
         share_url,
+        recording_limit,
     })
 }
 
@@ -2881,6 +2900,30 @@ mod tests {
 
         let created = parse_created_video(r#"{"id":"abc123","share_url":null}"#).unwrap();
         assert_eq!(created.share_url, None);
+    }
+
+    #[test]
+    fn created_video_reads_the_recording_limit() {
+        let created = parse_created_video(r#"{"id":"abc123","recording_limit_secs":300}"#).unwrap();
+        assert_eq!(
+            created.recording_limit,
+            Some(std::time::Duration::from_secs(300))
+        );
+
+        for body in [
+            r#"{"id":"abc123"}"#,
+            r#"{"id":"abc123","recording_limit_secs":null}"#,
+            r#"{"id":"abc123","recording_limit_secs":0}"#,
+            r#"{"id":"abc123","recording_limit_secs":-5}"#,
+            r#"{"id":"abc123","recording_limit_secs":"300"}"#,
+            r#"{"id":"abc123","recording_limit_secs":12.5}"#,
+        ] {
+            assert_eq!(
+                parse_created_video(body).unwrap().recording_limit,
+                None,
+                "{body}"
+            );
+        }
     }
 
     #[test]

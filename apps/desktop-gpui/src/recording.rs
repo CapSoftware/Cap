@@ -133,6 +133,7 @@ pub struct ActiveRecording {
     /// The feed a mid-recording microphone switch opened. Replacing it drops
     /// (and stops) the one before.
     switched_microphone: Arc<Mutex<Option<SwitchedMicrophone>>>,
+    recording_limit: Option<std::time::Duration>,
 }
 
 pub(crate) struct SwitchedMicrophone {
@@ -1105,6 +1106,10 @@ impl ActiveRecording {
 
     pub(crate) fn instant_video_id(&self) -> Option<&str> {
         self.instant_video_id.as_deref()
+    }
+
+    pub(crate) fn recording_limit(&self) -> Option<std::time::Duration> {
+        self.recording_limit
     }
 
     /// Stop and finalize. Returns the project directory.
@@ -2807,14 +2812,17 @@ async fn start_internal(
         .filter(|organization| !organization.is_empty())
         .map(str::to_string);
 
+    let mut recording_limit = None;
     let pre_created_video = if config.mode == RecordingMode::Instant {
-        let video = crate::upload::prepare_instant_upload(
+        let prepared = crate::upload::prepare_instant_upload(
             matches!(config.target, ScreenCaptureTarget::CameraOnly),
             project_name,
             organization_id,
         )
         .await
         .map_err(anyhow::Error::msg)?;
+        recording_limit = prepared.recording_limit;
+        let video = prepared.video;
         crate::upload::instant_cleanup::begin(&video.id, &project_dir);
         #[cfg(target_os = "linux")]
         if let Some(attempt) = &attempt {
@@ -2832,7 +2840,11 @@ async fn start_internal(
         #[cfg(target_os = "linux")]
         attempt.clone(),
     )
-    .await;
+    .await
+    .map(|mut active| {
+        active.recording_limit = recording_limit;
+        active
+    });
     #[cfg(target_os = "linux")]
     if result.is_err()
         && let Some(attempt) = &attempt
@@ -3243,6 +3255,7 @@ async fn start_attempt_with_upload(
         camera_only: matches!(config.target, ScreenCaptureTarget::CameraOnly),
         microphone_switch,
         switched_microphone: Arc::new(Mutex::new(None)),
+        recording_limit: None,
     })
 }
 
