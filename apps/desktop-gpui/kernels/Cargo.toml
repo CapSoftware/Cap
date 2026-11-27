@@ -58,3 +58,7 @@ harness = false
 [[bench]]
 name = "screenshot_blur"
 harness = false
+
+[[bench]]
+name = "png_single_strip"
+harness = false
