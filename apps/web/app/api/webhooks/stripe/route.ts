@@ -911,6 +911,12 @@ export const POST = async (req: Request) => {
 					count: subscriptions.data.length,
 				});
 
+				// Stripe can deliver events out of order, so the event payload may be
+				// older than the subscription. Use the status Stripe reports now.
+				const currentSubscription =
+					subscriptions.data.find((sub) => sub.id === subscription.id) ??
+					subscription;
+
 				// BAA cleanup depends only on Stripe state, so it must run even
 				// when the customer cannot be mapped to a user; the 202 below is
 				// treated as delivered and the event is never redelivered.
@@ -950,7 +956,7 @@ export const POST = async (req: Request) => {
 
 				console.log("Updating user in database with:", {
 					subscriptionId: subscription.id,
-					status: subscription.status,
+					status: currentSubscription.status,
 					customerId: customer.id,
 					inviteQuota,
 				});
@@ -959,7 +965,7 @@ export const POST = async (req: Request) => {
 					.update(users)
 					.set({
 						stripeSubscriptionId: subscription.id,
-						stripeSubscriptionStatus: subscription.status,
+						stripeSubscriptionStatus: currentSubscription.status,
 						stripeCustomerId: customer.id,
 						inviteQuota: inviteQuota,
 					})
