@@ -1,0 +1,90 @@
+name: Default path proof, Windows export (scratch)
+
+on:
+  push:
+    branches: [ci/encfb-win-export]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  record:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/quality-proof
+      - uses: actions/download-artifact@v4
+        with:
+          name: win-bins
+          path: ${{ runner.temp }}/bins
+          run-id: "45982388072"
+          github-token: ${{ github.token }}
+      - name: Display
+        shell: pwsh
+        run: |
+          New-Item -Force -ItemType Directory "$env:RUNNER_TEMP\results\windows" | Out-Null
+          & .github/quality-proof/res.ps1 -Width 1920 -Height 1080 | Tee-Object "$env:RUNNER_TEMP\results\windows\display.txt"
+      - name: Real Studio recordings, kept for export
+        shell: bash
+        run: |
+          b="$RUNNER_TEMP/bins"
+          "$b/ffplay.exe" -loglevel error -an -noborder -left 0 -top 0 -x 1920 -y 1080 \
+            -f lavfi -i "testsrc2=s=1920x1080:r=60,noise=alls=10:allf=t" > /dev/null 2>&1 &
+          sleep 5
+          python .github/quality-proof/rec.py --base "$b/cap-base.exe" --head "$b/cap-head.exe" --cases default \
+            --work "$RUNNER_TEMP/projects" --out "$RUNNER_TEMP/results/windows/rec-kept.json" --pairs 3 --secs 10 \
+            --ffprobe "$b/ffprobe.exe" --ffmpeg "$b/ffmpeg.exe" --label windows-hosted-kept --keep --no-export
+          taskkill //F //IM ffplay.exe || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-projects
+          path: ${{ runner.temp }}/projects
+          retention-days: 2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-win-record
+          path: ${{ runner.temp }}/results
+          retention-days: 3
+
+  export:
+    needs: record
+    runs-on: blacksmith-8vcpu-windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: win-bins
+          path: ${{ runner.temp }}/bins
+          run-id: "45982388072"
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: win-projects
+          path: ${{ runner.temp }}/projects
+      - name: Export every project with its own build
+        shell: bash
+        run: |
+          b="$RUNNER_TEMP/bins"
+          mkdir -p "$RUNNER_TEMP/results"
+          out="$RUNNER_TEMP/results/export.txt"
+          for p in "$RUNNER_TEMP"/projects/*.cap; do
+            name=$(basename "$p" .cap)
+            case "$name" in *-base-*) cap="$b/cap-base.exe";; *) cap="$b/cap-head.exe";; esac
+            "$cap" project validate "$p" > /dev/null 2>&1; v=$?
+            t0=$(date +%s.%N)
+            "$cap" export "$p" -o "$RUNNER_TEMP/$name.mp4" > "$RUNNER_TEMP/results/$name.export.log" 2>&1; e=$?
+            t1=$(date +%s.%N)
+            info=$("$b/ffprobe.exe" -v error -count_frames -select_streams v:0 -show_entries stream=codec_name,width,height,nb_read_frames -show_entries format=duration -of csv=p=0 "$RUNNER_TEMP/$name.mp4" 2>&1 | tr '\r\n' '  ')
+            errs=$("$b/ffmpeg.exe" -v error -i "$RUNNER_TEMP/$name.mp4" -fps_mode passthrough -f null - 2>&1 | grep -v '^\[null @\|Last message repeated' | wc -l)
+            echo "EXPORT $name validate=$v export=$e secs=$(python -c "print(round($t1-$t0,2))") [$info] decoder_errors=$errs" | tee -a "$out"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-win-export
+          path: ${{ runner.temp }}/results
+          retention-days: 3
