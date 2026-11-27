@@ -1,9 +1,10 @@
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use gpui::{
     AnyElement, AppContext as _, Context, Entity, EventEmitter, FontWeight, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, prelude::FluentBuilder, px, svg,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
+    prelude::FluentBuilder, px, svg,
 };
 
 use super::{
@@ -94,6 +95,10 @@ pub struct Sidebar {
     editing: Option<(Editing, Entity<TextInputState>)>,
     /// The Cap Pro row (see [`super::cap_ai::pro_row`]).
     pro: Option<ProRow>,
+    /// The list's scroll, to know when it runs past the row and fades out
+    /// above it (set at paint, read at the next render).
+    nav_scroll: ScrollHandle,
+    nav_overflows: Rc<Cell<bool>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -129,6 +134,8 @@ impl Sidebar {
             menu: None,
             editing: None,
             pro: None,
+            nav_scroll: ScrollHandle::new(),
+            nav_overflows: Rc::new(Cell::new(false)),
             _subscriptions: subscriptions,
         };
         this.refresh_recent(cx);
@@ -379,6 +386,7 @@ impl Render for Sidebar {
         let pro = self
             .pro
             .map(|row| render_pro_row(&palette, row, RowPlace::Sidebar));
+        let weak = cx.weak_entity();
         let entity = cx.entity();
         let store = self.store.read(cx);
         let trashed = store.snapshot.trashed.len();
@@ -586,18 +594,53 @@ impl Render for Sidebar {
                     .flex_shrink_0()
                     .child(self.start.clone()),
             )
-            .child(
-                div()
+            .child({
+                let nav = div()
                     .id("documents-nav")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .track_scroll(&self.nav_scroll)
                     .pt(px(4.))
                     .pb(px(8.))
                     .child(top)
                     .children(recent)
-                    .child(folder_list),
-            )
+                    .child(folder_list);
+                if pro.is_some() {
+                    // With the row below it, a list that runs past the foot
+                    // fades out above the row's line.
+                    let handle = self.nav_scroll.clone();
+                    let flag = self.nav_overflows.clone();
+                    let probe = gpui::canvas(
+                        move |_, _, cx| {
+                            let over = f32::from(handle.max_offset().y) > 0.5;
+                            if flag.replace(over) != over {
+                                let weak = weak.clone();
+                                cx.defer(move |cx| {
+                                    weak.update(cx, |_, cx| cx.notify()).ok();
+                                });
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full();
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .child(nav)
+                        .child(probe)
+                        .when(self.nav_overflows.get(), |el| {
+                            el.child(super::style::list_fade(&palette, 24.))
+                        })
+                        .into_any_element()
+                } else {
+                    nav.into_any_element()
+                }
+            })
             .children(pro)
             .child(
                 div().pt(px(6.)).pb(px(12.)).child(
