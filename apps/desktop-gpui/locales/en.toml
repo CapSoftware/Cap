@@ -1162,6 +1162,7 @@ title = "Incomplete Recording"
 [main.recovery.error]
 nothing_saved = { text = "No video was saved before this recording stopped, so there is nothing to recover. Its files are still in {path}.", context = "{path} is a folder path." }
 rebuild_failed = { text = "Cap could not rebuild this recording ({error}). Nothing was deleted, and the original files are in {path}.", context = "{error} is a technical error message, usually in English. {path} is a folder path." }
+still_recording = { text = "Another Cap process is still recording this. Try again when that recording stops.", context = "Shown when the Cap command line or another copy of Cap is recording into this project." }
 storage = { text = "There is not enough free space to recover this recording ({error}). Free up some space and press Recover again. Nothing was deleted, and the files are in {path}.", context = "{error} is a technical error message, usually in English. {path} is a folder path." }
 
 [main.sign_in]

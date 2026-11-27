@@ -81,6 +81,7 @@ struct InstantLifecycleInner {
     completion: tokio::sync::watch::Sender<Option<Result<(), output_pipeline::PipelineDoneError>>>,
     error: std::sync::Mutex<Option<String>>,
     runtime: std::sync::Mutex<Option<tokio::runtime::Handle>>,
+    recording_lock: crate::recovery::RecordingLockHolder,
 }
 
 #[cfg(target_os = "linux")]
@@ -94,6 +95,7 @@ impl InstantLifecycle {
             completion,
             error: std::sync::Mutex::new(None),
             runtime: std::sync::Mutex::new(None),
+            recording_lock: Default::default(),
         }))
     }
 
@@ -326,6 +328,7 @@ pub struct ActorHandle {
         >,
     >,
     microphone_switch: Option<crate::sources::MicrophoneSwitch>,
+    _recording_lock: crate::recovery::RecordingLockHolder,
 }
 
 impl ActorHandle {
@@ -1207,6 +1210,7 @@ async fn spawn_instant_recording_actor_inner(
     owner: InstantLifetimeOwner,
 ) -> anyhow::Result<ActorHandle> {
     let lifecycle = owner.lifecycle.clone();
+    let recording_lock = lifecycle.0.recording_lock.clone();
     run_owned_instant_build(
         owner,
         build_instant_recording_actor(
@@ -1214,6 +1218,7 @@ async fn spawn_instant_recording_actor_inner(
             inputs,
             max_output_size,
             max_fps,
+            recording_lock,
             camera,
             lifecycle,
         ),
@@ -1228,7 +1233,14 @@ async fn spawn_instant_recording_actor_inner(
     max_output_size: Option<u32>,
     max_fps: u32,
 ) -> anyhow::Result<ActorHandle> {
-    let startup = build_instant_recording_actor(recording_dir, inputs, max_output_size, max_fps);
+    let recording_lock = crate::recovery::RecordingLockHolder::default();
+    let startup = build_instant_recording_actor(
+        recording_dir,
+        inputs,
+        max_output_size,
+        max_fps,
+        recording_lock.clone(),
+    );
     #[cfg(windows)]
     {
         let scope = output_pipeline::PipelineBuildScope::new();
@@ -1244,6 +1256,7 @@ async fn build_instant_recording_actor(
     inputs: RecordingBaseInputs,
     max_output_size: Option<u32>,
     max_fps: u32,
+    recording_lock: crate::recovery::RecordingLockHolder,
     #[cfg(target_os = "linux")] camera: LinuxCameraConfig,
     #[cfg(target_os = "linux")] lifecycle: InstantLifecycle,
 ) -> anyhow::Result<ActorHandle> {
@@ -1322,6 +1335,7 @@ async fn build_instant_recording_actor(
         return Err(LinuxCameraPresentationError::UnsupportedTarget.into());
     }
     ensure_dir(&recording_dir)?;
+    recording_lock.hold(&recording_dir);
 
     let timestamps = Timestamps::now();
 
@@ -1605,10 +1619,12 @@ async fn build_instant_recording_actor(
         health_rx,
         segment_rx: segment_rx.map(|rx| std::sync::Mutex::new(Some(rx))),
         microphone_switch,
+        _recording_lock: recording_lock.clone(),
     };
 
     #[cfg(not(target_os = "linux"))]
     tokio::spawn(async move {
+        let _recording_lock = recording_lock;
         let _ = done_fut.await;
         let _ = actor_ref.ask(Stop).await;
     });
@@ -2153,6 +2169,7 @@ mod quiescence_tests {
                 health_rx: None,
                 segment_rx: None,
                 microphone_switch: None,
+                _recording_lock: Default::default(),
                 lifecycle,
             },
             audio_cancel,
@@ -2372,6 +2389,7 @@ mod quiescence_tests {
             health_rx: None,
             segment_rx: None,
             microphone_switch: None,
+            _recording_lock: Default::default(),
             lifecycle,
         };
         if start_video {
