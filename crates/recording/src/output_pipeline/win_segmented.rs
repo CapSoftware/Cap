@@ -531,6 +531,7 @@ impl WindowsSegmentedMuxer {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder for segment");
                         let mut first_timestamp: Option<Duration> = None;
+                        let mut last_frame: Option<screen_capture::ScreenFrame> = None;
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
                             || {
@@ -547,6 +548,8 @@ impl WindowsSegmentedMuxer {
                                 };
                                 let frame_time = duration_to_timespan(relative);
 
+                                // The encoder queues its texture copy before requesting the next frame.
+                                let frame = last_frame.insert(frame);
                                 Ok(Some((frame.texture().clone(), frame_time)))
                             },
                             |output_sample| {
