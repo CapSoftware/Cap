@@ -31,18 +31,27 @@ struct OutputProcess {
     outputs: Vec<OutputDevice>,
 }
 
-/// One off-screen window of each app that writes only to hidden virtual
-/// devices, to add to the display filter's excluded windows. `log` reports
-/// each app once, at capture start.
-pub(super) fn writer_windows(content: &sc::ShareableContent, log: bool) -> Vec<arc::R<sc::Window>> {
-    let writers = hidden_sink_writers(&output_processes(), &default_outputs());
+/// Apps whose only output right now is a hidden virtual device. Decided when
+/// capture starts and kept for the whole recording, so an app that pauses its
+/// audio is not let back in.
+pub(super) fn writers() -> Vec<sys::Pid> {
+    hidden_sink_writers(&output_processes(), &default_outputs())
+}
+
+/// One off-screen window of each app in `writers`, to add to the display
+/// filter's excluded windows. `log` reports each app, at capture start.
+pub(super) fn off_screen_windows(
+    content: &sc::ShareableContent,
+    writers: &[sys::Pid],
+    log: bool,
+) -> Vec<arc::R<sc::Window>> {
     if writers.is_empty() {
         return Vec::new();
     }
 
     let windows = content.windows();
     let mut excluded = Vec::new();
-    for pid in writers {
+    for &pid in writers {
         let mut hidden_windows: Vec<&sc::Window> = windows
             .iter()
             .filter(|window| {
