@@ -48,9 +48,9 @@ describe("no microphone confirm", () => {
 	});
 
 	it("asks once per session", async () => {
-		const { shouldConfirmNoMicrophone, rememberNoMicrophoneConfirmed } =
+		const { shouldConfirmNoMicrophone, rememberNoMicrophoneAnswered } =
 			await loadModule();
-		rememberNoMicrophoneConfirmed();
+		rememberNoMicrophoneAnswered();
 		expect(
 			shouldConfirmNoMicrophone({ micEnabled: false, micExplicitlyOff: false }),
 		).toBe(false);
@@ -82,12 +82,12 @@ describe("no microphone confirm", () => {
 				throw new Error("blocked");
 			},
 		});
-		const { shouldConfirmNoMicrophone, rememberNoMicrophoneConfirmed } =
+		const { shouldConfirmNoMicrophone, rememberNoMicrophoneAnswered } =
 			await loadModule();
 		expect(
 			shouldConfirmNoMicrophone({ micEnabled: false, micExplicitlyOff: false }),
 		).toBe(true);
-		rememberNoMicrophoneConfirmed();
+		rememberNoMicrophoneAnswered();
 		expect(
 			shouldConfirmNoMicrophone({ micEnabled: false, micExplicitlyOff: false }),
 		).toBe(false);

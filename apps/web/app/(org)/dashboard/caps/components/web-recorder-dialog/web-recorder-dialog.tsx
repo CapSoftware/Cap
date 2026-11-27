@@ -30,7 +30,7 @@ import { MicrophoneSelector } from "./MicrophoneSelector";
 import { MicrophoneUnavailablePrompt } from "./MicrophoneUnavailablePrompt";
 import { NoMicrophonePrompt } from "./NoMicrophonePrompt";
 import {
-	rememberNoMicrophoneConfirmed,
+	rememberNoMicrophoneAnswered,
 	shouldConfirmNoMicrophone,
 } from "./no-microphone-confirm";
 import { RecordingButton } from "./RecordingButton";
@@ -292,7 +292,7 @@ export const WebRecorderDialog = ({
 	}, [micEnabled, isMicExplicitlyOff, beginRecording]);
 
 	const handleRecordWithoutMicrophone = () => {
-		rememberNoMicrophoneConfirmed();
+		rememberNoMicrophoneAnswered();
 		setNoMicPromptOpen(false);
 		void beginRecording();
 	};
@@ -301,6 +301,7 @@ export const WebRecorderDialog = ({
 		setRequestingMic(true);
 		try {
 			if (await requestMicPermission()) {
+				rememberNoMicrophoneAnswered();
 				await refreshMics();
 				setNoMicPromptOpen(false);
 			}

@@ -1,23 +1,21 @@
-export const NO_MICROPHONE_CONFIRMED_KEY =
-	"cap-web-recorder-no-microphone-confirmed";
+export const NO_MICROPHONE_ANSWERED_KEY =
+	"cap-web-recorder-no-microphone-answered";
 
-let confirmedInMemory = false;
+let answeredInMemory = false;
 
-export const hasConfirmedNoMicrophone = () => {
-	if (confirmedInMemory) return true;
+export const hasAnsweredNoMicrophone = () => {
+	if (answeredInMemory) return true;
 	try {
-		return (
-			window.sessionStorage.getItem(NO_MICROPHONE_CONFIRMED_KEY) === "true"
-		);
+		return window.sessionStorage.getItem(NO_MICROPHONE_ANSWERED_KEY) === "true";
 	} catch {
 		return false;
 	}
 };
 
-export const rememberNoMicrophoneConfirmed = () => {
-	confirmedInMemory = true;
+export const rememberNoMicrophoneAnswered = () => {
+	answeredInMemory = true;
 	try {
-		window.sessionStorage.setItem(NO_MICROPHONE_CONFIRMED_KEY, "true");
+		window.sessionStorage.setItem(NO_MICROPHONE_ANSWERED_KEY, "true");
 	} catch {}
 };
 
@@ -27,4 +25,4 @@ export const shouldConfirmNoMicrophone = ({
 }: {
 	micEnabled: boolean;
 	micExplicitlyOff: boolean;
-}) => !micEnabled && !micExplicitlyOff && !hasConfirmedNoMicrophone();
+}) => !micEnabled && !micExplicitlyOff && !hasAnsweredNoMicrophone();
