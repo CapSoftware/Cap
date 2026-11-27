@@ -35,6 +35,7 @@ import {
 	hasProPlan,
 	isFreePlanDurationError,
 	measuredMediaSeconds,
+	recordingLimitStillApplies,
 } from "@/lib/free-plan-duration";
 
 const free = {
@@ -214,5 +215,44 @@ describe("free plan measured duration", () => {
 			getFreePlanDurationLimit(video(overrides)),
 		).resolves.toBeNull();
 		expect(mocks.queries).toBe(0);
+	});
+});
+
+describe("recording limit check during a recording", () => {
+	beforeEach(() => {
+		mocks.rows = [];
+		mocks.queries = 0;
+		mocks.buildEnv.NEXT_PUBLIC_IS_CAP = "true";
+	});
+
+	const recording = { ownerId: "owner-1", orgId: "org-1" };
+
+	it("still applies while the owner and the organization are free", async () => {
+		mocks.rows = [[recording], [free], [free]];
+		expect(
+			await recordingLimitStillApplies("owner-1" as User.UserId, "video-1"),
+		).toBe(true);
+	});
+
+	it("lifts when the organization's owner has Pro", async () => {
+		mocks.rows = [[recording], [free], [pro]];
+		expect(
+			await recordingLimitStillApplies("owner-1" as User.UserId, "video-1"),
+		).toBe(false);
+	});
+
+	it("lifts when the recording's owner has Pro", async () => {
+		mocks.rows = [[recording], [pro]];
+		expect(
+			await recordingLimitStillApplies("owner-1" as User.UserId, "video-1"),
+		).toBe(false);
+	});
+
+	it("answers nothing for a recording that is not the user's", async () => {
+		mocks.rows = [[]];
+		expect(
+			await recordingLimitStillApplies("owner-2" as User.UserId, "video-1"),
+		).toBeUndefined();
+		expect(mocks.queries).toBe(1);
 	});
 });

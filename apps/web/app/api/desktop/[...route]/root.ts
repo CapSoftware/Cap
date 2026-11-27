@@ -26,6 +26,7 @@ import { type Context, Hono } from "hono";
 import type Stripe from "stripe";
 import { z } from "zod";
 import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
+import { recordingLimitStillApplies } from "@/lib/free-plan-duration";
 import { planPriceId } from "@/lib/checkout/plans";
 import {
 	createWithReferralDiscount,
@@ -379,9 +380,20 @@ app.get("/plan", withAuth, async (c) => {
 		}
 	}
 
+	const videoId = c.req.query("videoId");
+	const recordingLimitApplies = videoId
+		? await recordingLimitStillApplies(user.id, videoId).catch((error) => {
+				console.error("[GET] Error reading the recording limit:", error);
+				return true;
+			})
+		: undefined;
+
 	return c.json({
 		upgraded: isSubscribed,
 		stripeSubscriptionStatus: user.stripeSubscriptionStatus,
+		...(recordingLimitApplies === undefined
+			? {}
+			: { recording_limit_applies: recordingLimitApplies }),
 	});
 });
 
