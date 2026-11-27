@@ -48,8 +48,21 @@ impl RecordingLock {
     pub fn acquire(project: &Path) -> io::Result<Self> {
         static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let (project, path) = lock_path(project)?;
-        create_lock_dir(path.parent().unwrap_or(&project))?;
-        let file = LockFile::exclusive(&path)?;
+        let directory = path.parent().unwrap_or(&project);
+        let mut attempts = 0;
+        let file = loop {
+            create_lock_dir(directory)?;
+            match LockFile::exclusive(&path) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound && attempts < 2 => {
+                    attempts += 1;
+                }
+                Ok(file) => break file,
+                Err(error) => {
+                    let _ = std::fs::remove_dir(directory);
+                    return Err(error);
+                }
+            }
+        };
         let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         held().push(Entry {
             id,
@@ -134,6 +147,16 @@ pub(super) fn probe(project: &Path) -> Result<RecordingProbe, RecoveryError> {
             return Ok(free);
         }
     };
+    if let Some(directory) = path.parent() {
+        match directory.symlink_metadata() {
+            Ok(metadata) if metadata.is_dir() && !is_link(&metadata) => {}
+            Ok(_) => {
+                tracing::debug!(path = %directory.display(), "Recording lock directory is not a plain directory; recovery proceeds");
+                return Ok(free);
+            }
+            Err(_) => return Ok(free),
+        }
+    }
     match LockFile::shared(&path) {
         Ok(file) => Ok(RecordingProbe { _file: Some(file) }),
         Err(error) if is_busy(&error) => Err(RecoveryError::RecordingInProgress),
@@ -176,7 +199,7 @@ fn create_lock_dir(directory: &Path) -> io::Result<()> {
         builder
     };
     match builder.create(directory) {
-        Ok(()) => {}
+        Ok(()) => hide(directory),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(error),
     }
@@ -196,10 +219,32 @@ fn create_lock_dir(directory: &Path) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn hide(directory: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::{
+        Win32::Storage::FileSystem::{FILE_ATTRIBUTE_HIDDEN, SetFileAttributesW},
+        core::PCWSTR,
+    };
+    let wide: Vec<u16> = directory.as_os_str().encode_wide().chain(Some(0)).collect();
+    if let Err(error) = unsafe { SetFileAttributesW(PCWSTR(wide.as_ptr()), FILE_ATTRIBUTE_HIDDEN) }
+    {
+        tracing::debug!(path = %directory.display(), %error, "Recording lock directory left visible");
+    }
+}
+
+#[cfg(not(windows))]
+fn hide(_directory: &Path) {}
+
 struct LockFile {
-    _file: File,
+    file: Option<File>,
+    owned: Option<OwnedLock>,
+}
+
+struct OwnedLock {
+    path: PathBuf,
     #[cfg(unix)]
-    owned: Option<(libc::pid_t, PathBuf)>,
+    pid: libc::pid_t,
 }
 
 impl LockFile {
@@ -246,9 +291,12 @@ impl LockFile {
             }
         }
         Ok(Self {
-            _file: file,
-            #[cfg(unix)]
-            owned: Some((unsafe { libc::getpid() }, path.to_path_buf())),
+            file: Some(file),
+            owned: Some(OwnedLock {
+                path: path.to_path_buf(),
+                #[cfg(unix)]
+                pid: unsafe { libc::getpid() },
+            }),
         })
     }
 
@@ -279,30 +327,39 @@ impl LockFile {
             }
         }
         Ok(Self {
-            _file: file,
-            #[cfg(unix)]
+            file: Some(file),
             owned: None,
         })
     }
 }
 
-#[cfg(unix)]
 impl Drop for LockFile {
     fn drop(&mut self) {
-        use std::os::fd::AsRawFd;
-        let Some((owner_pid, path)) = &self.owned else {
+        let Some(owned) = self.owned.take() else {
             return;
         };
-        if *owner_pid != unsafe { libc::getpid() } {
-            return;
-        }
-        if let Err(error) = std::fs::remove_file(path)
-            && error.kind() != io::ErrorKind::NotFound
+        #[cfg(unix)]
         {
-            tracing::debug!(path = %path.display(), %error, "Recording lock file kept");
+            use std::os::fd::AsRawFd;
+            if owned.pid != unsafe { libc::getpid() } {
+                return;
+            }
+            if let Err(error) = std::fs::remove_file(&owned.path)
+                && error.kind() != io::ErrorKind::NotFound
+            {
+                tracing::debug!(path = %owned.path.display(), %error, "Recording lock file kept");
+            }
+            if let Some(file) = &self.file
+                && unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) } != 0
+            {
+                tracing::warn!(error = %io::Error::last_os_error(), "Failed to release recording lock");
+            }
         }
-        if unsafe { libc::flock(self._file.as_raw_fd(), libc::LOCK_UN) } != 0 {
-            tracing::warn!(error = %io::Error::last_os_error(), "Failed to release recording lock");
+        drop(self.file.take());
+        if let Some(directory) = owned.path.parent()
+            && let Err(error) = std::fs::remove_dir(directory)
+        {
+            tracing::debug!(path = %directory.display(), %error, "Recording lock directory kept");
         }
     }
 }
@@ -354,8 +411,13 @@ mod tests {
     }
 
     fn record_in_child(projects: &[&Path], ready: &Path) -> Child {
+        record_in_child_from(projects, ready, &std::env::current_dir().unwrap())
+    }
+
+    fn record_in_child_from(projects: &[&Path], ready: &Path, cwd: &Path) -> Child {
         let mut child = Child(
             std::process::Command::new(std::env::current_exe().unwrap())
+                .current_dir(cwd)
                 .args([
                     "--exact",
                     "recovery::recording_lock::tests::recording_lock_child_holder",
@@ -591,5 +653,165 @@ mod tests {
             studio_status(&project),
             StudioRecordingStatus::Complete
         ));
+    }
+
+    fn spellings(project: &Path) -> Vec<PathBuf> {
+        let parent = project.parent().unwrap();
+        let name = project.file_name().unwrap();
+        std::fs::create_dir_all(parent.join("sibling")).unwrap();
+        let mut spellings = vec![
+            project.to_path_buf(),
+            PathBuf::from(format!(
+                "{}{}",
+                project.display(),
+                std::path::MAIN_SEPARATOR
+            )),
+            parent.join(".").join(name),
+            parent.join("sibling").join("..").join(name),
+        ];
+        #[cfg(unix)]
+        {
+            let link = parent.parent().unwrap().join("linked-recordings");
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(parent, &link).unwrap();
+            spellings.push(link.join(name));
+        }
+        #[cfg(windows)]
+        {
+            let plain = project.to_string_lossy().to_string();
+            let plain = plain.strip_prefix(r"\\?\").unwrap_or(&plain).to_string();
+            spellings.push(PathBuf::from(&plain));
+            spellings.push(PathBuf::from(format!(r"\\?\{plain}")));
+            spellings.push(PathBuf::from(plain.to_uppercase()));
+            spellings.push(PathBuf::from(plain.to_lowercase()));
+            if let Some(short) = short_name(project) {
+                spellings.push(short);
+            }
+        }
+        spellings
+    }
+
+    #[cfg(windows)]
+    fn short_name(path: &Path) -> Option<PathBuf> {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows::{Win32::Storage::FileSystem::GetShortPathNameW, core::PCWSTR};
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut buffer = vec![0u16; 1024];
+        let length =
+            unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), Some(&mut buffer)) } as usize;
+        (length > 0 && length < buffer.len())
+            .then(|| PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length])))
+            .filter(|short| short.as_path() != path)
+    }
+
+    #[test]
+    fn every_spelling_of_a_project_finds_the_same_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let recordings = root.path().join("Recordings Folder");
+        std::fs::create_dir(&recordings).unwrap();
+        let project = recordings.join("A Long Project Name.cap");
+        std::fs::create_dir(&project).unwrap();
+        let project = project.canonicalize().unwrap();
+        let signals = tempfile::tempdir().unwrap();
+        let all = spellings(&project);
+        assert!(all.len() >= 5, "{all:?}");
+
+        let child = record_in_child_from(
+            &[Path::new("A Long Project Name.cap")],
+            &signals.path().join("relative"),
+            &recordings,
+        );
+        for spelling in &all {
+            assert!(is_recording_elsewhere(spelling), "{}", spelling.display());
+        }
+        drop(child);
+        for spelling in &all {
+            assert!(!is_recording_elsewhere(spelling), "{}", spelling.display());
+        }
+
+        for (index, holder) in all.iter().enumerate().skip(1) {
+            let child = record_in_child(&[holder], &signals.path().join(format!("held-{index}")));
+            assert!(
+                is_recording_elsewhere(&project),
+                "held as {}",
+                holder.display()
+            );
+            drop(child);
+        }
+    }
+
+    #[test]
+    fn the_lock_directory_goes_with_its_last_lock() {
+        let recordings = tempfile::tempdir().unwrap();
+        let first = recordings.path().join("first");
+        let second = recordings.path().join("second");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        let directory = recordings.path().join(super::LOCK_DIR);
+        let one = RecordingLock::acquire(&first).unwrap();
+        let two = RecordingLock::acquire(&second).unwrap();
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+            assert_ne!(
+                directory.metadata().unwrap().file_attributes() & FILE_ATTRIBUTE_HIDDEN,
+                0
+            );
+        }
+        drop(one);
+        assert!(directory.is_dir());
+        drop(two);
+        assert!(!directory.exists());
+        let mut left = std::fs::read_dir(recordings.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        left.sort();
+        assert_eq!(left, ["first", "second"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_parent_records_without_a_lock_and_never_refuses() {
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let recordings = tempfile::tempdir().unwrap();
+        let project = needs_remux_project(recordings.path(), "readonly", 3);
+        std::fs::set_permissions(recordings.path(), std::fs::Permissions::from_mode(0o555))
+            .unwrap();
+        let before = tree(recordings.path());
+        assert!(RecordingLock::acquire(&project).is_err());
+        assert!(RecordingLock::acquire_for_recording(&project).is_none());
+        assert!(!is_recording_elsewhere(&project));
+        assert_eq!(tree(recordings.path()), before);
+        std::fs::set_permissions(recordings.path(), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        assert!(RecoveryManager::remux_if_needed(&project).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_lock_directory_is_never_used() {
+        use std::os::fd::AsRawFd;
+        let recordings = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let project = needs_remux_project(recordings.path(), "linked", 3);
+        let (_, path) = lock_path(&project).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), recordings.path().join(super::LOCK_DIR))
+            .unwrap();
+        let planted =
+            std::fs::File::create(elsewhere.path().join(path.file_name().unwrap())).unwrap();
+        assert_eq!(
+            unsafe { libc::flock(planted.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        assert!(RecordingLock::acquire(&project).is_err());
+        assert!(RecordingLock::acquire_for_recording(&project).is_none());
+        assert!(!is_recording_elsewhere(&project));
+        assert!(RecoveryManager::remux_if_needed(&project).unwrap());
+        assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 1);
     }
 }
