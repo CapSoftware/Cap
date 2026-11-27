@@ -364,17 +364,24 @@ impl Render for Sidebar {
             cx.listener(move |_, _, _, cx| cx.emit(SidebarEvent::Show(scope.clone())))
         };
 
-        let mut top = div().flex().flex_col().gap(px(2.)).child(
-            self.item(
-                "nav-home".into(),
-                "icons/notebook.svg",
-                tr::documents::home::title().into(),
-                is(&Scope::All),
-            )
-            .role(gpui::Role::ListItem)
-            .aria_selected(is(&Scope::All))
-            .on_click(show(Scope::All)),
-        );
+        // One tab list per section, so a reader's "2 of 4" counts within it.
+        let mut top = div()
+            .id("documents-nav-places")
+            .role(gpui::Role::TabList)
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .child(
+                self.item(
+                    "nav-home".into(),
+                    "icons/notebook.svg",
+                    tr::documents::home::title().into(),
+                    is(&Scope::All),
+                )
+                .role(gpui::Role::Tab)
+                .aria_selected(is(&Scope::All))
+                .on_click(show(Scope::All)),
+            );
         if pinned || is(&Scope::Pinned) {
             top = top.child(
                 self.item(
@@ -383,7 +390,7 @@ impl Render for Sidebar {
                     tr::documents::sidebar::pinned().into(),
                     is(&Scope::Pinned),
                 )
-                .role(gpui::Role::ListItem)
+                .role(gpui::Role::Tab)
                 .aria_selected(is(&Scope::Pinned))
                 .on_click(show(Scope::Pinned)),
             );
@@ -406,6 +413,8 @@ impl Render for Sidebar {
         };
         let recent = (!self.recent.is_empty()).then(|| {
             div()
+                .id("documents-nav-recent")
+                .role(gpui::Role::TabList)
                 .flex()
                 .flex_col()
                 .gap(px(2.))
@@ -415,7 +424,7 @@ impl Render for Sidebar {
                     let id = row.id.clone();
                     div()
                         .id(SharedString::from(format!("recent-{}", row.id)))
-                        .role(gpui::Role::ListItem)
+                        .role(gpui::Role::Tab)
                         .aria_selected(active)
                         .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                         .aria_label(row.title.clone())
@@ -445,7 +454,12 @@ impl Render for Sidebar {
                 }))
         });
         let has_folders = !folders.is_empty() || new_folder_input.is_some();
-        let mut folder_list = div().flex().flex_col().gap(px(2.));
+        let mut folder_list = div()
+            .id("documents-nav-folders")
+            .role(gpui::Role::TabList)
+            .flex()
+            .flex_col()
+            .gap(px(2.));
         if has_folders {
             folder_list = folder_list.child(
                 header(tr::documents::sidebar::folders()).child(
@@ -489,7 +503,7 @@ impl Render for Sidebar {
                     folder.name.clone().into(),
                     is(&target),
                 )
-                .role(gpui::Role::ListItem)
+                .role(gpui::Role::Tab)
                 .aria_selected(is(&target))
                 .on_click(show(target.clone()))
                 .on_mouse_down(
@@ -568,7 +582,6 @@ impl Render for Sidebar {
             .child(
                 div()
                     .id("documents-nav")
-                    .role(gpui::Role::List)
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
@@ -581,7 +594,7 @@ impl Render for Sidebar {
             .child(
                 div()
                     .id("documents-nav-end")
-                    .role(gpui::Role::List)
+                    .role(gpui::Role::TabList)
                     .pt(px(6.))
                     .pb(px(12.))
                     .child(
@@ -591,7 +604,7 @@ impl Render for Sidebar {
                             tr::documents::sidebar::trash().into(),
                             is(&Scope::Trash),
                         )
-                        .role(gpui::Role::ListItem)
+                        .role(gpui::Role::Tab)
                         .aria_selected(is(&Scope::Trash))
                         .when(trashed > 0, |el| {
                             el.child(
