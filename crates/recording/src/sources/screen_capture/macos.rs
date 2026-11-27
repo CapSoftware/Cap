@@ -26,6 +26,8 @@ use tokio_util::{
 };
 use tracing::{debug, error, info, warn};
 
+mod hidden_sink;
+
 const MAX_CAPTURE_RESTARTS: u32 = 3;
 const RESTART_DELAY: Duration = Duration::from_secs(2);
 const WINDOW_WATCH_INTERVAL: Duration = Duration::from_secs(1);
@@ -416,11 +418,15 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let content_filter = match window_filter {
             Some(filter) => filter,
             None => {
-                let excluded_sc_windows = excluded_shareable_windows(
+                let mut excluded_sc_windows = excluded_shareable_windows(
                     &self.excluded_windows,
                     &self.shareable_content,
                     "initial",
                 );
+                if self.system_audio {
+                    excluded_sc_windows
+                        .extend(hidden_sink::writer_windows(&self.shareable_content));
+                }
 
                 display
                     .raw_handle()
@@ -1270,8 +1276,11 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
     let content_filter = match window_filter {
         Some(filter) => filter,
         None => {
-            let excluded_sc_windows =
+            let mut excluded_sc_windows =
                 excluded_shareable_windows(&params.excluded_windows, &shareable_content, "restart");
+            if params.system_audio {
+                excluded_sc_windows.extend(hidden_sink::writer_windows(&shareable_content));
+            }
 
             display
                 .raw_handle()
