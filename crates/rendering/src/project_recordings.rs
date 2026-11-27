@@ -468,6 +468,10 @@ mod ordinary_media_access_tests {
     use cap_project::StudioRecordingMeta;
     use std::path::{Path, PathBuf};
 
+    // MPEG-4 Part 2, as imported from older cameras and phones. Cap ships no
+    // encoder for it, so the clip is a checked-in file.
+    const MPEG4_VIDEO: &[u8] = include_bytes!("../tests/fixtures/mpeg4-64x48.mp4");
+
     fn write_video_packets(
         encoder: &mut ffmpeg::codec::encoder::video::Encoder,
         output: &mut ffmpeg::format::context::Output,
@@ -869,7 +873,7 @@ mod ordinary_media_access_tests {
     fn mpeg4_video_falls_back_to_full_probe() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("video.mp4");
-        write_test_video(&path, ffmpeg::codec::Id::MPEG4);
+        std::fs::write(&path, MPEG4_VIDEO).unwrap();
 
         let full_input = ffmpeg::format::input(&path).unwrap();
         let expected = Video::from_input(&full_input, 0.25).unwrap();
@@ -890,7 +894,7 @@ mod ordinary_media_access_tests {
         let h264_path = directory.path().join("h264.mp4");
         let mpeg4_path = directory.path().join("mpeg4.mp4");
         write_test_video(&h264_path, ffmpeg::codec::Id::H264);
-        write_test_video(&mpeg4_path, ffmpeg::codec::Id::MPEG4);
+        std::fs::write(&mpeg4_path, MPEG4_VIDEO).unwrap();
 
         assert_eq!(
             header_video_metadata(&h264_path).map(|video| (video.width, video.height)),

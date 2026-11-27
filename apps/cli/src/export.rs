@@ -1229,7 +1229,7 @@ mod tests {
         let content = project.path().join("content");
         std::fs::create_dir(&content).unwrap();
         let mut output = ffmpeg::format::output(&content.join("output.mp4")).unwrap();
-        let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::MPEG4).unwrap();
+        let codec = ffmpeg::encoder::find_by_name("libx264").unwrap();
         let mut encoder = ffmpeg::codec::Context::new_with_codec(codec)
             .encoder()
             .video()

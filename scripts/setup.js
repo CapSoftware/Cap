@@ -51,35 +51,14 @@ async function main() {
 	if (process.platform === "darwin") {
 		cargoConfigContents += FFMPEG_CARGO_ENV;
 
-		const NATIVE_DEPS_VERSION = "v0.25";
-		const NATIVE_DEPS_URL = `https://github.com/spacedriveapp/native-deps/releases/download/${NATIVE_DEPS_VERSION}`;
-
-		const NATIVE_DEPS_ASSETS = {
-			x86_64: "native-deps-x86_64-darwin-apple.tar.xz",
-			aarch64: "native-deps-aarch64-darwin-apple.tar.xz",
-		};
-
-		const nativeDepsTar = NATIVE_DEPS_ASSETS[arch];
-		const nativeDepsTarPath = path.join(
-			targetDir,
-			`${NATIVE_DEPS_VERSION}-${nativeDepsTar}`,
-		);
-		let downloadedNativeDeps = false;
-
-		if (!(await fileExists(nativeDepsTarPath))) {
-			console.log(`Downloading ${nativeDepsTar}`);
-			const nativeDepsBytes = await downloadBytes(
-				`${NATIVE_DEPS_URL}/${nativeDepsTar}`,
-			);
-			await fs.writeFile(nativeDepsTarPath, Buffer.from(nativeDepsBytes));
-			console.log("Downloaded native deps");
-			downloadedNativeDeps = true;
-		} else console.log(`Using cached ${nativeDepsTar}`);
+		const { path: nativeDepsTarPath, downloaded: downloadedNativeDeps } =
+			await downloadCapFfmpeg(`${arch}-darwin-apple`);
 
 		const nativeDepsFolder = `native-deps`;
 		const nativeDepsDir = path.join(targetDir, nativeDepsFolder);
 		const frameworkDir = path.join(nativeDepsDir, "Spacedrive.framework");
 		if (downloadedNativeDeps || !(await fileExists(nativeDepsDir))) {
+			await fs.rm(nativeDepsDir, { recursive: true, force: true });
 			await fs.mkdir(nativeDepsDir, { recursive: true });
 			await execFile("tar", ["xf", nativeDepsTarPath, "-C", nativeDepsDir]);
 			console.log(`Extracted ${nativeDepsFolder}`);
@@ -135,29 +114,19 @@ async function main() {
 
 		await ensureMsvcVersion();
 
-		const FFMPEG_VERSION = "7.1";
-		const FFMPEG_ZIP_NAME = `ffmpeg-${FFMPEG_VERSION}-full_build-shared`;
-		const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/${FFMPEG_VERSION}/${FFMPEG_ZIP_NAME}.zip`;
-
 		await fs.mkdir(targetDir, { recursive: true });
 
-		let downloadedFfmpeg = false;
-		const ffmpegZip = `ffmpeg-${FFMPEG_VERSION}.zip`;
-		const ffmpegZipPath = path.join(targetDir, ffmpegZip);
-		if (!(await fileExists(ffmpegZipPath))) {
-			const ffmpegZipBytes = await downloadBytes(FFMPEG_ZIP_URL);
-			await fs.writeFile(ffmpegZipPath, Buffer.from(ffmpegZipBytes));
-			console.log(`Downloaded ${ffmpegZip}`);
-			downloadedFfmpeg = true;
-		} else console.log(`Using cached ${ffmpegZip}`);
+		const { path: ffmpegZipPath, downloaded: downloadedFfmpeg } =
+			await downloadCapFfmpeg("x86_64-windows-gnu");
 
 		const ffmpegDir = path.join(targetDir, "ffmpeg");
 		if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
-			await expandArchive(ffmpegZipPath, targetDir);
 			await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
-			await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
+			await expandArchive(ffmpegZipPath, ffmpegDir);
 			console.log("Extracted ffmpeg");
 		} else console.log("Using cached ffmpeg");
+
+		await setupWindowsFfmpegTools();
 
 		for (const profile of ["debug", "release"]) {
 			await fs.mkdir(path.join(targetDir, profile), { recursive: true });
@@ -170,6 +139,12 @@ async function main() {
 		}
 		console.log("Copied ffmpeg DLLs to target/debug and target/release");
 
+		if (downloadedFfmpeg)
+			for (const name of ["lib", "include"])
+				await fs.rm(path.join(targetDir, "native-deps", name), {
+					recursive: true,
+					force: true,
+				});
 		if (!(await fileExists(path.join(targetDir, "native-deps"))))
 			await fs.mkdir(path.join(targetDir, "native-deps"), { recursive: true });
 
@@ -249,31 +224,8 @@ async function main() {
 		if (triple) {
 			cargoConfigContents += FFMPEG_CARGO_ENV;
 
-			const NATIVE_DEPS_VERSION = "v0.26";
-			const NATIVE_DEPS_URL = `https://github.com/spacedriveapp/native-deps/releases/download/${NATIVE_DEPS_VERSION}`;
-			const NATIVE_DEPS_ASSETS = {
-				x86_64: "native-deps-x86_64-linux-gnu.tar.xz",
-				aarch64: "native-deps-aarch64-linux-gnu.tar.xz",
-			};
-
-			const nativeDepsTar = NATIVE_DEPS_ASSETS[arch];
-			if (!nativeDepsTar)
-				throw new Error(`Unsupported Linux arch for native deps: ${arch}`);
-
-			const nativeDepsTarPath = path.join(
-				targetDir,
-				`${NATIVE_DEPS_VERSION}-${nativeDepsTar}`,
-			);
-			let downloadedNativeDeps = false;
-			if (!(await fileExists(nativeDepsTarPath))) {
-				console.log(`Downloading ${nativeDepsTar}`);
-				const bytes = await downloadBytes(
-					`${NATIVE_DEPS_URL}/${nativeDepsTar}`,
-				);
-				await fs.writeFile(nativeDepsTarPath, Buffer.from(bytes));
-				console.log("Downloaded native deps");
-				downloadedNativeDeps = true;
-			} else console.log(`Using cached ${nativeDepsTar}`);
+			const { path: nativeDepsTarPath, downloaded: downloadedNativeDeps } =
+				await downloadCapFfmpeg(`${arch}-linux-gnu`);
 
 			const nativeDepsDir = path.join(targetDir, "native-deps");
 			const nativeLibDir = path.join(nativeDepsDir, "lib");
@@ -755,6 +707,93 @@ async function expandArchive(archivePath, destination) {
 		`$ErrorActionPreference = 'Stop'; Expand-Archive -Path "${archivePath}" -DestinationPath "${destination}" -Force`,
 		{ shell: "powershell.exe", env },
 	);
+}
+
+// Cap's FFmpeg builds: only the components Cap uses, built by
+// scripts/ffmpeg/build.sh. Bump the version and hashes when they are rebuilt.
+const CAP_FFMPEG_VERSION = "7.1-cap.2";
+const CAP_FFMPEG_URL = `https://github.com/CapSoftware/transcription-models/releases/download/ffmpeg-${CAP_FFMPEG_VERSION}`;
+const CAP_FFMPEG_ARCHIVES = {
+	"aarch64-darwin-apple": {
+		file: "cap-ffmpeg-aarch64-darwin-apple.tar.xz",
+		sha256: "cb40e595e6053200de93a349d8ece8681b42fc0e259631aa3da1764d4a09b48a",
+	},
+	"x86_64-darwin-apple": {
+		file: "cap-ffmpeg-x86_64-darwin-apple.tar.xz",
+		sha256: "2c4fb872bee942a8f460e65732c091203e6bd1e45f339a532e89bc9486737565",
+	},
+	"x86_64-linux-gnu": {
+		file: "cap-ffmpeg-x86_64-linux-gnu.tar.xz",
+		sha256: "f8af7b4d681508f35a90b9a5b1f564ef26be0341343b7a4c270a2193560c1e96",
+	},
+	"aarch64-linux-gnu": {
+		file: "cap-ffmpeg-aarch64-linux-gnu.tar.xz",
+		sha256: "a83d577770c7feacd213eea5ac9a5d9e887491cd8d953fc8be732cf04caca0c0",
+	},
+	"x86_64-windows-gnu": {
+		file: "cap-ffmpeg-x86_64-windows-gnu.zip",
+		sha256: "cf934c95f34195c61073bba492fa56d7c3a753983d7cbe040dfa18eedc384d98",
+	},
+};
+
+async function sha256File(filePath) {
+	return createHash("sha256")
+		.update(await fs.readFile(filePath))
+		.digest("hex");
+}
+
+async function downloadCapFfmpeg(target) {
+	const archive = CAP_FFMPEG_ARCHIVES[target];
+	if (!archive) throw new Error(`No Cap FFmpeg build for ${target}`);
+	const archivePath = path.join(
+		targetDir,
+		`ffmpeg-${CAP_FFMPEG_VERSION}-${archive.file}`,
+	);
+	if (
+		(await fileExists(archivePath)) &&
+		(await sha256File(archivePath)) === archive.sha256
+	) {
+		console.log(`Using cached ${archive.file}`);
+		return { path: archivePath, downloaded: false };
+	}
+
+	console.log(`Downloading ${archive.file}`);
+	const bytes = Buffer.from(
+		await downloadBytes(`${CAP_FFMPEG_URL}/${archive.file}`),
+	);
+	const actual = createHash("sha256").update(bytes).digest("hex");
+	if (actual !== archive.sha256)
+		throw new Error(
+			`${archive.file} SHA-256 mismatch: got ${actual}, expected ${archive.sha256}`,
+		);
+	await fs.writeFile(archivePath, bytes);
+	console.log(`Downloaded ${archive.file}`);
+	return { path: archivePath, downloaded: true };
+}
+
+// Tests and benchmarks run the ffmpeg and ffprobe programs. The Windows build
+// Cap ships has no programs, so take Gyan's static essentials build: a single
+// executable that never loads the DLLs Cap ships.
+async function setupWindowsFfmpegTools() {
+	const version = "7.1";
+	const name = `ffmpeg-${version}-essentials_build`;
+	const toolsDir = path.join(targetDir, "ffmpeg-tools");
+	if (await fileExists(path.join(toolsDir, "bin", "ffmpeg.exe"))) {
+		console.log("Using cached ffmpeg tools");
+		return;
+	}
+	const zipPath = path.join(targetDir, `${name}.zip`);
+	if (!(await fileExists(zipPath))) {
+		const bytes = await downloadBytes(
+			`https://github.com/GyanD/codexffmpeg/releases/download/${version}/${name}.zip`,
+		);
+		await fs.writeFile(zipPath, Buffer.from(bytes));
+	}
+	await fs.rm(path.join(targetDir, name), { recursive: true, force: true });
+	await expandArchive(zipPath, targetDir);
+	await fs.rm(toolsDir, { recursive: true, force: true });
+	await fs.rename(path.join(targetDir, name), toolsDir);
+	console.log("Prepared ffmpeg tools in target/ffmpeg-tools/bin");
 }
 
 async function downloadBytes(url) {

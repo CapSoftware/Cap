@@ -1,0 +1,44 @@
+name: FFmpeg build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "scripts/ffmpeg/**"
+      - ".github/workflows/ffmpeg-build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: FFmpeg ${{ matrix.target }}
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-darwin-apple
+          - x86_64-darwin-apple
+          - x86_64-linux-gnu
+          - aarch64-linux-gnu
+          - x86_64-windows-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+          platforms: linux/amd64
+      - name: Build
+        run: scripts/ffmpeg/build.sh "${{ matrix.target }}" "$RUNNER_TEMP/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cap-ffmpeg-${{ matrix.target }}
+          path: ${{ runner.temp }}/dist
+          if-no-files-found: error
+          retention-days: 14

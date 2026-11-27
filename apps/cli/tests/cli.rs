@@ -1663,7 +1663,7 @@ fn write_test_media(path: &Path) {
     ffmpeg::init().unwrap();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut output = ffmpeg::format::output(path).unwrap();
-    let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::MPEG4).unwrap();
+    let codec = ffmpeg::encoder::find_by_name("libx264").unwrap();
     let mut encoder = ffmpeg::codec::Context::new_with_codec(codec)
         .encoder()
         .video()

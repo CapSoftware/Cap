@@ -51,6 +51,7 @@ jobs:
               - 'vendor/**'
               - 'scripts/diagnostic-build.rs'
               - 'scripts/setup*'
+              - 'scripts/ffmpeg/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
             rust-without-cli:
@@ -62,11 +63,13 @@ jobs:
               - 'vendor/**'
               - 'scripts/diagnostic-build.rs'
               - 'scripts/setup*'
+              - 'scripts/ffmpeg/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
             gpui:
               - '.gitattributes'
               - 'scripts/setup.js'
+              - 'scripts/ffmpeg/**'
               - 'apps/desktop-gpui/**'
               - 'apps/media-server/src/__tests__/fixtures/**'
               - 'scripts/build-desktop-binaries*'
@@ -277,7 +280,7 @@ jobs:
           save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test native dependency setup
-        run: node --test scripts/setup.test.mjs
+        run: node --test scripts/setup.test.mjs scripts/ffmpeg/check-components.test.mjs
 
       - name: Run setup
         run: node scripts/setup.js
@@ -339,6 +342,10 @@ jobs:
       - name: Test desktop build preparation
         run: node --test scripts/prepare-gpui-dependency.test.mjs scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs scripts/finalize-macos-packages.test.mjs
 
+      - name: Test the FFmpeg components shipped code uses
+        if: ${{ runner.os == 'Linux' }}
+        run: node --test scripts/ffmpeg/check-components.test.mjs
+
       - name: Test Linux packaging
         if: ${{ runner.os == 'Linux' }}
         run: node --test scripts/linux-bundle-config.test.mjs scripts/finalize-linux-appimage.test.mjs scripts/finalize-linux-gpui-packages.test.mjs
@@ -376,6 +383,17 @@ jobs:
             nm -gU target/native-deps/onnxruntime/lib/libonnxruntime.dylib | grep -q OrtGetApiBase
           fi
           cargo test --locked -p cap-camera-effects --lib segmentation::tests::inference_runs_from_a_caller_with_a_tiny_stack -- --ignored --exact
+
+      - name: Test the FFmpeg components Cap uses
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          cargo test --locked -p cap-enc-ffmpeg --test ffmpeg_components
 
       # The test build compiles every line the binary build does (the app has
       # no cfg(not(test)) code), so a separate binary build only repeated the

@@ -84,9 +84,12 @@ test(
 			new RegExp(`"${onnxVersion.replaceAll(".", "\\.")}": "([0-9a-f]{64})"`),
 		)[1];
 
-		const nativeName = "native-deps-x86_64-linux-gnu.tar.xz";
+		const ffmpegVersion = setupSource.match(
+			/const CAP_FFMPEG_VERSION = "([^"]+)"/,
+		)[1];
+		const nativeName = "cap-ffmpeg-x86_64-linux-gnu.tar.xz";
 		const onnxId = `microsoft.ml.onnxruntime.${onnxVersion}`;
-		const nativeUrl = `/spacedriveapp/native-deps/releases/download/v0.26/${nativeName}`;
+		const nativeUrl = `/CapSoftware/transcription-models/releases/download/ffmpeg-${ffmpegVersion}/${nativeName}`;
 		const onnxUrl = `/v3-flatcontainer/microsoft.ml.onnxruntime/${onnxVersion}/${onnxId}.nupkg`;
 		const nativeLibrary = "synthetic native library\n";
 		const onnxLibrary = "synthetic ONNX library\n";
@@ -113,10 +116,22 @@ test(
 		const onnxHash = createHash("sha256")
 			.update(archives.get(onnxUrl))
 			.digest("hex");
-		writeFileSync(setupPath, setupSource.replaceAll(pinnedHash, onnxHash));
+		const nativeHash = createHash("sha256")
+			.update(archives.get(nativeUrl))
+			.digest("hex");
+		writeFileSync(
+			setupPath,
+			setupSource
+				.replaceAll(pinnedHash, onnxHash)
+				.replace(
+					/(file: "cap-ffmpeg-x86_64-linux-gnu\.tar\.xz",\s*sha256: ")[0-9a-f]*"/,
+					`$1${nativeHash}"`,
+				),
+		);
 
 		let failNative = true;
 		let tamperOnnx = false;
+		let tamperNative = false;
 		let networkFailures = 0;
 		const requests = [];
 		const server = createServer((request, response) => {
@@ -132,7 +147,9 @@ test(
 			}
 			const archive = archives.get(request.url);
 			response.writeHead(archive ? 200 : 404);
-			if (archive && tamperOnnx && request.url === onnxUrl)
+			if (archive && tamperNative && request.url === nativeUrl)
+				response.end(Buffer.concat([archive, Buffer.from("tampered")]));
+			else if (archive && tamperOnnx && request.url === onnxUrl)
 				response.end(Buffer.concat([archive, Buffer.from("tampered")]));
 			else response.end(archive ?? "Unexpected setup download");
 		});
@@ -175,7 +192,11 @@ globalThis.fetch = (input, options) => {
 				},
 			);
 
-		const cache = path.join(fixture, "target", `v0.26-${nativeName}`);
+		const cache = path.join(
+			fixture,
+			"target",
+			`ffmpeg-${ffmpegVersion}-${nativeName}`,
+		);
 		const failed = await runSetup();
 		assert.equal(failed.code, 1, failed.stderr);
 		assert.deepEqual(requests, [nativeUrl]);
@@ -187,6 +208,15 @@ globalThis.fetch = (input, options) => {
 		assert.match(failed.stderr, /HTTP 503/);
 
 		failNative = false;
+		tamperNative = true;
+		requests.length = 0;
+		const tamperedNative = await runSetup();
+		assert.equal(tamperedNative.code, 1, tamperedNative.stderr);
+		assert.deepEqual(requests, [nativeUrl]);
+		assert.match(tamperedNative.stderr, /SHA-256 mismatch/);
+		assert.equal(existsSync(cache), false);
+
+		tamperNative = false;
 		networkFailures = 3;
 		requests.length = 0;
 		const disconnected = await runSetup();

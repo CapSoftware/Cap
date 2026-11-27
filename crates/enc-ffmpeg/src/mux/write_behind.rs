@@ -679,13 +679,13 @@ fn run_writer<M: MuxTarget>(shared: &Shared<M>, label: &'static str) {
 mod tests {
     use super::*;
 
-    struct NutTarget {
+    struct Mp4Target {
         output: format::context::Output,
         write_delay: Duration,
         panic_on_write: bool,
     }
 
-    impl MuxTarget for NutTarget {
+    impl MuxTarget for Mp4Target {
         fn output(&self) -> &format::context::Output {
             &self.output
         }
@@ -697,21 +697,21 @@ mod tests {
         }
     }
 
-    fn nut_target(path: &std::path::Path) -> NutTarget {
+    fn mp4_target(path: &std::path::Path) -> Mp4Target {
         ffmpeg::init().unwrap();
-        let mut output = format::output_as(path, "nut").unwrap();
-        let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::PCM_S16LE).unwrap();
+        let mut output = format::output_as(path, "mp4").unwrap();
+        let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::AAC).unwrap();
         let mut stream = output.add_stream(codec).unwrap();
         stream.set_time_base(Rational::new(1, 48_000));
         unsafe {
             let parameters = (*stream.as_mut_ptr()).codecpar;
             (*parameters).codec_type = ffmpeg::ffi::AVMediaType::AVMEDIA_TYPE_AUDIO;
-            (*parameters).codec_id = ffmpeg::ffi::AVCodecID::AV_CODEC_ID_PCM_S16LE;
+            (*parameters).codec_id = ffmpeg::ffi::AVCodecID::AV_CODEC_ID_AAC;
             (*parameters).sample_rate = 48_000;
             ffmpeg::ffi::av_channel_layout_default(&mut (*parameters).ch_layout, 1);
         }
         output.write_header().unwrap();
-        NutTarget {
+        Mp4Target {
             output,
             write_delay: Duration::ZERO,
             panic_on_write: false,
@@ -733,7 +733,7 @@ mod tests {
         packet
     }
 
-    fn behind(target: NutTarget, budget: usize, limits: FinishLimits) -> MuxSink<NutTarget> {
+    fn behind(target: Mp4Target, budget: usize, limits: FinishLimits) -> MuxSink<Mp4Target> {
         MuxSink::Behind(
             WriteBehind::spawn("test", target, budget, limits)
                 .ok()
@@ -741,7 +741,7 @@ mod tests {
         )
     }
 
-    fn shared(sink: &MuxSink<NutTarget>) -> Arc<Shared<NutTarget>> {
+    fn shared(sink: &MuxSink<Mp4Target>) -> Arc<Shared<Mp4Target>> {
         match sink {
             MuxSink::Behind(writer) => writer.shared.clone(),
             _ => panic!("write-behind not enabled"),
@@ -749,12 +749,12 @@ mod tests {
     }
 
     fn header_only_len(directory: &std::path::Path) -> u64 {
-        let path = directory.join("header-only.nut");
-        drop(nut_target(&path));
+        let path = directory.join("header-only.mp4");
+        drop(mp4_target(&path));
         std::fs::metadata(path).unwrap().len()
     }
 
-    fn finish_with_trailer(sink: &mut MuxSink<NutTarget>) -> Result<(), ffmpeg::Error> {
+    fn finish_with_trailer(sink: &mut MuxSink<Mp4Target>) -> Result<(), ffmpeg::Error> {
         sink.finish(
             |_| Ok(()),
             |target, result| {
@@ -776,8 +776,8 @@ mod tests {
     #[test]
     fn producer_runs_ahead_of_a_stalled_writer_and_order_is_preserved() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("out.nut");
-        let mut sink = MuxSink::Direct(nut_target(&path));
+        let path = directory.path().join("out.mp4");
+        let mut sink = MuxSink::Direct(mp4_target(&path));
         sink.enable_write_behind("test", 1 << 20).unwrap();
         assert!(sink.is_write_behind());
 
@@ -800,7 +800,7 @@ mod tests {
     #[test]
     fn exhausted_budget_falls_back_to_waiting_for_storage() {
         let directory = tempfile::tempdir().unwrap();
-        let mut sink = MuxSink::Direct(nut_target(&directory.path().join("out.nut")));
+        let mut sink = MuxSink::Direct(mp4_target(&directory.path().join("out.mp4")));
         sink.enable_write_behind("test", 8 * 1024).unwrap();
         let shared = shared(&sink);
 
@@ -823,7 +823,7 @@ mod tests {
     #[test]
     fn oversized_packet_is_accepted_into_an_empty_queue() {
         let directory = tempfile::tempdir().unwrap();
-        let mut sink = MuxSink::Direct(nut_target(&directory.path().join("out.nut")));
+        let mut sink = MuxSink::Direct(mp4_target(&directory.path().join("out.mp4")));
         sink.enable_write_behind("test", 1024).unwrap();
         sink.write_packet(packet(0, 4096)).unwrap();
         finish_with_trailer(&mut sink).unwrap();
@@ -832,8 +832,8 @@ mod tests {
     #[test]
     fn earlier_write_errors_never_abort_the_end_of_stream_flush() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("out.nut");
-        let mut sink = MuxSink::Direct(nut_target(&path));
+        let path = directory.path().join("out.mp4");
+        let mut sink = MuxSink::Direct(mp4_target(&path));
         sink.enable_write_behind("test", 1 << 20).unwrap();
 
         sink.write_packet(packet(0, 64)).unwrap();
@@ -857,7 +857,7 @@ mod tests {
     #[test]
     fn end_of_stream_write_errors_are_reported_like_an_inline_flush() {
         let directory = tempfile::tempdir().unwrap();
-        let mut sink = MuxSink::Direct(nut_target(&directory.path().join("out.nut")));
+        let mut sink = MuxSink::Direct(mp4_target(&directory.path().join("out.mp4")));
         sink.enable_write_behind("test", 1 << 20).unwrap();
         sink.write_packet(packet(0, 64)).unwrap();
         let result = sink
@@ -872,7 +872,7 @@ mod tests {
     #[test]
     fn stalled_finish_returns_in_time_and_keeps_the_buffer_for_when_storage_recovers() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("out.nut");
+        let path = directory.path().join("out.mp4");
         let packets = 8usize;
         let packet_size = 64 * 1024;
         let finalized = Arc::new(AtomicBool::new(false));
@@ -881,7 +881,7 @@ mod tests {
                 drain: Duration::from_millis(100),
                 total: Duration::from_millis(300),
             };
-            let mut sink = behind(nut_target(&path), 1 << 20, limits);
+            let mut sink = behind(mp4_target(&path), 1 << 20, limits);
             let shared = shared(&sink);
             let stalled = lock(&shared.target);
             for pts in 0..packets {
@@ -914,8 +914,8 @@ mod tests {
     #[test]
     fn slow_storage_finishes_without_the_tail_within_the_limit() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("out.nut");
-        let mut target = nut_target(&path);
+        let path = directory.path().join("out.mp4");
+        let mut target = mp4_target(&path);
         target.write_delay = Duration::from_millis(60);
         let limits = FinishLimits {
             drain: Duration::from_millis(300),
@@ -1093,7 +1093,7 @@ mod tests {
             total: Duration::from_millis(300),
         };
         let mut sink = behind(
-            nut_target(&directory.path().join("out.nut")),
+            mp4_target(&directory.path().join("out.mp4")),
             1 << 20,
             limits,
         );
@@ -1110,10 +1110,10 @@ mod tests {
     #[test]
     fn dropping_without_finish_stops_the_writer_promptly() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("out.nut");
+        let path = directory.path().join("out.mp4");
         let shared;
         {
-            let mut sink = MuxSink::Direct(nut_target(&path));
+            let mut sink = MuxSink::Direct(mp4_target(&path));
             sink.enable_write_behind("test", 1 << 20).unwrap();
             shared = self::shared(&sink);
             let stalled = lock(&shared.target);
@@ -1145,7 +1145,7 @@ mod tests {
     #[test]
     fn idle_writer_drop_joins_the_thread() {
         let directory = tempfile::tempdir().unwrap();
-        let mut sink = MuxSink::Direct(nut_target(&directory.path().join("out.nut")));
+        let mut sink = MuxSink::Direct(mp4_target(&directory.path().join("out.mp4")));
         sink.enable_write_behind("test", 1 << 20).unwrap();
         let shared = shared(&sink);
         drop(sink);
@@ -1165,7 +1165,7 @@ mod tests {
     #[test]
     fn writer_panic_is_reported_on_the_next_enqueue() {
         let directory = tempfile::tempdir().unwrap();
-        let mut target = nut_target(&directory.path().join("out.nut"));
+        let mut target = mp4_target(&directory.path().join("out.mp4"));
         target.panic_on_write = true;
         let mut sink = behind(target, 1 << 20, FinishLimits::DEFAULT);
         sink.write_packet(packet(0, 64)).unwrap();
