@@ -431,10 +431,14 @@ describe("buildAskPrompt", () => {
 				...askInput(overrides),
 				boundary: B,
 			});
-			expect(system).toContain('Never leave a placeholder to fill in, such as "[Name]"');
+			expect(system).toContain(
+				'Never leave a placeholder to fill in, such as "[Name]"',
+			);
 		}
 		const { system } = prompts.buildAskPrompt({
-			...askInput({ transcript: "Sam: Send the recap?\nAlex: I'll send it." }),
+			...askInput({
+				transcript: "Sam: Send the recap?\nAlex: I'll send it.",
+			}),
 			boundary: B,
 		});
 		expect(system).not.toContain("is them");
