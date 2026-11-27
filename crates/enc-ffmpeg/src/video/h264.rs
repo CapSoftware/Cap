@@ -92,6 +92,14 @@ enum VideoToolboxHwInputSession {
     NonRealtime,
 }
 
+/// Frames a hardware encoder still held when it failed while handing over
+/// to the software encoder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HardwareTailLoss {
+    pub error: ffmpeg::Error,
+    pub frames: u64,
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum H264EncoderError {
     #[error("{0:?}")]
@@ -433,6 +441,8 @@ impl H264EncoderBuilder {
             software_fallback: None,
             #[cfg(test)]
             injected_failure: None,
+            #[cfg(test)]
+            handover_drain_failure: None,
             hardware_session: None,
             past_ceiling_hardware: false,
         })
@@ -475,6 +485,8 @@ impl H264EncoderBuilder {
             software_fallback: None,
             #[cfg(test)]
             injected_failure: None,
+            #[cfg(test)]
+            handover_drain_failure: None,
             hardware_session: None,
             past_ceiling_hardware: false,
         })
@@ -641,6 +653,8 @@ impl H264EncoderBuilder {
             software_fallback: Some(software_fallback),
             #[cfg(test)]
             injected_failure: None,
+            #[cfg(test)]
+            handover_drain_failure: None,
             hardware_session: None,
             past_ceiling_hardware: session == VideoToolboxHwInputSession::NonRealtime,
         })
@@ -1181,6 +1195,8 @@ pub struct H264Encoder {
     software_fallback: Option<Box<H264EncoderBuilder>>,
     #[cfg(test)]
     injected_failure: Option<InjectedCodecFailure>,
+    #[cfg(test)]
+    handover_drain_failure: Option<ffmpeg::Error>,
     /// Last, so the hardware encoder is released before it reports idle.
     hardware_session: Option<HardwareEncoderSession>,
     past_ceiling_hardware: bool,
@@ -1296,13 +1312,13 @@ impl H264Encoder {
     /// still works: libx264 is opened first, so a failed open leaves this
     /// encoder running with its replacement still available to the
     /// failure path, then every frame the hardware encoder held is written
-    /// before the swap. Returns the error of a hardware encoder that
-    /// failed while handing over; its remaining frames are lost and the swap
-    /// still happens.
+    /// before the swap. A hardware encoder that fails while handing over
+    /// loses the frames it still held; the swap still happens and the loss
+    /// is returned.
     pub fn hand_over_to_software<S: PacketSink + ?Sized>(
         &mut self,
         output: &mut S,
-    ) -> Result<Option<ffmpeg::Error>, H264EncoderError> {
+    ) -> Result<Option<HardwareTailLoss>, H264EncoderError> {
         let builder = self
             .software_fallback
             .take()
@@ -1314,9 +1330,17 @@ impl H264Encoder {
                 return Err(error);
             }
         };
+        #[cfg(test)]
+        let drained = match self.handover_drain_failure.take() {
+            Some(error) => Err((error, self.base.abandon_for_handover())),
+            None => self.base.drain_for_handover(output, &mut self.encoder),
+        };
+        #[cfg(not(test))]
         let drained = self.base.drain_for_handover(output, &mut self.encoder);
         self.install_software(opened);
-        Ok(drained.err())
+        Ok(drained
+            .err()
+            .map(|(error, frames)| HardwareTailLoss { error, frames }))
     }
 
     fn install_software(&mut self, opened: OpenedVideoEncoder) {
@@ -1372,6 +1396,11 @@ impl H264Encoder {
             replacement_preset,
         );
         self.past_ceiling_hardware = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_handover_drain(&mut self, error: ffmpeg::Error) {
+        self.handover_drain_failure = Some(error);
     }
 
     #[cfg(test)]

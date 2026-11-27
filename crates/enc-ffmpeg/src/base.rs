@@ -227,17 +227,29 @@ impl EncoderBase {
     /// Ends `encoder`'s stream and writes everything it still held, keeping
     /// the last packet back so the next encoder's first packet stamps its
     /// real duration and the timeline stays continuous across the change.
+    /// A failure returns the error with the frames that never came back.
     pub fn drain_for_handover<S: PacketSink + ?Sized>(
         &mut self,
         output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
-    ) -> Result<(), ffmpeg::Error> {
+    ) -> Result<(), (ffmpeg::Error, u64)> {
         let result = encoder
             .send_eof()
-            .and_then(|()| self.process_packets(output, encoder));
+            .and_then(|()| self.process_packets(output, encoder))
+            .map_err(|error| (error, self.frames_in_codec()));
         self.frames_sent = 0;
         self.packets_received = 0;
         result
+    }
+
+    /// Drops the codec's state the way a failed drain does, returning the
+    /// frames that never came back.
+    #[cfg(test)]
+    pub(crate) fn abandon_for_handover(&mut self) -> u64 {
+        let lost = self.frames_in_codec();
+        self.frames_sent = 0;
+        self.packets_received = 0;
+        lost
     }
 
     fn process_packets<S: PacketSink + ?Sized>(

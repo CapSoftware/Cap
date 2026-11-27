@@ -293,6 +293,7 @@ pub struct ScreenFrameAccounting {
     repeat_flags: Mutex<VecDeque<bool>>,
     capture_buffers: u64,
     switched_to_software: AtomicBool,
+    lost_at_handover: AtomicU64,
 }
 
 impl ScreenFrameAccounting {
@@ -309,6 +310,12 @@ impl ScreenFrameAccounting {
 
     pub fn record_switched_to_software(&self) {
         self.switched_to_software.store(true, Ordering::Relaxed);
+    }
+
+    /// Frames the hardware encoder still held when it failed while handing
+    /// over to the software encoder: encoded, but never written.
+    pub fn record_lost_at_handover(&self, frames: u64) {
+        self.lost_at_handover.fetch_add(frames, Ordering::Relaxed);
     }
 
     pub fn attach(&self) {
@@ -406,7 +413,9 @@ impl ScreenFrameAccounting {
             .saturating_sub(self.real_encoded.load(Ordering::Relaxed))
             .min(self.repeats_encoded.load(Ordering::Relaxed));
         let encoder_failed = self.encoder_failed.load(Ordering::Relaxed);
-        let known_lost = encoder_failed + self.writer_lost.load(Ordering::Relaxed);
+        let known_lost = encoder_failed
+            + self.writer_lost.load(Ordering::Relaxed)
+            + self.lost_at_handover.load(Ordering::Relaxed);
         let written = (packets - repeats_written).min(handed_to_encoder.saturating_sub(known_lost));
         let lost_in_encoder = if self.finished.load(Ordering::Relaxed) {
             handed_to_encoder.saturating_sub(written)
@@ -1062,6 +1071,37 @@ mod tests {
         };
         assert_eq!(window.lost_in_capture, 0);
         assert!(window.lost_before_encoder >= 59, "{window:?}");
+    }
+
+    #[test]
+    fn frames_lost_at_the_switch_count_in_the_encoder_and_cap_written() {
+        let accounting = ScreenFrameAccounting::default();
+        let mut packets = 0;
+        for i in 0..10 {
+            accounting.record_accepted(FrameLossCarry::default(), i == 0);
+            hand(&accounting, false);
+            let repeat = accounting.next_is_repeat();
+            if i < 7 {
+                packets += 1;
+            }
+            accounting.record_encoded(repeat, true, Some(packets));
+        }
+        accounting.record_lost_at_handover(3);
+        assert_eq!(accounting.totals().lost_in_encoder, 3, "live");
+        for _ in 0..2 {
+            hand(&accounting, true);
+            let repeat = accounting.next_is_repeat();
+            packets += 1;
+            accounting.record_encoded(repeat, true, Some(packets));
+        }
+        accounting.record_finished(Some(packets));
+        let totals = accounting.totals();
+        assert_eq!(
+            totals.written, 7,
+            "written repeats do not hide the lost frames"
+        );
+        assert_eq!(totals.lost_in_encoder, 3);
+        assert_eq!(totals.displayed, totals.written + totals.lost());
     }
 
     #[test]

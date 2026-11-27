@@ -243,10 +243,24 @@ fn report_encoder_fallback(
         Some(SoftwareSwitch::Switched {
             from,
             to,
-            hardware_tail_error,
+            hardware_tail_loss,
         }) => {
             if let Some(accounting) = accounting {
                 accounting.record_switched_to_software();
+            }
+            if let Some(loss) = hardware_tail_loss {
+                if let Some(accounting) = accounting {
+                    accounting.record_lost_at_handover(loss.frames);
+                }
+                warn!(
+                    encoder = %from,
+                    error = %loss.error,
+                    frames = loss.frames,
+                    "Frames the hardware encoder held at the switch to the software encoder were lost"
+                );
+                health_tx.emit(PipelineHealthEvent::EncoderTailLost {
+                    encoder: from.clone(),
+                });
             }
             let window = armed_by.copied().unwrap_or_default();
             warn!(
@@ -255,7 +269,6 @@ fn report_encoder_fallback(
                 displayed = window.displayed,
                 lost_to_encoder = window.lost(),
                 lost_pct = format!("{:.1}%", window.lost_pct()),
-                hardware_tail_error = ?hardware_tail_error,
                 "Hardware video encoder is losing frames; switched to the software encoder for the rest of the recording"
             );
             health_tx.emit(PipelineHealthEvent::EncoderRebuilt {

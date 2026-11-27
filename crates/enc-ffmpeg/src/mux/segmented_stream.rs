@@ -18,7 +18,7 @@ use std::{
 use crate::base::PacketSink;
 use crate::video::h264::{
     DEFAULT_KEYFRAME_INTERVAL_SECS, H264Encoder, H264EncoderBuilder, H264EncoderError, H264Preset,
-    QueueFrameError as EncodeError, VideoEncoderChoice,
+    HardwareTailLoss, QueueFrameError as EncodeError, VideoEncoderChoice,
 };
 
 /// Consecutive codec errors from a hardware encoder before it is replaced
@@ -171,7 +171,7 @@ pub enum SoftwareSwitch {
     Switched {
         from: String,
         to: String,
-        hardware_tail_error: Option<ffmpeg::Error>,
+        hardware_tail_loss: Option<HardwareTailLoss>,
     },
     Failed {
         encoder: String,
@@ -300,6 +300,7 @@ pub struct SegmentedVideoEncoder {
     segment_clock: Option<SegmentClock>,
     software_switch: Option<SwitchWait>,
     finished_switch: Option<SoftwareSwitch>,
+    handover_tail_lost: bool,
 }
 
 #[derive(Debug, Default)]
@@ -877,6 +878,7 @@ impl SegmentedVideoEncoder {
             segment_clock: None,
             software_switch: None,
             finished_switch: None,
+            handover_tail_lost: false,
         };
         if instance.encoder.is_past_ceiling_hardware() {
             instance.segment_clock = Some(SegmentClock::new(config.segment_duration));
@@ -1099,11 +1101,14 @@ impl SegmentedVideoEncoder {
         self.software_switch = None;
         self.segment_clock = None;
         self.finished_switch = Some(match result {
-            Ok(hardware_tail_error) => SoftwareSwitch::Switched {
-                from,
-                to: self.encoder.codec_name(),
-                hardware_tail_error,
-            },
+            Ok(hardware_tail_loss) => {
+                self.handover_tail_lost |= hardware_tail_loss.is_some();
+                SoftwareSwitch::Switched {
+                    from,
+                    to: self.encoder.codec_name(),
+                    hardware_tail_loss,
+                }
+            }
             Err(error) => SoftwareSwitch::Failed {
                 encoder: from,
                 error: error.to_string(),
@@ -1139,7 +1144,7 @@ impl SegmentedVideoEncoder {
         let unrecovered = self.unrecovered_codec_failure.clone();
         let encoder = &mut self.encoder;
         let mut tolerated_flush_error = None;
-        let tail_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let tail_lost = Arc::new(std::sync::atomic::AtomicBool::new(self.handover_tail_lost));
         let finalize_tail_lost = tail_lost.clone();
         let packets_written = self.packets_written.clone();
         let finished = self.mux.finish(
@@ -3220,7 +3225,7 @@ mod tests {
                 at,
                 SoftwareSwitch::Switched {
                     to,
-                    hardware_tail_error: None,
+                    hardware_tail_loss: None,
                     ..
                 },
             ),
@@ -3325,6 +3330,53 @@ mod tests {
         let decoded = decode_every_packet(&recorded_track(&base_path));
         assert_continuous(&decoded, total_frames as usize, 0.033_333);
         assert!(!decoded.in_band_sps_profiles.contains(&66));
+    }
+
+    #[test]
+    fn a_failed_drain_at_the_switch_marks_the_lost_tail() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let mut encoder = pretend_past_ceiling_libx264(&base_path);
+        encoder.encoder.fail_handover_drain(HARDWARE_FAILURE);
+
+        let total_frames = 300;
+        let switches = record_with_switch_request(
+            &mut encoder,
+            total_frames,
+            100,
+            Duration::from_micros(33_333),
+            |encoder, timestamp| {
+                encoder
+                    .queue_frame(create_test_frame(320, 240), timestamp)
+                    .unwrap();
+            },
+        );
+        let [
+            (
+                at,
+                SoftwareSwitch::Switched {
+                    hardware_tail_loss: Some(loss),
+                    ..
+                },
+            ),
+        ] = switches.as_slice()
+        else {
+            panic!("one switch with a lost tail expected, got {switches:?}");
+        };
+        assert_eq!(loss.error, HARDWARE_FAILURE);
+        assert!(loss.frames > 0, "the encoder held frames at the switch");
+        encoder.finish().unwrap();
+
+        assert_eq!(read_manifest(&base_path)["encoder_tail_lost"], true);
+        assert!(encoder.take_flush_failure().is_none());
+        assert_eq!(encoder.packets_written() + loss.frames, total_frames);
+        assert!(segment_starts(&base_path).contains(at));
+        let decoded = decode_every_packet(&recorded_track(&base_path));
+        assert_eq!(decoded.frames as u64, total_frames - loss.frames);
+        let mut pts = decoded.frame_pts_secs.clone();
+        pts.sort_by(f64::total_cmp);
+        assert!(pts.windows(2).all(|pair| pair[1] > pair[0]));
     }
 
     #[test]
@@ -3888,7 +3940,7 @@ mod tests {
                 SoftwareSwitch::Switched {
                     from,
                     to,
-                    hardware_tail_error: None,
+                    hardware_tail_loss: None,
                 },
             ),
         ] = switches.as_slice()
