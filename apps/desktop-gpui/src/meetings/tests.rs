@@ -2381,3 +2381,34 @@ fn a_finished_meetings_voice_count_follows_its_transcript() {
         None
     );
 }
+
+/// Lines of a finished meeting deleted or moved to another voice: its count
+/// of voices follows once the edit is written.
+#[test]
+fn a_finished_meetings_voice_count_follows_line_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let mut meta = library.create(DocKind::Meeting, Utc::now(), 7).unwrap();
+    let mut meeting = MeetingDetails {
+        ended_at: Some(Utc::now()),
+        ..MeetingDetails::default()
+    };
+    meeting.set_speaker_count(2);
+    meta.meeting = Some(meeting);
+    library.save(&meta).unwrap();
+    let mut transcript = Transcript::new();
+    transcript.upsert(utterance("m1", Source::Mic, 0, "Morning."));
+    transcript.upsert(utterance("s1", Source::System, 1_000, "Hi there."));
+    assert!(!persist::follow_speakers(&library, &meta.id, &transcript));
+
+    transcript.apply(LogLine::Delete {
+        ids: vec!["s1".into()],
+    });
+    assert!(persist::follow_speakers(&library, &meta.id, &transcript));
+    let count = library
+        .load(&meta.id)
+        .unwrap()
+        .meeting
+        .and_then(|m| m.speaker_count());
+    assert_eq!(count, Some(1));
+}

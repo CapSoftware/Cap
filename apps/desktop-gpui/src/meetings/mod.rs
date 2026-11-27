@@ -3441,11 +3441,34 @@ impl Meetings {
                     self.append_direct(doc_id, lines);
                 }
             }
-            None => self.append_direct(doc_id, vec![line]),
+            None => {
+                self.append_direct(doc_id, vec![line]);
+                self.speakers_follow_edits(doc_id, cx);
+            }
         }
         cx.emit(MeetingEvent::TranscriptChanged {
             doc_id: doc_id.to_string(),
         });
+    }
+
+    /// A finished meeting's lines changed: once the edit is on disk, its
+    /// count of voices follows and the notes list hears of it.
+    fn speakers_follow_edits(&mut self, doc_id: &str, cx: &mut Context<Self>) {
+        let Some(library) = self.library().cloned() else {
+            return;
+        };
+        let Ok(path) = library.transcript_path(doc_id) else {
+            return;
+        };
+        let doc = doc_id.to_string();
+        let (changed, note) = flume::bounded(1);
+        crate::meetings_ui::documents::queue_after_saves(move || {
+            let transcript = Transcript::load_jsonl(&path)
+                .map(|(t, _)| t)
+                .unwrap_or_default();
+            let _ = changed.send(persist::follow_speakers(&library, &doc, &transcript));
+        });
+        Self::library_changed_when(note, cx);
     }
 
     /// "Always spell as": the dictionary learns `wrong` as a sounds-like form

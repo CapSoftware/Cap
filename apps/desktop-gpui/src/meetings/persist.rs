@@ -166,14 +166,7 @@ pub fn follow_left_out(library: &Library, doc_id: &str, transcript: &Transcript)
     let Ok(mut meta) = library.load(doc_id) else {
         return false;
     };
-    let mut changed = false;
-    if let Some(meeting) = meta.meeting.as_mut().filter(|m| m.ended_at.is_some()) {
-        let speakers = transcript.speaker_count();
-        if meeting.speaker_count() != Some(speakers as u64) {
-            meeting.set_speaker_count(speakers);
-            changed = true;
-        }
-    }
+    let mut changed = sync_speaker_count(&mut meta, transcript);
     if meta.meeting.as_ref().is_some_and(|m| m.has_enhanced)
         && !summary_follows(&meta, transcript)
         && set_flag(&mut meta, NOTES_STALE_KEY, true)
@@ -187,6 +180,39 @@ pub fn follow_left_out(library: &Library, doc_id: &str, transcript: &Transcript)
         Ok(()) => true,
         Err(error) => {
             tracing::warn!(%error, "could not offer to update the notes");
+            false
+        }
+    }
+}
+
+/// A finished meeting's count of voices, which the notes list shows, follows
+/// its transcript. Returns whether it changed.
+fn sync_speaker_count(meta: &mut DocMeta, transcript: &Transcript) -> bool {
+    let Some(meeting) = meta.meeting.as_mut().filter(|m| m.ended_at.is_some()) else {
+        return false;
+    };
+    let speakers = transcript.speaker_count();
+    if meeting.speaker_count() == Some(speakers as u64) {
+        return false;
+    }
+    meeting.set_speaker_count(speakers);
+    true
+}
+
+/// After lines of a finished meeting were edited (deleted, moved to another
+/// voice): its count of voices follows. Returns whether the note changed.
+pub fn follow_speakers(library: &Library, doc_id: &str, transcript: &Transcript) -> bool {
+    let _lock = cap_meetings::library::lock_meta();
+    let Ok(mut meta) = library.load(doc_id) else {
+        return false;
+    };
+    if !sync_speaker_count(&mut meta, transcript) {
+        return false;
+    }
+    match library.save(&meta) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(%error, "could not save the meeting's voices");
             false
         }
     }
