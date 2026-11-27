@@ -377,6 +377,8 @@ pub struct ProjectSummary {
     /// The cursor tab is disabled on `!meta().hasRecordedCursorData`
     /// (`ConfigSidebar.tsx:610`).
     pub has_cursor_data: bool,
+    /// Whether any segment contains recorded raw keyboard events (`keyboard.bin`).
+    pub has_keyboard_data: bool,
     /// The asset family the recorded cursor shapes belong to, which the style
     /// picker highlights as "Recorded" and falls back to while the project's
     /// own type is `Auto`.
@@ -537,6 +539,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         duration: duration.max(0.0),
         has_camera,
         has_cursor_data: has_recorded_cursor_data(&meta, studio.as_ref()),
+        has_keyboard_data: cap_project::has_recorded_keyboard_events(&meta),
         recorded_cursor_family: recorded_cursor_family(studio.as_ref()),
         clip_display_durations: recordings
             .segments
@@ -13022,6 +13025,11 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let camera3d_preview = self.camera3d_auto_preview();
+        let keyboard_prompt = model.segments(TrackKind::Keyboard).is_empty()
+            && self
+                .summary()
+                .is_some_and(|summary| summary.has_keyboard_data)
+            && self.transport.is_some();
         let ui = timeline::SegmentUi {
             selection: self.selection.as_ref(),
             split_mode: self.split_mode,
@@ -13033,6 +13041,7 @@ impl EditorWindow {
             },
             // No create ghost while a generated set is on its way either.
             hovering_generate_zoom: self.hovering_generate_zoom || self.generating_auto_zoom,
+            keyboard_generate_prompt: keyboard_prompt,
             scene_preview_time: self.scene_preview_time,
             camera3d_preview: &camera3d_preview,
             camera3d_editing_end: self.sidebar.editing_end_pose,
@@ -13368,6 +13377,69 @@ impl EditorWindow {
                                                 this.hovering_generate_zoom = false;
                                                 cx.notify();
                                             })),
+                                    ),
+                            )
+                    }))
+                    .children((kind == TrackKind::Keyboard && keyboard_prompt).then(|| {
+                        let generating = self.generating_keyboard;
+                        let message = self
+                            .keyboard_generation_message
+                            .as_deref()
+                            .unwrap_or(tr::editor::tabs::keyboard::empty_title())
+                            .to_owned();
+                        div()
+                            .id("keyboard-generate-prompt")
+                            .debug_selector(|| "keyboard-generate-prompt".into())
+                            .absolute()
+                            .left(px(timeline::TRACK_GUTTER))
+                            .right_0()
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_center()
+                            .px(px(10.))
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(Hsla::from(if row_hovered {
+                                theme.editor.text_2
+                            } else {
+                                theme.editor.text_3
+                            }))
+                            .child(
+                                div()
+                                    .id("keyboard-generate-hit")
+                                    .debug_selector(|| "keyboard-generate-hit".into())
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(10.))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                                    )
+                                    .child(div().min_w_0().truncate().child(message))
+                                    .child(
+                                        ui::Button::plain(
+                                            &theme,
+                                            "keyboard-generate-button",
+                                            ui::ButtonVariant::Primary,
+                                            ui::ButtonSize::Sm,
+                                        )
+                                        .label(if generating {
+                                            tr::editor::tabs::keyboard::generating()
+                                        } else {
+                                            tr::editor::tabs::keyboard::generate()
+                                        })
+                                        .radius(px(7.))
+                                        .disabled(generating)
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.generate_keyboard_segments_clicked(window, cx);
+                                            }),
+                                        ),
                                     ),
                             )
                     }))
@@ -16690,6 +16762,7 @@ mod tests {
                             duration: 30.,
                             has_camera: false,
                             has_cursor_data: true,
+                            has_keyboard_data: false,
                             recorded_cursor_family: None,
                             clip_display_durations: vec![30.],
                             recording_duration: 30.,
@@ -16838,6 +16911,7 @@ mod tests {
                             duration: 10.,
                             has_camera: false,
                             has_cursor_data: false,
+                            has_keyboard_data: false,
                             recorded_cursor_family: None,
                             clip_display_durations: vec![10.],
                             recording_duration: 10.,

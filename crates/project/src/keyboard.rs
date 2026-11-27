@@ -308,6 +308,14 @@ fn load_project_keyboard_events(
         .collect()
 }
 
+pub fn has_recorded_keyboard_events(meta: &crate::RecordingMeta) -> bool {
+    load_project_keyboard_events(meta).is_ok_and(|takes| {
+        takes
+            .into_iter()
+            .any(|(events, _)| !events.presses.is_empty())
+    })
+}
+
 pub fn generate_project_keyboard_segments(
     meta: &crate::RecordingMeta,
     timeline: &crate::TimelineConfiguration,
@@ -2101,5 +2109,46 @@ mod timing_tests {
         segment.display_text = "⌘W".into();
         assert!(segment.split_at(11.0).is_none());
         assert!(!segment.ripple_delete(10.5, 11.5, 1.0));
+    }
+
+    #[test]
+    fn has_recorded_keyboard_events_detects_non_empty_keyboard_bin() {
+        let directory = tempfile::tempdir().unwrap();
+        KeyboardEvents::default()
+            .write_to_file(&directory.path().join("keyboard.bin"))
+            .unwrap();
+        let mut meta: crate::RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "empty keys",
+            "segments": [{"display": {"path": "display.mp4", "fps": 30}, "keyboard": "keyboard.bin"}],
+            "cursors": {}
+        }))
+        .unwrap();
+        meta.project_path = directory.path().to_path_buf();
+        assert!(!has_recorded_keyboard_events(&meta));
+
+        events(&[("a", 0.5)])
+            .write_to_file(&directory.path().join("keyboard.bin"))
+            .unwrap();
+        assert!(has_recorded_keyboard_events(&meta));
+    }
+
+    #[test]
+    fn has_recorded_keyboard_events_falls_back_to_segment_directory_keyboard_bin() {
+        let directory = tempfile::tempdir().unwrap();
+        let segment_dir = directory.path().join("content");
+        std::fs::create_dir_all(&segment_dir).unwrap();
+        let mut meta: crate::RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "fallback keys",
+            "segments": [{"display": {"path": "content/display.mp4", "fps": 30}}],
+            "cursors": {}
+        }))
+        .unwrap();
+        meta.project_path = directory.path().to_path_buf();
+        assert!(!has_recorded_keyboard_events(&meta));
+
+        events(&[("b", 1.25)])
+            .write_to_file(&segment_dir.join("keyboard.bin"))
+            .unwrap();
+        assert!(has_recorded_keyboard_events(&meta));
     }
 }

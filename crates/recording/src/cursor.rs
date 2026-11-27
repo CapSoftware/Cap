@@ -905,61 +905,61 @@ pub fn spawn_cursor_recorder(
                 }
             };
 
-            let Some(cursor_id) = cursor_id else {
-                continue;
-            };
-            if previous_cursor_id
-                .as_deref()
-                .is_some_and(|previous| previous != cursor_id)
-            {
-                last_cursor_activity = Instant::now();
-            }
+            if let Some(cursor_id) = cursor_id {
+                if previous_cursor_id
+                    .as_deref()
+                    .is_some_and(|previous| previous != cursor_id)
+                {
+                    last_cursor_activity = Instant::now();
+                }
 
-            // Playback takes the drawn shape from move events only, so a shape
-            // change under a still pointer is written as a move to the same
-            // position.
-            if records_cursor_move(position_changed, previous_cursor_id.as_deref(), &cursor_id) {
-                let cropped_norm_pos = position
-                    .relative_to_display(display)
-                    .and_then(|p| p.normalize())
-                    .map(|p| p.with_crop(crop_bounds))
-                    .map(|p| (p.x(), p.y()));
-                #[cfg(target_os = "linux")]
-                let cropped_norm_pos = if target.window.is_some() {
-                    window_position
-                } else {
-                    cropped_norm_pos
-                };
+                // Playback takes the drawn shape from move events only, so a shape
+                // change under a still pointer is written as a move to the same
+                // position.
+                if records_cursor_move(position_changed, previous_cursor_id.as_deref(), &cursor_id)
+                {
+                    let cropped_norm_pos = position
+                        .relative_to_display(display)
+                        .and_then(|p| p.normalize())
+                        .map(|p| p.with_crop(crop_bounds))
+                        .map(|p| (p.x(), p.y()));
+                    #[cfg(target_os = "linux")]
+                    let cropped_norm_pos = if target.window.is_some() {
+                        window_position
+                    } else {
+                        cropped_norm_pos
+                    };
 
-                if let Some((x, y)) = cropped_norm_pos {
-                    let mouse_event = CursorMoveEvent {
+                    if let Some((x, y)) = cropped_norm_pos {
+                        let mouse_event = CursorMoveEvent {
+                            active_modifiers: vec![],
+                            cursor_id: cursor_id.clone(),
+                            time_ms: elapsed,
+                            x,
+                            y,
+                        };
+                        response.moves.push(mouse_event);
+                    }
+                }
+
+                for (num, &pressed) in mouse_state.button_pressed.iter().enumerate() {
+                    let Some(prev) = last_mouse_state.button_pressed.get(num) else {
+                        continue;
+                    };
+
+                    if pressed == *prev {
+                        continue;
+                    }
+
+                    let mouse_event = CursorClickEvent {
+                        down: pressed,
                         active_modifiers: vec![],
+                        cursor_num: num as u8,
                         cursor_id: cursor_id.clone(),
                         time_ms: elapsed,
-                        x,
-                        y,
                     };
-                    response.moves.push(mouse_event);
+                    response.clicks.push(mouse_event);
                 }
-            }
-
-            for (num, &pressed) in mouse_state.button_pressed.iter().enumerate() {
-                let Some(prev) = last_mouse_state.button_pressed.get(num) else {
-                    continue;
-                };
-
-                if pressed == *prev {
-                    continue;
-                }
-
-                let mouse_event = CursorClickEvent {
-                    down: pressed,
-                    active_modifiers: vec![],
-                    cursor_num: num as u8,
-                    cursor_id: cursor_id.clone(),
-                    time_ms: elapsed,
-                };
-                response.clicks.push(mouse_event);
             }
 
             last_mouse_state = mouse_state;
