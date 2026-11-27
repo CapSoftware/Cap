@@ -143,6 +143,18 @@ impl Capturer {
     pub async fn stop(&self) -> Result<(), arc::R<ns::Error>> {
         self.stream.stop().await
     }
+
+    /// Starts replacing what the running stream captures; resolves once
+    /// ScreenCaptureKit has applied the new filter.
+    pub fn update_content_filter(
+        &self,
+        filter: &sc::ContentFilter,
+    ) -> cidre::blocks::Completion<Result<(), arc::R<ns::Error>>> {
+        let (future, mut block) = cidre::blocks::ok();
+        self.stream
+            .update_content_filter_ch_block(filter, Some(&mut block));
+        future
+    }
 }
 
 pub struct VideoFrame {
