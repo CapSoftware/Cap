@@ -11,7 +11,8 @@ on run argv
 					set capProcess to first process whose bundle identifier is capTarget
 				end if
 				repeat with candidate in windows of capProcess
-					set dialogs to {candidate}
+					set dialogs to {}
+					if subrole of candidate is "AXDialog" then set end of dialogs to candidate
 					repeat with attached in sheets of candidate
 						set end of dialogs to attached
 					end repeat

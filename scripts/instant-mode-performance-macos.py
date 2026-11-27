@@ -334,6 +334,13 @@ def link_start_titles():
 
 
 def confirm_link_start(app_pid, confirmation):
+	try:
+		confirmation["result"] = run_link_confirmation(app_pid)
+	except Exception as error:
+		confirmation["error"] = error
+
+
+def run_link_confirmation(app_pid):
 	result = run(
 		[
 			"osascript",
@@ -344,7 +351,7 @@ def confirm_link_start(app_pid, confirmation):
 		],
 		timeout=30,
 	)
-	confirmation["result"] = result.stdout.strip()
+	return result.stdout.strip()
 
 
 def start_recording(targets, args, app_pid, action_sender, confirmation):
@@ -357,7 +364,11 @@ def start_recording(targets, args, app_pid, action_sender, confirmation):
 
 def finish_link_start(confirmation):
 	confirmation["thread"].join(timeout=30)
-	result = confirmation.get("result", "no result")
+	if confirmation["thread"].is_alive():
+		raise RuntimeError("The start confirmation helper did not finish")
+	if "error" in confirmation:
+		raise RuntimeError(f"The start confirmation helper failed: {confirmation['error']}")
+	result = confirmation["result"]
 	print(f"start confirmation: {result}", flush=True)
 	if result.startswith("permission:"):
 		raise RuntimeError(result)
