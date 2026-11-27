@@ -29,6 +29,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Clone, Debug)]
 pub struct EncoderPreferences {
     force_software: Arc<AtomicBool>,
+    finish_wait: EncoderFinishWait,
+    stop_cut: crate::output_pipeline::StopCut,
 }
 
 #[cfg(windows)]
@@ -43,7 +45,18 @@ impl EncoderPreferences {
     pub fn new() -> Self {
         Self {
             force_software: Arc::new(AtomicBool::new(false)),
+            finish_wait: EncoderFinishWait::default(),
+            stop_cut: crate::output_pipeline::StopCut::default(),
         }
+    }
+
+    pub fn finish_wait(&self) -> EncoderFinishWait {
+        self.finish_wait.clone()
+    }
+
+    /// The recording's stop request; see [`crate::output_pipeline::StopCut`].
+    pub fn stop_cut(&self) -> crate::output_pipeline::StopCut {
+        self.stop_cut.clone()
     }
 
     pub fn should_force_software(&self) -> bool {
@@ -336,6 +349,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         shared_pause_state,
                         disk_space_callback: None,
                         segment_tx: None,
+                        finish_wait: Some(encoder_preferences.finish_wait()),
                     })
                     .await
             }
@@ -387,6 +401,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 shared_pause_state: None,
                 disk_space_callback: None,
                 segment_tx,
+                finish_wait: None,
             })
             .await
     }

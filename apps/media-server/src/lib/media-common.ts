@@ -73,6 +73,65 @@ export function encodeLengthLimit(metadata: {
 	);
 }
 
+export const LENGTH_LIMIT_ERROR_PREFIX = "media-length-limit-exceeded";
+
+// A capped encode runs a little past the requested length, so a source that
+// fits keeps every frame and one that does not is seen to run over. The
+// tolerance covers an encode rounding a fitting source up.
+const LENGTH_LIMIT_ENCODE_MARGIN_SECONDS = 2;
+const LENGTH_LIMIT_TOLERANCE_SECONDS = 0.5;
+
+export function encodeCapForRequestedLength(maxSeconds: number): number {
+	return maxSeconds + LENGTH_LIMIT_ENCODE_MARGIN_SECONDS;
+}
+
+export function runsPastRequestedLength(
+	outputSeconds: number,
+	maxSeconds: number,
+): boolean {
+	return (
+		Number.isFinite(outputSeconds) &&
+		outputSeconds > maxSeconds + LENGTH_LIMIT_TOLERANCE_SECONDS
+	);
+}
+
+// Whether a probed source runs longer than the caller allows. The header
+// length and the length the timestamps span are both measured, and the longer
+// one counts, so a header that understates the file does not pass.
+export function exceedsRequestedLength(
+	metadata: { duration: number; timestampSpan?: number | null },
+	maxSeconds: number | undefined,
+): boolean {
+	if (
+		typeof maxSeconds !== "number" ||
+		!Number.isFinite(maxSeconds) ||
+		maxSeconds <= 0
+	)
+		return false;
+	const lengths = [metadata.duration, metadata.timestampSpan].filter(
+		(value): value is number =>
+			typeof value === "number" && Number.isFinite(value) && value > 0,
+	);
+	return lengths.some((length) => length > maxSeconds);
+}
+
+// The tighter of the probed limit and a limit the caller asked for. The
+// caller's limit also bounds encodes the probe could not, such as a damaged
+// source read with rebuilt timestamps.
+export function capOutputSeconds(
+	probedLimit: number | null,
+	requestedLimit: number | undefined,
+): number | null {
+	const requested =
+		typeof requestedLimit === "number" &&
+		Number.isFinite(requestedLimit) &&
+		requestedLimit > 0
+			? requestedLimit
+			: null;
+	if (probedLimit === null) return requested;
+	return requested === null ? probedLimit : Math.min(probedLimit, requested);
+}
+
 export function outputLengthCapArgs(
 	maxOutputSeconds: number | null | undefined,
 ): string[] {

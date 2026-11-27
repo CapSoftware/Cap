@@ -43,6 +43,9 @@ export class ImageUploads extends Effect.Service<ImageUploads>()(
 						Option.andThen((iconKeyOrUrl) =>
 							ImageUpload.extractFileKey(iconKeyOrUrl, s3.isPathStyle),
 						),
+						Option.filter((key) =>
+							ImageUpload.isKeyUnderPrefix(key, args.keyPrefix),
+						),
 						Option.map(s3.deleteObject),
 						Effect.transposeOption,
 					);

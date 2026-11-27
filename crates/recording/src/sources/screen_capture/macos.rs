@@ -28,6 +28,12 @@ use tracing::{debug, error, info, warn};
 
 const MAX_CAPTURE_RESTARTS: u32 = 3;
 const RESTART_DELAY: Duration = Duration::from_secs(2);
+// Each check is a WindowServer round trip that measured several percent of an
+// Instant recording's CPU at 100 ms, so a still window is checked less often and
+// the fast interval only runs while the window is changing.
+const WINDOW_FOLLOW_INTERVAL: Duration = Duration::from_millis(100);
+const WINDOW_FOLLOW_IDLE_INTERVAL: Duration = Duration::from_millis(500);
+const WINDOW_FOLLOW_ACTIVE_FOR: Duration = Duration::from_secs(2);
 const WINDOW_WATCH_INTERVAL: Duration = Duration::from_secs(1);
 const WINDOW_GONE_CHECKS: u32 = 2;
 
@@ -100,6 +106,53 @@ fn configure_window_capture(settings: &mut sc::StreamCfg) {
             settings.set_preserves_aspect_ratio(true);
         }
     }
+}
+
+fn stream_settings(
+    config: &Config,
+    video_info: &VideoInfo,
+    system_audio: bool,
+    captures_window: bool,
+    crop_bounds: Option<super::CropBounds>,
+) -> arc::R<sc::StreamCfg> {
+    let max_queue_depth = get_max_queue_depth();
+    let queue_depth = ((config.fps as f32 / 30.0 * 5.0).ceil() as isize).clamp(3, max_queue_depth);
+    debug!(
+        queue_depth,
+        max_queue_depth,
+        ?crop_bounds,
+        "Screen capture queue depth"
+    );
+
+    let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
+        .with_width(video_info.width as usize)
+        .with_height(video_info.height as usize)
+        .with_fps(config.fps as f32)
+        .with_shows_cursor(config.show_cursor)
+        .with_captures_audio(system_audio)
+        .with_queue_depth(queue_depth)
+        .build();
+
+    settings.set_pixel_format(cv::PixelFormat::_420V);
+    settings.set_color_space_name(cg::color_space::names::srgb());
+    if captures_window {
+        configure_window_capture(&mut settings);
+    }
+    if let Some(crop_bounds) = crop_bounds {
+        settings.set_src_rect(source_rect(captures_window, crop_bounds));
+    }
+    settings
+}
+
+/// What a window-only capture of `window` reads now: the whole window, sized
+/// as the recording's own crop is when it starts. The window can be resized
+/// while it is recorded, and a source rect left at its first size would cut
+/// off whatever grew past it.
+fn current_window_crop(window: &WindowId, scale: f64) -> Option<super::CropBounds> {
+    let bounds = scap_targets::Window::from_id_direct(window)?
+        .raw_handle()
+        .logical_bounds()?;
+    Some(super::even_pixel_crop(bounds, scale))
 }
 
 /// What the stream reads. A display capture crops to `crop_bounds` on the
@@ -434,38 +487,13 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         debug!("SCK content filter: {:?}", content_filter);
 
-        let size = PhysicalSize::new(self.video_info.width as f64, self.video_info.height as f64);
-
-        debug!("size: {:?}", size);
-
-        let max_queue_depth = get_max_queue_depth();
-        let queue_depth =
-            ((self.config.fps as f32 / 30.0 * 5.0).ceil() as isize).clamp(3, max_queue_depth);
-        debug!(
-            queue_depth = queue_depth,
-            max_queue_depth = max_queue_depth,
-            "Screen capture queue depth"
+        let settings = stream_settings(
+            &self.config,
+            &self.video_info,
+            self.system_audio,
+            captures_window,
+            self.config.crop_bounds,
         );
-
-        let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
-            .with_width(size.width() as usize)
-            .with_height(size.height() as usize)
-            .with_fps(self.config.fps as f32)
-            .with_shows_cursor(self.config.show_cursor)
-            .with_captures_audio(self.system_audio)
-            .with_queue_depth(queue_depth)
-            .build();
-
-        settings.set_pixel_format(cv::PixelFormat::_420V);
-        settings.set_color_space_name(cg::color_space::names::srgb());
-        if captures_window {
-            configure_window_capture(&mut settings);
-        }
-
-        if let Some(crop_bounds) = self.config.crop_bounds {
-            debug!("crop bounds: {:?}", crop_bounds);
-            settings.set_src_rect(source_rect(captures_window, crop_bounds));
-        }
         cap_fail::fail_err!(
             "macos::ScreenCaptureActor::new",
             ns::Error::with_domain(ns::ErrorDomain::os_status(), 69420, None)
@@ -482,7 +510,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let (stall_health_tx, stall_health_rx) =
             tokio::sync::mpsc::channel::<output_pipeline::PipelineHealthEvent>(32);
         let frame_accounting = Arc::new(ScreenFrameAccounting::with_capture_buffers(
-            queue_depth as u64,
+            settings.queue_depth().max(0) as u64,
         ));
 
         let rebuild_params = Arc::new(CapturerRebuildParams {
@@ -707,7 +735,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             });
 
         let cancel_token = CancellationToken::new();
-        let capturer = Capturer::new(Arc::new(builder.build()?));
+        let capturer = Capturer::new(Arc::new(builder.build()?), self.config.crop_bounds);
 
         Ok((
             VideoSourceConfig {
@@ -752,6 +780,10 @@ pub struct CaptureError(pub arc::R<ns::Error>);
 struct Capturer {
     started: Arc<AtomicBool>,
     capturer: Arc<scap_screencapturekit::Capturer>,
+    /// The size of the source rect this stream reads now. A restart builds
+    /// a new stream for the window's size at that moment, so this is kept
+    /// per stream rather than per recording.
+    source_size: Arc<Mutex<Option<LogicalSize>>>,
 }
 
 impl Clone for Capturer {
@@ -759,17 +791,26 @@ impl Clone for Capturer {
         Self {
             started: self.started.clone(),
             capturer: self.capturer.clone(),
+            source_size: self.source_size.clone(),
             // error_rx: self.error_rx.resubscribe(),
         }
     }
 }
 
 impl Capturer {
-    fn new(capturer: Arc<scap_screencapturekit::Capturer>) -> Self {
+    fn new(
+        capturer: Arc<scap_screencapturekit::Capturer>,
+        crop_bounds: Option<super::CropBounds>,
+    ) -> Self {
         Self {
             started: Arc::new(AtomicBool::new(false)),
             capturer,
+            source_size: Arc::new(Mutex::new(crop_bounds.map(|bounds| bounds.size()))),
         }
+    }
+
+    fn source_size(&self) -> Option<LogicalSize> {
+        self.source_size.lock().ok().and_then(|size| *size)
     }
 
     fn mark_stopped(&self) {
@@ -893,6 +934,78 @@ impl output_pipeline::VideoSource for VideoSource {
         let active_capturer: Arc<Mutex<Option<Capturer>>> = Arc::new(Mutex::new(None));
         let active_capturer_for_stop = active_capturer.clone();
         let original_capturer = capturer.clone();
+
+        if let Some(window) = capturable_window(
+            &rebuild_params.config,
+            &rebuild_params.excluded_windows,
+            "follow",
+        )
+        .cloned()
+        {
+            let follow_cancel = cancel_token.clone();
+            let params = rebuild_params.clone();
+            let active_capturer = active_capturer.clone();
+            let original_capturer = capturer.clone();
+            ctx.tasks()
+                .spawn("screen-capture-window-follow", async move {
+                    let mut display_scale: Option<f64> = None;
+                    let mut last_change: Option<Instant> = None;
+                    loop {
+                        let interval = if last_change
+                            .is_some_and(|at| at.elapsed() < WINDOW_FOLLOW_ACTIVE_FOR)
+                        {
+                            WINDOW_FOLLOW_INTERVAL
+                        } else {
+                            WINDOW_FOLLOW_IDLE_INTERVAL
+                        };
+                        select! {
+                            _ = follow_cancel.cancelled() => break Ok(()),
+                            _ = tokio::time::sleep(interval) => {}
+                        }
+                        let capturer = active_capturer
+                            .lock()
+                            .ok()
+                            .and_then(|active| active.clone())
+                            .unwrap_or_else(|| original_capturer.clone());
+                        // A stopped stream, paused or waiting on a restart, takes
+                        // the window's size when it is rebuilt.
+                        if !capturer.started.load(atomic::Ordering::Relaxed) {
+                            continue;
+                        }
+                        if display_scale.is_none() {
+                            display_scale = Display::from_id(&params.display_id)
+                                .map(|display| display.raw_handle().scale().unwrap_or(1.0));
+                        }
+                        let Some(scale) = display_scale else {
+                            continue;
+                        };
+                        let Some(crop) = current_window_crop(&window, scale) else {
+                            continue;
+                        };
+                        if capturer.source_size() == Some(crop.size()) {
+                            continue;
+                        }
+                        last_change = Some(Instant::now());
+                        let update = capturer.capturer.update_cfg(&stream_settings(
+                            &params.config,
+                            &params.video_info,
+                            params.system_audio,
+                            true,
+                            Some(crop),
+                        ));
+                        match update.await {
+                            Ok(()) => {
+                                debug!(?crop, "Window capture follows the window's new size");
+                                if let Ok(mut size) = capturer.source_size.lock() {
+                                    *size = Some(crop.size());
+                                }
+                            }
+                            Err(error) => warn!(%error, "Could not resize the window capture"),
+                        }
+                    }
+                });
+        }
+
         ctx.tasks().spawn("screen-capture-monitor", async move {
             let mut restart_count = 0u32;
             let mut window_watch =
@@ -1260,7 +1373,8 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
     let display = Display::from_id(&params.display_id)
         .ok_or_else(|| anyhow!("Display not found during restart: {:?}", params.display_id))?;
 
-    let window_filter = capturable_window(&params.config, &params.excluded_windows, "restart")
+    let window = capturable_window(&params.config, &params.excluded_windows, "restart");
+    let window_filter = window
         .map(|id| {
             window_content_filter(id, &shareable_content, "restart").ok_or_else(|| {
                 anyhow!("Capture window {id} is gone; not falling back to the display")
@@ -1268,6 +1382,9 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
         })
         .transpose()?;
     let captures_window = window_filter.is_some();
+    let crop_bounds = window
+        .and_then(|id| current_window_crop(id, display.raw_handle().scale().unwrap_or(1.0)))
+        .or(params.config.crop_bounds);
 
     let content_filter = match window_filter {
         Some(filter) => filter,
@@ -1282,33 +1399,13 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
         }
     };
 
-    let size = PhysicalSize::new(
-        params.video_info.width as f64,
-        params.video_info.height as f64,
+    let settings = stream_settings(
+        &params.config,
+        &params.video_info,
+        params.system_audio,
+        captures_window,
+        crop_bounds,
     );
-
-    let max_queue_depth = get_max_queue_depth();
-    let queue_depth =
-        ((params.config.fps as f32 / 30.0 * 5.0).ceil() as isize).clamp(3, max_queue_depth);
-
-    let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
-        .with_width(size.width() as usize)
-        .with_height(size.height() as usize)
-        .with_fps(params.config.fps as f32)
-        .with_shows_cursor(params.config.show_cursor)
-        .with_captures_audio(params.system_audio)
-        .with_queue_depth(queue_depth)
-        .build();
-
-    settings.set_pixel_format(cv::PixelFormat::_420V);
-    settings.set_color_space_name(cg::color_space::names::srgb());
-    if captures_window {
-        configure_window_capture(&mut settings);
-    }
-
-    if let Some(crop_bounds) = params.config.crop_bounds {
-        settings.set_src_rect(source_rect(captures_window, crop_bounds));
-    }
 
     let expected_width = params.video_info.width as usize;
     let expected_height = params.video_info.height as usize;
@@ -1508,7 +1605,7 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
             }
         });
 
-    let capturer = Capturer::new(Arc::new(builder.build()?));
+    let capturer = Capturer::new(Arc::new(builder.build()?), crop_bounds);
     capturer.start().await?;
     Ok(capturer)
 }

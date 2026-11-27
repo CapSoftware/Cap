@@ -1565,6 +1565,10 @@ studio = "Lokale Aufnahme in höchster Qualität zum späteren Bearbeiten."
 subtitle = "Wählen Sie, wie Sie Ihren Bildschirm aufnehmen möchten"
 title = "Aufnahmemodus wählen"
 
+[dialog.saving]
+in_background = "Ihre Aufnahme wird noch gespeichert und erscheint in Ihrer Bibliothek, sobald sie fertig ist. Sie können jetzt eine neue Aufnahme starten."
+title = "Wird noch gespeichert"
+
 [dialog.storage]
 stopped_kept = "Die Aufnahme wurde beendet, weil der Speicherplatz knapp ist. Ihre Aufnahmedateien bleiben erhalten. Geben Sie Speicherplatz frei und stellen Sie die Aufnahme dann unten wieder her."
 stopped_saved = "Die Aufnahme wurde beendet, weil der Speicherplatz knapp ist. Ihre Aufnahme wurde gespeichert."
