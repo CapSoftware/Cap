@@ -26,7 +26,6 @@ import { type Context, Hono } from "hono";
 import type Stripe from "stripe";
 import { z } from "zod";
 import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
-import { recordingLimitStillApplies } from "@/lib/free-plan-duration";
 import { planPriceId } from "@/lib/checkout/plans";
 import {
 	createWithReferralDiscount,
@@ -38,6 +37,7 @@ import {
 	confirmedDesktopLogWebhookUrl,
 	createDesktopLogUpload,
 } from "@/lib/desktop-log-upload";
+import { recordingLimitStillApplies } from "@/lib/free-plan-duration";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
