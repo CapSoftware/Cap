@@ -22,7 +22,8 @@ impl HeadlessControl {
             let _ = blocks_tx.send(samples.iter().any(|sample| sample.abs() > 0.0001));
         });
         let (control_tx, control_rx) = std_mpsc::channel();
-        let thread = std::thread::spawn(move || control_thread_headless(control_rx, tap));
+        let thread =
+            std::thread::spawn(move || control_thread_headless(control_rx, tap, HEADLESS_CHANNELS));
         let control = Self {
             output: Arc::new(AudioOutput {
                 control_tx,
@@ -615,6 +616,7 @@ async fn progressive_output_acknowledges_real_pcm_and_grows_the_same_gated_sourc
             Box::new(move |samples, _| {
                 let _ = blocks_tx.send(samples.to_vec());
             }),
+            HEADLESS_CHANNELS,
         );
     });
     let output = AudioOutput {
@@ -682,6 +684,7 @@ async fn progressive_output_without_a_prefix_never_acknowledges_and_cancels_clea
             Box::new(move |samples, _| {
                 let _ = blocks_tx.send(samples.iter().any(|sample| *sample != 0.0));
             }),
+            HEADLESS_CHANNELS,
         );
     });
     let output = AudioOutput {
@@ -824,4 +827,38 @@ fn studio_sound_refresh_changes_live_pcm_and_cannot_restart_stopped_audio() {
         assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), 0.0);
     }
     output.shutdown();
+}
+
+#[test]
+fn mono_1channel_output_produces_audible_preview() {
+    let spec = audible_spec();
+    let (tx, rx) = std_mpsc::channel();
+    let output = AudioOutput::new_headless_with_channels(
+        1,
+        Box::new(move |samples, _| {
+            let mean =
+                samples.iter().map(|sample| sample.abs()).sum::<f32>() / samples.len() as f32;
+            let _ = tx.send(mean);
+        }),
+    );
+    let generation = output
+        .play(spec)
+        .expect("play must succeed on 1-channel mono output");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut audible = false;
+    while Instant::now() < deadline {
+        if rx
+            .recv_timeout(Duration::from_millis(500))
+            .is_ok_and(|mean| mean > 0.001)
+        {
+            audible = true;
+            break;
+        }
+    }
+    output.stop_playback(generation);
+    output.shutdown();
+    assert!(
+        audible,
+        "Mono 1-channel output must produce audible sound, not silence"
+    );
 }

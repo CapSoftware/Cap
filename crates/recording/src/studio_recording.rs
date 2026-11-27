@@ -1477,10 +1477,10 @@ struct Pipeline {
     pub track_failures: SharedTrackFailures,
     pub watcher_task: Option<JoinHandle<()>>,
     stopping: Arc<std::sync::atomic::AtomicBool>,
-    /// macOS records an audio-only segment's system audio from its own
-    /// ScreenCaptureKit stream, so that stream ending (sharing stopped, the
-    /// display gone, a system stop) has to end the recording the way the
-    /// screen ending does, instead of leaving only the black canvas running.
+    /// Audio-only system audio is the recording. On macOS that stream is a
+    /// ScreenCaptureKit capture. On Linux it is the output monitor. Either
+    /// one ending has to end the take, instead of leaving the stand-in clock
+    /// running.
     system_audio_required: bool,
 }
 
@@ -2069,6 +2069,23 @@ impl Pipeline {
                 #[cfg(target_os = "macos")]
                 if required && res.is_ok() && !stopping.load(std::sync::atomic::Ordering::Acquire) {
                     warn!(?track, "Studio screen capture ended before Stop");
+                    completion_tx.send_if_modified(|current| {
+                        if current.is_none() {
+                            *current = Some(Ok(()));
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                    continue;
+                }
+                #[cfg(target_os = "linux")]
+                if matches!(track, RecordingTrackKind::SystemAudio)
+                    && required
+                    && res.is_ok()
+                    && !stopping.load(std::sync::atomic::Ordering::Acquire)
+                {
+                    warn!(?track, "Audio-only system audio ended before Stop");
                     completion_tx.send_if_modified(|current| {
                         if current.is_none() {
                             *current = Some(Ok(()));
@@ -3763,7 +3780,7 @@ async fn create_segment_pipeline(
     #[cfg(target_os = "linux")]
     let mut start_time = start_time;
 
-    let (screen, system_audio, cursor_display) = if audio_only {
+    let (screen, system_audio, cursor_display, screen_frame_size) = if audio_only {
         let screen = OutputPipeline::builder(dir.join("display.mp4"))
             .with_video::<sources::AudioOnlyClock>(sources::AudioOnlyClockConfig)
             .with_timestamps(start_time)
@@ -3781,7 +3798,7 @@ async fn create_segment_pipeline(
         } else {
             None
         };
-        (screen, system_audio, None)
+        (screen, system_audio, None, None)
     } else if camera_only {
         #[cfg(target_os = "linux")]
         {
@@ -3823,7 +3840,7 @@ async fn create_segment_pipeline(
             }
             .context("camera-only screen pipeline setup")?;
 
-            (screen, None, None)
+            (screen, None, None, None)
         }
 
         #[cfg(any(target_os = "macos", windows))]
@@ -3864,7 +3881,7 @@ async fn create_segment_pipeline(
                 .await
                 .context("camera-only screen pipeline setup")?;
 
-            (screen, None, None)
+            (screen, None, None, None)
         }
     } else {
         let capture_target = base_inputs.capture_target.clone();
@@ -3940,7 +3957,12 @@ async fn create_segment_pipeline(
         .await
         .context("screen pipeline setup")?;
 
-        (screen, system_audio, Some(display))
+        (
+            screen,
+            system_audio,
+            Some(display),
+            Some((screen_info.width, screen_info.height)),
+        )
     };
 
     #[cfg(target_os = "macos")]
@@ -4143,6 +4165,7 @@ async fn create_segment_pipeline(
                             &base_inputs.capture_target,
                             base_inputs.window_only,
                         ),
+                        frame_size: screen_frame_size,
                     },
                     cursors_dir.to_path_buf(),
                     prev_cursors,
@@ -4178,7 +4201,7 @@ async fn create_segment_pipeline(
         track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
         watcher_task: None,
         stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        system_audio_required: audio_only && cfg!(target_os = "macos"),
+        system_audio_required: audio_only && cfg!(any(target_os = "macos", target_os = "linux")),
     })
 }
 
@@ -4199,7 +4222,9 @@ async fn audio_only_system_audio(
     #[cfg(target_os = "linux")]
     {
         let _ = (base_inputs, start_time);
-        screen_capture::create_system_audio_source_config().await
+        screen_capture::create_system_audio_source_config()
+            .await
+            .map(screen_capture::SystemAudioSourceConfig::end_take_when_lost)
     }
 
     #[cfg(target_os = "macos")]
