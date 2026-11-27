@@ -1647,8 +1647,13 @@ impl output_pipeline::AudioSource for SystemAudioSource {
 mod update_interval_tests {
     use super::*;
 
+    fn refreshes_between_frames(interval: f64, refresh: f64) -> f64 {
+        let early = 0.000_2;
+        ((interval + early) / refresh).ceil()
+    }
+
     #[test]
-    fn every_frame_slot_gets_a_refresh_at_any_rate_up_to_the_display() {
+    fn no_refresh_a_frame_needs_is_refused_at_any_rate_up_to_the_display() {
         for refresh_hz in [50.0, 59.94, 60.0, 75.0, 120.0, 144.0, 165.0, 240.0] {
             let refresh = 1.0 / refresh_hz;
             for fps in [15u32, 24, 25, 30, 48, 50, 60, 90, 100, 120, 144, 165, 240] {
@@ -1656,15 +1661,25 @@ mod update_interval_tests {
                     continue;
                 }
                 let frame = 1.0 / f64::from(fps);
-                let interval = wgc_min_update_interval(fps).as_secs_f64();
-                let early = interval + refresh * 0.001;
-                let spacing = (early / refresh).ceil() * refresh;
+                let usable = (frame / refresh * 1.01).floor();
+                let taken =
+                    refreshes_between_frames(wgc_min_update_interval(fps).as_secs_f64(), refresh);
                 assert!(
-                    spacing <= frame + 1e-9,
-                    "{fps} fps on {refresh_hz} Hz: refreshes {spacing} s apart, frames {frame} s"
+                    taken <= usable,
+                    "{fps} fps on {refresh_hz} Hz: waits {taken} refreshes, a frame lasts {usable}"
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_full_frame_interval_skips_a_refresh_at_30_fps_on_60_hz() {
+        let refresh = 1.0 / 60.0;
+        assert_eq!(refreshes_between_frames(1.0 / 30.0, refresh), 3.0);
+        assert_eq!(
+            refreshes_between_frames(wgc_min_update_interval(30).as_secs_f64(), refresh),
+            2.0
+        );
     }
 
     #[test]
