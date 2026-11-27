@@ -374,6 +374,17 @@ pub fn window_capture_size(window: &WindowId) -> Option<PhysicalSize> {
     even_capture_size(size.Width, size.Height)
 }
 
+// Windows Graphics Capture refuses any refresh that lands sooner than
+// MinUpdateInterval after the last frame it delivered. Set to exactly one
+// frame interval, a refresh arriving a hair early is refused and the next one
+// is a whole refresh later: 30 fps on a 60 Hz display recorded about 26 fps
+// with frames 50 ms apart. Half an interval never refuses the refresh a frame
+// needs at any frame rate up to the refresh rate; the cadence gate in the
+// capture callback drops the surplus before any copy.
+fn wgc_min_update_interval(fps: u32) -> Duration {
+    Duration::from_secs_f64(0.5 / f64::from(fps.max(1)))
+}
+
 fn even_capture_size(width: i32, height: i32) -> Option<PhysicalSize> {
     let width = (width.max(0) as u32) & !1;
     let height = (height.max(0) as u32) & !1;
@@ -437,8 +448,7 @@ impl ScreenCaptureConfig<Direct3DCapture> {
         }
 
         if let Ok(true) = scap_direct3d::Settings::can_min_update_interval() {
-            settings.min_update_interval =
-                Some(Duration::from_secs_f64(1.0 / self.config.fps as f64));
+            settings.min_update_interval = Some(wgc_min_update_interval(self.config.fps));
         }
 
         settings.fps = Some(self.config.fps);
@@ -1630,6 +1640,36 @@ impl output_pipeline::AudioSource for SystemAudioSource {
             warn!("system audio capturer pause failed: {err}");
         }
         async { Ok(()) }
+    }
+}
+
+#[cfg(test)]
+mod update_interval_tests {
+    use super::*;
+
+    #[test]
+    fn every_frame_slot_gets_a_refresh_at_any_rate_up_to_the_display() {
+        for refresh_hz in [50.0, 59.94, 60.0, 75.0, 120.0, 144.0, 165.0, 240.0] {
+            let refresh = 1.0 / refresh_hz;
+            for fps in [15u32, 24, 25, 30, 48, 50, 60, 90, 100, 120, 144, 165, 240] {
+                if f64::from(fps) > refresh_hz {
+                    continue;
+                }
+                let frame = 1.0 / f64::from(fps);
+                let interval = wgc_min_update_interval(fps).as_secs_f64();
+                let early = interval + refresh * 0.001;
+                let spacing = (early / refresh).ceil() * refresh;
+                assert!(
+                    spacing <= frame + 1e-9,
+                    "{fps} fps on {refresh_hz} Hz: refreshes {spacing} s apart, frames {frame} s"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_zero_rate_does_not_panic() {
+        assert_eq!(wgc_min_update_interval(0), Duration::from_millis(500));
     }
 }
 
