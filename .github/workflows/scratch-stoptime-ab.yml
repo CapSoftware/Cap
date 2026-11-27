@@ -56,12 +56,12 @@ jobs:
       - name: A/B 20 s
         run: |
           S=$("$RUNNER_TEMP/bins/base/cap" targets screens --format json | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
-          python3 ci-stoptime/run.py --stim ci-stoptime/stim.py --screen "$S" --out "$RUNNER_TEMP/ab20" --dur 20 --reps 12 --keep \
+          python3 ci-stoptime/run.py --stim ci-stoptime/stim.py --screen "$S" --out "$RUNNER_TEMP/ab20" --dur 20 --reps 1 --keep \
             --arm "base=$RUNNER_TEMP/bins/base/cap" --arm "fix=$RUNNER_TEMP/bins/fix/cap"
       - name: A/B 60 s
         run: |
           S=$("$RUNNER_TEMP/bins/base/cap" targets screens --format json | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
-          python3 ci-stoptime/run.py --stim ci-stoptime/stim.py --screen "$S" --out "$RUNNER_TEMP/ab60" --dur 60 --reps 3 --keep \
+          python3 ci-stoptime/run.py --stim ci-stoptime/stim.py --screen "$S" --out "$RUNNER_TEMP/ab60" --dur 60 --reps 10 --keep \
             --arm "base=$RUNNER_TEMP/bins/base/cap" --arm "fix=$RUNNER_TEMP/bins/fix/cap"
       - name: Files
         if: always()
