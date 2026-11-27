@@ -480,7 +480,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                     &self.shareable_content,
                     "initial",
                 );
-                if self.system_audio {
+                if self.system_audio && self.leave_out_hidden_sinks {
                     let writers = hidden_sink::writers();
                     let windows =
                         hidden_sink::off_screen_windows(&self.shareable_content, &writers, true);
@@ -528,6 +528,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             display_id: self.config.display.clone(),
             config: self.config.clone(),
             system_audio: self.system_audio,
+            leave_out_hidden_sinks: self.leave_out_hidden_sinks,
             excluded_windows: self.excluded_windows.clone(),
             video_info: self.video_info,
             video_tx: video_tx.clone(),
@@ -1404,6 +1405,7 @@ struct CapturerRebuildParams {
     display_id: DisplayId,
     config: Config,
     system_audio: bool,
+    leave_out_hidden_sinks: bool,
     excluded_windows: Vec<WindowId>,
     video_info: VideoInfo,
     video_tx: flume::Sender<VideoFrame>,
@@ -1507,7 +1509,7 @@ async fn rebuild_capturer(
         None => {
             let mut excluded_sc_windows =
                 excluded_shareable_windows(&params.excluded_windows, &shareable_content, "restart");
-            if params.system_audio {
+            if params.system_audio && params.leave_out_hidden_sinks {
                 for pid in hidden_sink::writers() {
                     if !writers.contains(&pid) {
                         writers.push(pid);
