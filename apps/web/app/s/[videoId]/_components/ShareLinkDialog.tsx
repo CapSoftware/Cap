@@ -96,6 +96,7 @@ export const ShareLinkDialog = ({
 	canManageAccess = false,
 	onManageAccess,
 	ownerIsPro = false,
+	isNote = false,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -107,6 +108,7 @@ export const ShareLinkDialog = ({
 	canManageAccess?: boolean;
 	onManageAccess?: () => void;
 	ownerIsPro?: boolean;
+	isNote?: boolean;
 }) => {
 	const { webUrl } = usePublicEnv();
 	const playback = useOptionalPlayback();
@@ -159,6 +161,8 @@ export const ShareLinkDialog = ({
 		try {
 			if (tab === "embed") {
 				await navigator.clipboard.writeText(embedCode);
+			} else if (isNote) {
+				await navigator.clipboard.writeText(targetUrl);
 			} else {
 				await copyRichVideoLink({
 					url: targetUrl,
@@ -172,7 +176,7 @@ export const ShareLinkDialog = ({
 				tab === "embed" ? "Failed to copy embed code" : "Failed to copy link",
 			);
 		}
-	}, [tab, embedCode, targetUrl, videoTitle, webUrl, videoId]);
+	}, [tab, embedCode, targetUrl, videoTitle, webUrl, videoId, isNote]);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -185,7 +189,7 @@ export const ShareLinkDialog = ({
 					<DialogTitle className="flex-1 text-2xl font-bold text-gray-12">
 						Share
 					</DialogTitle>
-					<div className="flex items-center gap-1">
+					<div className={clsx("flex items-center gap-1", isNote && "hidden")}>
 						{TABS.map(({ id, label, Icon }) => {
 							const active = tab === id;
 							return (
@@ -303,7 +307,12 @@ export const ShareLinkDialog = ({
 								: "Copy link"}
 					</button>
 
-					<label className="flex cursor-pointer items-center gap-3 text-[15px] font-medium text-gray-12">
+					<label
+						className={clsx(
+							"flex cursor-pointer items-center gap-3 text-[15px] font-medium text-gray-12",
+							isNote && "hidden",
+						)}
+					>
 						<input
 							type="checkbox"
 							checked={withTimestamp}

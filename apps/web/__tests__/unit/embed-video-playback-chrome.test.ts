@@ -219,6 +219,7 @@ const createProps = (
 		xStreamInfo: null,
 		firstViewEmailSentAt: null,
 		isScreenshot: false,
+		isNote: false,
 		awsRegion: null,
 		awsBucket: null,
 		videoStartTime: null,

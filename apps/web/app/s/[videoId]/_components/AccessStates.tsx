@@ -35,7 +35,12 @@ function SwitchAccountButton({ loginUrl }: { loginUrl: string }) {
 	);
 }
 
-export function PrivateVideoState({ videoId }: { videoId: Video.VideoId }) {
+type AccessStateProps = { videoId: Video.VideoId; isNote?: boolean };
+
+export function PrivateVideoState({
+	videoId,
+	isNote = false,
+}: AccessStateProps) {
 	const user = useCurrentUser();
 	const urls = accessUrls(videoId);
 
@@ -44,7 +49,7 @@ export function PrivateVideoState({ videoId }: { videoId: Video.VideoId }) {
 			<PaperState
 				homeHref={buildEnv.NEXT_PUBLIC_WEB_URL}
 				doodle={<LockDoodle />}
-				title="This video is private"
+				title={isNote ? "This note is private" : "This video is private"}
 				lede={
 					<>
 						You're signed in as <strong>{user.email}</strong>, which doesn't
@@ -70,8 +75,12 @@ export function PrivateVideoState({ videoId }: { videoId: Video.VideoId }) {
 		<PaperState
 			homeHref={buildEnv.NEXT_PUBLIC_WEB_URL}
 			doodle={<LockDoodle />}
-			title="This video is private"
-			lede="Only people the owner invited can watch it. If that's you, sign in with the email address that was invited."
+			title={isNote ? "This note is private" : "This video is private"}
+			lede={
+				isNote
+					? "Only people the owner invited can read it. If that's you, sign in with the email address that was invited."
+					: "Only people the owner invited can watch it. If that's you, sign in with the email address that was invited."
+			}
 		>
 			<PaperActions>
 				<a className={styles.cta} href={urls.login}>
@@ -85,13 +94,20 @@ export function PrivateVideoState({ videoId }: { videoId: Video.VideoId }) {
 	);
 }
 
-export function SignInRequiredState({ videoId }: { videoId: Video.VideoId }) {
+export function SignInRequiredState({
+	videoId,
+	isNote = false,
+}: AccessStateProps) {
 	return (
 		<PaperState
 			homeHref={buildEnv.NEXT_PUBLIC_WEB_URL}
 			doodle={<KeyDoodle />}
-			title="Sign in to watch"
-			lede="The owner only shares this video with approved email addresses. Sign in with yours to start watching."
+			title={isNote ? "Sign in to read" : "Sign in to watch"}
+			lede={
+				isNote
+					? "The owner only shares this note with approved email addresses. Sign in with yours to read it."
+					: "The owner only shares this video with approved email addresses. Sign in with yours to start watching."
+			}
 		>
 			<PaperActions>
 				<a className={styles.cta} href={accessUrls(videoId).login}>
@@ -102,14 +118,17 @@ export function SignInRequiredState({ videoId }: { videoId: Video.VideoId }) {
 	);
 }
 
-export function AccessRestrictedState({ videoId }: { videoId: Video.VideoId }) {
+export function AccessRestrictedState({
+	videoId,
+	isNote = false,
+}: AccessStateProps) {
 	const user = useCurrentUser();
 
 	return (
 		<PaperState
 			homeHref={buildEnv.NEXT_PUBLIC_WEB_URL}
 			doodle={<EnvelopeDoodle />}
-			title="This video is restricted"
+			title={isNote ? "This note is restricted" : "This video is restricted"}
 			lede={
 				user ? (
 					<>

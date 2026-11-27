@@ -70,6 +70,7 @@ const video: VideoData = {
 	fps: 30,
 	public: true,
 	isScreenshot: false,
+	isNote: false,
 	skipProcessing: false,
 	createdAt: new Date("2026-01-01"),
 	updatedAt: new Date("2026-01-01"),

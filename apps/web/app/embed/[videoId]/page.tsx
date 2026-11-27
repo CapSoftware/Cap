@@ -148,6 +148,7 @@ export default async function EmbedVideoPage(
 					jobId: videos.jobId,
 					jobStatus: videos.jobStatus,
 					isScreenshot: videos.isScreenshot,
+					isNote: videos.isNote,
 					skipProcessing: videos.skipProcessing,
 					transcriptionStatus: videos.transcriptionStatus,
 					source: videos.source,

@@ -115,7 +115,7 @@ const CommentComponent: React.FC<{
 									<RelativeTime date={commentDate} format={formatTimeAgo} />
 								</p>
 							</Tooltip>
-							{comment.timestamp !== null && (
+							{comment.timestamp !== null && onSeek && (
 								<button
 									type="button"
 									onClick={() => {

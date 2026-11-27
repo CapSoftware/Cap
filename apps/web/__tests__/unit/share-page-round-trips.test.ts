@@ -97,6 +97,7 @@ vi.mock("@/app/s/[videoId]/_components/ShareHeader", () => ({
 	ShareHeader: () => null,
 }));
 vi.mock("@/app/s/[videoId]/Share", () => ({ Share: () => null }));
+vi.mock("@/app/s/[videoId]/NoteShare", () => ({ NoteShare: () => null }));
 
 import type { ShareHeader } from "@/app/s/[videoId]/_components/ShareHeader";
 import ShareVideoPage from "@/app/s/[videoId]/page";
