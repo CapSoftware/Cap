@@ -1304,8 +1304,6 @@ struct CapturerRebuildParams {
 unsafe impl Send for CapturerRebuildParams {}
 unsafe impl Sync for CapturerRebuildParams {}
 
-/// Apps whose audio is left out by excluding one of their off-screen windows,
-/// and the windows excluded for them now.
 #[derive(Default)]
 struct HiddenSinkExclusion {
     writers: Vec<sys::Pid>,
@@ -1328,8 +1326,6 @@ impl HiddenSinkExclusion {
     }
 }
 
-/// Excludes another off-screen window of each app in `writers` and applies
-/// the filter to the running stream.
 async fn refresh_hidden_sink_filter(
     params: &CapturerRebuildParams,
     capturer: &Capturer,

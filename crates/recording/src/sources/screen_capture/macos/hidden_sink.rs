@@ -38,8 +38,6 @@ pub(super) fn writers() -> Vec<sys::Pid> {
     hidden_sink_writers(&output_processes(), &default_outputs())
 }
 
-/// One off-screen window of each app in `writers`, to add to the display
-/// filter's excluded windows. `log` reports each app, at capture start.
 pub(super) fn off_screen_windows(
     content: &sc::ShareableContent,
     writers: &[sys::Pid],
