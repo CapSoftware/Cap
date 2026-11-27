@@ -114,6 +114,9 @@ struct ButtonPaint {
 pub struct Button {
     id: ElementId,
     label: Option<SharedString>,
+    /// What screen readers call it when the visible label alone would not say
+    /// (a bare count, for example). Defaults to the label.
+    a11y_label: Option<SharedString>,
     icon: Option<SharedString>,
     right_icon: Option<SharedString>,
     size: ButtonSize,
@@ -146,6 +149,7 @@ impl Button {
         Self {
             id: id.into(),
             label: None,
+            a11y_label: None,
             icon: None,
             right_icon: None,
             size,
@@ -257,6 +261,12 @@ impl Button {
 
     pub fn icon(mut self, icon: impl Into<SharedString>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+
+    /// The name screen readers use instead of the visible label.
+    pub fn a11y_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.a11y_label = Some(label.into());
         self
     }
 
@@ -429,6 +439,7 @@ impl RenderOnce for Button {
         let Button {
             id,
             label,
+            a11y_label,
             icon,
             right_icon,
             size,
@@ -451,8 +462,8 @@ impl RenderOnce for Button {
             .id(id)
             // Screen readers see a button named by its label, which they can
             // press (the click listener below answers their press).
-            .when_some(label.clone(), |this, label| {
-                this.role(gpui::Role::Button).aria_label(label)
+            .when_some(a11y_label.or_else(|| label.clone()), |this, name| {
+                this.role(gpui::Role::Button).aria_label(name)
             })
             .tab_index(0)
             .tab_stop(!disabled)

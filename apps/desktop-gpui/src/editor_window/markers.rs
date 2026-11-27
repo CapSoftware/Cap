@@ -808,10 +808,14 @@ impl EditorWindow {
     ) -> gpui::AnyElement {
         let theme = self.theme;
         let count = self.markers.placed.len();
-        let label: SharedString = match (compact, count) {
-            (true, _) => SharedString::from(count.to_string()),
-            (false, 0) => SharedString::new_static(tr::editor::markers::title()),
-            (false, _) => SharedString::from(tr::editor::markers::button(count)),
+        let full: SharedString = match count {
+            0 => SharedString::new_static(tr::editor::markers::title()),
+            _ => SharedString::from(tr::editor::markers::button(count)),
+        };
+        let label = if compact {
+            SharedString::from(count.to_string())
+        } else {
+            full.clone()
         };
         div()
             .id("transport-markers-tooltip")
@@ -830,6 +834,7 @@ impl EditorWindow {
                 )
                 .icon("icons/flag.svg")
                 .label(label)
+                .a11y_label(full)
                 .radius(px(7.))
                 .disabled(!self.project_ready())
                 .on_click(cx.listener(
