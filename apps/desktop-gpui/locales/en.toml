@@ -1567,6 +1567,10 @@ studio = "Highest quality local recording for editing later."
 subtitle = "Select how you want to capture your screen"
 title = "Choose Recording Mode"
 
+[dialog.saving]
+in_background = "Your recording is still saving and will appear in your library when it is done. You can start a new recording now."
+title = "Still saving"
+
 [dialog.storage]
 stopped_kept = "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below."
 stopped_saved = "Recording stopped because storage is low. Your recording was saved."
@@ -2872,6 +2876,7 @@ position = "Position"
 refining_word_timings = "Refining word timings…"
 regenerate = "Regenerate Captions"
 reset_position = "Reset Position"
+show_existing = "Show Captions"
 show_filler_words = "Show Filler Words"
 size_label = "Size"
 style = "Style"

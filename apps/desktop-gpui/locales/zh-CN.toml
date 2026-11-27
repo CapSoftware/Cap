@@ -1565,6 +1565,10 @@ studio = "最高画质的本地录制，便于稍后编辑。"
 subtitle = "选择你想如何捕获屏幕"
 title = "选择录制模式"
 
+[dialog.saving]
+in_background = "你的录制仍在保存，完成后会显示在你的资料库中。你现在可以开始新的录制。"
+title = "仍在保存"
+
 [dialog.storage]
 stopped_kept = "存储空间不足，录制已停止。录制文件已保留。请释放空间，然后在下方恢复录制。"
 stopped_saved = "存储空间不足，录制已停止。你的录制已保存。"
@@ -2870,6 +2874,7 @@ position = "位置"
 refining_word_timings = "正在优化单词时间…"
 regenerate = "重新生成字幕"
 reset_position = "重置位置"
+show_existing = "显示字幕"
 show_filler_words = "显示语气词"
 size_label = "大小"
 style = "样式"

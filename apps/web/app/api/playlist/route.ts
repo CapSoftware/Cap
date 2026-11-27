@@ -17,6 +17,18 @@ import {
 } from "@effect/platform";
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Option, Schema } from "effect";
+import { declaredPlaylistSeconds } from "@/lib/free-plan-declared-length";
+import { exceedsFreePlanMeasuredDuration } from "@/lib/free-plan-duration";
+import {
+	isVideoOverFreePlanDuration,
+	recordFreePlanOverLength,
+} from "@/lib/free-plan-measure";
+import {
+	firstViewDecision,
+	measureFreePlanObjectIfNeeded,
+	remeasureHeldVideoIfNeeded,
+	runAfterResponse,
+} from "@/lib/free-plan-measure-probe";
 import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
@@ -72,7 +84,8 @@ class Api extends HttpApi.make("CapWebApi").add(
 			.addError(HttpApiError.BadRequest)
 			.addError(HttpApiError.Unauthorized)
 			.addError(HttpApiError.InternalServerError)
-			.addError(HttpApiError.NotFound),
+			.addError(HttpApiError.NotFound)
+			.addError(HttpApiError.ServiceUnavailable),
 	),
 ) {}
 
@@ -116,6 +129,25 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							);
 							if (locked)
 								return yield* Effect.fail(new HttpApiError.Forbidden());
+							const overDurationLimit = yield* Effect.tryPromise(() =>
+								isVideoOverFreePlanDuration({
+									id: video.id,
+									ownerId: video.ownerId,
+									orgId: video.orgId,
+									metadata: Option.getOrNull(video.metadata),
+								}),
+							).pipe(
+								Effect.tapError(Effect.logError),
+								Effect.orElseSucceed(() => false),
+							);
+							if (overDurationLimit) {
+								remeasureHeldVideoIfNeeded({
+									id: video.id,
+									createdAt: video.createdAt,
+									metadata: Option.getOrNull(video.metadata),
+								});
+								return yield* Effect.fail(new HttpApiError.Forbidden());
+							}
 						}
 
 						return yield* getPlaylistResponse(
@@ -126,6 +158,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								requestUrl,
 								requestHost,
 							),
+							Option.exists(viewer, (user) => user.id === video.ownerId),
 						);
 					}).pipe(
 						provideOptionalAuth,
@@ -193,10 +226,88 @@ const resolveRawPreviewKey = (video: Video.Video) =>
 		return yield* Effect.fail(new HttpApiError.NotFound());
 	});
 
+const runFreePlanCheck = (check: () => void) =>
+	Effect.sync(() => {
+		try {
+			check();
+		} catch (error) {
+			console.error("[playlist] Free plan check failed:", error);
+		}
+	});
+
+const scheduleFreePlanMeasure = (video: Video.Video, key: string) =>
+	runFreePlanCheck(() =>
+		measureFreePlanObjectIfNeeded(
+			{
+				id: video.id,
+				createdAt: video.createdAt,
+				metadata: Option.getOrNull(video.metadata),
+			},
+			key,
+		),
+	);
+
+const measureBeforeServing = (
+	video: Video.Video,
+	key: string,
+	viewerIsOwner: boolean,
+) =>
+	viewerIsOwner
+		? scheduleFreePlanMeasure(video, key)
+		: Effect.tryPromise(() =>
+				firstViewDecision(
+					{
+						id: video.id,
+						createdAt: video.createdAt,
+						metadata: Option.getOrNull(video.metadata),
+					},
+					key,
+				),
+			).pipe(
+				Effect.orElseSucceed(() => "play" as const),
+				Effect.flatMap(
+					(
+						decision,
+					): Effect.Effect<
+						void,
+						HttpApiError.Forbidden | HttpApiError.ServiceUnavailable
+					> =>
+						decision === "held"
+							? Effect.fail(new HttpApiError.Forbidden())
+							: decision === "pending"
+								? Effect.fail(new HttpApiError.ServiceUnavailable())
+								: Effect.void,
+				),
+			);
+
+// A playlist declares its own length. Over the limit, it is held before any
+// media URL in it is signed for someone other than the owner.
+const holdDeclaredOverLength = (
+	video: Video.Video,
+	key: string,
+	seconds: () => number,
+	viewerIsOwner: boolean,
+) =>
+	Effect.gen(function* () {
+		const length = yield* Effect.try(seconds).pipe(
+			Effect.orElseSucceed(() => 0),
+		);
+		if (!exceedsFreePlanMeasuredDuration(length)) return;
+		if (viewerIsOwner) {
+			runAfterResponse(() => recordFreePlanOverLength(video.id, key, length));
+			return;
+		}
+		const held = yield* Effect.promise(() =>
+			recordFreePlanOverLength(video.id, key, length),
+		);
+		if (held) return yield* Effect.fail(new HttpApiError.Forbidden());
+	});
+
 const getPlaylistResponse = (
 	video: Video.Video,
 	urlParams: (typeof GetPlaylistParams)["Type"],
 	publicOrigin: string,
+	viewerIsOwner: boolean,
 ) =>
 	Effect.gen(function* () {
 		const [bucket, customBucket] = yield* Storage.getAccessForVideo(video);
@@ -208,6 +319,7 @@ const getPlaylistResponse = (
 
 		if (urlParams.videoType === "raw-preview") {
 			const rawFileKey = yield* resolveRawPreviewKey(video);
+			yield* measureBeforeServing(video, rawFileKey, viewerIsOwner);
 			return yield* bucket
 				.getSignedObjectUrl(rawFileKey, playbackUrlValidity())
 				.pipe(Effect.map(HttpServerResponse.redirect));
@@ -244,6 +356,15 @@ const getPlaylistResponse = (
 			let manifest = yield* Schema.decodeUnknown(Video.SegmentManifest)(
 				parsed,
 			).pipe(Effect.mapError(() => new HttpApiError.InternalServerError()));
+			yield* holdDeclaredOverLength(
+				video,
+				manifestKey,
+				() =>
+					totalSegmentDuration(
+						manifest.video_segments.map(Video.normalizeSegmentEntry),
+					),
+				viewerIsOwner,
+			);
 			if (
 				manifest.version === 1 &&
 				manifest.is_complete &&
@@ -467,7 +588,20 @@ const getPlaylistResponse = (
 			});
 		}
 
-		if (bucket.provider === "s3" && Option.isNone(customBucket)) {
+		const defaultStorage =
+			bucket.provider === "s3" && Option.isNone(customBucket);
+		const servesSidecar = Option.exists(
+			urlParams.fileType,
+			(fileType) =>
+				fileType === "transcription" || fileType === "enhanced-audio",
+		);
+		if (
+			(isMp4Source || urlParams.videoType === "mp4") &&
+			(defaultStorage || !servesSidecar)
+		)
+			yield* measureBeforeServing(video, mp4Key, viewerIsOwner);
+
+		if (defaultStorage) {
 			if (isMp4Source || urlParams.videoType === "mp4") {
 				return HttpServerResponse.redirect(
 					yield* bucket.getSignedObjectUrl(mp4Key, playbackUrlValidity()),
@@ -507,6 +641,13 @@ const getPlaylistResponse = (
 				if (!variant) return yield* Effect.fail(new HttpApiError.NotFound());
 				playlist = yield* readPlaylist(resolveUri(variant));
 			}
+
+			yield* holdDeclaredOverLength(
+				video,
+				playlist.key,
+				() => declaredPlaylistSeconds(playlist.text),
+				viewerIsOwner,
+			);
 
 			const playlistLines = playlist.text.split("\n");
 			// Legacy segments run 3-4 s, so this covers recordings of several
@@ -584,10 +725,15 @@ const getPlaylistResponse = (
 
 		return yield* Effect.gen(function* () {
 			if (video.source.type === "local") {
+				const playlistKey = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 				const playlistText =
-					(yield* bucket.getObject(
-						`${video.ownerId}/${video.id}/combined-source/stream.m3u8`,
-					)).pipe(Option.getOrNull) ?? "";
+					(yield* bucket.getObject(playlistKey)).pipe(Option.getOrNull) ?? "";
+				yield* holdDeclaredOverLength(
+					video,
+					playlistKey,
+					() => declaredPlaylistSeconds(playlistText),
+					viewerIsOwner,
+				);
 
 				const lines = playlistText.split("\n");
 				const streamValidity = streamUrlValidity();
@@ -693,6 +839,12 @@ const getPlaylistResponse = (
 			);
 
 			const generatedPlaylist = generateM3U8Playlist(chunksUrls);
+			yield* holdDeclaredOverLength(
+				video,
+				prefix,
+				() => declaredPlaylistSeconds(generatedPlaylist),
+				viewerIsOwner,
+			);
 
 			return HttpServerResponse.text(generatedPlaylist, {
 				headers: {

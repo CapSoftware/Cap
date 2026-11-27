@@ -177,7 +177,11 @@ const requireDriveObject = (
 		),
 	);
 
-const createDriveObjectUrl = (key: string, ttlSeconds = 3600) =>
+const createDriveObjectUrl = (
+	key: string,
+	ttlSeconds = 3600,
+	internal = false,
+) =>
 	parseVideoIdFromObjectKey(key).pipe(
 		Option.match({
 			onNone: () =>
@@ -188,7 +192,10 @@ const createDriveObjectUrl = (key: string, ttlSeconds = 3600) =>
 				),
 			onSome: (videoId) =>
 				Effect.sync(() => {
-					const token = createStorageObjectToken({ videoId, key }, ttlSeconds);
+					const token = createStorageObjectToken(
+						internal ? { videoId, key, internal } : { videoId, key },
+						ttlSeconds,
+					);
 					const params = new URLSearchParams({ videoId, key, token });
 					return `${serverEnv().WEB_URL}/api/storage/object?${params.toString()}`;
 				}),
@@ -922,7 +929,7 @@ const makeGoogleDriveAccess = ({
 		getInternalSignedObjectUrl: (
 			key: string,
 			signingArgs?: Parameters<S3BucketAccess["getInternalSignedObjectUrl"]>[1],
-		) => createDriveObjectUrl(key, signingArgs?.expiresIn ?? 7200),
+		) => createDriveObjectUrl(key, signingArgs?.expiresIn ?? 7200, true),
 		getObject: (key: string) =>
 			Effect.gen(function* () {
 				const object = yield* mapStorageError(

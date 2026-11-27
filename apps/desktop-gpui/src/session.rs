@@ -11,7 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorageMonitor};
+use cap_utils::disk_space::{
+    DiskSpaceStatus, FinalizationKind, RecordingStorage, RecordingStorageMonitor,
+};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 use crate::app_sounds::AppSound;
@@ -418,6 +420,15 @@ async fn run_clean_control(
     CleanControlOutcome { paused, error }
 }
 
+fn log_storage(storage: RecordingStorage, event: &'static str) {
+    tracing::warn!(
+        available_bytes = storage.available_bytes,
+        recording_bytes = storage.recording_bytes,
+        finalization_bytes = storage.finalization_bytes(),
+        "{event}"
+    );
+}
+
 pub struct RecordingSession {
     pub phase: Phase,
     active: Option<ActiveRecording>,
@@ -427,6 +438,8 @@ pub struct RecordingSession {
     pub storage_notice: Option<String>,
     /// The last recording stopped because what it captured went away.
     pub capture_source_lost: bool,
+    /// Stop handed the app back while the last recording was still saving.
+    pub recording_still_saving: bool,
     stopped_for_low_storage: bool,
     stopped_elapsed: Option<Duration>,
     /// The config of the live (or last) recording, kept for restart.
@@ -515,6 +528,7 @@ impl RecordingSession {
             storage_warning: false,
             storage_notice: None,
             capture_source_lost: false,
+            recording_still_saving: false,
             stopped_for_low_storage: false,
             stopped_elapsed: None,
             last_config: None,
@@ -821,6 +835,7 @@ impl RecordingSession {
         self.storage_warning = false;
         self.storage_notice = None;
         self.capture_source_lost = false;
+        self.recording_still_saving = false;
         self.stopped_for_low_storage = false;
         self.stopped_elapsed = None;
         self.last_config = Some(config.clone());
@@ -1161,9 +1176,14 @@ impl RecordingSession {
 
     fn monitor_storage(&mut self, project_dir: std::path::PathBuf, cx: &mut Context<Self>) {
         self.storage_monitor = None;
+        let kind = if self.mode() == Some(recording::RecordingMode::Studio) {
+            FinalizationKind::Studio
+        } else {
+            FinalizationKind::Instant
+        };
         let task = cx.spawn(async move |this, cx| {
             let mut check_failed = false;
-            let mut storage_monitor = RecordingStorageMonitor::default();
+            let mut storage_monitor = RecordingStorageMonitor::new(kind);
             loop {
                 cx.background_executor().timer(Duration::from_secs(2)).await;
                 let is_current = |session: &Self| {
@@ -1205,6 +1225,10 @@ impl RecordingSession {
                         }
                         match storage.status() {
                             DiskSpaceStatus::Exhausted => {
+                                log_storage(
+                                    storage,
+                                    "Recording storage is low; stopping to save the recording",
+                                );
                                 this.storage_warning = true;
                                 this.stopped_for_low_storage = true;
                                 this.storage_notice = Some(tr::dialog::storage::stopping().into());
@@ -1214,6 +1238,14 @@ impl RecordingSession {
                             status => {
                                 let warning = status == DiskSpaceStatus::Low;
                                 if warning != this.storage_warning {
+                                    log_storage(
+                                        storage,
+                                        if warning {
+                                            "Recording storage is low; stopping soon to save the recording"
+                                        } else {
+                                            "Recording storage warning cleared"
+                                        },
+                                    );
                                     this.storage_warning = warning;
                                     cx.notify();
                                 }
@@ -1291,6 +1323,8 @@ impl RecordingSession {
         let Some(active) = self.active.as_ref() else {
             return;
         };
+        #[cfg(windows)]
+        active.mark_stop_requested();
         let instant_share_url = active.instant_share_url().map(ToString::to_string);
         let instant_video_id = active.instant_video_id().map(ToString::to_string);
         let instant_rules_hold = instant_share_url
@@ -1532,6 +1566,16 @@ impl RecordingSession {
                             }
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
                         }
+                    }
+                    #[cfg(windows)]
+                    Ok(Err(error))
+                        if error
+                            .chain()
+                            .any(|cause| cause.is::<crate::recording::StudioStillSaving>()) =>
+                    {
+                        tracing::warn!("Studio recording is still saving; the app is free for a new recording");
+                        this.capture_source_lost = false;
+                        this.recording_still_saving = true;
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to stop cleanly: {error:#}");
@@ -2249,14 +2293,14 @@ fn sleep_action(
     }
 }
 
-/// On macOS a pipeline only finishes cleanly before Stop when ScreenCaptureKit
-/// lost what it was capturing: the display slept or went away, the window
-/// closed, or sharing was stopped from the menu bar. Everything captured so far
-/// is intact, so the recording is stopped and saved instead of failed.
+/// A pipeline that finishes with Ok before Stop lost its capture source:
+/// macOS ScreenCaptureKit (display asleep, window closed, sharing stopped) or
+/// a Linux Audio Only output monitor. Everything captured so far is intact,
+/// so the recording is stopped and saved instead of failed.
 fn capture_ended_cleanly<E>(
     outcome: &Result<Result<(), cap_recording::PipelineDoneError>, E>,
 ) -> bool {
-    cfg!(target_os = "macos") && matches!(outcome, Ok(Ok(())))
+    cfg!(any(target_os = "macos", target_os = "linux")) && matches!(outcome, Ok(Ok(())))
 }
 
 fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> bool {
@@ -2862,7 +2906,10 @@ mod recording_failure_tests {
     #[test]
     fn a_capture_that_ends_cleanly_before_stop_is_saved_not_failed() {
         let ended: Result<Result<(), cap_recording::PipelineDoneError>, ()> = Ok(Ok(()));
-        assert_eq!(capture_ended_cleanly(&ended), cfg!(target_os = "macos"));
+        assert_eq!(
+            capture_ended_cleanly(&ended),
+            cfg!(any(target_os = "macos", target_os = "linux"))
+        );
         let task_died: Result<Result<(), cap_recording::PipelineDoneError>, ()> = Err(());
         assert!(!capture_ended_cleanly(&task_died));
     }

@@ -8997,17 +8997,6 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						if (name !== undefined && (!name || name.length > 255)) {
 							return yield* badRequest(requestId, "Folder name is invalid");
 						}
-						if (
-							payload.settings !== undefined &&
-							(!payload.settings ||
-								typeof payload.settings !== "object" ||
-								Array.isArray(payload.settings))
-						) {
-							return yield* badRequest(
-								requestId,
-								"Folder settings must be an object",
-							);
-						}
 						const management = yield* AgentManagement;
 						const access = yield* management.getFolderAccess(
 							principal.id,
@@ -9072,6 +9061,11 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								}
 								if (parentId) return { state: "conflict" };
 								const now = new Date();
+								const publicPage = payload.settings?.publicPage;
+								const settingsPatch =
+									publicPage && Object.keys(publicPage).length > 0
+										? JSON.stringify({ publicPage })
+										: null;
 								await tx
 									.update(Db.folders)
 									.set({
@@ -9079,8 +9073,9 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										color: payload.color,
 										parentId: payload.parentId,
 										public: payload.public,
-										settings:
-											payload.settings as typeof Db.folders.$inferInsert.settings,
+										settings: settingsPatch
+											? sql`JSON_MERGE_PATCH(COALESCE(${Db.folders.settings}, '{}'), CAST(${settingsPatch} AS JSON))`
+											: undefined,
 										updatedAt: now,
 									})
 									.where(eq(Db.folders.id, path.folderId));

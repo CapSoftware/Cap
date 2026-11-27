@@ -1565,6 +1565,10 @@ studio = "あとで編集するための最高画質のローカル録画です�
 subtitle = "画面のキャプチャ方法を選んでください"
 title = "録画モードを選択"
 
+[dialog.saving]
+in_background = "録画はまだ保存中です。完了するとライブラリに表示されます。新しい録画をすぐに開始できます。"
+title = "保存中です"
+
 [dialog.storage]
 stopped_kept = "ストレージが不足しているため録画を停止しました。録画ファイルは残されています。空き容量を確保してから、下で録画を復元してください。"
 stopped_saved = "ストレージが不足しているため録画を停止しました。録画は保存されています。"
@@ -2870,6 +2874,7 @@ position = "位置"
 refining_word_timings = "単語のタイミングを調整中…"
 regenerate = "字幕を再生成"
 reset_position = "位置をリセット"
+show_existing = "字幕を表示"
 show_filler_words = "フィラーを表示"
 size_label = "サイズ"
 style = "スタイル"

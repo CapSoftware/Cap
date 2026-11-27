@@ -13,7 +13,21 @@ export const desktopSessionRequestQuerySchema = z.object({
 	type: z
 		.union([z.literal("session"), z.literal("api_key")])
 		.default("session"),
+	state: z
+		.string()
+		.regex(/^[A-Za-z0-9_-]{16,128}$/)
+		.optional(),
 });
+
+export function buildDesktopCallbackParams(
+	data: Record<string, string>,
+	userId: string,
+	state: string | undefined,
+) {
+	const params = new URLSearchParams({ ...data, user_id: userId });
+	if (state !== undefined) params.set("state", state);
+	return params;
+}
 
 // Builds the desktop callback URL. The host is a fixed literal and only the
 // `port`/`search` setters are used, so the target is provably loopback: a

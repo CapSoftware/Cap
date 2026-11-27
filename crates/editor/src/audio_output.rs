@@ -510,11 +510,18 @@ impl AudioOutput {
     /// so sync harnesses can observe what a device would have played without
     /// needing audio hardware.
     pub fn new_headless(tap: HeadlessAudioTap) -> Self {
+        Self::new_headless_with_channels(HEADLESS_CHANNELS, tap)
+    }
+
+    /// `channels` is clamped to what the playback source can produce, so the
+    /// pump always pulls whole frames at the real-time rate.
+    pub fn new_headless_with_channels(channels: u16, tap: HeadlessAudioTap) -> Self {
+        let channels = channels.clamp(1, AudioInfo::MAX_AUDIO_CHANNELS);
         let (control_tx, control_rx) = std_mpsc::channel();
 
         if let Err(e) = std::thread::Builder::new()
             .name("cap-audio-headless".into())
-            .spawn(move || control_thread_headless(control_rx, tap))
+            .spawn(move || control_thread_headless(control_rx, tap, channels))
         {
             error!("Failed to spawn headless audio output thread: {e}");
         }
@@ -1279,12 +1286,12 @@ fn install_progressive_source<T: FromSampleBytes + cpal::FromSample<f32>>(
 
 /// Control loop for the headless sink: a pump thread pulls blocks on a
 /// real-time schedule (as a device would) and hands every block to `tap`.
-fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: HeadlessAudioTap) {
-    let output_info = AudioInfo::new_raw(
-        AudioData::SAMPLE_FORMAT,
-        HEADLESS_SAMPLE_RATE,
-        HEADLESS_CHANNELS,
-    );
+fn control_thread_headless(
+    control_rx: std_mpsc::Receiver<ControlMsg>,
+    mut tap: HeadlessAudioTap,
+    channels: u16,
+) {
+    let output_info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, HEADLESS_SAMPLE_RATE, channels);
 
     let (source_tx, source_rx) = std_mpsc::channel::<SourceCommand<f32>>();
     let stop = Arc::new(AtomicBool::new(false));
@@ -1292,7 +1299,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
 
     let pump = {
         let stop = stop.clone();
-        let channels = usize::from(HEADLESS_CHANNELS);
+        let channels = usize::from(channels);
         std::thread::Builder::new()
             .name("cap-audio-headless-pump".into())
             .spawn(move || {
