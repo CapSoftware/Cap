@@ -154,6 +154,23 @@ def wait_log(proc, needle, timeout):
     return None
 
 
+def wait_done(proc, sb, timeout):
+    """Studio stop finished: the main-window marker (0.6.3+) or, for builds
+    without it, recording-meta status Complete plus one second."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if "auto-record main window after the recording" in text(proc):
+            return time.monotonic()
+        projects = sb.projects()
+        if projects and "Complete" in json.dumps(meta_status(projects[-1])):
+            time.sleep(1)
+            return time.monotonic()
+        if proc.poll() is not None:
+            return None
+        time.sleep(0.1)
+    return None
+
+
 def kill(proc):
     if proc is None:
         return
@@ -639,7 +656,7 @@ def studio_record(side, name, theme="light", secs=30, behaviour="showOverlay", s
         with Sampler(proc.pid) as s:
             t_stop = wait_log(proc, "auto-record stop requested", secs + 60)
         entry["recording_resources"] = s.summary()
-        done = wait_log(proc, "auto-record main window after the recording", 120)
+        done = wait_done(proc, sb, 120)
         entry["finished"] = done is not None
         if t_stop and done:
             entry["stop_to_idle_s"] = round(done - t_stop, 2)
@@ -1230,7 +1247,7 @@ def flow_targets():
                     with Sampler(proc.pid) as s:
                         t_stop = wait_log(proc, "auto-record stop requested", 80)
                     entry["recording_resources"] = s.summary()
-                    done = wait_log(proc, "auto-record main window after the recording", 120)
+                    done = wait_done(proc, sb, 120)
                     entry["finished"] = done is not None
                     if t_stop and done:
                         entry["stop_to_idle_s"] = round(done - t_stop, 2)
@@ -1412,7 +1429,9 @@ def perf_record(side, label, mode, fps, secs, mic, cam=False):
 
 
 def perf_playback(side, sb, project):
-    env = {"CAP_GPUI_AUTO_EDITOR": str(project), "CAP_GPUI_AUTO_PLAYBACK": "16", "CAP_GPUI_AUTO_FRAME_STATS": "14"}
+    env = {"CAP_GPUI_AUTO_EDITOR": str(project), "CAP_GPUI_AUTO_PLAYBACK": "16"}
+    if os.environ.get("GATE_FRAME_STATS") == "1":
+        env["CAP_GPUI_AUTO_FRAME_STATS"] = "14"
     proc = sb.launch(side, "perf-play", env)
     entry = {}
     elapsed, _ = wait_window(proc, 90, min_size=400)
