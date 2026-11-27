@@ -966,13 +966,18 @@ fn ask_names_the_user_by_the_label_their_lines_carry() {
     names.rename(SpeakerId(2), "Sam");
     let mut voiced = transcript.clone();
     voiced.apply(LogLine::SpeakerNames { names });
+    // A microphone line the voices never placed is still the user's.
+    voiced.upsert(utterance("m2", Source::Mic, 9_000, "I'll book the room."));
     let renamed = ask(&voiced, Some("Ada"));
     assert_eq!(renamed["selfName"], "Lexi");
     let text = renamed["transcript"].as_str().unwrap();
     assert!(
-        text.starts_with("Lexi: ") && text.contains("Sam: Thanks."),
+        text.starts_with("Lexi: ")
+            && text.contains("Sam: Thanks.")
+            && text.contains("Lexi: I'll book the room."),
         "{text}"
     );
+    assert!(!text.contains("Ada:") && !text.contains("You:"), "{text}");
     assert_eq!(
         voiced.named_speakers(Some("Ada")),
         vec![("Lexi".to_string(), true), ("Sam".to_string(), false)]
