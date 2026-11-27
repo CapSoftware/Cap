@@ -2341,6 +2341,8 @@ impl EditorWindow {
                         .gap(px(2.))
                         .child(
                             ui::EditorButton::plain(&theme, (id, 0usize))
+                                .a11y_label(tr::editor::shape::decrease())
+                                .a11y_description(label)
                                 .left_icon("icons/minus.svg")
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.transcript_step_pause(longer, -0.1, cx);
@@ -2357,6 +2359,8 @@ impl EditorWindow {
                         )
                         .child(
                             ui::EditorButton::plain(&theme, (id, 1usize))
+                                .a11y_label(tr::editor::shape::increase())
+                                .a11y_description(label)
                                 .left_icon("icons/plus.svg")
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.transcript_step_pause(longer, 0.1, cx);

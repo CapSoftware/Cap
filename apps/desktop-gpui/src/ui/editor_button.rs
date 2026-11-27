@@ -54,6 +54,12 @@ pub struct EditorButton {
     pressed_text: Hsla,
     chevron: Hsla,
     tooltip: Option<(Theme, SharedString)>,
+    /// What screen readers call it when neither the label nor the tooltip
+    /// says it (an icon-only button whose tooltip lives on a wrapper).
+    a11y_label: Option<SharedString>,
+    a11y_description: Option<SharedString>,
+    /// `pressed` was set by the caller, so it is a state readers should hear.
+    has_pressed_state: bool,
     on_click: Option<ClickHandler>,
     on_open: Option<OpenHandler>,
 }
@@ -84,6 +90,9 @@ impl EditorButton {
             pressed_text: Hsla::from(theme.editor.text_1),
             chevron: Hsla::from(theme.editor.text_3),
             tooltip: None,
+            a11y_label: None,
+            a11y_description: None,
+            has_pressed_state: false,
             on_click: None,
             on_open: None,
         }
@@ -157,6 +166,19 @@ impl EditorButton {
 
     pub fn pressed(mut self, pressed: bool) -> Self {
         self.pressed = pressed;
+        self.has_pressed_state = true;
+        self
+    }
+
+    /// The name screen readers use instead of the label or tooltip.
+    pub fn a11y_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.a11y_label = Some(label.into());
+        self
+    }
+
+    /// Read after the name, for context the name leaves out.
+    pub fn a11y_description(mut self, description: impl Into<SharedString>) -> Self {
+        self.a11y_description = Some(description.into());
         self
     }
 
@@ -208,6 +230,9 @@ impl RenderOnce for EditorButton {
             pressed_text,
             chevron,
             tooltip,
+            a11y_label,
+            a11y_description,
+            has_pressed_state,
             on_click,
             on_open,
         } = self;
@@ -226,9 +251,29 @@ impl RenderOnce for EditorButton {
             other => SharedString::from(format!("eb-{other:?}")),
         };
         let icon_hover = (!disabled && !pressed).then_some(hover_text);
+        let name = a11y_label
+            .or_else(|| label.clone())
+            .or_else(|| tooltip.as_ref().map(|(_, tip)| tip.clone()));
+        // A menu trigger's open look is not exposed as expanded: an expanded
+        // button cannot be pressed through UI Automation.
+        let toggle = has_pressed_state && on_open.is_none();
 
         div()
             .id(id)
+            .when_some(name, |this, name| {
+                this.role(gpui::Role::Button)
+                    .aria_label(name)
+                    .when_some(a11y_description, |this, description| {
+                        this.aria_description(description)
+                    })
+                    .when(toggle, |this| {
+                        this.aria_toggled(if pressed {
+                            gpui::Toggled::True
+                        } else {
+                            gpui::Toggled::False
+                        })
+                    })
+            })
             .group(group.clone())
             .tab_index(0)
             .flex()

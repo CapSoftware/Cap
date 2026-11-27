@@ -2902,6 +2902,7 @@ impl ScreenshotEditorWindow {
                 ]
                 .map(|popover| {
                     let button = ui::EditorButton::plain(&theme, popover.id())
+                        .a11y_label(popover.tooltip())
                         .left_icon(popover.icon())
                         .icon_size(px(16.))
                         .pressed(self.active_popover == Some(popover))
@@ -4304,6 +4305,7 @@ impl ScreenshotEditorWindow {
                 tr::screenshot_editor::zoom_out(),
                 &["meta", "-"],
                 ui::EditorButton::plain(&theme, "screenshot-zoom-out")
+                    .a11y_label(tr::screenshot_editor::zoom_out())
                     .left_icon("icons/zoom-out.svg")
                     .icon_size(px(16.))
                     .on_click(cx.listener(|this, _, _window, cx| {
@@ -4317,6 +4319,7 @@ impl ScreenshotEditorWindow {
                 tr::screenshot_editor::zoom_in(),
                 &["meta", "+"],
                 ui::EditorButton::plain(&theme, "screenshot-zoom-in")
+                    .a11y_label(tr::screenshot_editor::zoom_in())
                     .left_icon("icons/zoom-in.svg")
                     .icon_size(px(16.))
                     .on_click(cx.listener(|this, _, _window, cx| {
