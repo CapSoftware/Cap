@@ -132,8 +132,6 @@ pub struct Button {
     dim_disabled: bool,
     on_click: Option<ClickHandler>,
     on_open: Option<OpenHandler>,
-    /// Shown to screen readers as a button named by its label.
-    exposed: bool,
 }
 
 impl Button {
@@ -162,7 +160,6 @@ impl Button {
             dim_disabled: false,
             on_click: None,
             on_open: None,
-            exposed: false,
         }
     }
 
@@ -319,12 +316,6 @@ impl Button {
         self
     }
 
-    /// Screen readers see a button named by the label, which they can press.
-    pub fn exposed(mut self) -> Self {
-        self.exposed = true;
-        self
-    }
-
     pub fn height(mut self, height: Pixels) -> Self {
         self.height = Some(height);
         self
@@ -452,16 +443,16 @@ impl RenderOnce for Button {
             height,
             on_click,
             on_open,
-            exposed,
         } = self;
 
         let icon_color = paint.text;
 
         div()
             .id(id)
-            .when(exposed, |this| {
-                this.role(gpui::Role::Button)
-                    .when_some(label.clone(), |this, label| this.aria_label(label))
+            // Screen readers see a button named by its label, which they can
+            // press (the click listener below answers their press).
+            .when_some(label.clone(), |this, label| {
+                this.role(gpui::Role::Button).aria_label(label)
             })
             .tab_index(0)
             .tab_stop(!disabled)
@@ -551,6 +542,12 @@ pub struct IconButton {
     disabled: bool,
     occlude: bool,
     rounded: Option<Pixels>,
+    /// What screen readers call it. Without one the button stays out of the
+    /// accessibility tree, as an icon alone says nothing to them.
+    label: Option<SharedString>,
+    /// Reported as a toggle that is on or off, for buttons whose `active`
+    /// look means a state the user switched (a panel shown, a mode on).
+    toggle: bool,
     on_click: Option<ClickHandler>,
 }
 
@@ -572,6 +569,8 @@ impl IconButton {
             disabled: false,
             occlude: false,
             rounded: None,
+            label: None,
+            toggle: false,
             on_click: None,
         }
     }
@@ -634,6 +633,18 @@ impl IconButton {
         self
     }
 
+    /// The name screen readers read and press it by.
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Screen readers hear `active` as this toggle being on.
+    pub fn toggle(mut self) -> Self {
+        self.toggle = true;
+        self
+    }
+
     /// A resting fill and hairline, for the buttons that have one even when
     /// idle -- the editor's transport play button is `rounded-full border
     /// border-gray-300 bg-gray-3 size-9`.
@@ -685,11 +696,24 @@ impl RenderOnce for IconButton {
             disabled,
             occlude,
             rounded,
+            label,
+            toggle,
             on_click,
         } = self;
 
         div()
             .id(id)
+            .when_some(label, |this, label| {
+                this.role(gpui::Role::Button)
+                    .aria_label(label)
+                    .when(toggle, |this| {
+                        this.aria_toggled(if active {
+                            gpui::Toggled::True
+                        } else {
+                            gpui::Toggled::False
+                        })
+                    })
+            })
             .when(occlude, |this| this.occlude())
             .tab_index(0)
             .tab_stop(!disabled)

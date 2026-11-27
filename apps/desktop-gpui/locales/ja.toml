@@ -1573,9 +1573,12 @@ stopping = "ストレージが不足しています。録画を停止して保�
 [dialog.teleprompter]
 cue_markers = "キューマーカー"
 hidden = "このウィンドウはCapの録画に映りません"
+larger_text = "文字を大きく"
 mirror = "テキストを反転"
 paused = "録画に合わせてスクロールを一時停止中"
 placeholder = "台本を貼り付けるか入力してください…"
+settings = "テレプロンプターの設定"
+smaller_text = "文字を小さく"
 words_per_minute = "{wpm}語/分"
 
 [import]
@@ -2422,6 +2425,7 @@ lighting = "ライティング"
 texture = "テクスチャ"
 
 [editor.sidebar.background]
+remove_image = "画像を削除"
 title = "背景"
 
 [editor.sidebar.border]

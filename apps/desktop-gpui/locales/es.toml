@@ -1573,9 +1573,12 @@ stopping = "Queda poco espacio. Deteniendo y guardando tu grabación…"
 [dialog.teleprompter]
 cue_markers = "Marcadores"
 hidden = "Esta ventana no aparece en las grabaciones de Cap"
+larger_text = "Texto más grande"
 mirror = "Texto en espejo"
 paused = "Desplazamiento en pausa junto con la grabación"
 placeholder = "Pega o escribe tu guion…"
+settings = "Ajustes del teleprompter"
+smaller_text = "Texto más pequeño"
 words_per_minute = "{wpm} ppm"
 
 [import]
@@ -2422,6 +2425,7 @@ lighting = "Iluminación"
 texture = "Textura"
 
 [editor.sidebar.background]
+remove_image = "Quitar imagen"
 title = "Fondo"
 
 [editor.sidebar.border]

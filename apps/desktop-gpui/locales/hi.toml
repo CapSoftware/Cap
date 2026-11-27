@@ -1573,9 +1573,12 @@ stopping = "स्टोरेज कम है। आपकी रिकॉर�
 [dialog.teleprompter]
 cue_markers = "क्यू मार्कर"
 hidden = "यह विंडो Cap रिकॉर्डिंग में नहीं दिखती"
+larger_text = "बड़ा टेक्स्ट"
 mirror = "टेक्स्ट मिरर करें"
 paused = "रिकॉर्डिंग के साथ स्क्रॉलिंग रुकी है"
 placeholder = "अपनी स्क्रिप्ट पेस्ट करें या लिखें…"
+settings = "टेलीप्रॉम्प्टर सेटिंग्स"
+smaller_text = "छोटा टेक्स्ट"
 words_per_minute = "{wpm} शब्द/मिनट"
 
 [import]
@@ -2422,6 +2425,7 @@ lighting = "लाइटिंग"
 texture = "टेक्सचर"
 
 [editor.sidebar.background]
+remove_image = "इमेज हटाएँ"
 title = "बैकग्राउंड"
 
 [editor.sidebar.border]

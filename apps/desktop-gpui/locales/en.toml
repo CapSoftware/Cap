@@ -1575,9 +1575,12 @@ stopping = "Low storage. Stopping and saving your recording…"
 [dialog.teleprompter]
 cue_markers = { text = "Cue markers", context = "Toggle in a 192px popover." }
 hidden = "This window is hidden from Cap recordings"
+larger_text = "Larger text"
 mirror = { text = "Mirror text", context = "Toggle in a 192px popover." }
 paused = "Scrolling paused with recording"
 placeholder = "Paste or type your script…"
+settings = "Teleprompter settings"
+smaller_text = "Smaller text"
 words_per_minute = { text = "{wpm} wpm", context = "Teleprompter scroll speed in words per minute; {wpm} is a number such as 150." }
 
 [import]
@@ -2424,6 +2427,7 @@ lighting = "Lighting"
 texture = "Texture"
 
 [editor.sidebar.background]
+remove_image = "Remove image"
 title = "Background"
 
 [editor.sidebar.border]

@@ -3236,6 +3236,7 @@ impl EditorWindow {
                 .child(
                     div().absolute().top(px(8.)).right(px(8.)).child(
                         ui::IconButton::new("clear-background-image", "icons/circle-x.svg")
+                            .label(tr::editor::sidebar::background::remove_image())
                             .size(px(32.))
                             .icon_size(px(16.))
                             .rounded(px(16.))

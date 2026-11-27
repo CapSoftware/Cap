@@ -1573,9 +1573,12 @@ stopping = "Espace de stockage faible. Arrêt et sauvegarde de votre enregistrem
 [dialog.teleprompter]
 cue_markers = "Repères"
 hidden = "Cette fenêtre est masquée dans les enregistrements Cap"
+larger_text = "Texte plus grand"
 mirror = "Texte en miroir"
 paused = "Défilement en pause avec l'enregistrement"
 placeholder = "Collez ou saisissez votre script…"
+settings = "Réglages du prompteur"
+smaller_text = "Texte plus petit"
 words_per_minute = "{wpm} mots/min"
 
 [import]
@@ -2422,6 +2425,7 @@ lighting = "Éclairage"
 texture = "Texture"
 
 [editor.sidebar.background]
+remove_image = "Supprimer l'image"
 title = "Arrière-plan"
 
 [editor.sidebar.border]

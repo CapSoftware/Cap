@@ -2401,7 +2401,6 @@ impl SettingsWindow {
                 )
                 .full_width()
                 .height(px(34.))
-                .exposed()
             })
     }
 

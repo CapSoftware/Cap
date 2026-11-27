@@ -508,6 +508,10 @@ fn editor_panels_match_the_literals_they_replaced() {
         ),
         (tr::editor::sidebar::layout::motion_blur(), "Motion Blur"),
         (tr::editor::sidebar::background::title(), "Background"),
+        (
+            tr::editor::sidebar::background::remove_image(),
+            "Remove image",
+        ),
         (tr::editor::sidebar::desktop::importing(), "Importing..."),
         (
             tr::editor::sidebar::desktop::import(),

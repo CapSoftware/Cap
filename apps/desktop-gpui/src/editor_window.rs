@@ -12439,6 +12439,7 @@ impl EditorWindow {
                                     })
                                     .child(
                                         ui::IconButton::new("transport-play", icon)
+                                            .label(tr::editor::window::transport::play_pause())
                                             .size(px(32.))
                                             .icon_size(px(12.))
                                             .color(Hsla::from(editor.card))
@@ -13358,6 +13359,7 @@ impl EditorWindow {
                                     .right(px(6.))
                                     .child(
                                         ui::IconButton::new("zoom-generate-dismiss", "icons/x.svg")
+                                            .label(tr::common::dismiss())
                                             .size(px(20.))
                                             .icon_size(px(12.))
                                             .color(Hsla::from(theme.editor.text_3))
@@ -13437,6 +13439,7 @@ impl EditorWindow {
                                 .child(self.render_camera3d_count_pills("lane", 0, maximum, cx))
                                 .child(
                                     ui::IconButton::new("camera3d-picker-close", "icons/x.svg")
+                                        .label(tr::common::close())
                                         .size(px(22.))
                                         .icon_size(px(12.))
                                         .color(Hsla::from(theme.editor.text_3))

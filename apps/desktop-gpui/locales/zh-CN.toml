@@ -1573,9 +1573,12 @@ stopping = "存储空间不足。正在停止并保存你的录制…"
 [dialog.teleprompter]
 cue_markers = "提示标记"
 hidden = "此窗口不会出现在 Cap 录制中"
+larger_text = "放大文字"
 mirror = "镜像文字"
 paused = "滚动已随录制暂停"
 placeholder = "粘贴或输入你的脚本…"
+settings = "提词器设置"
+smaller_text = "缩小文字"
 words_per_minute = "{wpm} 字/分钟"
 
 [import]
@@ -2422,6 +2425,7 @@ lighting = "光照"
 texture = "纹理"
 
 [editor.sidebar.background]
+remove_image = "移除图片"
 title = "背景"
 
 [editor.sidebar.border]

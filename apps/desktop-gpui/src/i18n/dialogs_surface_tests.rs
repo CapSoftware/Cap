@@ -311,9 +311,15 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::dialog::teleprompter::cue_markers(), "Cue markers"),
         (
+            tr::dialog::teleprompter::settings(),
+            "Teleprompter settings",
+        ),
+        (tr::dialog::teleprompter::smaller_text(), "Smaller text"),
+        (
             tr::dialog::teleprompter::hidden(),
             "This window is hidden from Cap recordings",
         ),
+        (tr::dialog::teleprompter::larger_text(), "Larger text"),
         (tr::dialog::teleprompter::mirror(), "Mirror text"),
         (
             tr::dialog::teleprompter::paused(),

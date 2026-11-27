@@ -1573,9 +1573,12 @@ stopping = "Wenig Speicherplatz. Ihre Aufnahme wird beendet und gespeichert…"
 [dialog.teleprompter]
 cue_markers = "Cue-Marker"
 hidden = "Dieses Fenster ist in Cap-Aufnahmen ausgeblendet"
+larger_text = "Größere Schrift"
 mirror = "Text spiegeln"
 paused = "Scrollen zusammen mit der Aufnahme pausiert"
 placeholder = "Skript einfügen oder eingeben…"
+settings = "Teleprompter-Einstellungen"
+smaller_text = "Kleinere Schrift"
 words_per_minute = "{wpm} Wörter/Min."
 
 [import]
@@ -2422,6 +2425,7 @@ lighting = "Licht"
 texture = "Textur"
 
 [editor.sidebar.background]
+remove_image = "Bild entfernen"
 title = "Hintergrund"
 
 [editor.sidebar.border]

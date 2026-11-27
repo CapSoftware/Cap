@@ -929,6 +929,7 @@ impl TeleprompterWindow {
                             .child(self.tool_button(
                                 "font-smaller",
                                 "icons/minus.svg",
+                                tr::dialog::teleprompter::smaller_text(),
                                 false,
                                 cx.listener(|this, _, window, cx| {
                                     this.change_font_size(-FONT_SIZE_STEP, window, cx);
@@ -946,21 +947,26 @@ impl TeleprompterWindow {
                             .child(self.tool_button(
                                 "font-larger",
                                 "icons/plus.svg",
+                                tr::dialog::teleprompter::larger_text(),
                                 false,
                                 cx.listener(|this, _, window, cx| {
                                     this.change_font_size(FONT_SIZE_STEP, window, cx);
                                 }),
                             )),
                     )
-                    .child(self.tool_button(
-                        "settings",
-                        "icons/settings-2.svg",
-                        self.settings_open,
-                        cx.listener(|this, _, _window, cx| {
-                            this.settings_open = !this.settings_open;
-                            cx.notify();
-                        }),
-                    )),
+                    .child(
+                        self.tool_button(
+                            "settings",
+                            "icons/settings-2.svg",
+                            tr::dialog::teleprompter::settings(),
+                            self.settings_open,
+                            cx.listener(|this, _, _window, cx| {
+                                this.settings_open = !this.settings_open;
+                                cx.notify();
+                            }),
+                        )
+                        .toggle(),
+                    ),
             )
     }
 
@@ -974,10 +980,12 @@ impl TeleprompterWindow {
         &self,
         id: &'static str,
         icon: &'static str,
+        label: &'static str,
         active: bool,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> ui::IconButton {
         ui::IconButton::glass(&self.theme, id, icon)
+            .label(label)
             .active(active)
             .on_click(on_click)
     }

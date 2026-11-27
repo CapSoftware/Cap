@@ -3698,7 +3698,6 @@ impl MainWindow {
             )
             .label(tr::main::sign_in::open_browser_again())
             .full_width()
-            .exposed()
             .on_click(cx.listener(|_, _, _, cx| {
                 SignIn::global(cx).update(cx, |sign_in, cx| sign_in.reopen(cx));
             }))
@@ -3712,7 +3711,6 @@ impl MainWindow {
             .icon("icons/user-round.svg")
             .label(tr::main::sign_in::sign_in())
             .full_width()
-            .exposed()
             .on_click(cx.listener(|this, _, _, cx| {
                 let Some(prompt) = this.sign_in_prompt.as_mut() else {
                     return;
@@ -3733,7 +3731,6 @@ impl MainWindow {
                 )
                 .label(tr::common::cancel())
                 .full_width()
-                .exposed()
                 .on_click(cx.listener(|_, _, _, cx| {
                     SignIn::global(cx).update(cx, |sign_in, cx| sign_in.cancel(cx));
                 })),
@@ -3752,7 +3749,6 @@ impl MainWindow {
                         )
                         .label(tr::main::sign_in::use_studio())
                         .full_width()
-                        .exposed()
                         .on_click(cx.listener(|this, _, _, cx| {
                             let Some(prompt) = this.sign_in_prompt.take() else {
                                 return;
@@ -3772,7 +3768,6 @@ impl MainWindow {
                         )
                         .label(tr::main::sign_in::not_now())
                         .full_width()
-                        .exposed()
                         .on_click(cx.listener(|this, _, _, cx| this.dismiss_sign_in_prompt(cx))),
                     ),
                 )
@@ -4546,7 +4541,6 @@ impl MainWindow {
                                 tr::main::error::copy()
                             })
                             .full_width()
-                            .exposed()
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(
@@ -4568,7 +4562,6 @@ impl MainWindow {
                             )
                             .label(tr::common::dismiss())
                             .full_width()
-                            .exposed()
                             .on_click(cx.listener(|this, _, _, cx| this.dismiss_idle_error(cx))),
                         ),
                     ),
