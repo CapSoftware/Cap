@@ -113,11 +113,13 @@ def main():
             report["killed"] = True
         else:
             report["stop"] = run([args.cap, "record", "stop", "--id", rid, "--json", "--timeout", "300"], 400)
+    report["parent_after_stop"] = sorted(os.listdir(work))
     report["status_final"] = meta_status(project)
     report["validate"] = run([args.cap, "project", "validate", project, "--json"], 120)["code"]
     report["export"] = export(args.cap, project, args.mode, args.out, args.tag)
     report["media"] = media_frames(project, args.mode)
     report["validate_after_export"] = run([args.cap, "project", "validate", project, "--json"], 120)["code"]
+    report["parent_after_export"] = sorted(os.listdir(work))
     with open(os.path.join(args.out, f"{args.tag}.json"), "w") as f:
         json.dump(report, f, indent=1)
     print("LOCKPROOF " + json.dumps({
@@ -132,6 +134,7 @@ def main():
         "export_duration": report["export"].get("duration"),
         "export_err": (report["export"].get("stderr") or "")[-160:],
         "media": report["media"], "validate_after_export": report["validate_after_export"],
+        "parent_after_stop": report["parent_after_stop"], "parent_after_export": report["parent_after_export"],
     }), flush=True)
     shutil.rmtree(work, ignore_errors=True)
 
