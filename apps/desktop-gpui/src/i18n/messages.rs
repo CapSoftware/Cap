@@ -107,6 +107,10 @@ const EXACT: &[(&str, fn() -> &'static str)] = &[
         "This recording was deleted on the web; the local recording is preserved",
         tr::message::upload::deleted_on_web,
     ),
+    (
+        "Replaced on the web. Your recording is still on this computer.",
+        tr::message::upload::replaced_on_web,
+    ),
     ("The saved recording is empty", tr::message::upload::empty),
     (
         "This recording has no resumable upload state",

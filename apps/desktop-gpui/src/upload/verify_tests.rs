@@ -496,6 +496,13 @@ impl MockCap {
         self.lock().deleting_on_web.push(video_id.to_string());
     }
 
+    /// Replaces the cap's video on the web, as a web edit does: the server
+    /// retires its processing job and answers completion calls with 409 code
+    /// "output-replaced".
+    pub(super) fn replace_on_web(&self, video_id: &str) {
+        self.lock().replaced.push(video_id.to_string());
+    }
+
     /// Deletes the cap on the web just before its first completion call, after
     /// every upload URL was issued and the media uploaded.
     pub(super) fn delete_on_web_before_completion(&self, video_id: &str) {
