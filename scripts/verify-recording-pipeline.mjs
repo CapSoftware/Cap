@@ -670,6 +670,20 @@ async function openDeepLink(name, action) {
 	await runCommand(name, "open", args);
 }
 
+function linkStartTitles() {
+	const localesDir = path.join(root, "apps", "desktop-gpui", "locales");
+	return fs
+		.readdirSync(localesDir)
+		.filter((name) => name.endsWith(".toml"))
+		.flatMap((name) => {
+			const text = fs.readFileSync(path.join(localesDir, name), "utf8");
+			const section =
+				text.split(/^\[main\.link_start\]$/m)[1]?.split(/^\[/m)[0] ?? "";
+			const match = section.match(/^start = "(.*)"$/m);
+			return match ? [match[1]] : [];
+		});
+}
+
 async function confirmDesktopLinkStart() {
 	const target = summary.desktop.execPid
 		? `pid:${summary.desktop.execPid}`
@@ -678,8 +692,13 @@ async function confirmDesktopLinkStart() {
 		path.join(root, "scripts", "confirm-desktop-link-start.applescript"),
 		target,
 		process.env.CAP_VERIFY_CONFIRM_WAIT_SECONDS || "15",
+		...linkStartTitles(),
 	]);
-	summary.desktop.startConfirmation = result.stdout.trim();
+	const outcome = result.stdout.trim();
+	summary.desktop.startConfirmation = outcome;
+	if (outcome.startsWith("permission:")) {
+		throw new Error(outcome);
+	}
 }
 
 async function launchDesktopApp() {

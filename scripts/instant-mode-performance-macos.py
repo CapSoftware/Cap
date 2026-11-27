@@ -11,6 +11,7 @@ import re
 import statistics
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 from datetime import datetime
@@ -321,17 +322,45 @@ def deep_link(action, app_pid, action_sender):
 	)
 
 
-def start_recording(targets, args, app_pid, action_sender):
-	deep_link(start_action(targets, args), app_pid, action_sender)
+def link_start_titles():
+	titles = []
+	for path in sorted((REPO_ROOT / "apps" / "desktop-gpui" / "locales").glob("*.toml")):
+		parts = path.read_text().split("[main.link_start]\n", 1)
+		if len(parts) == 2:
+			match = re.search(r'^start = "(.*)"$', parts[1].split("\n[", 1)[0], re.M)
+			if match:
+				titles.append(match.group(1))
+	return titles
+
+
+def confirm_link_start(app_pid, confirmation):
 	result = run(
 		[
 			"osascript",
-			str(REPO_ROOT / "scripts" / "confirm-desktop-link-start.applescript"),
+			REPO_ROOT / "scripts" / "confirm-desktop-link-start.applescript",
 			f"pid:{app_pid}",
 			"15",
-		]
+			*link_start_titles(),
+		],
+		timeout=30,
 	)
-	print(f"start confirmation: {result.stdout.strip()}", flush=True)
+	confirmation["result"] = result.stdout.strip()
+
+
+def start_recording(targets, args, app_pid, action_sender, confirmation):
+	deep_link(start_action(targets, args), app_pid, action_sender)
+	confirmation["thread"] = threading.Thread(
+		target=confirm_link_start, args=(app_pid, confirmation), daemon=True
+	)
+	confirmation["thread"].start()
+
+
+def finish_link_start(confirmation):
+	confirmation["thread"].join(timeout=30)
+	result = confirmation.get("result", "no result")
+	print(f"start confirmation: {result}", flush=True)
+	if result.startswith("permission:"):
+		raise RuntimeError(result)
 
 
 def app_windows(app_pid, action_sender):
@@ -1372,6 +1401,7 @@ def main():
 		before = project_snapshot(args.recordings_dir)
 		started_ns = time.time_ns()
 		print(f"run {index}/{args.repetitions}: start", flush=True)
+		confirmation = {}
 		phases.append(
 			measure_phase(
 				"start",
@@ -1385,9 +1415,11 @@ def main():
 						args,
 						app_pid,
 						action_sender,
+						confirmation,
 					),
 				)
 		)
+		finish_link_start(confirmation)
 		project = wait_for_project(args.recordings_dir, before, started_ns)
 		if not args.no_camera:
 			print(f"run {index}/{args.repetitions}: verify camera", flush=True)
