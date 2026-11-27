@@ -1,0 +1,58 @@
+name: encfail builds (scratch)
+
+on:
+  push:
+    branches: [ci/encfail-build]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arm: base
+            sha: 48cacf437090d373e3f9c7f235909dac490f7920
+          - arm: head
+            sha: 3676d9c52a4b320740afee71b07751eddf187748
+    runs-on: blacksmith-8vcpu-windows-2025
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+          prefix-key: v1-rust-release
+          save-cache: "false"
+      - name: Build plain and DIAG cap CLI
+        shell: bash
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+        run: |
+          set -euo pipefail
+          cp .github/encfail/diag_patch.py "$RUNNER_TEMP/diag_patch.py"
+          git checkout -q -f --detach ${{ matrix.sha }}
+          git log -1 --format='%H %s'
+          node scripts/setup.js
+          out="$RUNNER_TEMP/bins"; mkdir -p "$out"
+          cargo build --locked --release -p cap
+          cp target/release/cap.exe "$out/cap-${{ matrix.arm }}.exe"
+          python "$RUNNER_TEMP/diag_patch.py" "$PWD"
+          git diff > "$out/diag-${{ matrix.arm }}.patch"
+          cargo build --locked --release -p cap
+          cp target/release/cap.exe "$out/cap-${{ matrix.arm }}-diag.exe"
+          git checkout -q -- crates/enc-ffmpeg/src/video/h264.rs
+          git rev-parse HEAD > "$out/cap-${{ matrix.arm }}.commit"
+          cp target/ffmpeg/bin/*.dll target/ffmpeg/bin/*.exe "$out/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: encfail-${{ matrix.arm }}
+          path: ${{ runner.temp }}/bins
+          retention-days: 3
