@@ -2716,7 +2716,9 @@ impl MainWindow {
             let kind = match &target {
                 ScreenCaptureTarget::Display { .. } => TargetType::Display,
                 ScreenCaptureTarget::Window { .. } => TargetType::Window,
-                ScreenCaptureTarget::Area { .. } => TargetType::Area,
+                ScreenCaptureTarget::Area { .. } | ScreenCaptureTarget::DesktopArea { .. } => {
+                    TargetType::Area
+                }
                 ScreenCaptureTarget::CameraOnly => TargetType::CameraOnly,
                 ScreenCaptureTarget::AudioOnly => TargetType::AudioOnly,
             };

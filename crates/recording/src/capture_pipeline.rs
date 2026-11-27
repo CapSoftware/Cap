@@ -601,12 +601,32 @@ pub fn target_to_display_and_crop(
                 )
             }
         }
+        ScreenCaptureTarget::DesktopArea { .. } => {
+            return Err(anyhow!(
+                "Multi-monitor desktop area capture requires the desktop area pipeline"
+            ));
+        }
         ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
             return Err(anyhow!("{} target has no display", target.kind_str()));
         }
     };
 
     Ok((display, crop_bounds))
+}
+
+#[cfg(windows)]
+pub fn target_to_desktop_area_plan(
+    target: &ScreenCaptureTarget,
+) -> anyhow::Result<(scap_targets::Display, screen_capture::DesktopAreaPlan)> {
+    let plan = target.resolve_windows_desktop_area_plan().ok_or_else(|| {
+        anyhow!("Multi-monitor desktop area displays are unavailable or not adjacent")
+    })?;
+    let anchor = plan
+        .regions
+        .first()
+        .and_then(|region| scap_targets::Display::from_id(&region.display_id))
+        .ok_or_else(|| anyhow!("Anchor display not found"))?;
+    Ok((anchor, plan))
 }
 
 /// Locates the recording display's physical notch within the frames this target
@@ -631,6 +651,7 @@ pub fn resolve_display_notch(target: &ScreenCaptureTarget) -> Option<cap_project
             resolve_area_display_notch(notch, display_size, *bounds)
         }
         ScreenCaptureTarget::Window { .. }
+        | ScreenCaptureTarget::DesktopArea { .. }
         | ScreenCaptureTarget::CameraOnly
         | ScreenCaptureTarget::AudioOnly => None,
     }

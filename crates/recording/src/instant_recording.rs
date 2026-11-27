@@ -1448,56 +1448,100 @@ async fn build_instant_recording_actor(
             #[cfg(windows)]
             let d3d_device = crate::capture_pipeline::create_d3d_device()?;
 
-            let (display, crop_bounds) = target_to_display_and_crop(&inputs.capture_target)
-                .context("target_display_crop")?;
-
-            #[cfg(target_os = "macos")]
-            let max_capture_size = max_output_size.and_then(|max_output_size| {
-                inputs.capture_target.physical_size().map(|size| {
-                    capture_size_constraint(
-                        (size.width() as u32, size.height() as u32),
-                        max_output_size,
-                    )
-                })
-            });
-            #[cfg(not(target_os = "macos"))]
-            let max_capture_size = None;
-
-            #[cfg(any(target_os = "macos", windows))]
-            let capture_window = instant_capture_window(
-                &inputs.capture_target,
-                inputs.window_only,
-                inputs.camera_feed.is_some(),
-            );
-
-            let screen_source = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
-                display,
-                crop_bounds,
-                true,
-                max_fps,
-                max_capture_size,
-                timestamps.system_time(),
-                inputs.capture_system_audio,
-                #[cfg(any(target_os = "macos", windows))]
-                capture_window,
-                #[cfg(target_os = "linux")]
-                crate::sources::screen_capture::LinuxCaptureSource::from_target(
+            #[cfg(windows)]
+            let screen_source = if matches!(
+                inputs.capture_target,
+                ScreenCaptureTarget::DesktopArea { .. }
+            ) {
+                let (anchor_display, plan) =
+                    crate::capture_pipeline::target_to_desktop_area_plan(&inputs.capture_target)
+                        .context("target_desktop_area_plan")?;
+                ScreenCaptureConfig::<ScreenCaptureMethod>::init_desktop_area(
+                    anchor_display,
+                    plan,
+                    true,
+                    max_fps,
+                    None,
+                    timestamps.system_time(),
+                    inputs.capture_system_audio,
+                    d3d_device,
+                )
+                .await
+                .context("screen capture init")?
+            } else {
+                let (display, crop_bounds) = target_to_display_and_crop(&inputs.capture_target)
+                    .context("target_display_crop")?;
+                let capture_window = instant_capture_window(
                     &inputs.capture_target,
-                ),
-                #[cfg(windows)]
-                d3d_device,
+                    inputs.window_only,
+                    inputs.camera_feed.is_some(),
+                );
+                ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+                    display,
+                    crop_bounds,
+                    true,
+                    max_fps,
+                    None,
+                    timestamps.system_time(),
+                    inputs.capture_system_audio,
+                    capture_window,
+                    d3d_device,
+                )
+                .await
+                .context("screen capture init")?
+            };
+
+            #[cfg(not(windows))]
+            let screen_source = {
+                let (display, crop_bounds) = target_to_display_and_crop(&inputs.capture_target)
+                    .context("target_display_crop")?;
+
                 #[cfg(target_os = "macos")]
-                inputs
-                    .shareable_content
-                    .clone()
-                    .ok_or_else(|| anyhow::anyhow!("Missing shareable content"))?,
+                let max_capture_size = max_output_size.and_then(|max_output_size| {
+                    inputs.capture_target.physical_size().map(|size| {
+                        capture_size_constraint(
+                            (size.width() as u32, size.height() as u32),
+                            max_output_size,
+                        )
+                    })
+                });
+                #[cfg(not(target_os = "macos"))]
+                let max_capture_size = None;
+
                 #[cfg(target_os = "macos")]
-                inputs.excluded_windows,
-                #[cfg(target_os = "macos")]
-                true,
-            )
-            .await
-            .context("screen capture init")?;
+                let capture_window = instant_capture_window(
+                    &inputs.capture_target,
+                    inputs.window_only,
+                    inputs.camera_feed.is_some(),
+                );
+
+                ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+                    display,
+                    crop_bounds,
+                    true,
+                    max_fps,
+                    max_capture_size,
+                    timestamps.system_time(),
+                    inputs.capture_system_audio,
+                    #[cfg(target_os = "macos")]
+                    capture_window,
+                    #[cfg(target_os = "linux")]
+                    crate::sources::screen_capture::LinuxCaptureSource::from_target(
+                        &inputs.capture_target,
+                    ),
+                    #[cfg(target_os = "macos")]
+                    inputs
+                        .shareable_content
+                        .clone()
+                        .ok_or_else(|| anyhow::anyhow!("Missing shareable content"))?,
+                    #[cfg(target_os = "macos")]
+                    inputs.excluded_windows,
+                    #[cfg(target_os = "macos")]
+                    true,
+                )
+                .await
+                .context("screen capture init")?
+            };
 
             debug!("screen capture: {screen_source:#?}");
 

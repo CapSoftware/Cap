@@ -128,6 +128,12 @@ fn capture_bounds(target: &ScreenCaptureTarget) -> Option<[f64; 4]> {
                 bounds.size().height() * scale.1,
             ])
         }
+        ScreenCaptureTarget::DesktopArea { bounds, .. } => Some([
+            bounds.position().x(),
+            bounds.position().y(),
+            bounds.size().width(),
+            bounds.size().height(),
+        ]),
     }
 }
 

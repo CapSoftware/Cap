@@ -2257,7 +2257,9 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
         .or_else(|| pinned.as_ref().map(|window| window.display_id.clone()));
 
     select.update(cx, |select, cx| {
-        select.arm(Some(request.mode), request.recording_mode, pinned, cx)
+        #[cfg(windows)]
+        select.set_desktop_monitors(crate::target_overlay::windows_desktop_monitors());
+        select.arm(Some(request.mode), request.recording_mode, pinned, cx);
     });
     sync_camera_presentation(cx);
 
@@ -2485,69 +2487,89 @@ fn area_overlay_matches(
     candidate: &ScreenCaptureTarget,
     capture_excluded: bool,
 ) -> bool {
-    let (
-        ScreenCaptureTarget::Area { screen, bounds },
-        ScreenCaptureTarget::Area {
-            screen: candidate_screen,
-            bounds: candidate_bounds,
-        },
-    ) = (target, candidate)
-    else {
+    if !capture_excluded {
         return false;
-    };
-    capture_excluded
-        && screen == candidate_screen
-        && bounds.position() == candidate_bounds.position()
-        && bounds.size() == candidate_bounds.size()
+    }
+    match (target, candidate) {
+        (
+            ScreenCaptureTarget::Area { screen, bounds },
+            ScreenCaptureTarget::Area {
+                screen: candidate_screen,
+                bounds: candidate_bounds,
+            },
+        ) => {
+            screen == candidate_screen
+                && bounds.position() == candidate_bounds.position()
+                && bounds.size() == candidate_bounds.size()
+        }
+        (
+            ScreenCaptureTarget::DesktopArea { bounds, screens },
+            ScreenCaptureTarget::DesktopArea {
+                bounds: candidate_bounds,
+                screens: candidate_screens,
+            },
+        ) => bounds == candidate_bounds && screens == candidate_screens,
+        _ => false,
+    }
 }
 
-/// The picker overlay an area recording keeps on screen as its outline, when
-/// it can be kept out of the recording: macOS leaves it out by window number,
-/// Windows by display affinity, set here. Linux has neither and closes it.
-fn area_overlay_for_recording(
+fn area_overlays_for_recording(
     target: &ScreenCaptureTarget,
     cx: &mut App,
-) -> Option<WindowHandle<OverlayWindow>> {
-    let ScreenCaptureTarget::Area { screen, .. } = target else {
-        return None;
+) -> Vec<WindowHandle<OverlayWindow>> {
+    let screen_ids: Vec<DisplayId> = match target {
+        ScreenCaptureTarget::Area { screen, .. } => vec![screen.clone()],
+        #[cfg(windows)]
+        ScreenCaptureTarget::DesktopArea { screens, .. } if screens.len() >= 2 => screens.clone(),
+        _ => return Vec::new(),
     };
-    let handle = overlay_handle(Some(screen.clone()), cx)?;
-    let (candidate, capture_excluded) = handle
-        .update(cx, |view, window, cx| {
-            let candidate = view.target(cx)?;
-            #[cfg(target_os = "macos")]
-            let capture_excluded = platform::window_is_visible(window)
-                && platform::window_number(window).is_some_and(|number| number > 0);
-            #[cfg(windows)]
-            let capture_excluded = platform::window_is_visible(window)
-                .then(|| platform::native_window(window))
-                .flatten();
-            #[cfg(not(any(target_os = "macos", windows)))]
-            let capture_excluded = {
-                let _ = window;
-                false
-            };
-            Some((candidate, capture_excluded))
-        })
-        .ok()
-        .flatten()?;
-    // Outside the update: the affinity change reaches the window server
-    // without a gpui borrow held. A remote or streamed session keeps windows
-    // in captures, and then the outline would be in the recording.
-    #[cfg(windows)]
-    let capture_excluded = capture_excluded.is_some_and(|native| {
-        platform::set_window_capture_hidden(&native, true);
-        platform::window_capture_hidden(&native)
-    });
-    area_overlay_matches(target, &candidate, capture_excluded).then_some(handle)
+
+    let mut handles = Vec::with_capacity(screen_ids.len());
+    for screen in &screen_ids {
+        let Some(handle) = overlay_handle(Some(screen.clone()), cx) else {
+            return Vec::new();
+        };
+        let Some((candidate, capture_excluded)) = handle
+            .update(cx, |view, window, cx| {
+                let candidate = view.target(cx)?;
+                #[cfg(target_os = "macos")]
+                let capture_excluded = platform::window_is_visible(window)
+                    && platform::window_number(window).is_some_and(|number| number > 0);
+                #[cfg(windows)]
+                let capture_excluded = platform::window_is_visible(window)
+                    .then(|| platform::native_window(window))
+                    .flatten();
+                #[cfg(not(any(target_os = "macos", windows)))]
+                let capture_excluded = {
+                    let _ = window;
+                    false
+                };
+                Some((candidate, capture_excluded))
+            })
+            .ok()
+            .flatten()
+        else {
+            return Vec::new();
+        };
+        #[cfg(windows)]
+        let capture_excluded = capture_excluded.is_some_and(|native| {
+            platform::set_window_capture_hidden(&native, true);
+            platform::window_capture_hidden(&native)
+        });
+        if !area_overlay_matches(target, &candidate, capture_excluded) {
+            return Vec::new();
+        }
+        handles.push(handle);
+    }
+    handles
 }
 
-fn close_other_overlays(retained: WindowHandle<OverlayWindow>, cx: &mut App) {
+fn close_other_overlays(retained: &[WindowHandle<OverlayWindow>], cx: &mut App) {
     let closing: Vec<_> = cx
         .global::<AppWindows>()
         .overlays
         .iter()
-        .filter(|(_, handle)| *handle != retained)
+        .filter(|(_, handle)| !retained.contains(handle))
         .map(|(display, _)| display.clone())
         .collect();
     for display in closing {
@@ -2558,25 +2580,28 @@ fn close_other_overlays(retained: WindowHandle<OverlayWindow>, cx: &mut App) {
 fn retain_recording_area(
     target: &ScreenCaptureTarget,
     cx: &mut App,
-) -> Option<WindowHandle<OverlayWindow>> {
-    let Some(handle) = area_overlay_for_recording(target, cx) else {
+) -> Vec<WindowHandle<OverlayWindow>> {
+    let handles = area_overlays_for_recording(target, cx);
+    if handles.is_empty() {
         close_target_overlays(cx);
-        return None;
-    };
-    let committed = handle
-        .update(cx, |view, _, cx| {
-            view.is_recording_area() || view.commit_area_for_recording(cx)
-        })
-        .unwrap_or(false);
+        return Vec::new();
+    }
+    let committed = handles.iter().all(|handle| {
+        handle
+            .update(cx, |view, _, cx| {
+                view.is_recording_area() || view.commit_area_for_recording(cx)
+            })
+            .unwrap_or(false)
+    });
     if !committed {
         close_target_overlays(cx);
-        return None;
+        return Vec::new();
     }
     release_camera_park(cx);
-    close_other_overlays(handle, cx);
+    close_other_overlays(&handles, cx);
     platform::unregister_escape_hotkey();
     disarm_target_selection(cx);
-    Some(handle)
+    handles
 }
 
 fn make_recording_area_passive(handle: WindowHandle<OverlayWindow>, cx: &mut App) {
@@ -2767,33 +2792,36 @@ fn start_recording_from_overlay_now(target: ScreenCaptureTarget, cx: &mut App) {
     // this, and an overlay that has not finished closing must not end up in
     // the recording.
     let excluded = overlay_window_ids(cx);
-    let area = matches!(&target, ScreenCaptureTarget::Area { .. });
+    let area = target.is_area();
     let retained = if area && cfg!(any(target_os = "macos", windows)) {
-        area_overlay_for_recording(&target, cx).filter(|handle| {
-            handle
-                .update(cx, |view, _, cx| view.commit_area_for_recording(cx))
-                .unwrap_or(false)
-        })
+        let handles = area_overlays_for_recording(&target, cx);
+        if !handles.is_empty()
+            && handles.iter().all(|handle| {
+                handle
+                    .update(cx, |view, _, cx| view.commit_area_for_recording(cx))
+                    .unwrap_or(false)
+            })
+        {
+            handles
+        } else {
+            Vec::new()
+        }
     } else {
-        None
+        Vec::new()
     };
-    let retained_area = retained.is_some();
-    match retained {
-        Some(handle) => close_other_overlays(handle, cx),
-        // A remote or streamed Windows session cannot leave the outline out
-        // of the capture, so it records the area without one.
-        None if area && cfg!(target_os = "macos") => {
-            dismiss_target_overlays(cx);
-            RecordingSession::global(cx).update(cx, |session, cx| {
-                session.error = Some(tr::dialog::capture::area_unavailable().into());
-                cx.notify();
-            });
-            return;
-        }
-        None => {
-            release_camera_park(cx);
-            close_target_overlays(cx);
-        }
+    let retained_area = !retained.is_empty();
+    if retained_area {
+        close_other_overlays(&retained, cx);
+    } else if area && cfg!(target_os = "macos") {
+        dismiss_target_overlays(cx);
+        RecordingSession::global(cx).update(cx, |session, cx| {
+            session.error = Some(tr::dialog::capture::area_unavailable().into());
+            cx.notify();
+        });
+        return;
+    } else {
+        release_camera_park(cx);
+        close_target_overlays(cx);
     }
 
     let preparing = main
@@ -3044,6 +3072,7 @@ fn close_overlay_windows(cx: &mut App) {
     // The window-variant overlay's `onCleanup`: the camera bubble goes back
     // where the picker found it, unless the pick was committed first.
     revert_camera_park(cx);
+    TargetSelect::global(cx).update(cx, |select, _| select.clear_desktop_area());
     let overlays = std::mem::take(&mut cx.global_mut::<AppWindows>().overlays);
     for (_, handle) in overlays {
         handle
@@ -4504,11 +4533,13 @@ fn begin_recording_after_preflight(config: StartConfig, cx: &mut App) {
         ..config
     };
     session.update(cx, |session, cx| session.start(config, cx));
-    if let Some(handle) = recording_area {
+    if !recording_area.is_empty() {
         if session.read(cx).phase == Phase::Idle {
             close_target_overlays(cx);
         } else {
-            make_recording_area_passive(handle, cx);
+            for handle in recording_area {
+                make_recording_area_passive(handle, cx);
+            }
         }
     }
 }
@@ -8565,6 +8596,29 @@ mod tests {
             area_target("1", -120., 80., 641., 480.),
             area_target("1", -120., 80., 640., 481.),
             area_target("2", -120., 80., 640., 480.),
+        ] {
+            assert!(!area_overlay_matches(&admitted, &changed, true));
+        }
+    }
+
+    #[test]
+    fn recording_outline_matches_multi_monitor_desktop_area_and_rejects_changes() {
+        let make =
+            |x: f64, y: f64, w: f64, h: f64, screens: &[&str]| ScreenCaptureTarget::DesktopArea {
+                bounds: scap_targets::bounds::PhysicalBounds::new(
+                    scap_targets::bounds::PhysicalPosition::new(x, y),
+                    scap_targets::bounds::PhysicalSize::new(w, h),
+                ),
+                screens: screens.iter().map(|s| s.parse().unwrap()).collect(),
+            };
+        let admitted = make(-640., 100., 1280., 720., &["1", "2"]);
+        let same = make(-640., 100., 1280., 720., &["1", "2"]);
+        assert!(area_overlay_matches(&admitted, &same, true));
+        assert!(!area_overlay_matches(&admitted, &same, false));
+        for changed in [
+            make(-639., 100., 1280., 720., &["1", "2"]),
+            make(-640., 100., 1280., 720., &["1", "3"]),
+            area_target("1", 0., 0., 1280., 720.),
         ] {
             assert!(!area_overlay_matches(&admitted, &changed, true));
         }

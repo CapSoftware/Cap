@@ -35,7 +35,9 @@ pub fn take_screenshot(target: ScreenCaptureTarget, cx: &mut App) {
     if cap_recording::screenshot::uses_wayland_portal()
         && matches!(
             target,
-            ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. }
+            ScreenCaptureTarget::Display { .. }
+                | ScreenCaptureTarget::Area { .. }
+                | ScreenCaptureTarget::DesktopArea { .. }
         )
         && !WAYLAND_SCREENSHOTS_ALLOWED.load(std::sync::atomic::Ordering::Acquire)
     {

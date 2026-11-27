@@ -9,7 +9,9 @@ use std::time::SystemTime;
 use tracing::*;
 
 pub mod cadence;
+pub mod desktop_area;
 pub mod frame_accounting;
+pub use desktop_area::*;
 
 #[cfg(target_os = "windows")]
 mod windows;
@@ -74,6 +76,10 @@ pub enum ScreenCaptureTarget {
         screen: DisplayId,
         bounds: LogicalBounds,
     },
+    DesktopArea {
+        bounds: PhysicalBounds,
+        screens: Vec<DisplayId>,
+    },
     CameraOnly,
     AudioOnly,
 }
@@ -91,7 +97,9 @@ impl LinuxCaptureSource {
     pub fn from_target(target: &ScreenCaptureTarget) -> Self {
         match target {
             ScreenCaptureTarget::Window { id } => Self::Window { id: id.clone() },
-            ScreenCaptureTarget::Area { .. } => Self::Area,
+            ScreenCaptureTarget::Area { .. } | ScreenCaptureTarget::DesktopArea { .. } => {
+                Self::Area
+            }
             ScreenCaptureTarget::Display { .. }
             | ScreenCaptureTarget::CameraOnly
             | ScreenCaptureTarget::AudioOnly => Self::Display,
@@ -104,11 +112,16 @@ impl ScreenCaptureTarget {
         matches!(self, Self::AudioOnly)
     }
 
+    pub fn is_area(&self) -> bool {
+        matches!(self, Self::Area { .. } | Self::DesktopArea { .. })
+    }
+
     pub fn display(&self) -> Option<Display> {
         match self {
             Self::Display { id } => Display::from_id(id),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.display()),
             Self::Area { screen, .. } => Display::from_id(screen),
+            Self::DesktopArea { screens, .. } => screens.first().and_then(Display::from_id),
             Self::CameraOnly | Self::AudioOnly => None,
         }
     }
@@ -244,8 +257,46 @@ impl ScreenCaptureTarget {
                     return Some(CursorCropBounds::new_linux(bounds));
                 }
             }
+            Self::DesktopArea { bounds, screens } => {
+                #[cfg(windows)]
+                {
+                    let plan = self.resolve_windows_desktop_area_plan()?;
+                    let anchor_bounds = Display::from_id(screens.first()?)?
+                        .raw_handle()
+                        .physical_bounds()?;
+                    let _ = bounds;
+                    Some(CursorCropBounds::new_windows(desktop_area_cursor_crop(
+                        anchor_bounds,
+                        &plan,
+                    )))
+                }
+
+                #[cfg(not(windows))]
+                {
+                    let _ = (bounds, screens);
+                    None
+                }
+            }
             Self::CameraOnly | Self::AudioOnly => None,
         }
+    }
+
+    #[cfg(windows)]
+    pub fn resolve_windows_desktop_area_plan(&self) -> Option<DesktopAreaPlan> {
+        let Self::DesktopArea { bounds, screens } = self else {
+            return None;
+        };
+        if screens.len() < 2 {
+            return None;
+        }
+        let mut monitors = Vec::with_capacity(screens.len());
+        for id in screens {
+            let display = Display::from_id(id)?;
+            let physical_bounds = display.raw_handle().physical_bounds()?;
+            monitors.push((id.clone(), physical_bounds));
+        }
+        let plan = resolve_desktop_area_plan(*bounds, &monitors)?;
+        (plan.regions.len() >= 2).then_some(plan)
     }
 
     pub fn physical_size(&self) -> Option<PhysicalSize> {
@@ -278,6 +329,23 @@ impl ScreenCaptureTarget {
                     )
                 }
             }
+            Self::DesktopArea { bounds, .. } => {
+                #[cfg(windows)]
+                {
+                    self.resolve_windows_desktop_area_plan()
+                        .map(|plan| {
+                            PhysicalSize::new(
+                                f64::from(plan.canvas_width),
+                                f64::from(plan.canvas_height),
+                            )
+                        })
+                        .or_else(|| Some(bounds.size()))
+                }
+                #[cfg(not(windows))]
+                {
+                    Some(bounds.size())
+                }
+            }
             Self::CameraOnly | Self::AudioOnly => None,
         }
     }
@@ -287,6 +355,17 @@ impl ScreenCaptureTarget {
             Self::Display { id } => Display::from_id(id).and_then(|d| d.name()),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.name()),
             Self::Area { screen, .. } => Display::from_id(screen).and_then(|d| d.name()),
+            Self::DesktopArea { screens, .. } => {
+                let names: Vec<String> = screens
+                    .iter()
+                    .filter_map(|id| Display::from_id(id).and_then(|d| d.name()))
+                    .collect();
+                if names.is_empty() {
+                    Some("Multi-Display".to_string())
+                } else {
+                    Some(names.join(" + "))
+                }
+            }
             Self::CameraOnly => Some("Camera".to_string()),
             Self::AudioOnly => Some("Audio".to_string()),
         }
@@ -296,7 +375,7 @@ impl ScreenCaptureTarget {
         match self {
             ScreenCaptureTarget::Display { .. } => "Display",
             ScreenCaptureTarget::Window { .. } => "Window",
-            ScreenCaptureTarget::Area { .. } => "Area",
+            ScreenCaptureTarget::Area { .. } | ScreenCaptureTarget::DesktopArea { .. } => "Area",
             ScreenCaptureTarget::CameraOnly => "Camera",
             ScreenCaptureTarget::AudioOnly => "Audio",
         }
@@ -402,6 +481,8 @@ pub struct Config {
     /// Capture this window itself rather than a crop of its display.
     #[cfg(any(target_os = "macos", windows))]
     window: Option<WindowId>,
+    #[cfg(windows)]
+    desktop_area: Option<DesktopAreaPlan>,
 }
 
 #[cfg(target_os = "macos")]
@@ -632,6 +713,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
                 linux_source,
                 #[cfg(any(target_os = "macos", windows))]
                 window,
+                #[cfg(windows)]
+                desktop_area: None,
             },
             video_info: VideoInfo::from_raw_ffmpeg(
                 TCaptureFormat::pixel_format(),
@@ -650,6 +733,65 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
             excluded_windows,
             #[cfg(target_os = "macos")]
             leave_out_hidden_sinks,
+        })
+    }
+
+    #[cfg(windows)]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn init_desktop_area(
+        anchor_display: scap_targets::Display,
+        plan: DesktopAreaPlan,
+        show_cursor: bool,
+        max_fps: u32,
+        max_capture_size: Option<(u32, u32)>,
+        start_time: SystemTime,
+        system_audio: bool,
+        d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    ) -> Result<Self, ScreenCaptureInitError> {
+        cap_fail::fail!("ScreenCaptureSource::init");
+
+        let max_refresh = plan
+            .regions
+            .iter()
+            .filter_map(|region| Display::from_id(&region.display_id))
+            .map(|display| validated_refresh_rate(display.refresh_rate()))
+            .max()
+            .unwrap_or_else(|| validated_refresh_rate(anchor_display.refresh_rate()));
+        let fps = std::cmp::max(1, std::cmp::min(max_fps, max_refresh));
+
+        let native_output_size =
+            PhysicalSize::new(f64::from(plan.canvas_width), f64::from(plan.canvas_height));
+        let output_size = constrain_capture_size(native_output_size, max_capture_size);
+
+        tracing::info!(
+            regions = plan.regions.len(),
+            canvas_width = plan.canvas_width,
+            canvas_height = plan.canvas_height,
+            output_width = output_size.width(),
+            output_height = output_size.height(),
+            fps,
+            "Multi-monitor desktop area capture configured"
+        );
+
+        Ok(Self {
+            config: Config {
+                display: anchor_display.id(),
+                crop_bounds: None,
+                fps,
+                show_cursor,
+                window: None,
+                desktop_area: Some(plan),
+            },
+            video_info: VideoInfo::from_raw_ffmpeg(
+                TCaptureFormat::pixel_format(),
+                output_size.width() as u32,
+                output_size.height() as u32,
+                fps,
+            ),
+            start_time,
+            system_audio,
+            _phantom: std::marker::PhantomData,
+            d3d_device,
         })
     }
 
