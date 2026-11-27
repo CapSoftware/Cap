@@ -28,7 +28,7 @@ use gpui::{App, Global, PromptButton, PromptLevel};
 use crate::{
     app_windows,
     i18n::tr,
-    main_window::{Mode, TargetType},
+    main_window::{Mode, RecordingStartPermit, TargetType},
     session::{Phase, RecordingSession},
     store,
 };
@@ -1100,6 +1100,11 @@ fn dispatch_without_mode(action: HotkeyAction, pressed_at: std::time::Instant, c
         }
         HotkeyAction::ToggleDrawing => crate::live_draw::toggle(cx),
         HotkeyAction::StopRecording => {
+            let main = cx.global::<app_windows::AppWindows>().main;
+            let _ = main.update(cx, |view, _, cx| {
+                view.cancel_deep_link_start();
+                cx.notify();
+            });
             RecordingSession::global(cx).update(cx, |session, cx| session.stop(cx));
         }
         HotkeyAction::RestartRecording => {
@@ -1170,6 +1175,100 @@ fn microphone_available(name: &str) -> bool {
     } else {
         MicrophoneFeed::list().contains_key(name)
     }
+}
+
+/// Starts a recording in the given mode (or falls back to the stored Studio/Instant mode)
+/// for external deep-link triggers like Raycast, holding a permit so Stop cancels pending starts.
+pub(crate) fn start_default_recording(mode: Option<Mode>, cx: &mut App) -> Result<(), String> {
+    let resolved_mode = match mode.unwrap_or_else(Mode::from_store) {
+        Mode::Studio => Mode::Studio,
+        Mode::Instant | Mode::Screenshot => Mode::Instant,
+    };
+    let main = cx.global::<app_windows::AppWindows>().main;
+    let can_set_mode = RecordingSession::global(cx).read(cx).phase == Phase::Idle
+        && !app_windows::clean_capture_owned(cx)
+        && main
+            .read(cx)
+            .is_ok_and(|view| !view.is_preparing_recording());
+    if can_set_mode {
+        app_windows::set_recording_mode(resolved_mode, cx);
+    }
+    let permit = main
+        .update(cx, |view, _, cx| view.prepare_default_recording_start(cx))
+        .map_err(|_| "The recording window is unavailable".to_string())??;
+    let armed = main.read(cx).ok().and_then(|view| view.armed_target());
+    let stored = stored_target();
+    let confirm = store::GeneralSettings::load().confirm_without_microphone;
+    let mic_name = main.read(cx).ok().and_then(|view| {
+        view.microphone_selection()
+            .map(|microphone| microphone.name.clone())
+    });
+
+    cx.spawn(async move |cx| {
+        let target = cx
+            .background_executor()
+            .spawn(async move {
+                pick_hotkey_target(armed, stored, target_is_live, || {
+                    scap_targets::Display::get_containing_cursor()
+                        .unwrap_or_else(scap_targets::Display::primary)
+                        .id()
+                })
+            })
+            .await;
+        if !cx.update(|cx| default_start_is_current(main, &permit, cx)) {
+            return;
+        }
+        if !confirm {
+            cx.update(|cx| start_default_now(main, target, false, permit, cx));
+            return;
+        }
+        let available = match mic_name {
+            Some(name) => {
+                cx.background_executor()
+                    .spawn(async move { microphone_available(&name) })
+                    .await
+            }
+            None => false,
+        };
+        if !cx.update(|cx| default_start_is_current(main, &permit, cx)) {
+            return;
+        }
+        if available {
+            cx.update(|cx| start_default_now(main, target, false, permit, cx));
+            return;
+        }
+        let receiver = cx.update(|cx| {
+            if !default_start_is_current(main, &permit, cx) {
+                return None;
+            }
+            app_windows::show_main_window(cx);
+            cx.activate(true);
+            main.update(cx, |_, window, cx| {
+                window.prompt(
+                    PromptLevel::Warning,
+                    tr::main::mic_warning::title(),
+                    Some(tr::dialog::no_microphone_body()),
+                    &[
+                        PromptButton::ok(tr::main::mic_warning::record_without()),
+                        PromptButton::cancel(tr::common::cancel()),
+                    ],
+                    cx,
+                )
+            })
+            .ok()
+        });
+        let Some(receiver) = receiver else {
+            cx.update(|cx| finish_default_start(main, &permit, cx));
+            return;
+        };
+        if receiver.await == Ok(0) {
+            cx.update(|cx| start_default_now(main, target, true, permit, cx));
+        } else {
+            cx.update(|cx| finish_default_start(main, &permit, cx));
+        }
+    })
+    .detach();
+    Ok(())
 }
 
 /// `start_recording_from_hotkey` + the `RequestStartRecording` listener
@@ -1317,6 +1416,20 @@ fn target_is_live(target: &ScreenCaptureTarget) -> bool {
     }
 }
 
+fn default_start_is_current(
+    main: gpui::WindowHandle<crate::main_window::MainWindow>,
+    permit: &RecordingStartPermit,
+    cx: &mut App,
+) -> bool {
+    let current = main
+        .read(cx)
+        .is_ok_and(|view| view.recording_start_is_current(permit, cx));
+    if !current {
+        finish_default_start(main, permit, cx);
+    }
+    current
+}
+
 fn start_now(
     main: gpui::WindowHandle<crate::main_window::MainWindow>,
     mode: Mode,
@@ -1331,6 +1444,42 @@ fn start_now(
         view.start_recording_in_mode(target, mode, window, cx)
     })
     .ok();
+}
+
+fn finish_default_start(
+    main: gpui::WindowHandle<crate::main_window::MainWindow>,
+    permit: &RecordingStartPermit,
+    cx: &mut App,
+) {
+    if main
+        .update(cx, |view, _, _| view.finish_deep_link_start(permit))
+        .is_err()
+    {
+        permit.cancel();
+    }
+}
+
+fn start_default_now(
+    main: gpui::WindowHandle<crate::main_window::MainWindow>,
+    target: ScreenCaptureTarget,
+    confirmed_without_microphone: bool,
+    permit: RecordingStartPermit,
+    cx: &mut App,
+) {
+    if main
+        .update(cx, |view, _, cx| {
+            view.start_recording_with_target_and_permit(
+                target,
+                Vec::new(),
+                confirmed_without_microphone,
+                permit.clone(),
+                cx,
+            )
+        })
+        .is_err()
+    {
+        permit.cancel();
+    }
 }
 
 /// `RecordingSettingsStore.target`, straight off the shared store's JSON. A
