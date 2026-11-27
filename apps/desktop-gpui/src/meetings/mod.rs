@@ -1139,6 +1139,7 @@ impl Meetings {
     fn watch_speaking(&mut self, doc_id: String, cx: &mut Context<Self>) {
         self.speaking_watch = None;
         if !cap_meeting_platform::READS_MEETING_APPS
+            || !cap_meeting_platform::NAMES_FROM_MEETING_APPS
             || !self.settings.transcription.name_speakers_from_apps
             || !cap_meeting_platform::accessibility_trusted()
         {
