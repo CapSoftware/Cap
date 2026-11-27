@@ -64,18 +64,20 @@ export async function generateMetadata(
 			Option.match({
 				onNone: () => notFound(),
 				onSome: ([video]) => ({
-					...buildShareVideoMetadata({
-						videoId,
-						name: video.name,
-						sourceType: video.source.type,
-						width: Option.getOrNull(video.width),
-						height: Option.getOrNull(video.height),
-						webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
-						thumbnailVersion: getCustomThumbnailVersion(
-							Option.getOrNull(video.metadata),
-						),
-					}),
-					robots: "index, follow",
+					...(video.isNote
+						? { title: `${video.name} | Cap` }
+						: buildShareVideoMetadata({
+								videoId,
+								name: video.name,
+								sourceType: video.source.type,
+								width: Option.getOrNull(video.width),
+								height: Option.getOrNull(video.height),
+								webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+								thumbnailVersion: getCustomThumbnailVersion(
+									Option.getOrNull(video.metadata),
+								),
+							})),
+					robots: video.isNote ? "noindex, nofollow" : "index, follow",
 				}),
 			}),
 		),
@@ -233,6 +235,14 @@ async function EmbedContent({
 	options: EmbedOptions;
 	minimal: boolean;
 }) {
+	if (video.isNote) {
+		return (
+			<div className="flex justify-center items-center min-h-screen text-white bg-black">
+				<p>Notes cannot be embedded</p>
+			</div>
+		);
+	}
+
 	const [user, sharedSpaces, [videoOwner]] = await Promise.all([
 		getCurrentUser(),
 		db()

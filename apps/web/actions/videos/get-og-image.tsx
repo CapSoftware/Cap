@@ -33,6 +33,12 @@ export async function generateVideoOgImage(
 	const access = await anonymousViewAccess(video);
 	if (access !== "allowed") return renderVideoOgStatus(access);
 
+	if (video.isNote)
+		return renderVideoOg({
+			kind: "note",
+			note: { title: video.name, ownerName: ownerName ?? undefined },
+		});
+
 	// A version only names an image that exists. Anything else goes to the
 	// current URL, so made-up versions cannot each cost a fresh render.
 	const currentVersion = getCustomThumbnailVersion(video.metadata);

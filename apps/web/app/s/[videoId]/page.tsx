@@ -83,7 +83,10 @@ import {
 	getCustomThumbnailUrl,
 	getSharePlaybackSource,
 } from "@/lib/share-playback";
-import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
+import {
+	buildShareNoteMetadata,
+	buildShareVideoMetadata,
+} from "@/lib/share-video-metadata";
 import {
 	resolveForeignShareRedirect,
 	resolveRestrictedShareRedirect,
@@ -351,6 +354,15 @@ export async function generateMetadata(
 							}
 						: notFound(),
 				onSome: ([video]) => {
+					if (video.isNote)
+						return {
+							...buildShareNoteMetadata({
+								videoId,
+								name: video.name,
+								webUrl,
+							}),
+							robots: "noindex, nofollow",
+						};
 					return {
 						...buildShareVideoMetadata({
 							videoId,

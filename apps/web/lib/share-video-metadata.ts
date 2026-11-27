@@ -200,3 +200,38 @@ export const buildShareVideoMetadata = ({
 		},
 	};
 };
+
+export const buildShareNoteMetadata = ({
+	videoId,
+	name,
+	webUrl,
+}: Pick<ShareVideoMetadataInput, "videoId" | "name" | "webUrl">): Metadata => {
+	const shareUrl = new URL(`/s/${videoId}`, webUrl).toString();
+	const ogImage = {
+		url: buildVideoOgImageUrl({ videoId, webUrl }),
+		width: 1200,
+		height: 630,
+		type: "image/png",
+	};
+	const title = `${name} | Cap`;
+	const description = "Read this note on Cap";
+
+	return {
+		title,
+		description,
+		alternates: { canonical: shareUrl },
+		openGraph: {
+			title,
+			description,
+			url: shareUrl,
+			type: "article",
+			images: [ogImage],
+		},
+		twitter: {
+			card: "summary_large_image",
+			title,
+			description,
+			images: [ogImage.url],
+		},
+	};
+};
