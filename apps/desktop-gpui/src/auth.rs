@@ -466,24 +466,11 @@ pub async fn update_auth_plan() -> Result<(), AuthApiError> {
     }
     let account = auth_identity(&store::store_section("auth"));
 
-    let mut plan = None;
-    if !snapshot.plan_manual {
-        match authed_request(reqwest::Method::GET, "/api/desktop/plan", None).await {
-            Ok(response) if response.status().is_success() => {
-                if let Ok(body) = response.json::<Value>().await
-                    && let Some(upgraded) = body.get("upgraded").and_then(Value::as_bool)
-                {
-                    plan = Some(json!({
-                        "upgraded": upgraded,
-                        "manual": false,
-                        "last_checked": chrono::Utc::now().timestamp() as i32,
-                    }));
-                }
-            }
-            Ok(response) => tracing::warn!("Plan fetch returned {}", response.status()),
-            Err(error) => tracing::warn!("Failed to fetch plan: {error}"),
-        }
-    }
+    let plan = if snapshot.plan_manual {
+        None
+    } else {
+        fetch_plan(None).await
+    };
 
     let mut organizations = None;
     let mut organizations_failed = false;
@@ -510,7 +497,7 @@ pub async fn update_auth_plan() -> Result<(), AuthApiError> {
             return false;
         }
         if let Some(plan) = plan {
-            auth.insert("plan".into(), plan);
+            save_plan(auth, plan);
         }
         let now = json!(chrono::Utc::now().timestamp() as i32);
         if let Some(orgs) = organizations {
@@ -533,6 +520,116 @@ pub async fn update_auth_plan() -> Result<(), AuthApiError> {
         return Err(AuthApiError::Other("Failed to persist auth plan".into()));
     }
     Ok(())
+}
+
+/// Plan fetches can finish out of order: `update_auth_plan` saves only after
+/// the organizations request, so its plan can be older than one saved since.
+/// `last_checked` is in seconds, so fetches made by this run are also ordered
+/// by when they returned.
+fn save_plan(auth: &mut serde_json::Map<String, Value>, fetched: FetchedPlan) {
+    if superseded(auth.get("plan"), &fetched.plan)
+        || SAVED_PLAN_FETCH.fetch_max(fetched.order, Ordering::SeqCst) > fetched.order
+    {
+        return;
+    }
+    auth.insert("plan".into(), fetched.plan);
+}
+
+static PLAN_FETCHES: AtomicU64 = AtomicU64::new(0);
+static SAVED_PLAN_FETCH: AtomicU64 = AtomicU64::new(0);
+
+struct FetchedPlan {
+    plan: Value,
+    order: u64,
+    recording_limit_applies: Option<bool>,
+}
+
+fn fetched_plan(plan: Value) -> FetchedPlan {
+    FetchedPlan {
+        plan,
+        order: PLAN_FETCHES.fetch_add(1, Ordering::SeqCst) + 1,
+        recording_limit_applies: None,
+    }
+}
+
+fn parse_plan(body: &Value) -> Option<(bool, Option<bool>)> {
+    let upgraded = body.get("upgraded").and_then(Value::as_bool)?;
+    let recording_limit_applies = body.get("recording_limit_applies").and_then(Value::as_bool);
+    Some((upgraded, recording_limit_applies))
+}
+
+fn superseded(saved: Option<&Value>, fetched: &Value) -> bool {
+    let checked_at = |plan: &Value| plan.get("last_checked").and_then(Value::as_i64);
+    match (saved.and_then(checked_at), checked_at(fetched)) {
+        (Some(saved), Some(fetched)) => saved > fetched,
+        _ => false,
+    }
+}
+
+/// With a recording's video id, servers that know it also answer whether
+/// that recording's limit still applies, which counts its organization too.
+async fn fetch_plan(video_id: Option<&str>) -> Option<FetchedPlan> {
+    let path = match video_id {
+        Some(id) if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric()) => {
+            format!("/api/desktop/plan?videoId={id}")
+        }
+        _ => "/api/desktop/plan".to_string(),
+    };
+    match authed_request(reqwest::Method::GET, &path, None).await {
+        Ok(response) if response.status().is_success() => {
+            let body = response.json::<Value>().await.ok()?;
+            let (upgraded, recording_limit_applies) = parse_plan(&body)?;
+            let mut fetched = fetched_plan(json!({
+                "upgraded": upgraded,
+                "manual": false,
+                "last_checked": chrono::Utc::now().timestamp() as i32,
+            }));
+            fetched.recording_limit_applies = recording_limit_applies;
+            Some(fetched)
+        }
+        Ok(response) => {
+            tracing::warn!("Plan fetch returned {}", response.status());
+            None
+        }
+        Err(error) => {
+            tracing::warn!("Failed to fetch plan: {error}");
+            None
+        }
+    }
+}
+
+/// Fetches and saves the plan alone, for checks that cannot wait on the
+/// organizations request `update_auth_plan` also makes. Returns whether the
+/// given recording's limit still applies, when the server says.
+pub async fn update_plan_only(video_id: Option<String>) -> Result<Option<bool>, AuthApiError> {
+    let snapshot = store::auth_snapshot();
+    if !snapshot.signed_in() {
+        return Err(AuthApiError::InvalidAuthentication);
+    }
+    if snapshot.plan_manual {
+        return Ok(None);
+    }
+    let account = auth_identity(&store::store_section("auth"));
+    let plan = fetch_plan(video_id.as_deref())
+        .await
+        .ok_or_else(|| AuthApiError::Other("Failed to fetch plan".into()))?;
+    let recording_limit_applies = plan.recording_limit_applies;
+    let mut stale = false;
+    let persisted = store::update_store_section("auth", |auth| {
+        if account.is_none() || auth_identity(auth) != account {
+            stale = true;
+            return false;
+        }
+        save_plan(auth, plan);
+        true
+    });
+    if stale {
+        return Err(AuthApiError::InvalidAuthentication);
+    }
+    if !persisted {
+        return Err(AuthApiError::Other("Failed to persist auth plan".into()));
+    }
+    Ok(recording_limit_applies)
 }
 
 fn auth_identity(auth: &serde_json::Map<String, Value>) -> Option<(Value, Value)> {
@@ -860,6 +957,48 @@ mod server_change_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_whether_a_recording_limit_still_applies() {
+        assert_eq!(parse_plan(&json!({"upgraded": false})), Some((false, None)));
+        assert_eq!(
+            parse_plan(&json!({"upgraded": false, "recording_limit_applies": false})),
+            Some((false, Some(false)))
+        );
+        assert_eq!(
+            parse_plan(&json!({"upgraded": true, "recording_limit_applies": true})),
+            Some((true, Some(true)))
+        );
+        assert_eq!(parse_plan(&json!({"recording_limit_applies": false})), None);
+    }
+
+    #[test]
+    fn a_plan_fetched_earlier_in_the_same_second_never_replaces_a_later_one() {
+        let plan =
+            |upgraded: bool| json!({"upgraded": upgraded, "manual": false, "last_checked": 10});
+        let free = fetched_plan(plan(false));
+        let pro = fetched_plan(plan(true));
+        let mut auth = serde_json::Map::new();
+        save_plan(&mut auth, pro);
+        save_plan(&mut auth, free);
+        assert_eq!(auth["plan"]["upgraded"], json!(true));
+        save_plan(&mut auth, fetched_plan(plan(false)));
+        assert_eq!(auth["plan"]["upgraded"], json!(false));
+    }
+
+    #[test]
+    fn an_older_plan_never_replaces_a_newer_one() {
+        let plan = |at: i64| json!({"upgraded": true, "manual": false, "last_checked": at});
+        assert!(superseded(Some(&plan(20)), &plan(10)));
+        assert!(!superseded(Some(&plan(10)), &plan(20)));
+        assert!(!superseded(Some(&plan(10)), &plan(10)));
+        assert!(!superseded(None, &plan(10)));
+        assert!(!superseded(Some(&Value::Null), &plan(10)));
+        assert!(!superseded(
+            Some(&json!({"upgraded": true, "manual": true})),
+            &plan(10)
+        ));
+    }
 
     #[test]
     fn parses_api_key_callback() {
