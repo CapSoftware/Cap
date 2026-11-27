@@ -344,10 +344,17 @@ async function processVideoOnMediaServer(
 		)
 		.pipe(runWorkflowPromise);
 
+	const [limitedUpload] =
+		freePlanLimitSeconds === null
+			? []
+			: await db()
+					.select({ startedAt: videoUploads.startedAt })
+					.from(videoUploads)
+					.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true${
 		freePlanLimitSeconds === null
 			? ""
-			: `&${FREE_PLAN_DURATION_WEBHOOK_PARAM}=1`
+			: `&${FREE_PLAN_DURATION_WEBHOOK_PARAM}=${limitedUpload?.startedAt.getTime() ?? 0}`
 	}`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 

@@ -379,10 +379,12 @@ describe("media processing workflows", () => {
 	});
 
 	describe("free plan duration limit", () => {
-		const dispatchedRows = () => [
+		const uploadStartedAt = new Date("2026-11-27T09:00:00Z");
+		const dispatchedRows = (limited = false) => [
 			[video],
 			[{ ...pending, rawFileKey: payload.rawFileKey }],
 			[video],
+			...(limited ? [[{ startedAt: uploadStartedAt }]] : []),
 			[pending],
 			[],
 			[metadata],
@@ -394,7 +396,7 @@ describe("media processing workflows", () => {
 
 		it("asks the media server to measure a free plan upload against the limit", async () => {
 			mocks.freePlanLimit.mockResolvedValue(330);
-			mocks.rows = dispatchedRows();
+			mocks.rows = dispatchedRows(true);
 			await expect(processVideoWorkflow(payload)).resolves.toMatchObject({
 				success: true,
 			});
@@ -402,7 +404,7 @@ describe("media processing workflows", () => {
 			const body = dispatchBody();
 			expect(body.maxOutputSeconds).toBe(330);
 			expect(new URL(body.webhookUrl).searchParams.get("freePlanLimit")).toBe(
-				"1",
+				String(uploadStartedAt.getTime()),
 			);
 		});
 
@@ -425,6 +427,7 @@ describe("media processing workflows", () => {
 				[video],
 				[{ ...pending, rawFileKey: payload.rawFileKey }],
 				[video],
+				[{ startedAt: uploadStartedAt }],
 				[{ ...pending, phase: "error", processingError }],
 			];
 			await expect(processVideoWorkflow(payload)).rejects.toThrow(

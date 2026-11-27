@@ -32,7 +32,11 @@ const mocks = vi.hoisted(() => ({
 			metadata: "videos.metadata",
 		},
 		jobs: { videoId: "jobs.videoId" },
-		uploads: { videoId: "uploads.videoId", rawFileKey: "uploads.rawFileKey" },
+		uploads: {
+			videoId: "uploads.videoId",
+			rawFileKey: "uploads.rawFileKey",
+			startedAt: "uploads.startedAt",
+		},
 	},
 }));
 
@@ -202,6 +206,8 @@ type Mutation = {
 	values?: Record<string, unknown>;
 };
 
+const uploadStartedAt = new Date("2026-11-27T09:00:00Z");
+
 function databaseFixture(initial: DesktopRecordingJob | null = fixture().job) {
 	let current = initial;
 	let rawFileKey: string | null = null;
@@ -219,7 +225,9 @@ function databaseFixture(initial: DesktopRecordingJob | null = fixture().job) {
 		if (table === mocks.tables.jobs)
 			return current ? [structuredClone(current)] : [];
 		if (table === mocks.tables.uploads)
-			return mocks.noUploadRow ? [] : [{ rawFileKey }];
+			return mocks.noUploadRow
+				? []
+				: [{ rawFileKey, startedAt: uploadStartedAt }];
 		throw new Error("Unexpected table");
 	};
 	const writes = (pending: Mutation[]) => ({
@@ -1136,7 +1144,8 @@ describe("Loom importer completions", () => {
 });
 
 describe("free plan duration limit at processing", () => {
-	const freePlanSearch = "?retryable=true&freePlanLimit=1";
+	const freePlanSearch = `?retryable=true&freePlanLimit=${uploadStartedAt.getTime()}`;
+	const earlierUploadSearch = `?retryable=true&freePlanLimit=${uploadStartedAt.getTime() - 60_000}`;
 	const rawFileKey = `${ownerId}/${videoId}/raw-upload.mp4`;
 	const complete = (measured: Record<string, unknown>) => ({
 		jobId: "media-job-1",
@@ -1318,6 +1327,45 @@ describe("free plan duration limit at processing", () => {
 		});
 		expect(mocks.deleteObjects).not.toHaveBeenCalled();
 		expect(database.mutations).toEqual([]);
+	});
+
+	it("treats a refusal for an earlier upload like any other worker error", async () => {
+		const database = freeUpload();
+		const error =
+			"media-length-limit-exceeded: the source runs longer than 330 seconds";
+		const response = await request(
+			{ jobId: "media-job-old", videoId, phase: "error", progress: 5, error },
+			"media-secret",
+			earlierUploadSearch,
+		);
+		expect(await response.json()).toEqual({ success: true });
+		expect(mocks.measureObject).not.toHaveBeenCalled();
+		expect(uploadWrites(database.mutations)).toEqual([
+			{
+				operation: "update",
+				table: mocks.tables.uploads,
+				values: expect.objectContaining({
+					phase: "processing",
+					processingError: error,
+				}),
+			},
+		]);
+	});
+
+	it("never fails the current upload for an earlier upload's over-limit completion", async () => {
+		const database = freeUpload();
+		await request(
+			complete({ duration: 900 }),
+			"media-secret",
+			earlierUploadSearch,
+		);
+		expect(
+			uploadWrites(database.mutations).some(({ values }) =>
+				String(values?.processingError ?? "").startsWith(
+					"free-plan-duration-exceeded",
+				),
+			),
+		).toBe(false);
 	});
 
 	it("retries a refusal without the limit after the owner upgrades", async () => {

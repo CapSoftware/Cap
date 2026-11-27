@@ -202,9 +202,15 @@ export async function POST(request: NextRequest) {
 		);
 
 		const dbPhase = mapPhaseToDbPhase(payload.phase);
-		const freePlanLimited =
-			request.nextUrl.searchParams.get(FREE_PLAN_DURATION_WEBHOOK_PARAM) ===
-			"1";
+		// The limit applies only to the upload this job was started for: a
+		// late callback from an earlier upload is handled like any other.
+		const limitedUpload = request.nextUrl.searchParams.get(
+			FREE_PLAN_DURATION_WEBHOOK_PARAM,
+		);
+		const freePlanLimited = limitedUpload !== null;
+		const isLimitedUpload = (upload: { startedAt: Date | null } | undefined) =>
+			freePlanLimited &&
+			upload?.startedAt?.getTime().toString() === limitedUpload;
 
 		if (
 			freePlanLimited &&
@@ -216,12 +222,18 @@ export async function POST(request: NextRequest) {
 				.from(videos)
 				.where(eq(videos.id, payload.videoId as Video.VideoId));
 			const [currentUpload] = await db()
-				.select({ rawFileKey: videoUploads.rawFileKey })
+				.select({
+					rawFileKey: videoUploads.rawFileKey,
+					startedAt: videoUploads.startedAt,
+				})
 				.from(videoUploads)
 				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
-			const status = currentVideo
-				? await rejectFreePlanOverLimitVideo(currentVideo, currentUpload)
-				: "no-upload";
+			const status =
+				!currentVideo || !currentUpload
+					? "no-upload"
+					: isLimitedUpload(currentUpload)
+						? await rejectFreePlanOverLimitVideo(currentVideo, currentUpload)
+						: "not-limited";
 			if (status !== "not-limited")
 				return NextResponse.json({ success: true, status });
 		}
@@ -232,7 +244,10 @@ export async function POST(request: NextRequest) {
 				.from(videos)
 				.where(eq(videos.id, payload.videoId as Video.VideoId));
 			const [currentUpload] = await db()
-				.select({ rawFileKey: videoUploads.rawFileKey })
+				.select({
+					rawFileKey: videoUploads.rawFileKey,
+					startedAt: videoUploads.startedAt,
+				})
 				.from(videoUploads)
 				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
 			const isEditUpload =
@@ -268,7 +283,7 @@ export async function POST(request: NextRequest) {
 			if (
 				currentVideo &&
 				!isEditUpload &&
-				freePlanLimited &&
+				isLimitedUpload(currentUpload) &&
 				exceedsFreePlanMeasuredDuration(
 					measuredMediaSeconds(payload.metadata),
 				) &&
