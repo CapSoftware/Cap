@@ -876,6 +876,21 @@ pub fn run() -> anyhow_lite::R {
             }))
         };
         let reader = Arc::new(Mutex::new(CodeReader::new(&device, &ctx, code, fmt)?));
+        let cb_nv12 = (a.release == "immediate" && a.map_mode.starts_with("cb")).then(|| {
+            Mutex::new(Nv12Reader {
+                device: device.clone(),
+                ctx: ctx.clone(),
+                code,
+                readback: a.map_mode == "cbstage",
+                state: None,
+                pending: VecDeque::new(),
+                next: 0,
+                buf: Vec::new(),
+                small: None,
+                fmt,
+                failed: None,
+            })
+        });
         if a.memload {
             let secs = a.secs;
             std::thread::spawn(move || {
@@ -918,6 +933,10 @@ pub fn run() -> anyhow_lite::R {
                 };
                 let rec = Rec { seq: s, cb_ns: cb, src_ns: src, idx: -1, ..Default::default() };
                 match release.as_str() {
+                    "immediate" if cb_nv12.is_some() => {
+                        cb_nv12.as_ref().unwrap().lock().unwrap().read(&tex, rec, None, &sink2);
+                        drop(frame);
+                    }
                     "immediate" => {
                         if let Some(g) = gpu_sink.as_ref() {
                             unsafe { ctx2.CopyResource(g, &tex) };
