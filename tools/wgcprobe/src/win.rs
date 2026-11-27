@@ -188,14 +188,23 @@ fn crc8(v: u32) -> u32 {
 
 // data points at the region origin's row 0; pitch in bytes.
 fn decode(data: &[u8], pitch: usize, ox: usize, oy: usize, cell: usize) -> Option<u32> {
+    decode_bpp(data, pitch, ox, oy, cell, 4)
+}
+
+fn decode_bpp(data: &[u8], pitch: usize, ox: usize, oy: usize, cell: usize, bpp: usize) -> Option<u32> {
     let q = (cell / 4).max(1);
     let sample = |cx: usize, cy: usize| -> f64 {
         let mut s = 0u64;
         let mut n = 0u64;
         for yy in cy.saturating_sub(q)..cy + q {
             for xx in cx.saturating_sub(q)..cx + q {
-                let o = yy * pitch + xx * 4;
-                if o + 2 < data.len() {
+                let o = yy * pitch + xx * bpp;
+                if bpp == 1 {
+                    if o < data.len() {
+                        s += data[o] as u64;
+                        n += 1;
+                    }
+                } else if o + 2 < data.len() {
                     s += data[o] as u64 + data[o + 1] as u64 + data[o + 2] as u64;
                     n += 3;
                 }
@@ -503,6 +512,178 @@ impl FullReader {
     }
 }
 
+struct Nv12Reader {
+    device: ID3D11Device,
+    ctx: ID3D11DeviceContext,
+    code: Code,
+    readback: bool,
+    state: Option<Nv12State>,
+    pending: VecDeque<(usize, Rec, Option<Direct3D11CaptureFrame>)>,
+    next: usize,
+    buf: Vec<u8>,
+    small: Option<CodeReader>,
+    fmt: DXGI_FORMAT,
+    failed: Option<String>,
+}
+
+struct Nv12State {
+    vdev: ID3D11VideoDevice,
+    vctx: ID3D11VideoContext,
+    en: ID3D11VideoProcessorEnumerator,
+    vp: ID3D11VideoProcessor,
+    outs: Vec<(ID3D11Texture2D, ID3D11VideoProcessorOutputView)>,
+    stages: Vec<ID3D11Texture2D>,
+    w: u32,
+    h: u32,
+}
+
+const NV12_SLOTS: usize = 4;
+
+impl Nv12Reader {
+    fn init(&mut self, w: u32, h: u32) -> Result<()> {
+        let vdev: ID3D11VideoDevice = self.device.cast()?;
+        let vctx: ID3D11VideoContext = self.ctx.cast()?;
+        let desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
+            InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+            InputFrameRate: DXGI_RATIONAL { Numerator: 60, Denominator: 1 },
+            InputWidth: w,
+            InputHeight: h,
+            OutputFrameRate: DXGI_RATIONAL { Numerator: 60, Denominator: 1 },
+            OutputWidth: w,
+            OutputHeight: h,
+            Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
+        };
+        let en = unsafe { vdev.CreateVideoProcessorEnumerator(&desc)? };
+        let vp = unsafe { vdev.CreateVideoProcessor(&en, 0)? };
+        if let Ok(c1) = vctx.cast::<ID3D11VideoContext1>() {
+            unsafe {
+                c1.VideoProcessorSetStreamColorSpace1(&vp, 0, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+                c1.VideoProcessorSetOutputColorSpace1(&vp, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+            }
+        }
+        let mut outs = Vec::new();
+        let mut stages = Vec::new();
+        for _ in 0..NV12_SLOTS {
+            let tdesc = D3D11_TEXTURE2D_DESC {
+                Width: w,
+                Height: h,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_NV12,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+            let mut t = None;
+            unsafe { self.device.CreateTexture2D(&tdesc, None, Some(&mut t))? };
+            let t = t.unwrap();
+            let vdesc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
+                ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
+                Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
+                    Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 },
+                },
+            };
+            let mut v = None;
+            unsafe { vdev.CreateVideoProcessorOutputView(&t, &en, &vdesc, Some(&mut v))? };
+            outs.push((t, v.unwrap()));
+            stages.push(staging(&self.device, w, h, DXGI_FORMAT_NV12)?);
+        }
+        self.state = Some(Nv12State { vdev, vctx, en, vp, outs, stages, w, h });
+        Ok(())
+    }
+
+    fn blit(&self, src: &ID3D11Texture2D, slot: usize) -> Result<()> {
+        let st = self.state.as_ref().unwrap();
+        let idesc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
+            FourCC: 0,
+            ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
+            Anonymous: D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 {
+                Texture2D: D3D11_TEX2D_VPIV { MipSlice: 0, ArraySlice: 0 },
+            },
+        };
+        let mut input = None;
+        unsafe { st.vdev.CreateVideoProcessorInputView(src, &st.en, &idesc, Some(&mut input))? };
+        let mut stream = D3D11_VIDEO_PROCESSOR_STREAM {
+            Enable: true.into(),
+            OutputIndex: 0,
+            InputFrameOrField: 0,
+            pInputSurface: std::mem::ManuallyDrop::new(input),
+            ..Default::default()
+        };
+        let r = unsafe { st.vctx.VideoProcessorBlt(&st.vp, &st.outs[slot].1, 0, std::slice::from_ref(&stream)) };
+        unsafe { std::mem::ManuallyDrop::drop(&mut stream.pInputSurface) };
+        r
+    }
+
+    fn read(&mut self, tex: &ID3D11Texture2D, rec: Rec, frame: Option<Direct3D11CaptureFrame>, sink: &Sink) {
+        let mut d = D3D11_TEXTURE2D_DESC::default();
+        unsafe { tex.GetDesc(&mut d) };
+        if self.state.is_none() && self.failed.is_none() {
+            if let Err(e) = self.init(d.Width, d.Height) {
+                self.failed = Some(format!("init: {e:?}"));
+            }
+        }
+        if self.small.is_none() {
+            self.small = Some(CodeReader::new(&self.device, &self.ctx, self.code, self.fmt).unwrap());
+        }
+        if self.failed.is_some() {
+            self.small.as_mut().unwrap().push(tex, rec, sink);
+            return;
+        }
+        if self.pending.len() >= NV12_SLOTS - 1 {
+            self.drain_one(sink);
+        }
+        let slot = self.next % NV12_SLOTS;
+        self.next += 1;
+        if let Err(e) = self.blit(tex, slot) {
+            self.failed = Some(format!("blit: {e:?}"));
+            self.small.as_mut().unwrap().push(tex, rec, sink);
+            return;
+        }
+        if !self.readback {
+            self.small.as_mut().unwrap().push(tex, rec, sink);
+            drop(frame);
+            return;
+        }
+        let st = self.state.as_ref().unwrap();
+        unsafe { self.ctx.CopyResource(&st.stages[slot], &st.outs[slot].0) };
+        unsafe { self.ctx.Flush() };
+        drop(frame);
+        self.pending.push_back((slot, rec, None));
+        while self.pending.len() > 2 {
+            self.drain_one(sink);
+        }
+    }
+
+    fn drain_one(&mut self, sink: &Sink) {
+        let Some((slot, mut rec, frame)) = self.pending.pop_front() else { return };
+        let (stage, w, h) = {
+            let st = self.state.as_ref().unwrap();
+            (st.stages[slot].clone(), st.w, st.h)
+        };
+        let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+        if unsafe { self.ctx.Map(&stage, 0, D3D11_MAP_READ, 0, Some(&mut m)) }.is_ok() {
+            let pitch = m.RowPitch as usize;
+            let len = pitch * h as usize * 3 / 2;
+            let data = unsafe { std::slice::from_raw_parts(m.pData as *const u8, len) };
+            let row = w as usize;
+            self.buf.resize(row * h as usize * 3 / 2, 0);
+            for y in 0..(h as usize * 3 / 2) {
+                self.buf[y * row..(y + 1) * row].copy_from_slice(&data[y * pitch..y * pitch + row]);
+            }
+            rec.idx = decode_bpp(data, pitch, self.code.rx as usize, self.code.ry as usize, self.code.cell as usize, 1)
+                .map(i64::from)
+                .unwrap_or(-1);
+            unsafe { self.ctx.Unmap(&stage, 0) };
+        }
+        drop(frame);
+        rec.done_ns = qpc_ns();
+        sink.put(rec);
+    }
+}
+
 fn create_device(adapter_index: Option<u32>) -> Result<(ID3D11Device, ID3D11DeviceContext, String)> {
     let mut device: Option<ID3D11Device> = None;
     let mut ctx: Option<ID3D11DeviceContext> = None;
@@ -655,8 +836,32 @@ pub fn run() -> anyhow_lite::R {
             let sink = sink.clone();
             let free = free.clone();
             let is_ring = a.release == "ring";
+            let mut nv = (a.release == "nv12").then(|| Nv12Reader {
+                device: device.clone(),
+                ctx: ctx.clone(),
+                code,
+                readback: a.map_mode != "nv12blit",
+                state: None,
+                pending: VecDeque::new(),
+                next: 0,
+                buf: Vec::new(),
+                small: None,
+                fmt,
+                failed: None,
+            });
+            let mut nv_logged = false;
             Some(std::thread::spawn(move || {
                 while let Ok((frame, tex, rec)) = rx.recv() {
+                    if let Some(nv) = nv.as_mut() {
+                        nv.read(&tex, rec, frame, &sink);
+                        if !nv_logged {
+                            if let Some(f) = nv.failed.as_ref() {
+                                eprintln!("nv12 path failed: {f}");
+                                nv_logged = true;
+                            }
+                        }
+                        continue;
+                    }
                     if fr.map_mode == "pipe" && !is_ring {
                         fr.read_pipe(&tex, rec, frame, &sink);
                         continue;
