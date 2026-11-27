@@ -2050,6 +2050,13 @@ fn watch_sink(
         if stop.load(Ordering::Acquire) {
             return;
         }
+        // Our capture stream died with the sound server: the monitor reader
+        // takes over again, and a new capture is tried after the usual wait.
+        if free.as_ref().is_some_and(|free| free.failed()) {
+            tracing::warn!("the reader-free capture stopped; computer audio is read as before");
+            free = None;
+            refused = Some(Instant::now());
+        }
         let reader = child
             .lock()
             .ok()

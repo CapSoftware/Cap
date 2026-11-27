@@ -323,17 +323,22 @@ mod platform {
     /// nothing linked so it always delivers. It goes with this process.
     struct Capture {
         stop: Arc<AtomicBool>,
+        /// The stream errored or was disconnected (the sound server went
+        /// away): it delivers nothing more.
+        failed: Arc<AtomicBool>,
         thread: Option<JoinHandle<()>>,
     }
 
     impl Capture {
         fn start(mut sink: impl FnMut(&[f32]) + Send + 'static) -> Result<Self, String> {
             let stop = Arc::new(AtomicBool::new(false));
+            let failed = Arc::new(AtomicBool::new(false));
             let (ready_tx, ready_rx) = flume::bounded::<Result<(), String>>(1);
             let thread = std::thread::Builder::new()
                 .name("cap-meeting-reader-free".into())
                 .spawn({
                     let stop = stop.clone();
+                    let failed = failed.clone();
                     move || {
                         // Everything lives in this scope: the core borrows the
                         // context, the stream the core.
@@ -375,6 +380,14 @@ mod platform {
                                 .add_local_listener_with_user_data(Vec::<f32>::with_capacity(
                                     CHUNK * 4,
                                 ))
+                                .state_changed(move |_, _, old, new| {
+                                    let lost = matches!(new, pw::stream::StreamState::Error(_))
+                                        || (matches!(new, pw::stream::StreamState::Unconnected)
+                                            && !matches!(old, pw::stream::StreamState::Unconnected));
+                                    if lost {
+                                        failed.store(true, Ordering::Release);
+                                    }
+                                })
                                 .process(move |stream, pending: &mut Vec<f32>| {
                                     let Some(mut buffer) = stream.dequeue_buffer() else {
                                         return;
@@ -446,6 +459,7 @@ mod platform {
             match ready_rx.recv_timeout(Duration::from_secs(3)) {
                 Ok(Ok(())) => Ok(Self {
                     stop,
+                    failed,
                     thread: Some(thread),
                 }),
                 Ok(Err(error)) => {
@@ -573,6 +587,13 @@ mod platform {
                     .ok()
             });
             Ok(made)
+        }
+
+        /// Our capture stream stopped delivering (the sound server went away).
+        pub fn failed(&self) -> bool {
+            self.capture
+                .as_ref()
+                .is_some_and(|capture| capture.failed.load(Ordering::Acquire))
         }
 
         /// From now on its samples reach the meeting.
