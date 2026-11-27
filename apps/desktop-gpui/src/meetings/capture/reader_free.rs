@@ -301,10 +301,18 @@ mod platform {
     /// from streams that play elsewhere now, from one look at the graph.
     fn reconcile(output: &str) -> Result<(), String> {
         let graph = dump()?;
-        for (from, to) in plan_links(&graph, output, NODE) {
+        let links = plan_links(&graph, output, NODE);
+        let unlinks = plan_unlinks(&graph, output, NODE);
+        tracing::debug!(
+            output,
+            links = links.len(),
+            unlinks = unlinks.len(),
+            "reader-free links reconciled"
+        );
+        for (from, to) in links {
             run("pw-link", &[&from.to_string(), &to.to_string()])?;
         }
-        for id in plan_unlinks(&graph, output, NODE) {
+        for id in unlinks {
             run("pw-link", &["-d", &id.to_string()])?;
         }
         Ok(())
