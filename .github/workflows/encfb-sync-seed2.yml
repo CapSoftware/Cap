@@ -1,0 +1,83 @@
+name: Sync matrix seed repro (scratch)
+
+on:
+  push:
+    branches: [ci/encfb-sync-seed2]
+
+permissions:
+  contents: read
+
+env:
+  BASE_SHA: 48cacf437090d373e3f9c7f235909dac490f7920
+  HEAD_SHA: 3676d9c52a4b320740afee71b07751eddf187748
+  CAP_SYNC_MATRIX_SEED: "1795792094697741200"
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+          prefix-key: v1-rust-sync
+          save-cache: "false"
+      - uses: ./.github/actions/install-desktop-deps
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Virtual audio device
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/duncanthrax/scream/releases/download/3.6/Scream3.6.zip -OutFile Scream3.6.zip
+          $expected = "25ea5e778b4e6995a98d448b9b5f6d321f681663f1aeeec69d8e63183d008b19"
+          $actual = (Get-FileHash -Algorithm SHA256 Scream3.6.zip).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Scream3.6.zip SHA-256 mismatch" }
+          Expand-Archive -Path Scream3.6.zip -DestinationPath Scream
+          $cert = (Get-AuthenticodeSignature Scream\Install\driver\Scream.sys).SignerCertificate
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new("TrustedPublisher", "LocalMachine")
+          $store.Open("ReadWrite"); $store.Add($cert); $store.Close()
+          Scream\Install\helpers\devcon.exe install Scream\Install\driver\Scream.inf *Scream
+          if ($LASTEXITCODE -gt 1) { throw "devcon install failed" }
+          Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
+      - name: Build both test binaries
+        shell: bash
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+        run: |
+          set -euo pipefail
+          for arm in base head; do
+            sha=BASE_SHA; [ $arm = head ] && sha=HEAD_SHA
+            git worktree add "$RUNNER_TEMP/$arm" "${!sha}"
+            (cd "$RUNNER_TEMP/$arm" && node scripts/setup.js)
+            (cd "$RUNNER_TEMP/$arm" && cargo test --locked -p cap-recording --test sync_matrix --no-run --message-format=json \
+              | python -c "import json,sys; [print(m['executable']) for m in map(json.loads,sys.stdin) if m.get('reason')=='compiler-artifact' and m.get('executable') and m['target']['name']=='sync_matrix']" > "$RUNNER_TEMP/$arm.bin")
+            echo "$arm $(git -C "$RUNNER_TEMP/$arm" rev-parse HEAD) $(cat "$RUNNER_TEMP/$arm.bin")"
+          done
+      - name: Matrix with the failing seed, interleaved
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          rep=0
+          for arm in head base head head base head head; do
+            rep=$((rep + 1))
+            {
+              bin=$(cat "$RUNNER_TEMP/$arm.bin")
+              export PATH="$RUNNER_TEMP/$arm/target/ffmpeg/bin:$PATH"
+              export CAP_SYNC_MATRIX_REPORT="$RUNNER_TEMP/out/$arm-$rep.json"
+              (cd "$RUNNER_TEMP/$arm/crates/recording" && "$bin" --nocapture > "$RUNNER_TEMP/out/$arm-$rep.log" 2>&1); rc=$?
+              echo "RUN $arm r$rep rc=$rc $(grep -E 'matrix cases failed|test result' "$RUNNER_TEMP/out/$arm-$rep.log" | tr '\n' ' ')"
+              grep -E "random/.*video-nominal93-delivered148|video leg" "$RUNNER_TEMP/out/$arm-$rep.log" | head -4
+            }
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sync-seed
+          path: ${{ runner.temp }}/out
+          retention-days: 3
