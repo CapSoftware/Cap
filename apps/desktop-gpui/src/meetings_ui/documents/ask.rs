@@ -545,7 +545,7 @@ pub fn answer_sentences(text: &str) -> Vec<String> {
 
 /// An answer with each sourced sentence followed by its time; clicking a
 /// time asks the host to show those lines.
-fn render_linked(
+pub(super) fn render_linked(
     id: usize,
     text: &str,
     palette: &Palette,
