@@ -884,6 +884,7 @@ async fn apply_state(state: &str, handle: WindowHandle<DocumentsWindow>, cx: &mu
                         crate::meetings::AiAccess::parse(&arg).map(|a| (a, arg == "spent"));
                     crate::meetings::access::set_debug_access(access);
                     root.pane.update(cx, |p, cx| p.debug_ai_refresh(cx));
+                    root.sidebar.update(cx, |s, cx| s.refresh_pro(cx));
                 }
                 "ai_trial_written" => {
                     let doc = root.pane.read(cx).doc.as_ref().map(|d| d.id.clone());

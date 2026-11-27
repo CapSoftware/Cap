@@ -310,3 +310,8 @@ fn user_entries_leave_out_what_cap_added_itself() {
     assert_eq!(mine[0].sounds_like, vec!["Kappa".to_string()]);
     assert_eq!(mine[1], Entry::new("Acme"));
 }
+
+#[test]
+fn naming_speakers_from_meeting_apps_starts_off() {
+    assert!(!TranscriptionSettings::default().name_speakers_from_apps);
+}

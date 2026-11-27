@@ -50,7 +50,7 @@ use chrono::{DateTime, Utc};
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Global, Subscription, Task};
 use serde_json::json;
 
-pub use access::AiAccess;
+pub use access::{AiAccess, ProOffer};
 pub use calendar::{CalendarError, CalendarSource, SourceConfig, SyncErrorKind};
 pub use cap_calendar::{Agenda, CalendarEvent};
 pub use cap_meetings::{session::StopReason, transcript::Source};
@@ -752,7 +752,11 @@ fn local_mode(local: Option<&LocalModel>) -> EngineMode {
 }
 
 fn auth_key() -> String {
-    let auth = crate::store::auth_snapshot();
+    account_key(&crate::store::auth_snapshot())
+}
+
+/// Which account (and server) answers are cached for.
+pub(crate) fn account_key(auth: &crate::store::AuthSnapshot) -> String {
     format!(
         "{}|{}|{}",
         auth.server_url,
@@ -1139,6 +1143,7 @@ impl Meetings {
     fn watch_speaking(&mut self, doc_id: String, cx: &mut Context<Self>) {
         self.speaking_watch = None;
         if !cap_meeting_platform::READS_MEETING_APPS
+            || !cap_meeting_platform::NAMES_FROM_MEETING_APPS
             || !self.settings.transcription.name_speakers_from_apps
             || !cap_meeting_platform::accessibility_trusted()
         {

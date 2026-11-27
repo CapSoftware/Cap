@@ -398,6 +398,14 @@ pub fn status_line(
     }
 }
 
+/// The account changed outside Notes (signed out, plan refreshed): Notes
+/// redraws its Cap AI offers from the stored account.
+pub fn account_changed(cx: &mut App) {
+    if let Some(meetings) = Meetings::try_global(cx) {
+        meetings.update(cx, |_, cx| cx.notify());
+    }
+}
+
 pub fn ensure_access(cx: &mut App) {
     if let Some(meetings) = Meetings::try_global(cx) {
         meetings.update(cx, |m, cx| m.ensure_access(cx));
