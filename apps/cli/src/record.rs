@@ -1675,10 +1675,7 @@ fn emit_record_event(format: OutputFormat, event: &RecordEvent<'_>) -> Result<()
                             mib(*available_bytes)
                         );
                     } else {
-                        println!(
-                            "Drive space recovered ({} MB free)",
-                            mib(*available_bytes)
-                        );
+                        println!("Drive space recovered ({} MB free)", mib(*available_bytes));
                     }
                 }
                 RecordEvent::Error { error, .. } => println!("Recording error: {error}"),
@@ -2242,7 +2239,11 @@ mod tests {
             assert!(result.is_ok());
             assert!(!path.exists());
         } else {
-            assert!(result.unwrap_err().contains("Not enough free space to record"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("Not enough free space to record")
+            );
         }
     }
 
