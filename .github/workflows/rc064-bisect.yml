@@ -1,0 +1,142 @@
+name: gate064 bisect builds
+
+on:
+  push:
+    branches: ["ci/gate064-app-probe"]
+    paths: ["rc064/bisect-trigger"]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  app:
+    name: app ${{ matrix.os.slug }} ${{ matrix.side.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - slug: macos
+            runner: blacksmith-6vcpu-macos-15
+            target: aarch64-apple-darwin
+        side:
+          - name: p4459
+            ref: 897c446d68d5f488e92f35be9823c99f65ddc250
+          - name: p4275
+            ref: c9fafab19900bd3560a5fed192d372bd3cfe5748
+          - name: p4508
+            ref: 9df9f836bd70eb0919d20531034749a8fb56bfb5
+          - name: p4366
+            ref: 065f6d8e06c902c079dafbbf711e85dd4d961468
+    runs-on: ${{ matrix.os.runner }}
+    timeout-minutes: 120
+    env:
+      TARGET: ${{ matrix.os.target }}
+      CARGO_PROFILE_RELEASE_LTO: "off"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ matrix.os.slug == 'windows' && 'false' || 'true' }}
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+    steps:
+      - name: Which OSes to build
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/contents/rc064/build-os?ref=${{ github.sha }}" -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/build-os.txt" || echo "macos windows linux" > "$RUNNER_TEMP/build-os.txt"
+          cat "$RUNNER_TEMP/build-os.txt"
+      - name: Gate
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sides=$(gh api "repos/${{ github.repository }}/contents/rc064/build-sides?ref=${{ github.sha }}" -H "Accept: application/vnd.github.raw" 2>/dev/null || echo "base head")
+          if grep -qw "${{ matrix.os.slug }}" "$RUNNER_TEMP/build-os.txt" && true; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "go=false" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == 'true'
+        with:
+          ref: ${{ matrix.side.ref }}
+          persist-credentials: false
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux' && steps.gate.outputs.go == 'true'
+        uses: ./.github/actions/install-desktop-deps
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        if: steps.gate.outputs.go == 'true'
+        with:
+          targets: ${{ matrix.os.target }}
+
+      - name: Setup
+        if: steps.gate.outputs.go == 'true'
+        shell: bash
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.os.target }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.side.ref }}" = cap-v0.6.2 ]; then
+            gh api "repos/${{ github.repository }}/contents/rc064/setup-v062.js?ref=${{ github.sha }}" -H "Accept: application/vnd.github.raw" > scripts/setup.js
+          fi
+          if [ "${{ matrix.side.ref }}" = cap-v0.6.3 ]; then
+            # The GitHub onnxruntime archives the tag downloads are gone; same builds from NuGet (setup only).
+            gh api "repos/${{ github.repository }}/contents/rc064/setup-base.js?ref=${{ github.sha }}" -H "Accept: application/vnd.github.raw" > scripts/setup.js
+          fi
+          env -u PSModulePath node scripts/setup.js
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build release app
+        if: steps.gate.outputs.go == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          cargo +1.95.0 build --release --manifest-path apps/desktop-gpui/Cargo.toml --locked --target "$TARGET" --bin cap-gpui
+          echo "build seconds $(( $(date +%s) - start ))"
+
+      - name: Package
+        if: steps.gate.outputs.go == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="$RUNNER_TEMP/pkg"
+          mkdir -p "$pkg/bin"
+          rel="apps/desktop-gpui/target/$TARGET/release"
+          git rev-parse HEAD > "$pkg/commit.txt"
+          case "$RUNNER_OS" in
+            macOS)
+              cp "$rel/cap-gpui" "$pkg/bin/"
+              mkdir -p "$pkg/Frameworks"
+              cp -RL target/Frameworks/Spacedrive.framework "$pkg/Frameworks/Spacedrive.framework"
+              ls -la "$pkg/Frameworks/Spacedrive.framework/Libraries" | head -5
+              ln -s ../Frameworks "$pkg/bin/Frameworks"
+              if [ -d target/native-deps/onnxruntime/lib ]; then mkdir -p "$pkg/onnxruntime"; cp -R target/native-deps/onnxruntime/lib "$pkg/onnxruntime/"; fi
+              otool -l "$pkg/bin/cap-gpui" | grep -A2 LC_RPATH > "$pkg/info.txt" || true
+              otool -L "$pkg/bin/cap-gpui" >> "$pkg/info.txt"
+              ;;
+            Windows)
+              cp "$rel/cap-gpui.exe" "$pkg/bin/"
+              for d in target/ffmpeg/bin target/native-deps/dxc target/native-deps/onnxruntime/lib target/native-deps/vcruntime "$rel"; do
+                if [ -d "$d" ]; then find "$d" -maxdepth 1 -iname '*.dll' -exec cp {} "$pkg/bin/" \; ; fi
+              done
+              ls -la "$pkg/bin" > "$pkg/info.txt"
+              ;;
+            Linux)
+              cp "$rel/cap-gpui" "$pkg/bin/"
+              mkdir -p "$pkg/lib"
+              cp -a target/native-deps/lib/. "$pkg/lib/"
+              LD_LIBRARY_PATH="$pkg/lib" ldd "$pkg/bin/cap-gpui" > "$pkg/info.txt" || true
+              ;;
+          esac
+          cat "$pkg/info.txt" | head -80
+          (cd "$pkg" && tar -czf "../app-${{ matrix.os.slug }}-${{ matrix.side.name }}.tgz" .)
+          ls -la "$RUNNER_TEMP"/*.tgz
+
+      - uses: actions/upload-artifact@v4
+        if: steps.gate.outputs.go == 'true'
+        with:
+          name: app-${{ matrix.os.slug }}-${{ matrix.side.name }}
+          path: ${{ runner.temp }}/app-${{ matrix.os.slug }}-${{ matrix.side.name }}.tgz
+          retention-days: 5
+
