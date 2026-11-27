@@ -1,0 +1,55 @@
+name: CK staging build (scratch)
+on:
+  push:
+    branches:
+      - ci/ck-staging-build
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ff4d34e2686482cfcc793769cdd75806476d51c9
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+      - name: Setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: bash scripts/prepare-gpui-dependency.sh
+      - name: Build release cap-gpui
+        shell: bash
+        working-directory: apps/desktop-gpui
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = ff4d34e2686482cfcc793769cdd75806476d51c9
+          cargo +1.95.0 build --release -p cap-desktop-gpui --bin cap-gpui
+          tdir="$(cargo +1.95.0 metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+          mkdir -p "$RUNNER_TEMP/out/dylibs"
+          cp "$tdir/release/cap-gpui" "$RUNNER_TEMP/out/cap-gpui"
+          fw="$(find "$GITHUB_WORKSPACE" "$tdir" -type d -name Spacedrive.framework -path '*native-deps*' 2>/dev/null | head -1)"
+          echo "framework: $fw"
+          test -n "$fw"
+          find "$fw" -type f -name '*.dylib' -exec cp {} "$RUNNER_TEMP/out/dylibs/" \;
+          cd "$RUNNER_TEMP/out"
+          echo ff4d34e2686482cfcc793769cdd75806476d51c9 > source.sha
+          shasum -a 256 cap-gpui dylibs/*.dylib > SHA256SUMS
+          echo "== SHA256SUMS"
+          cat SHA256SUMS
+          otool -L cap-gpui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cap-gpui-ff4d34e268
+          path: ${{ runner.temp }}/out
+          retention-days: 2
+          if-no-files-found: error
