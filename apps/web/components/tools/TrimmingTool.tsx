@@ -3,6 +3,7 @@
 import { Button } from "@cap/ui";
 import { useEffect, useRef, useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
+import { resolveMediaDuration } from "@/lib/media-duration";
 import { formatClock } from "@/lib/player-time";
 
 const SUPPORTED_VIDEO_FORMATS = ["mp4", "webm", "mov", "avi", "mkv"];
@@ -203,19 +204,31 @@ export const TrimmingTool = () => {
 		}
 	};
 
-	const handleVideoLoaded = () => {
+	const handleVideoLoaded = async () => {
 		if (videoPreviewRef.current) {
 			const video = videoPreviewRef.current;
 
-			if (
-				Number.isNaN(video.duration) ||
-				video.duration === Infinity ||
-				video.duration === 0
-			) {
+			if (Number.isNaN(video.duration) || video.duration === 0) {
 				return;
 			}
 
-			const duration = video.duration;
+			const src = video.src;
+			let duration: number;
+			try {
+				duration = await resolveMediaDuration(video);
+			} catch {
+				if (video.src !== src) return;
+				setFileState((prev) => ({
+					...prev,
+					isLoading: false,
+					error:
+						"Could not read the video's length. Please try a different file.",
+				}));
+				return;
+			}
+			// Another file was chosen while this one's duration was being read.
+			if (video.src !== src) return;
+
 			const dimensions = `${video.videoWidth}x${video.videoHeight}`;
 
 			setVideoState((prev) => ({
