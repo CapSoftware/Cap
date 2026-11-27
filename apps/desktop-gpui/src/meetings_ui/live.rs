@@ -419,6 +419,7 @@ pub fn toggle(cx: &mut App) {
 }
 
 pub fn accept_prompt(id: u64, join: Option<String>, cx: &mut App) {
+    let joining = join.is_some();
     if let Some(url) = join {
         cx.open_url(&url);
     }
@@ -428,7 +429,7 @@ pub fn accept_prompt(id: u64, join: Option<String>, cx: &mut App) {
         debug::start(StartSource::Prompt(id), cx);
         return;
     }
-    let accepted = update_meetings(cx, |meetings, cx| meetings.accept_prompt(id, cx));
+    let accepted = update_meetings(cx, |meetings, cx| meetings.accept_prompt(id, joining, cx));
     let started = Meetings::try_global(cx).and_then(|meetings| {
         meetings
             .read(cx)

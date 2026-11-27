@@ -1643,7 +1643,7 @@ fn accepting_a_prompt_whose_start_fails_reports_why(cx: &mut gpui::TestAppContex
     });
     let prompt = prompt.expect("a prompt for the meeting about to start");
 
-    let accepted = meetings.update(cx, |m, cx| m.accept_prompt(prompt, cx));
+    let accepted = meetings.update(cx, |m, cx| m.accept_prompt(prompt, false, cx));
     assert!(
         matches!(accepted, Err(super::MeetingError::Library(_))),
         "{accepted:?}"
@@ -1654,7 +1654,7 @@ fn accepting_a_prompt_whose_start_fails_reports_why(cx: &mut gpui::TestAppContex
     // that starts nothing must not report it.
     let accepted = meetings.update(cx, |m, cx| {
         m.prompt_start_error = Some(super::MeetingError::Library("an older failure".into()));
-        m.accept_prompt(prompt + 1000, cx)
+        m.accept_prompt(prompt + 1000, false, cx)
     });
     assert_eq!(accepted, Ok(()));
 }
@@ -1703,7 +1703,7 @@ fn an_automatic_start_that_fails_is_reported_but_an_accept_is_not(cx: &mut gpui:
     });
     let prompt = prompt.expect("a prompt for the meeting about to start");
 
-    let accepted = meetings.update(cx, |m, cx| m.accept_prompt(prompt, cx));
+    let accepted = meetings.update(cx, |m, cx| m.accept_prompt(prompt, false, cx));
     assert!(accepted.is_err(), "{accepted:?}");
     cx.run_until_parked();
     assert!(
@@ -2316,4 +2316,59 @@ fn a_refused_microphone_reads_as_access_off() {
     assert!(!super::mic_access_denied(
         "BuildStream: The requested device is no longer available. For example, it has been unplugged."
     ));
+}
+
+#[test]
+fn a_meeting_link_names_the_call_app_it_opens_in() {
+    use cap_calendar::link::Provider;
+    assert_eq!(super::link_call_app(Provider::Zoom), Some("zoom"));
+    assert_eq!(super::link_call_app(Provider::Teams), Some("teams"));
+    assert_eq!(
+        super::link_call_app(Provider::GoogleMeet),
+        Some("google-meet")
+    );
+    assert_eq!(super::link_call_app(Provider::GoToMeeting), Some("goto"));
+    assert_eq!(super::link_call_app(Provider::Other), None);
+    for provider in Provider::ALL {
+        if let Some(id) = super::link_call_app(provider) {
+            let app = cap_meetings::apps::app_by_id(id).unwrap();
+            assert_ne!(
+                app.kind,
+                cap_meetings::apps::AppKind::Browser,
+                "{provider:?}"
+            );
+        }
+    }
+}
+
+/// "Join and take notes" (the accept that opened the meeting's link) marks
+/// the meeting it starts as joining its call; a plain accept, an automatic
+/// start and a detected call do not.
+#[gpui::test]
+fn join_and_take_notes_starts_a_meeting_joining_its_call(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let meetings = cx.update(|cx| {
+        super::Meetings::install_for_tests(
+            cap_meetings::settings::MeetingSettings::default(),
+            dir.path().join("calendar"),
+            cx,
+        )
+    });
+    let scheduled = cap_meetings::prompt::RecordSource::Scheduled {
+        event_id: "planning".into(),
+    };
+    let detected = cap_meetings::prompt::RecordSource::DetectedCall {
+        app_id: "zoom".into(),
+        event_id: Some("planning".into()),
+    };
+    meetings.update(cx, |m, _| {
+        assert!(!m.origin_for(&scheduled).joining);
+        m.accepting = true;
+        assert!(!m.origin_for(&scheduled).joining);
+        m.accepting_join = true;
+        assert!(m.origin_for(&scheduled).joining);
+        assert!(!m.origin_for(&detected).joining);
+        m.accepting = false;
+        assert!(!m.origin_for(&scheduled).joining);
+    });
 }
