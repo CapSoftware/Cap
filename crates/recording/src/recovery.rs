@@ -5001,7 +5001,8 @@ fn validate_recovery_track(
     video_validation: VideoValidation,
 ) -> Result<(), RecoveryError> {
     let validate = || -> Result<(), String> {
-        let mut input = ffmpeg::format::input(path).map_err(|error| error.to_string())?;
+        let mut input = cap_enc_ffmpeg::remux::open_input_without_rate_analysis(path)
+            .map_err(|error| error.to_string())?;
         let stream = input
             .streams()
             .best(kind)

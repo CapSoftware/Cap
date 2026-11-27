@@ -1943,6 +1943,7 @@ failed = "Upload needs attention"
 paused = "Upload paused"
 prepared = "Upload prepared"
 processing = "Processing upload"
+replaced = "Replaced on the web"
 retrying = "Upload will retry"
 sign_in = "Sign in to retry upload"
 uploaded = "Uploaded"
@@ -3549,6 +3550,7 @@ offline = { text = "offline", context = "Shown under a recording whose upload is
 authentication_expired = "Authentication expired"
 no_audio_intent_review = "This older recording has no saved audio intent; review it before retrying"
 legacy_no_account = "This older upload has no saved account and audio intent. Its local recording is preserved."
+replaced_on_web = "Replaced on the web. Your recording is still on this computer."
 verification_timed_out = "Cloud verification timed out; the local recording is preserved"
 verification_failed_retry = "Cloud verification failed; the saved recording will upload again"
 must_save_first = "Recording must be saved locally before its upload can resume"
@@ -4324,11 +4326,6 @@ try_free = "Sign in to try it free"
 write = "Write my notes"
 too_short = "This call was too short to write up."
 unavailable_title = "Cap AI notes aren't available on this server"
-free_left = { one = "{count} free note left", other = "{count} free notes left" }
-
-[cap_ai.footer]
-last = "Written by Cap AI. That was your last free note"
-left = { one = "Written by Cap AI. {count} free note left", other = "Written by Cap AI. {count} free notes left" }
 
 [cap_ai.live]
 sign_in = "Sign in and Cap AI writes this up when the meeting ends"
@@ -4339,6 +4336,11 @@ upgrade = "With Cap Pro, Cap AI writes this up when the meeting ends"
 several = { text = "{a}, {b} and others", context = "First names of people on a call when there are four or more." }
 three = { text = "{a}, {b} and {c}", context = "First names of three people on a call." }
 two = { text = "{a} and {b}", context = "First names of two people on a call." }
+
+[cap_ai.row]
+left = { one = "{count} free Cap\u00A0AI note left", other = "{count} free Cap\u00A0AI notes left", context = "Cap Pro row at the foot of the Notes sidebar: Cap AI write-ups left free on this account, next to a Get Cap Pro button. Local notes stay free and unlimited, so always say Cap AI notes. May wrap to two lines. Keep the non-breaking spaces in Cap AI and Cap Pro so the names never split." }
+pro = { text = "Cap\u00A0AI notes are part of Cap\u00A0Pro", context = "Cap Pro row in the Notes sidebar when the free Cap AI notes are used up or not known yet, next to a Get Cap Pro button. May wrap to two lines. Keep the non-breaking spaces in Cap AI and Cap Pro so the names never split." }
+signed_out = { text = "Try Cap\u00A0AI notes free", context = "Cap Pro row in the Notes sidebar for someone signed out, next to a Sign in button. May wrap to two lines. Keep the non-breaking spaces in Cap AI and Cap Pro so the names never split." }
 
 [cap_ai.settings]
 get_pro = "Get Cap Pro"

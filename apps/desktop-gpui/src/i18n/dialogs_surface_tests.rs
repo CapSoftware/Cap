@@ -347,6 +347,7 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         (tr::upload::status::paused(), "Upload paused"),
         (tr::upload::status::prepared(), "Upload prepared"),
         (tr::upload::status::processing(), "Processing upload"),
+        (tr::upload::status::replaced(), "Replaced on the web"),
         (tr::upload::status::retrying(), "Upload will retry"),
         (tr::upload::status::sign_in(), "Sign in to retry upload"),
         (tr::upload::status::uploaded(), "Uploaded"),

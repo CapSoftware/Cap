@@ -1941,6 +1941,7 @@ failed = "上传需要处理"
 paused = "上传已暂停"
 prepared = "已准备上传"
 processing = "正在处理上传"
+replaced = "已在网页端替换"
 retrying = "将重试上传"
 sign_in = "登录以重试上传"
 uploaded = "已上传"
@@ -3547,6 +3548,7 @@ offline = "离线"
 authentication_expired = "登录已过期"
 no_audio_intent_review = "这个较早的录制没有保存音频设置；请先检查后再重试"
 legacy_no_account = "这个较早的上传没有保存账户和音频设置。其本地录制已保留。"
+replaced_on_web = "已在网页端替换。你的录制仍保存在这台电脑上。"
 verification_timed_out = "云端验证超时；本地录制已保留"
 verification_failed_retry = "云端验证失败；已保存的录制将重新上传"
 must_save_first = "录制必须先保存到本地，才能继续上传"
@@ -4322,11 +4324,6 @@ try_free = "登录免费试用"
 write = "写纪要"
 too_short = "这次通话太短，无法写纪要。"
 unavailable_title = "此服务器不提供 Cap AI 笔记"
-free_left = { other = "还剩 {count} 次免费" }
-
-[cap_ai.footer]
-last = "由 Cap AI 撰写。这是你最后一次免费使用"
-left = { other = "由 Cap AI 撰写。还剩 {count} 次免费" }
 
 [cap_ai.live]
 sign_in = "登录后，会议结束时 Cap AI 会写好纪要"
@@ -4337,6 +4334,11 @@ upgrade = "有了 Cap Pro，会议结束时 Cap AI 会写好纪要"
 several = "{a}、{b} 等人"
 three = "{a}、{b} 和 {c}"
 two = "{a} 和 {b}"
+
+[cap_ai.row]
+left = { other = "还剩 {count} 次免费 Cap\u00A0AI 笔记" }
+pro = "Cap\u00A0AI 笔记是 Cap\u00A0Pro 的功能"
+signed_out = "免费试用 Cap\u00A0AI 笔记"
 
 [cap_ai.settings]
 get_pro = "获取 Cap Pro"

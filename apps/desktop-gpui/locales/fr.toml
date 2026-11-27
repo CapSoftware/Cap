@@ -1941,6 +1941,7 @@ failed = "L'envoi nécessite votre attention"
 paused = "Envoi en pause"
 prepared = "Envoi préparé"
 processing = "Traitement de l'envoi"
+replaced = "Remplacé sur le web"
 retrying = "L'envoi va être relancé"
 sign_in = "Connectez-vous pour relancer l'envoi"
 uploaded = "Envoyé"
@@ -3547,6 +3548,7 @@ offline = "Hors ligne"
 authentication_expired = "L'authentification a expiré"
 no_audio_intent_review = "Cet ancien enregistrement n'a pas de réglage audio enregistré ; vérifiez-le avant de réessayer"
 legacy_no_account = "Cet ancien envoi n'a ni compte ni réglage audio enregistrés. Son enregistrement local est conservé."
+replaced_on_web = "Remplacé sur le web. Votre enregistrement reste sur cet ordinateur."
 verification_timed_out = "La vérification dans le cloud a expiré ; l'enregistrement local est conservé"
 verification_failed_retry = "La vérification dans le cloud a échoué ; l'enregistrement sauvegardé sera envoyé à nouveau"
 must_save_first = "L'enregistrement doit être sauvegardé localement avant que son envoi puisse reprendre"
@@ -4322,11 +4324,6 @@ try_free = "Se connecter pour l'essayer gratuitement"
 write = "Rédiger mes notes"
 too_short = "Cet appel était trop court pour un compte rendu."
 unavailable_title = "Les notes Cap AI ne sont pas disponibles sur ce serveur"
-free_left = { one = "Encore {count} note gratuite", other = "Encore {count} notes gratuites" }
-
-[cap_ai.footer]
-last = "Rédigé par Cap AI. C'était votre dernière note gratuite"
-left = { one = "Rédigé par Cap AI. Encore {count} note gratuite", other = "Rédigé par Cap AI. Encore {count} notes gratuites" }
 
 [cap_ai.live]
 sign_in = "Connectez-vous et Cap AI rédigera le compte rendu à la fin de la réunion"
@@ -4337,6 +4334,11 @@ upgrade = "Avec Cap Pro, Cap AI rédige le compte rendu à la fin de la réunion
 several = "{a}, {b} et d'autres"
 three = "{a}, {b} et {c}"
 two = "{a} et {b}"
+
+[cap_ai.row]
+left = { one = "Encore {count} note Cap\u00A0AI gratuite", other = "Encore {count} notes Cap\u00A0AI gratuites" }
+pro = "Les notes Cap\u00A0AI font partie de Cap\u00A0Pro"
+signed_out = "Essayez les notes Cap\u00A0AI gratuitement"
 
 [cap_ai.settings]
 get_pro = "Passer à Cap Pro"

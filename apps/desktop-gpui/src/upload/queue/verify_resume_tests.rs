@@ -610,6 +610,43 @@ fn cap_being_deleted_on_the_web_is_not_uploaded_again() {
     });
 }
 
+/// The owner edits the cap on the web while its upload waits for cloud
+/// verification, which replaces its video: the server answers the completion
+/// call with 409 code "output-replaced". The queue stops there instead of
+/// uploading the recording again, and keeps the local recording.
+#[test]
+fn cap_replaced_on_the_web_is_not_uploaded_again() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_replaced_on_web_during_verification");
+    virtual_time(async {
+        let mock = MockCap::start(vec![rule(Route::Api("recording-complete"), Fault::Hang)]).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        upload_then_quit_before_verification(&mock, &project).await;
+        let initiated = mock.count("POST", "multipart/initiate");
+
+        mock.replace_on_web(VIDEO_ID);
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        run_queue(&manager, &project, Duration::from_secs(30 * 60)).await;
+        eprintln!("{}", mock.timeline());
+        assert_eq!(mock.count("POST", "multipart/initiate"), initiated);
+        assert_eq!(mock.count("POST", "recording-complete"), 1);
+        let state = read_state(&project).unwrap().unwrap();
+        assert_eq!(state.phase, UploadPhase::Failed, "{state:?}");
+        assert_eq!(
+            state.last_error.as_deref(),
+            Some(RECORDING_REPLACED_ON_WEB),
+            "{state:?}"
+        );
+        assert!(state.next_retry_at.is_none() && !state.is_pending());
+        assert_eq!(
+            std::fs::read(project.join("content/output.mp4")).unwrap(),
+            SAMPLE_MP4
+        );
+        assert_eq!(mock.deletes(), 0);
+    });
+}
+
 /// A cap deleted on the web before its upload starts gets 404 from the upload
 /// URL routes, so the queue never reaches cloud verification and retries the
 /// transfer with the usual bounded backoff.
