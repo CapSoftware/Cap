@@ -14,6 +14,15 @@ describe("AI generation language support", () => {
 		expect(parseAiGenerationLanguage("ro")).toBe("ro");
 	});
 
+	it("exposes Danish for AI generation and transcription", () => {
+		expect(AI_GENERATION_LANGUAGES.da).toBe("Danish");
+		expect(isAiGenerationLanguage("da")).toBe(true);
+		expect(parseAiGenerationLanguage("da")).toBe("da");
+		expect(getAssemblyAITranscriptionOptions("da")).toMatchObject({
+			language_code: "da",
+		});
+	});
+
 	it("does not expose unsupported transcription languages", () => {
 		expect(AI_GENERATION_LANGUAGES).not.toHaveProperty("pa");
 		expect(isAiGenerationLanguage("pa")).toBe(false);

@@ -27,6 +27,7 @@ export const ASSEMBLYAI_SUPPORTED_LANGUAGES = [
 	"pt",
 	"it",
 	"nl",
+	"da",
 	"pl",
 	"ro",
 	"sk",
