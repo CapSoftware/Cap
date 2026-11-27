@@ -123,8 +123,7 @@ import { NoteTranscript } from "./_components/note/NoteTranscript";
 import { PasswordGate } from "./_components/PasswordGate";
 import { PendingRecordingShare } from "./_components/PendingRecordingShare";
 import { ShareHeader } from "./_components/ShareHeader";
-import { NoteShare } from "./NoteShare";
-import { Share } from "./Share";
+import { NoteShareLoader, ShareLoader } from "./ShareLoader";
 
 const VIEW_NOTIFICATION_DELAY_MS = 2 * 60 * 1000;
 const VIDEO_ID_PATTERN = /^[0-9abcdefghjkmnpqrstvwxyz]+$/;
@@ -1310,7 +1309,7 @@ async function AuthorizedContent({
 				: [];
 		return (
 			<div className="flex flex-col flex-1 min-h-0">
-				<NoteShare
+				<NoteShareLoader
 					header={header}
 					data={videoWithOrganizationInfo}
 					document={
@@ -1339,7 +1338,7 @@ async function AuthorizedContent({
 
 	return (
 		<div className="flex flex-col flex-1 min-h-0">
-			<Share
+			<ShareLoader
 				header={header}
 				dashboardDestination={dashboardDestination}
 				upNext={upNextPromise}
