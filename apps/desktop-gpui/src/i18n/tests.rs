@@ -559,6 +559,7 @@ fn appearance_labels_follow_language_changes_without_changing_saved_values() {
         (Locale::Es, ["Sistema", "Claro", "Oscuro"]),
         (Locale::De, ["System", "Hell", "Dunkel"]),
         (Locale::Hi, ["सिस्टम", "लाइट", "डार्क"]),
+        (Locale::Ru, ["Системная", "Светлая", "Тёмная"]),
         (Locale::En, ["System", "Light", "Dark"]),
     ] {
         init(Some(locale.code()));
@@ -671,6 +672,7 @@ fn system_tags_resolve_to_catalogs() {
         ("de_DE@euro", Some(Locale::De)),
         ("es-419", Some(Locale::Es)),
         ("hi-IN", Some(Locale::Hi)),
+        ("ru-RU", Some(Locale::Ru)),
         ("ja-JP", Some(Locale::Ja)),
         ("JA", Some(Locale::Ja)),
         ("zh", Some(Locale::ZhCn)),
@@ -741,6 +743,7 @@ fn picker_lists_endonyms_and_pseudo_only_in_debug_builds() {
         "Français",
         "Español",
         "Deutsch",
+        "Русский",
         "हिन्दी",
     ];
     if cfg!(debug_assertions) {
