@@ -439,6 +439,21 @@ impl Session {
                 out.push(SessionAction::JoinedCall {
                     app_id: app_id.to_string(),
                 });
+            } else if self.hands_over_to(app_id) {
+                // A browser held the meeting's call (a pre-join page, the web
+                // client) and the linked event's own app now takes it: the
+                // meeting is that app's call, and the browser letting go
+                // does not end it.
+                self.app_id = Some(app_id.to_string());
+                self.joined_late = false;
+                self.call_end_suppressed = false;
+                if let Some(Warning::Ending { .. }) = self.warning {
+                    self.warning = None;
+                    out.push(SessionAction::ClearWarning);
+                }
+                out.push(SessionAction::JoinedCall {
+                    app_id: app_id.to_string(),
+                });
             }
             return out;
         }
@@ -448,6 +463,18 @@ impl Session {
             out.push(SessionAction::ClearWarning);
         }
         out
+    }
+
+    /// The linked event's own call app takes over a meeting whose call a
+    /// browser holds.
+    fn hands_over_to(&self, app_id: &str) -> bool {
+        matches!(self.state, SessionState::Starting | SessionState::Recording)
+            && self.own_call.link_app.as_deref() == Some(app_id)
+            && self
+                .app_id
+                .as_deref()
+                .and_then(crate::apps::app_by_id)
+                .is_some_and(|app| app.kind == crate::apps::AppKind::Browser)
     }
 
     pub fn on_call_ended(&mut self, now: Millis, app_id: &str) -> Vec<SessionAction> {
