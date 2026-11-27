@@ -555,6 +555,22 @@ pub fn probe_media_valid(path: &Path) -> bool {
     result
 }
 
+/// Opens a file for probes that read its duration or decode packets themselves.
+///
+/// When a video's first 100 timestamps fit no standard rate (common for
+/// variable-rate screen captures), `avformat_find_stream_info` reads 20 more
+/// packets and decodes 7 of them on every open to guess `r_frame_rate`, and
+/// finalize opens the display file about a dozen times. Skipping that guess
+/// leaves duration, streams and codec parameters unchanged, so only readers of
+/// the frame rate keep the default open.
+pub fn open_input_without_rate_analysis(
+    path: &Path,
+) -> Result<avformat::context::Input, ffmpeg::Error> {
+    let mut options = ffmpeg::Dictionary::new();
+    options.set("fpsprobesize", "0");
+    avformat::input_with_dictionary(path, options)
+}
+
 pub fn probe_video_can_decode(path: &Path) -> Result<bool, String> {
     suppress_ffmpeg_logs();
     let result = probe_video_can_decode_inner(path);
@@ -570,7 +586,8 @@ pub fn probe_video_seek_points(path: &Path, sample_count: usize) -> Result<(), S
 }
 
 fn probe_video_can_decode_inner(path: &Path) -> Result<bool, String> {
-    let mut input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
+    let mut input =
+        open_input_without_rate_analysis(path).map_err(|e| format!("Failed to open file: {e}"))?;
 
     let input_stream = input
         .streams()
@@ -641,7 +658,7 @@ fn probe_video_can_decode_inner(path: &Path) -> Result<bool, String> {
 }
 
 fn probe_video_seek_points_inner(path: &Path, sample_count: usize) -> Result<(), String> {
-    let duration_us = avformat::input(path)
+    let duration_us = open_input_without_rate_analysis(path)
         .map_err(|e| format!("Failed to open file: {e}"))?
         .duration();
     let probe_points = build_seek_probe_positions(duration_us, sample_count);
@@ -714,7 +731,8 @@ fn seek_probe_worker_count(probes: usize) -> usize {
 }
 
 fn probe_video_seek_point_batch(path: &Path, probe_points: &[i64]) -> Result<(), String> {
-    let mut input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
+    let mut input =
+        open_input_without_rate_analysis(path).map_err(|e| format!("Failed to open file: {e}"))?;
 
     let (stream_index, decoder_ctx) = {
         let input_stream = input
@@ -867,7 +885,7 @@ pub fn get_media_duration(path: &Path) -> Option<Duration> {
 }
 
 fn get_media_duration_inner(path: &Path) -> Option<Duration> {
-    let input = avformat::input(path).ok()?;
+    let input = open_input_without_rate_analysis(path).ok()?;
     let duration_ts = input.duration();
     if duration_ts <= 0 {
         return None;
