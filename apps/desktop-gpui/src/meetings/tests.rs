@@ -2338,3 +2338,46 @@ fn join_and_take_notes_starts_a_meeting_joining_its_call(cx: &mut gpui::TestAppC
         assert!(!m.origin_for(&scheduled).joining);
     });
 }
+
+/// A finished meeting's count of voices follows the transcript's edits (a
+/// voice left out, labels moved after Stop), so the notes list stays right.
+#[test]
+fn a_finished_meetings_voice_count_follows_its_transcript() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let mut meta = library.create(DocKind::Meeting, Utc::now(), 5).unwrap();
+    let mut meeting = MeetingDetails {
+        ended_at: Some(Utc::now()),
+        ..MeetingDetails::default()
+    };
+    meeting.set_speaker_count(1);
+    meta.meeting = Some(meeting);
+    library.save(&meta).unwrap();
+    let mut transcript = Transcript::new();
+    transcript.upsert(utterance("m1", Source::Mic, 0, "Morning."));
+    transcript.upsert(utterance("s1", Source::System, 1_000, "Hi there."));
+
+    assert!(persist::follow_left_out(&library, &meta.id, &transcript));
+    let count = |library: &Library| {
+        library
+            .load(&meta.id)
+            .unwrap()
+            .meeting
+            .and_then(|m| m.speaker_count())
+    };
+    assert_eq!(count(&library), Some(2));
+    assert!(
+        !persist::follow_left_out(&library, &meta.id, &transcript),
+        "nothing changed"
+    );
+
+    // still recording: the stop saves the count
+    let mut live = library.create(DocKind::Meeting, Utc::now(), 6).unwrap();
+    live.meeting = Some(MeetingDetails::default());
+    library.save(&live).unwrap();
+    assert!(!persist::follow_left_out(&library, &live.id, &transcript));
+    assert_eq!(
+        library.load(&live.id).unwrap().meeting.unwrap().speaker_count(),
+        None
+    );
+}

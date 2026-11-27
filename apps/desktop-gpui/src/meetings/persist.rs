@@ -158,17 +158,29 @@ pub fn summary_follows(meta: &DocMeta, transcript: &Transcript) -> bool {
 }
 
 /// After the person changed who is left out of the notes, or a summary was
-/// written: one written under other choices is offered for an update.
+/// written: one written under other choices is offered for an update, and a
+/// finished meeting's count of voices follows the transcript.
 /// Returns whether the note changed.
 pub fn follow_left_out(library: &Library, doc_id: &str, transcript: &Transcript) -> bool {
     let _lock = cap_meetings::library::lock_meta();
     let Ok(mut meta) = library.load(doc_id) else {
         return false;
     };
-    if !meta.meeting.as_ref().is_some_and(|m| m.has_enhanced)
-        || summary_follows(&meta, transcript)
-        || !set_flag(&mut meta, NOTES_STALE_KEY, true)
+    let mut changed = false;
+    if let Some(meeting) = meta.meeting.as_mut().filter(|m| m.ended_at.is_some()) {
+        let speakers = transcript.speaker_count();
+        if meeting.speaker_count() != Some(speakers as u64) {
+            meeting.set_speaker_count(speakers);
+            changed = true;
+        }
+    }
+    if meta.meeting.as_ref().is_some_and(|m| m.has_enhanced)
+        && !summary_follows(&meta, transcript)
+        && set_flag(&mut meta, NOTES_STALE_KEY, true)
     {
+        changed = true;
+    }
+    if !changed {
         return false;
     }
     match library.save(&meta) {
