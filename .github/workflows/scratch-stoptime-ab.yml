@@ -2,10 +2,10 @@ name: Scratch stop-time A/B
 
 on:
   push:
-    branches: ["ci/stoptime-ab"]
+    branches: ["ci/stoptime-ab", "ci/stoptime-ab-mac"]
 
 concurrency:
-  group: scratch-stoptime-ab
+  group: scratch-stoptime-ab-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -40,8 +40,11 @@ jobs:
           cargo build --locked --release -p cap --bin cap
           cp target/release/cap "$RUNNER_TEMP/bins/base/cap"
           git checkout -q -
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Stimulus deps
-        run: python3 -m pip install --break-system-packages pygame psutil av || python3 -m pip install pygame psutil av
+        run: python3 -m pip install pygame psutil av
       - name: Screens
         run: |
           "$RUNNER_TEMP/bins/base/cap" targets screens --format json
@@ -69,6 +72,7 @@ jobs:
             ${{ runner.temp }}/files.txt
 
   windows:
+    if: github.ref_name == 'ci/stoptime-ab'
     runs-on: windows-2022
     timeout-minutes: 120
     steps:
