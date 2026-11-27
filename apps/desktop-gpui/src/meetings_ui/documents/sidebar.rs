@@ -95,6 +95,7 @@ pub struct Sidebar {
     editing: Option<(Editing, Entity<TextInputState>)>,
     /// The Cap Pro row (see [`super::cap_ai::pro_row`]).
     pro: Option<ProRow>,
+    pro_for: String,
     /// The list's scroll, to know when it runs past the row and fades out
     /// above it (set at paint, read at the next render).
     nav_scroll: ScrollHandle,
@@ -134,12 +135,17 @@ impl Sidebar {
             menu: None,
             editing: None,
             pro: None,
+            pro_for: String::new(),
             nav_scroll: ScrollHandle::new(),
             nav_overflows: Rc::new(Cell::new(false)),
             _subscriptions: subscriptions,
         };
         this.refresh_recent(cx);
-        this.pro = meetings.and_then(|m| next_pro_row(None, m.read(cx).pro_offer()));
+        if let Some(meetings) = &meetings {
+            let offer = meetings.read(cx).pro_offer();
+            this.pro = next_pro_row(None, "", &offer);
+            this.pro_for = offer.account;
+        }
         // Home may be the first Notes screen: ask the server for the free
         // count now rather than when a note opens.
         if let Some(meetings) = Meetings::try_global(cx) {
@@ -156,7 +162,9 @@ impl Sidebar {
         let Some(meetings) = Meetings::try_global(cx) else {
             return;
         };
-        let pro = next_pro_row(self.pro, meetings.read(cx).pro_offer());
+        let offer = meetings.read(cx).pro_offer();
+        let pro = next_pro_row(self.pro, &self.pro_for, &offer);
+        self.pro_for = offer.account;
         if pro != self.pro {
             self.pro = pro;
             cx.emit(SidebarEvent::ProChanged);

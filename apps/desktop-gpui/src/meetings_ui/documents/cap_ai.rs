@@ -155,20 +155,22 @@ pub fn pro_row(access: AiAccess, trial_remaining: Option<u32>, sells: bool) -> O
     })
 }
 
-/// The row for `offer`, after `shown`. While the server is being asked again
-/// (after a write-up, or offline) the count it last gave stays on screen
-/// rather than flashing to the line without one.
-pub fn next_pro_row(shown: Option<ProRow>, offer: ProOffer) -> Option<ProRow> {
+/// While the same account's server is being asked again (after a write-up,
+/// or offline) the count it last gave stays on screen: asking clears the
+/// cached answer, which would otherwise read as no count (cap.so) or as Cap
+/// AI not sold here (a custom server).
+pub fn next_pro_row(shown: Option<ProRow>, shown_for: &str, offer: &ProOffer) -> Option<ProRow> {
     let next = pro_row(offer.access, offer.trial, offer.sells);
     match (shown, next) {
-        (Some(held @ (ProRow::Left(_) | ProRow::Spent)), Some(ProRow::Upgrade)) if !offer.known => {
+        (Some(held @ (ProRow::Left(_) | ProRow::Spent)), None | Some(ProRow::Upgrade))
+            if !offer.known && shown_for == offer.account =>
+        {
             Some(held)
         }
         _ => next,
     }
 }
 
-/// The row's line, its button, and whether the button signs in.
 pub fn pro_row_copy(row: ProRow) -> (SharedString, &'static str, bool) {
     match row {
         ProRow::SignedOut => (
@@ -877,6 +879,7 @@ mod tests {
             trial,
             sells: true,
             known,
+            account: "a".into(),
         }
     }
 
@@ -884,25 +887,56 @@ mod tests {
     fn the_row_keeps_the_last_count_while_the_server_is_asked_again() {
         let asking = offer(AiAccess::NeedsUpgrade, None, false);
         assert_eq!(
-            next_pro_row(Some(ProRow::Left(3)), asking),
+            next_pro_row(Some(ProRow::Left(3)), "a", &asking),
             Some(ProRow::Left(3))
         );
         assert_eq!(
-            next_pro_row(Some(ProRow::Spent), asking),
+            next_pro_row(Some(ProRow::Spent), "a", &asking),
             Some(ProRow::Spent)
         );
         // The answer lands: the new count.
         assert_eq!(
             next_pro_row(
                 Some(ProRow::Left(3)),
-                offer(AiAccess::Trial { remaining: 2 }, Some(2), true)
+                "a",
+                &offer(AiAccess::Trial { remaining: 2 }, Some(2), true)
             ),
             Some(ProRow::Left(2))
         );
         // Nothing known before: the line without a count, same height.
-        assert_eq!(next_pro_row(None, asking), Some(ProRow::Upgrade));
+        assert_eq!(next_pro_row(None, "a", &asking), Some(ProRow::Upgrade));
         assert_eq!(
-            next_pro_row(Some(ProRow::SignedOut), asking),
+            next_pro_row(Some(ProRow::SignedOut), "a", &asking),
+            Some(ProRow::Upgrade)
+        );
+    }
+
+    #[test]
+    fn a_custom_server_being_asked_again_keeps_its_count() {
+        // Asking again clears the cached answer, so a custom server briefly
+        // reads as not selling Cap AI.
+        let asking = ProOffer {
+            sells: false,
+            ..offer(AiAccess::NeedsUpgrade, None, false)
+        };
+        assert_eq!(
+            next_pro_row(Some(ProRow::Left(2)), "a", &asking),
+            Some(ProRow::Left(2))
+        );
+        // It answers that Cap AI isn't set up: the row goes.
+        let answered = ProOffer {
+            known: true,
+            ..asking.clone()
+        };
+        assert_eq!(next_pro_row(Some(ProRow::Left(2)), "a", &answered), None);
+        // Another account's count never carries over.
+        assert_eq!(next_pro_row(Some(ProRow::Left(2)), "b", &asking), None);
+        assert_eq!(
+            next_pro_row(
+                Some(ProRow::Left(2)),
+                "b",
+                &offer(AiAccess::NeedsUpgrade, None, false)
+            ),
             Some(ProRow::Upgrade)
         );
     }
@@ -914,15 +948,17 @@ mod tests {
             trial: None,
             sells: true,
             known: true,
+            account: "a".into(),
         };
         for shown in [None, Some(ProRow::Left(1)), Some(ProRow::Upgrade)] {
-            assert_eq!(next_pro_row(shown, down), None);
+            assert_eq!(next_pro_row(shown, "a", &down), None);
         }
         // Signing out or upgrading clears a held count at once.
         assert_eq!(
             next_pro_row(
                 Some(ProRow::Left(2)),
-                offer(AiAccess::NeedsSignIn, None, true)
+                "a",
+                &offer(AiAccess::NeedsSignIn, None, true)
             ),
             Some(ProRow::SignedOut)
         );
@@ -939,7 +975,10 @@ mod tests {
             (ProRow::Left(3), "3 free Cap\u{a0}AI notes left"),
             (ProRow::Left(1), "1 free Cap\u{a0}AI note left"),
             (ProRow::Spent, "Cap\u{a0}AI notes are part of Cap\u{a0}Pro"),
-            (ProRow::Upgrade, "Cap\u{a0}AI notes are part of Cap\u{a0}Pro"),
+            (
+                ProRow::Upgrade,
+                "Cap\u{a0}AI notes are part of Cap\u{a0}Pro",
+            ),
         ] {
             assert_eq!(pro_row_copy(row), (line.into(), "Get Cap Pro", false));
         }

@@ -89,12 +89,15 @@ fn sells_cap_ai(input: &AccessInput<'_>) -> bool {
 /// The account as the Cap Pro row in Notes sees it: access, the free count,
 /// whether Cap AI is sold on this server, and whether the server has answered
 /// for this account (`known`); until it has, the row keeps what it showed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProOffer {
     pub access: AiAccess,
     pub trial: Option<u32>,
     pub sells: bool,
     pub known: bool,
+    /// The account the answer is for: a count held on screen never carries
+    /// over to another account.
+    pub account: String,
 }
 
 pub fn resolve(input: AccessInput<'_>) -> AiAccess {
@@ -249,7 +252,6 @@ impl Meetings {
         })
     }
 
-    /// What the Cap Pro row in Notes needs, from one look at the account.
     pub fn pro_offer(&self) -> ProOffer {
         #[cfg(debug_assertions)]
         if debug_access().is_some() {
@@ -258,6 +260,7 @@ impl Meetings {
                 trial: self.trial_remaining(),
                 sells: true,
                 known: true,
+                account: String::new(),
             };
         }
         let auth = crate::store::auth_snapshot();
@@ -273,6 +276,7 @@ impl Meetings {
             trial: self.trial_remaining(),
             sells: sells_cap_ai(&input),
             known: settled(input),
+            account: super::account_key(&auth),
         }
     }
 

@@ -752,7 +752,11 @@ fn local_mode(local: Option<&LocalModel>) -> EngineMode {
 }
 
 fn auth_key() -> String {
-    let auth = crate::store::auth_snapshot();
+    account_key(&crate::store::auth_snapshot())
+}
+
+/// Which account (and server) answers are cached for.
+pub(crate) fn account_key(auth: &crate::store::AuthSnapshot) -> String {
     format!(
         "{}|{}|{}",
         auth.server_url,
