@@ -2328,7 +2328,6 @@ mod tests {
         errno: ffmpeg::error::EIO,
     };
 
-    /// The index of the first frame in each media segment.
     fn segment_starts(base_path: &Path) -> Vec<usize> {
         let mut segment_paths: Vec<PathBuf> = std::fs::read_dir(base_path)
             .unwrap()
@@ -2373,9 +2372,6 @@ mod tests {
         }
     }
 
-    /// Queues `total_frames` `step` apart, asking for the switch before
-    /// frame `request_at`, and returns every switch with the frame it
-    /// happened on.
     fn record_with_switch_request(
         encoder: &mut SegmentedVideoEncoder,
         total_frames: u64,
@@ -2458,6 +2454,116 @@ mod tests {
         let baseline = 66;
         assert!(decoded.in_band_sps_profiles.first() != Some(&baseline));
         assert_eq!(decoded.in_band_sps_profiles.last(), Some(&baseline));
+    }
+
+    fn pretend_past_ceiling_libx264(base_path: &Path) -> SegmentedVideoEncoder {
+        let mut encoder = SegmentedVideoEncoder::init_libx264(
+            base_path.to_path_buf(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig {
+                preset: H264Preset::Medium,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        encoder.force_runtime_fallback(true);
+        encoder.pretend_past_ceiling_hardware(Some(H264Preset::Ultrafast));
+        encoder
+    }
+
+    #[test]
+    fn a_failed_software_replacement_is_not_retried() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut encoder = SegmentedVideoEncoder::init_libx264(
+            temp.path().to_path_buf(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        encoder.force_runtime_fallback(true);
+        encoder.encoder.inject_codec_failure_after(
+            10,
+            HARDWARE_FAILURE,
+            Some(H264Preset::Ultrafast),
+        );
+        encoder.encoder.fail_software_open();
+        assert!(encoder.encoder.can_replace_with_software());
+        for i in 0..60u64 {
+            let _ = encoder.queue_frame(
+                create_test_frame(320, 240),
+                Duration::from_micros(i * 33_333),
+            );
+            if encoder.unrecovered_encoder_failure().is_some() {
+                assert!(
+                    !encoder.encoder.can_replace_with_software(),
+                    "a failed replacement consumes its builder, so later frames never retry it"
+                );
+            }
+        }
+        assert!(encoder.take_encoder_fallback().is_none());
+        assert!(encoder.unrecovered_encoder_failure().is_some());
+        assert!(!encoder.encoder.can_replace_with_software());
+    }
+
+    #[test]
+    fn a_failed_software_open_at_the_switch_stays_on_hardware_once() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let mut encoder = pretend_past_ceiling_libx264(&base_path);
+        encoder.encoder.fail_software_open();
+
+        let total_frames = 300;
+        let switches = record_with_switch_request(
+            &mut encoder,
+            total_frames,
+            100,
+            Duration::from_micros(33_333),
+            |encoder, timestamp| {
+                encoder
+                    .queue_frame(create_test_frame(320, 240), timestamp)
+                    .unwrap();
+            },
+        );
+        let [(_, SoftwareSwitch::Failed { .. })] = switches.as_slice() else {
+            panic!("one failed switch expected, got {switches:?}");
+        };
+        assert!(
+            encoder.encoder.can_replace_with_software(),
+            "the failure path keeps its replacement"
+        );
+        encoder.finish().unwrap();
+        assert_eq!(encoder.packets_written(), total_frames);
+        let decoded = decode_every_packet(&recorded_track(&base_path));
+        assert_continuous(&decoded, total_frames as usize, 0.033_333);
+        assert!(!decoded.in_band_sps_profiles.contains(&66));
+    }
+
+    #[test]
+    fn stopping_while_the_switch_is_armed_keeps_every_frame() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let mut encoder = pretend_past_ceiling_libx264(&base_path);
+        let total_frames = 150u64;
+        for i in 0..total_frames {
+            if i == 100 {
+                assert!(encoder.request_software_switch());
+            }
+            encoder
+                .queue_frame(
+                    create_test_frame(320, 240),
+                    Duration::from_micros(i * 33_333),
+                )
+                .unwrap();
+            assert!(encoder.take_software_switch().is_none());
+        }
+        encoder.finish().unwrap();
+        assert_eq!(encoder.packets_written(), total_frames);
+        let decoded = decode_every_packet(&recorded_track(&base_path));
+        assert_continuous(&decoded, total_frames as usize, 0.033_333);
+        assert!(!decoded.in_band_sps_profiles.contains(&66));
     }
 
     #[test]

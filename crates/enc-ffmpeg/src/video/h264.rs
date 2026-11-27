@@ -40,6 +40,8 @@ pub struct H264EncoderBuilder {
     software_tuning: Option<SoftwareEncoderTuning>,
     #[cfg(target_os = "macos")]
     video_encoder: VideoEncoderChoice,
+    #[cfg(test)]
+    fail_software_open: bool,
 }
 
 /// libx264 settings for an export split across several encoders running at
@@ -166,6 +168,8 @@ impl H264EncoderBuilder {
             software_tuning: None,
             #[cfg(target_os = "macos")]
             video_encoder: VideoEncoderChoice::Automatic,
+            #[cfg(test)]
+            fail_software_open: false,
         }
     }
 
@@ -481,6 +485,10 @@ impl H264EncoderBuilder {
         output_width: u32,
         output_height: u32,
     ) -> Result<OpenedVideoEncoder, H264EncoderError> {
+        #[cfg(test)]
+        if self.fail_software_open {
+            return Err(H264EncoderError::CodecNotFound);
+        }
         let input_config = self.input_config;
         let (codec, mut encoder_options) = get_codec_and_options(
             &input_config,
@@ -1269,7 +1277,11 @@ impl H264Encoder {
     /// the failed encoder still held are lost. libx264 starts on an IDR frame
     /// with its parameter sets in-band, as every encoder here writes them.
     pub fn replace_with_software(&mut self) -> Result<(), H264EncoderError> {
-        let opened = self.open_software_replacement()?;
+        let builder = self
+            .software_fallback
+            .take()
+            .ok_or(H264EncoderError::CodecNotFound)?;
+        let opened = builder.open_software(self.output_width, self.output_height)?;
         self.install_software(opened);
         Ok(())
     }
@@ -1282,28 +1294,29 @@ impl H264Encoder {
 
     /// Like [`Self::replace_with_software`], for a hardware encoder that
     /// still works: libx264 is opened first, so a failed open leaves this
-    /// encoder running, then every frame the hardware encoder held is
-    /// written before the swap. Returns the error of a hardware encoder that
+    /// encoder running with its replacement still available to the
+    /// failure path, then every frame the hardware encoder held is written
+    /// before the swap. Returns the error of a hardware encoder that
     /// failed while handing over; its remaining frames are lost and the swap
     /// still happens.
     pub fn hand_over_to_software<S: PacketSink + ?Sized>(
         &mut self,
         output: &mut S,
     ) -> Result<Option<ffmpeg::Error>, H264EncoderError> {
-        let opened = self.open_software_replacement()?;
-        let drained = self.base.drain_for_handover(output, &mut self.encoder);
-        self.install_software(opened);
-        Ok(drained.err())
-    }
-
-    fn open_software_replacement(&mut self) -> Result<OpenedVideoEncoder, H264EncoderError> {
         let builder = self
             .software_fallback
             .take()
             .ok_or(H264EncoderError::CodecNotFound)?;
-        builder
-            .open_software(self.output_width, self.output_height)
-            .inspect_err(|_| self.software_fallback = Some(builder))
+        let opened = match builder.open_software(self.output_width, self.output_height) {
+            Ok(opened) => opened,
+            Err(error) => {
+                self.software_fallback = Some(builder);
+                return Err(error);
+            }
+        };
+        let drained = self.base.drain_for_handover(output, &mut self.encoder);
+        self.install_software(opened);
+        Ok(drained.err())
     }
 
     fn install_software(&mut self, opened: OpenedVideoEncoder) {
@@ -1359,6 +1372,13 @@ impl H264Encoder {
             replacement_preset,
         );
         self.past_ceiling_hardware = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_software_open(&mut self) {
+        if let Some(builder) = &mut self.software_fallback {
+            builder.fail_software_open = true;
+        }
     }
 
     #[cfg(test)]

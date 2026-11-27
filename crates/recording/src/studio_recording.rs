@@ -3953,6 +3953,12 @@ async fn create_segment_pipeline(
             start_time = Timestamps::now();
         }
         #[cfg(target_os = "macos")]
+        let video_encoder = if screen_frames.switched_to_software() {
+            VideoEncoderChoice::Automatic
+        } else {
+            video_encoder
+        };
+        #[cfg(target_os = "macos")]
         screen_frames.register(capture_source.frame_accounting());
 
         let screen = ScreenCaptureMethod::make_studio_mode_pipeline(

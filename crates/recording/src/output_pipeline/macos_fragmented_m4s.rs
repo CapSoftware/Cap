@@ -235,6 +235,7 @@ fn report_encoder_fallback(
     link: &EncoderFallbackLink,
     encoder: &mut SegmentedVideoEncoder,
     armed_by: Option<&ScreenFrameTotals>,
+    accounting: Option<&ScreenFrameAccounting>,
     health_tx: &SharedHealthSender,
 ) {
     link.backlog.set_in_codec(encoder.frames_in_codec());
@@ -244,6 +245,9 @@ fn report_encoder_fallback(
             to,
             hardware_tail_error,
         }) => {
+            if let Some(accounting) = accounting {
+                accounting.record_switched_to_software();
+            }
             let window = armed_by.copied().unwrap_or_default();
             warn!(
                 from = %from,
@@ -744,6 +748,7 @@ impl MacOSFragmentedM4SMuxer {
                                         link,
                                         &mut encoder,
                                         fallback_armed_by.as_ref(),
+                                        frame_accounting.as_deref(),
                                         &health_tx,
                                     );
                                 }

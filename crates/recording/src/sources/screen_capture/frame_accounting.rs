@@ -292,6 +292,7 @@ pub struct ScreenFrameAccounting {
     writer_lost: AtomicU64,
     repeat_flags: Mutex<VecDeque<bool>>,
     capture_buffers: u64,
+    switched_to_software: AtomicBool,
 }
 
 impl ScreenFrameAccounting {
@@ -304,6 +305,10 @@ impl ScreenFrameAccounting {
 
     pub fn capture_buffers(&self) -> u64 {
         self.capture_buffers
+    }
+
+    pub fn record_switched_to_software(&self) {
+        self.switched_to_software.store(true, Ordering::Relaxed);
     }
 
     pub fn attach(&self) {
@@ -429,6 +434,16 @@ impl ScreenFrameLedger {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(segment);
+    }
+
+    /// Whether an earlier segment of this recording switched to the software
+    /// encoder, so later segments start there instead of on hardware again.
+    pub fn switched_to_software(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .any(|segment| segment.switched_to_software.load(Ordering::Relaxed))
     }
 
     pub fn totals(&self) -> Option<ScreenFrameTotals> {
@@ -942,10 +957,6 @@ mod tests {
         );
     }
 
-    /// Feeds a 120 fps stream for `secs`: frame `i` arrives after
-    /// `skip(i)` missed slots while the encoder side holds `held` frames, and
-    /// is lost before the encoder when `dropped(i)`. Returns the frame index
-    /// and window of every time the trigger fires.
     fn run_trigger(
         trigger: &mut EncoderFallbackTrigger,
         secs: u64,
@@ -1051,6 +1062,19 @@ mod tests {
         };
         assert_eq!(window.lost_in_capture, 0);
         assert!(window.lost_before_encoder >= 59, "{window:?}");
+    }
+
+    #[test]
+    fn a_switch_in_any_segment_holds_for_the_rest_of_the_recording() {
+        let ledger = ScreenFrameLedger::default();
+        let first = Arc::new(ScreenFrameAccounting::with_capture_buffers(8));
+        ledger.register(first.clone());
+        assert!(!ledger.switched_to_software());
+        first.record_switched_to_software();
+        let second = Arc::new(ScreenFrameAccounting::with_capture_buffers(8));
+        ledger.register(second);
+        assert!(ledger.switched_to_software());
+        assert!(!ScreenFrameLedger::default().switched_to_software());
     }
 
     #[test]
