@@ -1,0 +1,119 @@
+name: Scratch CL Library smoke on main
+# Temporary branch (deleted after use): builder CL's screen-reader A/B for the Library's pinned items and
+# smart folder editor controls, on main. Both arms built with debug assertions (seeded notes). AT-SPI + Orca
+# on Linux, UI Automation + Narrator on Windows, AX + VoiceOver on macOS. Scratch profiles, server URL on a
+# closed local port. Pixel counts computed on the runners. Nothing ships.
+
+on:
+  push:
+    branches: [ci/cl-libsmoke*]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: "true"
+  CL_BASE: efe94b1d3c9c3f70d6a658011113f6217fcc522c
+  CL_HEAD: efe94b1d3c9c3f70d6a658011113f6217fcc522c
+
+jobs:
+  build-mac:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+      - run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage/bin" "$stage/Frameworks"
+          cp -R .cl "$stage/cl"
+          for pair in head=$CL_HEAD; do
+            arm=${pair%%=*}; git checkout -q -f "${pair#*=}"
+            git clean -q -fd apps/desktop-gpui/src
+            node scripts/sync-desktop-versions.mjs
+            ./scripts/prepare-gpui-dependency.sh
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui 2>&1 | tail -2
+            cp apps/desktop-gpui/target/release/cap-gpui "$stage/bin/cap-gpui-$arm"
+            codesign --force -s - "$stage/bin/cap-gpui-$arm"
+          done
+          cp "$stage/bin/cap-gpui-head" "$stage/bin/cap-gpui-base"; codesign --force -s - "$stage/bin/cap-gpui-base"
+          cp -RL target/Frameworks/Spacedrive.framework "$stage/Frameworks/"
+          tar -C "$stage" -czf "$RUNNER_TEMP/cl-mac.tgz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cl-libsmoke-mac-app
+          path: ${{ runner.temp }}/cl-mac.tgz
+          retention-days: 1
+
+  run-mac:
+    needs: build-mac
+    runs-on: macos-15
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: CapSoftware/cap-performance-fixtures
+          path: performance-fixtures
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: cl-libsmoke-mac-app
+          path: ${{ runner.temp }}
+      - name: Unpack, tools, grants
+        run: |
+          set -euo pipefail
+          S="$RUNNER_TEMP/s"; mkdir -p "$S"; tar xzf "$RUNNER_TEMP/cl-mac.tgz" -C "$S"; echo "S=$S" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/Frameworks"; cp -R "$S/Frameworks/"* "$RUNNER_TEMP/Frameworks/"
+          swiftc -O -o "$S/cl/cdax" "$S/cl/cdax.swift" 2>&1 | grep -v warning | head -5 || true
+          codesign --force -s - "$S/cl/cdax"
+          U="$HOME/Library/Application Support/com.apple.TCC/TCC.db"; SY="/Library/Application Support/com.apple.TCC/TCC.db"
+          for client in /usr/local/opt/runner/provisioner/provisioner /usr/local/opt/runner/runprovisioner.sh \
+            /opt/hca/hosted-compute-agent /opt/hca/start_hca.sh /bin/bash /bin/zsh /bin/sh /usr/bin/osascript \
+            /usr/sbin/screencapture "$S/bin/cap-gpui-base" "$S/bin/cap-gpui-head" "$S/cl/cdax"; do
+            for service in kTCCServiceAccessibility kTCCServiceScreenCapture kTCCServiceMicrophone; do
+              row="'$service','$client',1,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,1687786159,NULL,NULL,'UNUSED',1687786159"
+              sqlite3 "$U" "insert or replace into access values ($row)" 2> /dev/null || true
+              sudo sqlite3 "$SY" "insert or replace into access values ($row)" 2> /dev/null || true
+            done
+            for target in com.apple.VoiceOver com.apple.systemevents; do
+              row="'kTCCServiceAppleEvents','$client',1,2,4,1,NULL,NULL,0,'$target',NULL,0,1687786159,NULL,NULL,'UNUSED',1687786159"
+              sqlite3 "$U" "insert or replace into access values ($row)" 2> /dev/null || true
+              sudo sqlite3 "$SY" "insert or replace into access values ($row)" 2> /dev/null || true
+            done
+          done
+          sudo killall tccd 2> /dev/null; killall tccd 2> /dev/null; sleep 2
+          "$S/cl/cdax" trusted || true
+      - name: Run
+        run: |
+          set +e
+          python3 -m pip install -q --break-system-packages pillow || python3 -m pip install -q pillow
+          bash "$S/cl/cl8.sh" mac "$RUNNER_TEMP/out" "$S/bin/cap-gpui-base" "$S/bin/cap-gpui-head" "t x"
+          echo "=========== pixels"; python3 -W ignore "$S/cl/c1pix.py" "$RUNNER_TEMP/out" mac
+          cat "$RUNNER_TEMP/out/result.txt"
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cl-libsmoke-mac
+          path: ${{ runner.temp }}/out
+          retention-days: 4
