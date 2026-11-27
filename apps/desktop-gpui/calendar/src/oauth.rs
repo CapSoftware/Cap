@@ -10,6 +10,7 @@ pub const GOOGLE_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/
 pub const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 pub const GOOGLE_CALENDAR_SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly";
 pub const GOOGLE_SCOPES: &str = "openid email https://www.googleapis.com/auth/calendar.readonly";
+pub const GOOGLE_DRIVE_FILE_SCOPE: &str = "https://www.googleapis.com/auth/drive.file";
 pub const MICROSOFT_SCOPES: &str = "openid email offline_access Calendars.Read User.Read";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -136,11 +137,29 @@ pub fn authorize_url(
     challenge: &str,
     login_hint: Option<&str>,
 ) -> String {
+    authorize_url_with_scopes(
+        client,
+        client.scopes(),
+        redirect_uri,
+        state,
+        challenge,
+        login_hint,
+    )
+}
+
+pub fn authorize_url_with_scopes(
+    client: &OAuthClient,
+    scopes: &str,
+    redirect_uri: &str,
+    state: &str,
+    challenge: &str,
+    login_hint: Option<&str>,
+) -> String {
     let mut pairs: Vec<(&str, &str)> = vec![
         ("client_id", client.client_id.as_str()),
         ("redirect_uri", redirect_uri),
         ("response_type", "code"),
-        ("scope", client.scopes()),
+        ("scope", scopes),
         ("state", state),
         ("code_challenge", challenge),
         ("code_challenge_method", "S256"),
@@ -204,10 +223,12 @@ pub fn refresh_request(client: &OAuthClient, refresh_token: &str) -> HttpRequest
 /// response always lists what was granted. Microsoft grants every scope or
 /// none.
 pub fn grants_calendar(client: &OAuthClient, scope: Option<&str>) -> bool {
-    match (client.provider, scope) {
-        (OAuthProvider::Google, Some(scope)) => scope
-            .split_whitespace()
-            .any(|granted| granted == GOOGLE_CALENDAR_SCOPE),
+    grants_scope(client.provider, scope, GOOGLE_CALENDAR_SCOPE)
+}
+
+pub fn grants_scope(provider: OAuthProvider, granted: Option<&str>, wanted: &str) -> bool {
+    match (provider, granted) {
+        (OAuthProvider::Google, Some(granted)) => granted.split_whitespace().any(|g| g == wanted),
         _ => true,
     }
 }

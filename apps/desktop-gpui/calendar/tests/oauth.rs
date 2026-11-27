@@ -2,8 +2,10 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cap_calendar::HttpMethod;
 use cap_calendar::oauth::{
-    AuthError, OAuthClient, Pkce, authorize_url, grants_calendar, id_token_email, parse_redirect,
-    parse_token_response, refresh_request, state_from_random, token_request,
+    AuthError, GOOGLE_CALENDAR_SCOPE, GOOGLE_DRIVE_FILE_SCOPE, GOOGLE_SCOPES, MICROSOFT_SCOPES,
+    OAuthClient, OAuthProvider, Pkce, authorize_url, authorize_url_with_scopes, grants_calendar,
+    grants_scope, id_token_email, parse_redirect, parse_token_response, refresh_request,
+    state_from_random, token_request,
 };
 
 fn query_of(url: &str) -> Vec<(String, String)> {
@@ -277,4 +279,99 @@ fn google_sign_in_without_the_calendar_box_ticked_is_not_calendar_access() {
     assert!(grants_calendar(&google, None));
     let microsoft = OAuthClient::microsoft("id");
     assert!(grants_calendar(&microsoft, Some("User.Read")));
+}
+
+#[test]
+fn drive_authorize_url_asks_for_drive_file_only() {
+    let client = OAuthClient::google("drive.apps.googleusercontent.com", None);
+    let url = authorize_url_with_scopes(
+        &client,
+        GOOGLE_DRIVE_FILE_SCOPE,
+        "http://127.0.0.1:53682",
+        "st4te",
+        "chal",
+        None,
+    );
+    let pairs = query_of(&url);
+    assert_eq!(
+        get(&pairs, "scope"),
+        Some("https://www.googleapis.com/auth/drive.file")
+    );
+    assert_eq!(
+        GOOGLE_DRIVE_FILE_SCOPE,
+        "https://www.googleapis.com/auth/drive.file"
+    );
+    assert_eq!(get(&pairs, "code_challenge"), Some("chal"));
+    assert_eq!(get(&pairs, "code_challenge_method"), Some("S256"));
+    assert_eq!(get(&pairs, "access_type"), Some("offline"));
+    assert_eq!(get(&pairs, "prompt"), Some("consent"));
+    assert_eq!(get(&pairs, "redirect_uri"), Some("http://127.0.0.1:53682"));
+    assert_eq!(get(&pairs, "login_hint"), None);
+    assert!(url.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"));
+}
+
+#[test]
+fn calendar_authorize_url_is_unchanged_by_the_scope_parameter() {
+    let google = OAuthClient::google("123.apps.googleusercontent.com", Some("s".to_string()));
+    assert_eq!(
+        authorize_url(
+            &google,
+            "http://127.0.0.1:1/cb",
+            "st",
+            "ch",
+            Some("me@x.example")
+        ),
+        authorize_url_with_scopes(
+            &google,
+            GOOGLE_SCOPES,
+            "http://127.0.0.1:1/cb",
+            "st",
+            "ch",
+            Some("me@x.example"),
+        )
+    );
+    let microsoft = OAuthClient::microsoft("ms-id");
+    assert_eq!(
+        authorize_url(&microsoft, "http://localhost:2", "st", "ch", None),
+        authorize_url_with_scopes(
+            &microsoft,
+            MICROSOFT_SCOPES,
+            "http://localhost:2",
+            "st",
+            "ch",
+            None,
+        )
+    );
+}
+
+#[test]
+fn grants_scope_checks_the_wanted_scope_for_google_only() {
+    let drive = "https://www.googleapis.com/auth/drive.file";
+    assert!(grants_scope(
+        OAuthProvider::Google,
+        Some("openid https://www.googleapis.com/auth/drive.file"),
+        drive
+    ));
+    assert!(!grants_scope(
+        OAuthProvider::Google,
+        Some("https://www.googleapis.com/auth/calendar.readonly"),
+        drive
+    ));
+    assert!(!grants_scope(
+        OAuthProvider::Google,
+        Some("https://www.googleapis.com/auth/drive.file.extra"),
+        drive
+    ));
+    assert!(!grants_scope(
+        OAuthProvider::Google,
+        Some("https://www.googleapis.com/auth/drive.file"),
+        GOOGLE_CALENDAR_SCOPE
+    ));
+    assert!(grants_scope(OAuthProvider::Google, None, drive));
+    assert!(grants_scope(
+        OAuthProvider::Microsoft,
+        Some("User.Read"),
+        drive
+    ));
+    assert!(grants_scope(OAuthProvider::Microsoft, None, drive));
 }

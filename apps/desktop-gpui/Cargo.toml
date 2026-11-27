@@ -5,7 +5,7 @@
 # gpui's tree does not want.
 [workspace]
 resolver = "2"
-members = [".", "kernels", "i18n-build", "glass", "notes", "notes-ui", "calendar", "meetings", "meeting-platform", "diarize"]
+members = [".", "kernels", "i18n-build", "glass", "notes", "notes-ui", "calendar", "gdrive", "meetings", "meeting-platform", "diarize"]
 
 [package]
 name = "cap-desktop-gpui"
@@ -32,6 +32,7 @@ cap-glass = { path = "glass" }
 cap-meetings = { path = "meetings" }
 cap-meeting-platform = { path = "meeting-platform" }
 cap-calendar = { path = "calendar" }
+cap-gdrive = { path = "gdrive" }
 cap-diarize = { path = "diarize" }
 cap-notes = { path = "notes" }
 cap-notes-ui = { path = "notes-ui" }
@@ -215,6 +216,7 @@ tokio = { version = "1", features = [
 # Caption oracles (`src/transcription/verify_tests.rs`): fixture projects and
 # audio markers for the fake transcriber.
 cap-verify = { path = "../../crates/verify" }
+cap-gdrive = { path = "gdrive", features = ["fake-server"] }
 tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]

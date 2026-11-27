@@ -363,13 +363,16 @@ fn pending_video(meta: &RecordingMeta) -> Option<VideoUploadInfo> {
                 id: video_id.clone(),
             },
         }),
-        Some(UploadMeta::Failed { .. }) => meta.sharing.as_ref().map(|share| VideoUploadInfo {
-            id: share.id.clone(),
-            link: share.link.clone(),
-            config: S3UploadMeta {
-                id: share.id.clone(),
-            },
-        }),
+        Some(UploadMeta::Failed { .. }) => {
+            crate::gdrive::current_sharing(meta.sharing.as_ref(), crate::gdrive::ShareProvider::Cap)
+                .map(|share| VideoUploadInfo {
+                    id: share.id.clone(),
+                    link: share.link.clone(),
+                    config: S3UploadMeta {
+                        id: share.id.clone(),
+                    },
+                })
+        }
         _ => None,
     }
 }
@@ -1475,6 +1478,38 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn failed_meta(sharing_id: &str, link: &str) -> RecordingMeta {
+        RecordingMeta {
+            platform: None,
+            project_path: PathBuf::from("recording.cap"),
+            pretty_name: "Saved recording".into(),
+            sharing: Some(SharingMeta {
+                id: sharing_id.into(),
+                link: link.into(),
+                content_hash: None,
+            }),
+            inner: RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
+                fps: 30,
+                sample_rate: None,
+            }),
+            upload: Some(UploadMeta::Failed {
+                error: "network".into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn pending_video_ignores_drive_sharing_after_a_failed_upload() {
+        let drive = failed_meta(
+            "gdrive:f1",
+            "https://drive.google.com/file/d/f1/view?usp=drivesdk",
+        );
+        assert!(pending_video(&drive).is_none());
+
+        let cap = failed_meta("cap-video", "https://cap.so/s/cap-video");
+        assert_eq!(pending_video(&cap).unwrap().id, "cap-video");
     }
 
     #[derive(Default)]

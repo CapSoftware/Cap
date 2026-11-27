@@ -1503,16 +1503,13 @@ async fn upload_exported_video_inner(
             &metadata,
             progress,
             &cancel,
-            replace_shared_video && meta.sharing.is_some(),
+            replace_shared_video && cap_sharing(meta.sharing.as_ref()).is_some(),
         )
     })
     .await
     {
         Ok((link, object_identity)) => {
-            let link = meta
-                .sharing
-                .as_ref()
-                .map(|sharing| sharing.link.clone())
+            let link = kept_link(meta.sharing.as_ref())
                 .or(created_link)
                 .unwrap_or(link);
             meta.sharing = Some(SharingMeta {
@@ -1552,7 +1549,7 @@ async fn upload_exported_video_inner(
 }
 
 fn reusable_video_id(sharing: Option<&SharingMeta>, upload: Option<&UploadMeta>) -> Option<String> {
-    sharing
+    cap_sharing(sharing)
         .map(|sharing| sharing.id.clone())
         .or_else(|| match upload {
             Some(UploadMeta::SinglePartUpload { video_id, .. })
@@ -1560,6 +1557,14 @@ fn reusable_video_id(sharing: Option<&SharingMeta>, upload: Option<&UploadMeta>)
             | Some(UploadMeta::MultipartUpload { video_id, .. }) => Some(video_id.clone()),
             _ => None,
         })
+}
+
+fn cap_sharing(sharing: Option<&SharingMeta>) -> Option<&SharingMeta> {
+    crate::gdrive::current_sharing(sharing, crate::gdrive::ShareProvider::Cap)
+}
+
+fn kept_link(sharing: Option<&SharingMeta>) -> Option<String> {
+    cap_sharing(sharing).map(|sharing| sharing.link.clone())
 }
 
 fn store_auth_missing() -> bool {
@@ -2977,11 +2982,31 @@ mod tests {
     async fn signed_uploads_send_one_content_type_on_the_wire() {
         let (url, requests) = strict_put_server().await;
         for (subpath, signed_type, sent_type) in [
-            ("segments/manifest.json", Some("application/json"), "application/json"),
-            ("segments/recording.json", Some("application/json"), "application/json"),
-            ("screenshot/screen-capture.jpg", Some("image/jpeg"), "image/jpeg"),
-            ("screenshot/screen-capture.png", Some("image/png"), "image/png"),
-            ("segments/video/segment_001.m4s", Some("video/mp4"), "video/mp4"),
+            (
+                "segments/manifest.json",
+                Some("application/json"),
+                "application/json",
+            ),
+            (
+                "segments/recording.json",
+                Some("application/json"),
+                "application/json",
+            ),
+            (
+                "screenshot/screen-capture.jpg",
+                Some("image/jpeg"),
+                "image/jpeg",
+            ),
+            (
+                "screenshot/screen-capture.png",
+                Some("image/png"),
+                "image/png",
+            ),
+            (
+                "segments/video/segment_001.m4s",
+                Some("video/mp4"),
+                "video/mp4",
+            ),
             ("segments/video/segment_001.m4s", None, "video/mp4"),
             ("segments/manifest.json", None, "application/json"),
         ] {
@@ -3640,6 +3665,47 @@ mod tests {
             None
         );
     }
+
+    fn drive_sharing() -> SharingMeta {
+        SharingMeta {
+            link: "https://drive.google.com/file/d/f1/view?usp=drivesdk".into(),
+            id: "gdrive:f1".into(),
+            content_hash: None,
+        }
+    }
+
+    #[test]
+    fn reusable_video_id_ignores_drive_sharing() {
+        let upload = UploadMeta::SinglePartUpload {
+            video_id: "v".into(),
+            file_path: PathBuf::from("video.mp4"),
+            screenshot_path: PathBuf::from("display.jpg"),
+            recording_dir: PathBuf::from("recording.cap"),
+        };
+
+        assert_eq!(
+            reusable_video_id(Some(&drive_sharing()), Some(&upload)).as_deref(),
+            Some("v")
+        );
+        assert_eq!(reusable_video_id(Some(&drive_sharing()), None), None);
+    }
+
+    #[test]
+    fn kept_link_never_keeps_a_drive_link() {
+        let cap = SharingMeta {
+            link: "https://cap.so/s/shared".into(),
+            id: "shared".into(),
+            content_hash: None,
+        };
+
+        assert_eq!(kept_link(Some(&drive_sharing())), None);
+        assert_eq!(
+            kept_link(Some(&cap)).as_deref(),
+            Some("https://cap.so/s/shared")
+        );
+        assert_eq!(kept_link(None), None);
+    }
+
     #[derive(Default)]
     struct FakeSegmentTransport {
         delay_preparation: AtomicBool,

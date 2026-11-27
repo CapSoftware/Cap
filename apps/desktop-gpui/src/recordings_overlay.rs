@@ -29,6 +29,7 @@ use gpui::{
 };
 
 use crate::{
+    gdrive::{DriveError, LinkRoute, ShareFailure, ShareProvider, link_route},
     i18n::tr,
     platform,
     theme::{LocaleFont as _, Theme},
@@ -148,6 +149,58 @@ impl ActionState {
     }
 }
 
+pub fn share_provider_for(kind: MediaKind, chosen: ShareProvider) -> ShareProvider {
+    match kind {
+        MediaKind::Recording => chosen,
+        MediaKind::Screenshot => ShareProvider::Cap,
+    }
+}
+
+pub fn reusable_link(sharing: Option<&SharingMeta>, provider: ShareProvider) -> Option<String> {
+    crate::gdrive::current_sharing(sharing, provider).map(|sharing| sharing.link.clone())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SharePlan {
+    SignIn,
+    ConnectDrive,
+    Upgrade,
+    Cap,
+    Drive,
+}
+
+pub fn share_plan(
+    kind: MediaKind,
+    route: LinkRoute,
+    upgraded: bool,
+    duration: Option<f64>,
+) -> SharePlan {
+    match route {
+        LinkRoute::SignInToCap => SharePlan::SignIn,
+        LinkRoute::ConnectDrive => SharePlan::ConnectDrive,
+        LinkRoute::Drive => SharePlan::Drive,
+        LinkRoute::Cap => {
+            let needs_upgrade = match kind {
+                MediaKind::Recording => {
+                    !upgraded && duration.is_some_and(|secs| secs >= FREE_SHARE_LIMIT_SECS)
+                }
+                MediaKind::Screenshot => !upgraded,
+            };
+            if needs_upgrade {
+                SharePlan::Upgrade
+            } else {
+                SharePlan::Cap
+            }
+        }
+    }
+}
+
+fn open_drive_settings(cx: &mut App) {
+    cx.defer(|cx| {
+        crate::app_windows::open_settings(crate::settings_window::Page::Integrations, cx)
+    });
+}
+
 pub fn share_organization(saved: Option<&str>, organizations: &[String]) -> Option<String> {
     saved
         .filter(|id| organizations.iter().any(|org| org == id))
@@ -222,6 +275,7 @@ struct Entry {
     thumbnail: Option<PathBuf>,
     details: Option<Details>,
     shared: bool,
+    share_note: Option<String>,
     /// Sound only: no thumbnail, and no share link, since links play video.
     audio_only: bool,
     state: ActionState,
@@ -712,6 +766,7 @@ impl Overlay {
                 thumbnail,
                 details: None,
                 shared,
+                share_note: None,
                 audio_only,
                 state: ActionState::Idle,
                 cancel: Arc::new(AtomicBool::new(false)),
@@ -763,11 +818,7 @@ impl Overlay {
         let Some(entry) = self.entry_mut(id) else {
             return;
         };
-        let settle_after = match &state {
-            ActionState::Done(_) => Some(DONE_VISIBLE),
-            ActionState::Failed(..) => Some(FAILURE_VISIBLE),
-            _ => None,
-        };
+        let settle_after = card_visible(&state, entry.share_note.as_deref());
         entry.state = state;
         entry.settle = settle_after.map(|delay| {
             cx.spawn(async move |this, cx| {
@@ -799,6 +850,7 @@ impl Overlay {
             return false;
         }
         entry.cancel = Arc::new(AtomicBool::new(false));
+        entry.share_note = None;
         self.set_state(id, ActionState::Busy(kind, stage), cx);
         true
     }
@@ -925,10 +977,10 @@ impl Overlay {
         let bundle = entry.bundle();
         let duration = entry.details.and_then(|details| details.duration_secs);
 
+        let provider = share_provider_for(kind, crate::gdrive::share_provider());
         let existing = RecordingMeta::load_for_project(&bundle)
             .ok()
-            .and_then(|meta| meta.sharing)
-            .map(|sharing| sharing.link);
+            .and_then(|meta| reusable_link(meta.sharing.as_ref(), provider));
         if let Some(link) = existing {
             if !self.begin(id, ActionKind::Share, Stage::Uploading(1.), cx) {
                 return;
@@ -940,7 +992,23 @@ impl Overlay {
         }
 
         let auth = crate::store::auth_snapshot();
-        if !auth.signed_in() {
+        let route = link_route(provider, crate::gdrive::drive_ready(), auth.signed_in());
+        let plan = share_plan(kind, route, auth.is_upgraded(), duration);
+        if plan == SharePlan::ConnectDrive {
+            if self.entry(id).is_some_and(|entry| !entry.state.is_busy()) {
+                self.set_state(
+                    id,
+                    ActionState::Failed(
+                        ActionKind::Share,
+                        tr::gdrive::connect_to_share().to_string(),
+                    ),
+                    cx,
+                );
+                open_drive_settings(cx);
+            }
+            return;
+        }
+        if plan == SharePlan::SignIn {
             if self.entry(id).is_some_and(|entry| !entry.state.is_busy()) {
                 self.set_state(
                     id,
@@ -956,13 +1024,7 @@ impl Overlay {
             }
             return;
         }
-        let needs_upgrade = match kind {
-            MediaKind::Recording => {
-                !auth.is_upgraded() && duration.is_some_and(|secs| secs >= FREE_SHARE_LIMIT_SECS)
-            }
-            MediaKind::Screenshot => !auth.is_upgraded(),
-        };
-        if needs_upgrade {
+        if plan == SharePlan::Upgrade {
             if self.entry(id).is_some_and(|entry| !entry.state.is_busy()) {
                 cx.open_url(crate::auth::PRICING_URL);
                 self.set_state(
@@ -970,6 +1032,19 @@ impl Overlay {
                     ActionState::Failed(
                         ActionKind::Share,
                         tr::editor::export::upgrade_message().to_string(),
+                    ),
+                    cx,
+                );
+            }
+            return;
+        }
+        if plan == SharePlan::Drive && crate::gdrive::share_in_flight(&path) {
+            if self.entry(id).is_some_and(|entry| !entry.state.is_busy()) {
+                self.set_state(
+                    id,
+                    ActionState::Failed(
+                        ActionKind::Share,
+                        tr::gdrive::already_uploading().to_string(),
                     ),
                     cx,
                 );
@@ -1000,15 +1075,21 @@ impl Overlay {
         let task = cx.spawn(async move |this, cx| {
             let result = match kind {
                 MediaKind::Recording => {
-                    share_recording(&this, id, path, organization_id, &cancel, cx).await
+                    share_recording(&this, id, path, organization_id, route, &cancel, cx).await
                 }
                 MediaKind::Screenshot => share_screenshot(path, bundle, cx).await,
             };
             let result = match result {
-                Ok(ShareOutcome::Link(link)) => {
+                Ok(ShareOutcome::Link(link, note)) => {
                     cx.update(|cx| {
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
                     });
+                    this.update(cx, |overlay, _| {
+                        if let Some(entry) = overlay.entry_mut(id) {
+                            entry.share_note = note;
+                        }
+                    })
+                    .ok();
                     Ok(())
                 }
                 Ok(ShareOutcome::SignIn) => {
@@ -1023,6 +1104,10 @@ impl Overlay {
                     cx.update(|cx| cx.open_url(crate::auth::PRICING_URL));
                     Err(tr::editor::export::upgrade_message().to_string())
                 }
+                Ok(ShareOutcome::ConnectDrive) => {
+                    cx.update(open_drive_settings);
+                    Err(tr::gdrive::connect_to_share().to_string())
+                }
                 Err(error) => Err(error),
             };
             finish(&this, id, ActionKind::Share, result, &cancel, cx);
@@ -1031,10 +1116,53 @@ impl Overlay {
     }
 }
 
+#[derive(Debug, PartialEq)]
 enum ShareOutcome {
-    Link(String),
+    Link(String, Option<String>),
     SignIn,
     Upgrade,
+    ConnectDrive,
+}
+
+enum ShareUpload {
+    Cap(Result<crate::upload::UploadResult, String>),
+    Drive(Result<crate::gdrive::DriveShare, ShareFailure>),
+}
+
+fn drive_outcome(
+    result: Result<crate::gdrive::DriveShare, ShareFailure>,
+) -> Result<ShareOutcome, String> {
+    match result {
+        Ok(share) => {
+            let note = match &share.visibility {
+                crate::gdrive::LinkVisibility::Private(reason) => {
+                    Some(crate::gdrive::private_link_message(reason))
+                }
+                crate::gdrive::LinkVisibility::Public => None,
+            };
+            Ok(ShareOutcome::Link(share.web_view_link, note))
+        }
+        Err(ShareFailure::Drive(DriveError::NotConnected | DriveError::NotConfigured)) => {
+            Ok(ShareOutcome::ConnectDrive)
+        }
+        Err(failure) => Err(crate::gdrive::share_failure_message(&failure)),
+    }
+}
+
+fn card_message(state: &ActionState, kind: MediaKind, note: Option<&str>) -> Option<String> {
+    match (state, note) {
+        (ActionState::Done(ActionKind::Share), Some(note)) => Some(note.to_string()),
+        _ => state.message(kind),
+    }
+}
+
+fn card_visible(state: &ActionState, note: Option<&str>) -> Option<Duration> {
+    match state {
+        ActionState::Done(ActionKind::Share) if note.is_some() => Some(FAILURE_VISIBLE),
+        ActionState::Done(_) => Some(DONE_VISIBLE),
+        ActionState::Failed(..) => Some(FAILURE_VISIBLE),
+        _ => None,
+    }
 }
 
 fn update_stage(
@@ -1061,6 +1189,10 @@ fn update_stage(
 pub fn failure_message(kind: ActionKind, error: String) -> String {
     if error == tr::editor::export::sign_in_required()
         || error == tr::editor::export::upgrade_message()
+        || error == tr::gdrive::connect_to_share()
+        || error.ends_with(tr::gdrive::kept_locally())
+        || error == tr::gdrive::error_missing_file()
+        || error == tr::gdrive::already_uploading()
         || cap_utils::export_resources::is_resource_stop(&error)
     {
         return error;
@@ -1238,23 +1370,43 @@ async fn share_recording(
     id: u64,
     project_path: PathBuf,
     organization_id: Option<String>,
+    route: LinkRoute,
     cancel: &Arc<AtomicBool>,
     cx: &mut AsyncApp,
 ) -> Result<ShareOutcome, String> {
-    render_for_project(this, id, ActionKind::Share, &project_path, None, cancel, cx).await?;
+    let output =
+        render_for_project(this, id, ActionKind::Share, &project_path, None, cancel, cx).await?;
     update_stage(this, id, ActionKind::Share, Stage::Uploading(0.), cx);
     let (progress_tx, progress_rx) = flume::unbounded::<f64>();
     let upload_cancel = cancel.clone();
     let upload = gpui_tokio::Tokio::spawn(cx, async move {
-        crate::upload::upload_exported_video(
-            project_path,
-            organization_id,
-            move |progress| {
-                let _ = progress_tx.send(progress);
-            },
-            upload_cancel,
-        )
-        .await
+        if route == LinkRoute::Drive {
+            let title = crate::gdrive::recording_title(&project_path);
+            ShareUpload::Drive(
+                crate::gdrive::share_recording(crate::gdrive::ShareRequest {
+                    project_dir: project_path,
+                    file: output,
+                    title,
+                    progress: Arc::new(move |progress| {
+                        let _ = progress_tx.send(progress);
+                    }),
+                    cancel: upload_cancel,
+                })
+                .await,
+            )
+        } else {
+            ShareUpload::Cap(
+                crate::upload::upload_exported_video(
+                    project_path,
+                    organization_id,
+                    move |progress| {
+                        let _ = progress_tx.send(progress);
+                    },
+                    upload_cancel,
+                )
+                .await,
+            )
+        }
     });
     loop {
         let mut latest = None;
@@ -1276,10 +1428,17 @@ async fn share_recording(
         cx.background_executor().timer(PROGRESS_POLL).await;
     }
     match upload.await {
-        Ok(Ok(crate::upload::UploadResult::Success(link))) => Ok(ShareOutcome::Link(link)),
-        Ok(Ok(crate::upload::UploadResult::NotAuthenticated)) => Ok(ShareOutcome::SignIn),
-        Ok(Ok(crate::upload::UploadResult::UpgradeRequired)) => Ok(ShareOutcome::Upgrade),
-        Ok(Err(error)) => Err(error),
+        Ok(ShareUpload::Cap(Ok(crate::upload::UploadResult::Success(link)))) => {
+            Ok(ShareOutcome::Link(link, None))
+        }
+        Ok(ShareUpload::Cap(Ok(crate::upload::UploadResult::NotAuthenticated))) => {
+            Ok(ShareOutcome::SignIn)
+        }
+        Ok(ShareUpload::Cap(Ok(crate::upload::UploadResult::UpgradeRequired))) => {
+            Ok(ShareOutcome::Upgrade)
+        }
+        Ok(ShareUpload::Cap(Err(error))) => Err(error),
+        Ok(ShareUpload::Drive(result)) => drive_outcome(result),
         Err(error) => Err(format!("Upload task failed: {error}")),
     }
 }
@@ -1325,7 +1484,7 @@ async fn share_screenshot(
         }
         Err(error) => tracing::warn!(%error, "screenshot meta unavailable for its share link"),
     }
-    Ok(ShareOutcome::Link(item.link))
+    Ok(ShareOutcome::Link(item.link, None))
 }
 
 fn load_details(project: &Path) -> Details {
@@ -1481,7 +1640,7 @@ impl OverlayView {
         let status = entry.state.title(entry.kind).map(|title| {
             (
                 title,
-                entry.state.message(entry.kind),
+                card_message(&entry.state, entry.kind, entry.share_note.as_deref()),
                 entry.state.progress(),
                 entry.state.clone(),
             )

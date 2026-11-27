@@ -42,6 +42,22 @@ pub fn calendar_not_connected() -> String {
     )
 }
 
+pub fn drive_connected() -> String {
+    render(
+        tr::local_page::drive_title(),
+        tr::local_page::drive_body(),
+        Tone::Done,
+    )
+}
+
+pub fn drive_not_connected() -> String {
+    render(
+        tr::local_page::drive_denied_title(),
+        tr::local_page::drive_denied_body(),
+        Tone::Problem,
+    )
+}
+
 /// A request this server does not know: an old tab, a typo, a probe.
 pub fn unknown() -> String {
     render(
@@ -115,6 +131,8 @@ mod tests {
             ("signed in", signed_in()),
             ("calendar", calendar_connected()),
             ("calendar not connected", calendar_not_connected()),
+            ("drive", drive_connected()),
+            ("drive not connected", drive_not_connected()),
             ("unknown", unknown()),
         ]
     }
@@ -151,6 +169,10 @@ mod tests {
         assert!(signed_in().contains("badge done"));
         assert!(calendar_connected().contains("Calendar connected"));
         assert!(calendar_not_connected().contains("badge problem"));
+        assert!(drive_connected().contains("Google Drive connected"));
+        assert!(drive_connected().contains("badge done"));
+        assert!(drive_not_connected().contains("access to your Google Drive"));
+        assert!(drive_not_connected().contains("badge problem"));
         assert!(!unknown().contains("class=\"badge"));
         for (_, page) in every_page() {
             assert!(page.contains("You can close this tab."));

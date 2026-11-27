@@ -1321,6 +1321,7 @@ impl RecordingSession {
         };
         let instant_share_url = active.instant_share_url().map(ToString::to_string);
         let instant_video_id = active.instant_video_id().map(ToString::to_string);
+        let local_instant = active.is_local_instant();
         let instant_rules_hold = instant_share_url
             .as_ref()
             .and_then(|_| crate::automation::hold_instant_rules(&active.project_dir));
@@ -1559,6 +1560,9 @@ impl RecordingSession {
                                 );
                             }
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
+                        } else if local_instant {
+                            this.finished_instant = !low_storage;
+                            crate::gdrive::instant::share_after_stop(project_dir, cx);
                         }
                     }
                     Ok(Err(error)) => {

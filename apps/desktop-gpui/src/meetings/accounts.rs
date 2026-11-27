@@ -110,7 +110,7 @@ fn client(provider: Provider) -> Option<OAuthClient> {
     })
 }
 
-fn random(len: usize) -> Result<Vec<u8>, ConnectError> {
+pub(crate) fn random(len: usize) -> Result<Vec<u8>, ConnectError> {
     let mut bytes = vec![0u8; len];
     getrandom::getrandom(&mut bytes).map_err(|_| ConnectError::Rejected)?;
     Ok(bytes)
@@ -191,9 +191,11 @@ impl Pending {
             cancel,
             ..
         } = self;
-        let code = tokio::task::spawn_blocking(move || wait_for_code(&listener, &state, &cancel))
-            .await
-            .map_err(|_| ConnectError::Rejected)??;
+        let code = tokio::task::spawn_blocking(move || {
+            wait_for_code(&listener, &state, &cancel, &CALENDAR_PAGES)
+        })
+        .await
+        .map_err(|_| ConnectError::Rejected)??;
         let http = http_client().map_err(|_| ConnectError::Network)?;
         let spec = oauth::token_request(&client, &code, &verifier, &redirect_uri);
         let (_, body) = send(&http, &spec, None)
@@ -221,6 +223,18 @@ impl Pending {
         })
     }
 }
+
+pub(crate) struct LoopbackPages {
+    pub connected: fn() -> String,
+    pub not_connected: fn() -> String,
+    pub flow: &'static str,
+}
+
+const CALENDAR_PAGES: LoopbackPages = LoopbackPages {
+    connected: crate::local_page::calendar_connected,
+    not_connected: crate::local_page::calendar_not_connected,
+    flow: "calendar",
+};
 
 fn respond(stream: &mut TcpStream, status: &str, page: &str) {
     let _ = write!(
@@ -259,10 +273,11 @@ fn request_target(stream: &mut TcpStream) -> Option<String> {
     parts.next().map(str::to_string)
 }
 
-fn wait_for_code(
+pub(crate) fn wait_for_code(
     listener: &TcpListener,
     state: &str,
     cancel: &Cancel,
+    pages: &LoopbackPages,
 ) -> Result<String, ConnectError> {
     let deadline = Instant::now() + SIGN_IN_TIMEOUT;
     loop {
@@ -287,28 +302,20 @@ fn wait_for_code(
         }
         match oauth::parse_redirect(query, state) {
             Ok(code) => {
-                respond(
-                    &mut stream,
-                    "200 OK",
-                    &crate::local_page::calendar_connected(),
-                );
+                respond(&mut stream, "200 OK", &(pages.connected)());
                 return Ok(code.code);
             }
             Err(AuthError::AccessDenied) => {
-                respond(
-                    &mut stream,
-                    "200 OK",
-                    &crate::local_page::calendar_not_connected(),
-                );
+                respond(&mut stream, "200 OK", &(pages.not_connected)());
                 return Err(ConnectError::Denied);
             }
             Err(AuthError::Provider { error, .. }) => {
-                tracing::warn!(error, "calendar sign-in redirect carried an error");
-                respond(
-                    &mut stream,
-                    "200 OK",
-                    &crate::local_page::calendar_not_connected(),
+                tracing::warn!(
+                    error,
+                    flow = pages.flow,
+                    "sign-in redirect carried an error"
                 );
+                respond(&mut stream, "200 OK", &(pages.not_connected)());
                 return Err(ConnectError::Rejected);
             }
             Err(_) => respond(
@@ -320,7 +327,7 @@ fn wait_for_code(
     }
 }
 
-fn http_client() -> Result<reqwest::Client, reqwest::Error> {
+pub(crate) fn http_client() -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(45))
@@ -330,12 +337,12 @@ fn http_client() -> Result<reqwest::Client, reqwest::Error> {
 }
 
 #[derive(Debug)]
-enum SendError {
+pub(crate) enum SendError {
     Network(reqwest::Error),
     TooLarge,
 }
 
-async fn send(
+pub(crate) async fn send(
     http: &reqwest::Client,
     spec: &HttpRequestSpec,
     bearer: Option<&str>,
@@ -436,6 +443,29 @@ fn access_tokens() -> &'static Mutex<HashMap<String, (String, Instant)>> {
     static TOKENS: std::sync::OnceLock<Mutex<HashMap<String, (String, Instant)>>> =
         std::sync::OnceLock::new();
     TOKENS.get_or_init(Default::default)
+}
+
+#[cfg(test)]
+pub(crate) fn cache_calendar_access(id: &str, token: &str) {
+    access_tokens()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(
+            id.to_string(),
+            (
+                token.to_string(),
+                Instant::now() + Duration::from_secs(3600),
+            ),
+        );
+}
+
+#[cfg(test)]
+pub(crate) fn cached_calendar_access(id: &str) -> Option<String> {
+    access_tokens()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(id)
+        .map(|(token, _)| token.clone())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1091,7 +1121,7 @@ mod tests {
         let cancel = Cancel::default();
         let handle = std::thread::spawn({
             let cancel = cancel.clone();
-            move || wait_for_code(&listener, state, &cancel)
+            move || wait_for_code(&listener, state, &cancel, &CALENDAR_PAGES)
         });
         (port, cancel, handle)
     }

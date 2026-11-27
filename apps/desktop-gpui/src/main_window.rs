@@ -33,7 +33,6 @@ use crate::{
 };
 use gpui::{Entity, Task};
 
-
 /// How long the mode panel's doodles take to draw in. After this they render
 /// still, so an open panel stops asking for frames.
 const MODE_INFO_DRAW_DURATION: std::time::Duration = std::time::Duration::from_millis(1900);
@@ -486,11 +485,7 @@ impl gpui::RenderOnce for ModeHoverCard {
             .bg(theme.gray_12)
             .text_color(theme.gray_1)
             .shadow_lg()
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .child(mode.hover_title()),
-            )
+            .child(div().text_size(px(12.)).child(mode.hover_title()))
             .child(
                 div()
                     .text_size(px(10.))
@@ -498,41 +493,38 @@ impl gpui::RenderOnce for ModeHoverCard {
                     .text_color(theme.gray_4)
                     .child(description),
             )
-            .when_some(
-                (mode != Mode::Screenshot).then_some(mode),
-                |this, mode| {
-                    this.child(
-                        div()
-                            .id("mode-quality-settings")
-                            .group("mode-quality-settings")
-                            .tab_index(0)
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .mx(px(-4.))
-                            .px(px(8.))
-                            .py(px(4.))
-                            .rounded(px(6.))
-                            .text_size(px(11.))
-                            .text_color(theme.gray_4)
-                            .hover(|style| style.bg(theme.gray_11).text_color(theme.gray_1))
-                            .child(
-                                svg()
-                                    .path("icons/settings.svg")
-                                    .size(px(12.))
-                                    .text_color(theme.gray_4)
-                                    .group_hover("mode-quality-settings", |style| {
-                                        style.text_color(theme.gray_1)
-                                    }),
-                            )
-                            .child(tr::main::mode::hover::quality_settings())
-                            .on_click(move |_, _, cx| {
-                                cx.stop_propagation();
-                                cx.defer(move |cx| app_windows::open_quality_settings(mode, cx));
-                            }),
-                    )
-                },
-            )
+            .when_some((mode != Mode::Screenshot).then_some(mode), |this, mode| {
+                this.child(
+                    div()
+                        .id("mode-quality-settings")
+                        .group("mode-quality-settings")
+                        .tab_index(0)
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .mx(px(-4.))
+                        .px(px(8.))
+                        .py(px(4.))
+                        .rounded(px(6.))
+                        .text_size(px(11.))
+                        .text_color(theme.gray_4)
+                        .hover(|style| style.bg(theme.gray_11).text_color(theme.gray_1))
+                        .child(
+                            svg()
+                                .path("icons/settings.svg")
+                                .size(px(12.))
+                                .text_color(theme.gray_4)
+                                .group_hover("mode-quality-settings", |style| {
+                                    style.text_color(theme.gray_1)
+                                }),
+                        )
+                        .child(tr::main::mode::hover::quality_settings())
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            cx.defer(move |cx| app_windows::open_quality_settings(mode, cx));
+                        }),
+                )
+            })
     }
 }
 
@@ -2685,7 +2677,13 @@ impl MainWindow {
                 None => return,
             }
         };
-        if mode == recording::RecordingMode::Instant && !crate::store::auth_snapshot().signed_in() {
+        let instant_route =
+            (mode == recording::RecordingMode::Instant).then(crate::gdrive::current_link_route);
+        if instant_route == Some(crate::gdrive::LinkRoute::ConnectDrive) {
+            cx.defer(|cx| app_windows::open_settings(Page::Integrations, cx));
+            return;
+        }
+        if instant_route == Some(crate::gdrive::LinkRoute::SignInToCap) {
             let kind = match &target {
                 ScreenCaptureTarget::Display { .. } => TargetType::Display,
                 ScreenCaptureTarget::Window { .. } => TargetType::Window,
@@ -5618,6 +5616,16 @@ impl MainWindow {
                 }),
             ));
         }
+        if shows_drive_share(
+            mode,
+            &item.status,
+            item.sharing.is_some(),
+            crate::gdrive::drive_link_private(&path),
+            library::is_recording_in_progress(&path),
+            crate::gdrive::share_provider(),
+        ) {
+            row = row.child(self.render_drive_share_action(path.clone()));
+        }
         if item.audio_only {
             let audio = path.clone();
             row = row.child(self.library_action(
@@ -5736,6 +5744,38 @@ impl MainWindow {
                     this.delete_library_screenshot(bundle.clone(), window, cx);
                 }),
             ))
+    }
+
+    fn render_drive_share_action(&self, path: std::path::PathBuf) -> gpui::AnyElement {
+        if crate::gdrive::share_in_flight(&path) {
+            return self
+                .library_action(
+                    "lib-rec-drive",
+                    "icons/cloud-upload.svg",
+                    tr::gdrive::uploading_title(),
+                    |_, _, _| {},
+                )
+                .into_any_element();
+        }
+        if !crate::gdrive::drive_ready() {
+            return self
+                .library_action(
+                    "lib-rec-drive",
+                    "icons/google-drive.svg",
+                    tr::gdrive::connect_to_share(),
+                    |_, _, cx| cx.defer(|cx| app_windows::open_settings(Page::Integrations, cx)),
+                )
+                .into_any_element();
+        }
+        self.library_action(
+            "lib-rec-drive",
+            "icons/google-drive.svg",
+            tr::gdrive::share_to_drive(),
+            move |_, _, cx| {
+                crate::gdrive::instant::retry(path.clone(), cx);
+            },
+        )
+        .into_any_element()
     }
 
     fn library_action(
@@ -7369,13 +7409,7 @@ impl MainWindow {
         self.mode_hover = ModeHoverState::default();
     }
 
-    fn update_mode_hover(
-        &mut self,
-        mode: Mode,
-        card: bool,
-        hovered: bool,
-        cx: &mut Context<Self>,
-    ) {
+    fn update_mode_hover(&mut self, mode: Mode, card: bool, hovered: bool, cx: &mut Context<Self>) {
         let previous = self.mode_hover.target();
         self.mode_hover.update(mode, card, hovered);
         let target = self.mode_hover.target();
@@ -8658,6 +8692,74 @@ mod recording_error_panel_tests {
                 "Capture cleanup is unconfirmed",
             ));
             assert_eq!(current.as_deref(), Some("Capture cleanup is unconfirmed"));
+        }
+    }
+}
+
+fn shows_drive_share(
+    mode: library::RecordingMode,
+    status: &library::RecordingStatus,
+    has_link: bool,
+    link_private: bool,
+    in_progress: bool,
+    provider: crate::gdrive::ShareProvider,
+) -> bool {
+    mode == library::RecordingMode::Instant
+        && status.is_complete()
+        && (!has_link || link_private)
+        && !in_progress
+        && provider == crate::gdrive::ShareProvider::GoogleDrive
+}
+
+#[cfg(test)]
+mod drive_share_button_tests {
+    use super::shows_drive_share;
+    use crate::gdrive::ShareProvider;
+    use crate::library::{RecordingMode, RecordingStatus};
+
+    #[test]
+    fn only_a_finished_instant_recording_without_a_public_link_offers_drive() {
+        let drive = ShareProvider::GoogleDrive;
+        let complete = RecordingStatus::Complete;
+        let instant = RecordingMode::Instant;
+        assert!(shows_drive_share(
+            instant, &complete, false, false, false, drive
+        ));
+        assert!(shows_drive_share(
+            instant, &complete, true, true, false, drive
+        ));
+        assert!(!shows_drive_share(
+            instant, &complete, true, false, false, drive
+        ));
+        assert!(!shows_drive_share(
+            instant, &complete, false, false, true, drive
+        ));
+        assert!(!shows_drive_share(
+            instant,
+            &complete,
+            false,
+            false,
+            false,
+            ShareProvider::Cap
+        ));
+        assert!(!shows_drive_share(
+            RecordingMode::Studio,
+            &complete,
+            false,
+            false,
+            false,
+            drive
+        ));
+        for status in [
+            RecordingStatus::InProgress,
+            RecordingStatus::NeedsRemux,
+            RecordingStatus::Failed {
+                error: "finalize failed".into(),
+            },
+        ] {
+            assert!(!shows_drive_share(
+                instant, &status, false, false, false, drive
+            ));
         }
     }
 }

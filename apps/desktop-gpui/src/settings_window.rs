@@ -369,6 +369,22 @@ const INSTANT_RESOLUTION_TIERS: &[(u32, &str, Label)] = &[
 /// `FREE_INSTANT_MODE_MAX_RESOLUTION`.
 const FREE_INSTANT_MODE_MAX_RESOLUTION: u32 = 1280;
 
+fn instant_resolution_unlocked(has_cap_pro: bool, provider: crate::gdrive::ShareProvider) -> bool {
+    has_cap_pro || provider == crate::gdrive::ShareProvider::GoogleDrive
+}
+
+fn shown_instant_resolution(unlocked: bool, setting: u32) -> u32 {
+    if unlocked {
+        setting
+    } else {
+        FREE_INSTANT_MODE_MAX_RESOLUTION
+    }
+}
+
+fn instant_tier_locked(unlocked: bool, resolution: u32) -> bool {
+    !unlocked && resolution > FREE_INSTANT_MODE_MAX_RESOLUTION
+}
+
 const RESOLUTION_NAMES: &[(u32, &str)] = &[
     (1280, "720p"),
     (1920, "1080p"),
@@ -3686,16 +3702,19 @@ impl SettingsWindow {
         ]
     }
 
+    fn instant_unlocked(&self) -> bool {
+        instant_resolution_unlocked(self.has_cap_pro, crate::gdrive::share_provider())
+    }
+
     fn effective_instant_resolution(&self) -> u32 {
-        if self.has_cap_pro {
-            self.settings.instant_mode_max_resolution
-        } else {
-            FREE_INSTANT_MODE_MAX_RESOLUTION
-        }
+        shown_instant_resolution(
+            self.instant_unlocked(),
+            self.settings.instant_mode_max_resolution,
+        )
     }
 
     fn instant_resolution_locked(&self, resolution: u32) -> bool {
-        !self.has_cap_pro && resolution > FREE_INSTANT_MODE_MAX_RESOLUTION
+        instant_tier_locked(self.instant_unlocked(), resolution)
     }
 
     fn render_instant_quality(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3706,7 +3725,7 @@ impl SettingsWindow {
             .find(|(value, _, _)| *value == effective)
             .map(|(_, _, summary)| summary())
             .unwrap_or_default();
-        let description = if self.has_cap_pro {
+        let description = if self.instant_unlocked() {
             summary
         } else {
             tr::settings::quality::instant::free_plan()
@@ -5582,6 +5601,22 @@ mod tests {
 
     fn offered(ceiling: FrameRateCeiling) -> Vec<StudioFrameRate> {
         frame_rate_options(ceiling).map(|(rate, _)| *rate).collect()
+    }
+
+    #[test]
+    fn instant_resolution_is_only_capped_for_free_cap_sharing() {
+        use crate::gdrive::ShareProvider;
+        assert!(!instant_resolution_unlocked(false, ShareProvider::Cap));
+        assert!(instant_resolution_unlocked(true, ShareProvider::Cap));
+        let drive = ShareProvider::GoogleDrive;
+        assert!(instant_resolution_unlocked(false, drive));
+        assert!(instant_resolution_unlocked(true, drive));
+        assert_eq!(shown_instant_resolution(false, 3840), 1280);
+        assert_eq!(shown_instant_resolution(true, 3840), 3840);
+        assert_eq!(shown_instant_resolution(true, 1920), 1920);
+        assert!(instant_tier_locked(false, 1920));
+        assert!(!instant_tier_locked(false, 1280));
+        assert!(!instant_tier_locked(true, 3840));
     }
 
     const MACOS: FrameRateCeiling = FrameRateCeiling {

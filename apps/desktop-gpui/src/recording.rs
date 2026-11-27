@@ -110,6 +110,7 @@ pub struct ActiveRecording {
     pub project_dir: PathBuf,
     start_gate: Option<cap_recording::RecordingStartGate>,
     instant_upload: Option<SharedInstantUpload>,
+    local_instant_lock: Option<Arc<Mutex<()>>>,
     instant_share_link: Option<String>,
     instant_video_id: Option<String>,
     #[cfg(target_os = "linux")]
@@ -984,6 +985,10 @@ impl ActiveRecording {
         self.instant_video_id.as_deref()
     }
 
+    pub(crate) fn is_local_instant(&self) -> bool {
+        self.local_instant_lock.is_some()
+    }
+
     /// Stop and finalize. Returns the project directory.
     ///
     /// Finalization mirrors the CLI's `finalize_completed`: studio projects get
@@ -1225,6 +1230,7 @@ impl ActiveRecording {
             }
         };
         let upload = self.instant_upload.clone();
+        let local_lock = self.local_instant_lock.clone();
         let directory = self.project_dir.clone();
         Box::pin(async move {
             let mut upload_guard = match &upload {
@@ -1236,8 +1242,9 @@ impl ActiveRecording {
                 upload.abort_segments().await;
             }
             finish_failed_capture(stop, || {
-                if let Some(upload) = upload.as_ref() {
-                    mark_instant_recording_stopped(&directory, upload.metadata_lock())?;
+                if let Some(lock) = instant_metadata_lock(upload.as_deref(), local_lock.as_deref())
+                {
+                    mark_instant_recording_stopped(&directory, lock)?;
                 }
                 Ok(())
             })
@@ -1275,7 +1282,12 @@ impl ActiveRecording {
                 result,
             );
         }
-        persist_preserved_instant_stop(&self.project_dir, None, joined, result)
+        persist_preserved_instant_stop(
+            &self.project_dir,
+            self.local_instant_lock.as_deref(),
+            joined,
+            result,
+        )
     }
 
     /// Cancel without finalizing and delete the project directory -- the
@@ -1377,7 +1389,12 @@ impl ActiveRecording {
                     Ok(()),
                 );
             }
-            return persist_preserved_instant_stop(&self.project_dir, None, true, Ok(()));
+            return persist_preserved_instant_stop(
+                &self.project_dir,
+                self.local_instant_lock.as_deref(),
+                true,
+                Ok(()),
+            );
         }
         #[cfg(not(target_os = "linux"))]
         let _ = keep_media;
@@ -1413,6 +1430,7 @@ impl ActiveRecording {
             None => None,
         };
         let mut instant_upload = upload_guard.as_deref_mut().and_then(Option::as_mut);
+        let plan = instant_stop_plan(instant_upload.is_some(), self.local_instant_lock.is_some());
         match self.handle {
             Handle::Studio(handle) => {
                 let capture_target = handle.capture_target.clone();
@@ -1429,10 +1447,11 @@ impl ActiveRecording {
                     };
                     #[cfg(not(target_os = "linux"))]
                     let stopped = handle.stop().await;
-                    let metadata_result = match instant_upload.as_ref() {
-                        Some(upload) => {
-                            mark_instant_recording_stopped(&self.project_dir, upload.metadata_lock())
-                        }
+                    let metadata_result = match instant_metadata_lock(
+                        instant_upload.as_deref(),
+                        self.local_instant_lock.as_deref(),
+                    ) {
+                        Some(lock) => mark_instant_recording_stopped(&self.project_dir, lock),
                         None => Err(anyhow!("instant recording has no upload session")),
                     };
                     if let Err(error) = &metadata_result {
@@ -1441,9 +1460,6 @@ impl ActiveRecording {
                     let mut completed = stopped?;
                     metadata_result?;
                     let project_path = completed.project_path.clone();
-                    let upload = instant_upload
-                        .as_mut()
-                        .ok_or_else(|| anyhow!("instant recording has no upload session"))?;
 
                     let display_dir = project_path.join("content/display");
                     let audio_dir = project_path.join("content/audio");
@@ -1479,7 +1495,17 @@ impl ActiveRecording {
                         return Err(anyhow!("instant recording has no finalized output"));
                     }
 
-                    persist_instant_meta(&completed, upload.video(), upload.metadata_lock())?;
+                    match (instant_upload.as_deref(), self.local_instant_lock.as_deref()) {
+                        (Some(upload), _) => persist_instant_meta(
+                            &completed,
+                            upload.video(),
+                            upload.metadata_lock(),
+                        )?,
+                        (None, Some(lock)) => persist_local_instant_meta(&completed, lock)?,
+                        (None, None) => {
+                            return Err(anyhow!("instant recording has no upload session"));
+                        }
+                    }
 
                     // The Tauri app builds the instant thumbnail by concatenating
                     // `content/display`'s init segment with the first media
@@ -1504,7 +1530,8 @@ impl ActiveRecording {
                 {
                     upload.abort_segments().await;
                 }
-                if let Ok(project) = &result
+                if plan.enqueues()
+                    && let Ok(project) = &result
                     && let Some(upload) = upload_guard.as_deref_mut().and_then(Option::take)
                     && let Err(error) =
                         crate::upload::queue::enqueue(project.clone(), upload, preserve_local).await
@@ -1515,6 +1542,15 @@ impl ActiveRecording {
             }
         }
     }
+}
+
+fn instant_metadata_lock<'a>(
+    upload: Option<&'a crate::upload::InstantUpload>,
+    local: Option<&'a Mutex<()>>,
+) -> Option<&'a Mutex<()>> {
+    upload
+        .map(crate::upload::InstantUpload::metadata_lock)
+        .or(local)
 }
 
 fn with_instant_metadata_lock<T>(
@@ -2369,6 +2405,29 @@ fn persist_instant_meta(
     upload: &cap_project::VideoUploadInfo,
     metadata_lock: &Mutex<()>,
 ) -> anyhow::Result<()> {
+    persist_finished_instant_meta(
+        completed,
+        Some(cap_project::SharingMeta {
+            id: upload.id.clone(),
+            link: upload.link.clone(),
+            content_hash: None,
+        }),
+        metadata_lock,
+    )
+}
+
+fn persist_local_instant_meta(
+    completed: &instant_recording::CompletedRecording,
+    metadata_lock: &Mutex<()>,
+) -> anyhow::Result<()> {
+    persist_finished_instant_meta(completed, None, metadata_lock)
+}
+
+fn persist_finished_instant_meta(
+    completed: &instant_recording::CompletedRecording,
+    sharing: Option<cap_project::SharingMeta>,
+    metadata_lock: &Mutex<()>,
+) -> anyhow::Result<()> {
     with_instant_metadata_lock(metadata_lock, || {
         use cap_project::{
             InstantRecordingMeta, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
@@ -2390,11 +2449,7 @@ fn persist_instant_meta(
             platform: Some(Platform::default()),
             project_path: completed.project_path.clone(),
             pretty_name,
-            sharing: Some(cap_project::SharingMeta {
-                id: upload.id.clone(),
-                link: upload.link.clone(),
-                content_hash: None,
-            }),
+            sharing,
             inner: RecordingMetaInner::Instant(meta),
             upload: previous_upload,
         };
@@ -2493,21 +2548,36 @@ fn persist_in_progress_instant_meta(
     segmented: bool,
     metadata_lock: &Mutex<()>,
 ) -> anyhow::Result<()> {
+    let upload = if segmented {
+        cap_project::UploadMeta::SegmentUpload {
+            video_id: video.id.clone(),
+            pre_created_video: video.clone(),
+            recording_dir: project_path.to_path_buf(),
+        }
+    } else {
+        cap_project::UploadMeta::MultipartUpload {
+            video_id: video.id.clone(),
+            file_path: project_path.join("content/output.mp4"),
+            pre_created_video: video.clone(),
+            recording_dir: project_path.to_path_buf(),
+        }
+    };
+    save_in_progress_instant_meta(project_path, Some(upload), metadata_lock)
+}
+
+fn persist_local_in_progress_instant_meta(
+    project_path: &std::path::Path,
+    metadata_lock: &Mutex<()>,
+) -> anyhow::Result<()> {
+    save_in_progress_instant_meta(project_path, None, metadata_lock)
+}
+
+fn save_in_progress_instant_meta(
+    project_path: &std::path::Path,
+    upload: Option<cap_project::UploadMeta>,
+    metadata_lock: &Mutex<()>,
+) -> anyhow::Result<()> {
     with_instant_metadata_lock(metadata_lock, || {
-        let upload = if segmented {
-            cap_project::UploadMeta::SegmentUpload {
-                video_id: video.id.clone(),
-                pre_created_video: video.clone(),
-                recording_dir: project_path.to_path_buf(),
-            }
-        } else {
-            cap_project::UploadMeta::MultipartUpload {
-                video_id: video.id.clone(),
-                file_path: project_path.join("content/output.mp4"),
-                pre_created_video: video.clone(),
-                recording_dir: project_path.to_path_buf(),
-            }
-        };
         let pretty_name = project_pretty_name(project_path);
 
         let meta = cap_project::RecordingMeta {
@@ -2518,7 +2588,7 @@ fn persist_in_progress_instant_meta(
             inner: cap_project::RecordingMetaInner::Instant(
                 cap_project::InstantRecordingMeta::InProgress { recording: true },
             ),
-            upload: Some(upload),
+            upload,
         };
         save_instant_metadata(&meta)?;
         Ok(())
@@ -2600,6 +2670,43 @@ pub(crate) fn start_tracked(
     )
 }
 
+fn local_instant(mode: RecordingMode, provider: crate::gdrive::ShareProvider) -> bool {
+    mode == RecordingMode::Instant && provider == crate::gdrive::ShareProvider::GoogleDrive
+}
+
+fn instant_sign_in_required(mode: RecordingMode, signed_in: bool, local_instant: bool) -> bool {
+    mode == RecordingMode::Instant && !signed_in && !local_instant
+}
+
+fn instant_max_resolution(upgraded: bool, local_instant: bool, setting: u32) -> u32 {
+    if upgraded || local_instant {
+        setting
+    } else {
+        cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StopPlan {
+    Upload,
+    Local,
+    NoSession,
+}
+
+impl StopPlan {
+    fn enqueues(self) -> bool {
+        self == Self::Upload
+    }
+}
+
+fn instant_stop_plan(has_upload: bool, has_local_lock: bool) -> StopPlan {
+    match (has_upload, has_local_lock) {
+        (true, _) => StopPlan::Upload,
+        (false, true) => StopPlan::Local,
+        (false, false) => StopPlan::NoSession,
+    }
+}
+
 async fn start_internal(
     config: StartConfig,
     #[cfg(target_os = "linux")] attempt: Option<InstantAttempt>,
@@ -2630,7 +2737,12 @@ async fn start_internal(
             cap_recording::studio_recording::AUDIO_ONLY_NEEDS_A_SOURCE
         ));
     }
-    if config.mode == RecordingMode::Instant && !crate::store::auth_snapshot().signed_in() {
+    let local_instant = local_instant(config.mode, crate::gdrive::share_provider());
+    if instant_sign_in_required(
+        config.mode,
+        crate::store::auth_snapshot().signed_in(),
+        local_instant,
+    ) {
         return Err(anyhow!("Please sign in to use instant recording"));
     }
 
@@ -2646,7 +2758,7 @@ async fn start_internal(
         .filter(|organization| !organization.is_empty())
         .map(str::to_string);
 
-    let pre_created_video = if config.mode == RecordingMode::Instant {
+    let pre_created_video = if config.mode == RecordingMode::Instant && !local_instant {
         let video = crate::upload::prepare_instant_upload(
             matches!(config.target, ScreenCaptureTarget::CameraOnly),
             project_name,
@@ -2668,6 +2780,7 @@ async fn start_internal(
         config,
         project_dir,
         pre_created_video.clone(),
+        local_instant,
         #[cfg(target_os = "linux")]
         attempt.clone(),
     )
@@ -2716,6 +2829,7 @@ async fn start_attempt_with_upload(
     mut config: StartConfig,
     project_dir: PathBuf,
     pre_created_video: Option<cap_project::VideoUploadInfo>,
+    local_instant: bool,
     #[cfg(target_os = "linux")] attempt: Option<InstantAttempt>,
 ) -> anyhow::Result<ActiveRecording> {
     // The selected camera stays selected for the next video recording, but an
@@ -2878,11 +2992,11 @@ async fn start_attempt_with_upload(
     // The instant output cap is plan-gated at start time, not at settings
     // time (`recording.rs:1634-1639`): free stays at the free cap even if a
     // stale store value says otherwise.
-    let instant_max_resolution = if crate::store::auth_snapshot().is_upgraded() {
-        settings.instant_mode_max_resolution
-    } else {
-        cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
-    };
+    let instant_max_resolution = instant_max_resolution(
+        crate::store::auth_snapshot().is_upgraded(),
+        local_instant,
+        settings.instant_mode_max_resolution,
+    );
 
     #[cfg(target_os = "macos")]
     let excluded_windows = {
@@ -2901,6 +3015,7 @@ async fn start_attempt_with_upload(
         excluded
     };
     let mut instant_upload = None;
+    let mut local_instant_lock = None;
     // Focus in the picker and the window capture style setting are the same
     // stored choice; recording reads it here, as it starts.
     // Instant draws a picture the way it draws a camera, by recording the
@@ -2942,7 +3057,7 @@ async fn start_attempt_with_upload(
                     .context("studio recording actor")?,
             )
         }
-        RecordingMode::Instant => {
+        RecordingMode::Instant => 'instant: {
             let mut builder =
                 instant_recording::Actor::builder(project_dir.clone(), config.target.clone())
                     .with_system_audio(config.system_audio)
@@ -2997,6 +3112,15 @@ async fn start_attempt_with_upload(
                     .await
                     .context("instant recording actor")?,
             );
+            if local_instant && pre_created_video.is_none() {
+                let metadata_lock = Arc::new(Mutex::new(()));
+                let setup = persist_local_in_progress_instant_meta(&project_dir, &metadata_lock);
+                #[cfg(windows)]
+                let setup = finish_windows_startup_setup(setup, handle.cancel()).await;
+                setup?;
+                local_instant_lock = Some(metadata_lock);
+                break 'instant Handle::Instant(handle);
+            }
             let setup = (|| {
                 let video = pre_created_video
                     .ok_or_else(|| anyhow!("instant recording has no reserved upload"))?;
@@ -3067,6 +3191,7 @@ async fn start_attempt_with_upload(
         project_dir,
         start_gate: config.start_gate.clone(),
         instant_upload,
+        local_instant_lock,
         instant_share_link,
         instant_video_id,
         #[cfg(target_os = "linux")]
@@ -6032,5 +6157,135 @@ mod preparing_presentation_tests {
             serde_json::to_value(&shown.timeline).unwrap(),
             serde_json::to_value(&project.timeline).unwrap()
         );
+    }
+}
+
+#[cfg(test)]
+mod local_instant_tests {
+    use super::*;
+    use crate::gdrive::ShareProvider;
+    use cap_project::{InstantRecordingMeta, RecordingMeta, RecordingMetaInner};
+
+    fn temp_project(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "cap-gpui-local-instant-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn drive_chosen_records_instant_locally_signed_in_or_not() {
+        let local = local_instant(RecordingMode::Instant, ShareProvider::GoogleDrive);
+        assert!(local);
+        assert!(!instant_sign_in_required(
+            RecordingMode::Instant,
+            false,
+            local
+        ));
+        assert!(!instant_sign_in_required(
+            RecordingMode::Instant,
+            true,
+            local
+        ));
+    }
+
+    #[test]
+    fn cap_chosen_and_signed_out_still_needs_a_cap_sign_in() {
+        let local = local_instant(RecordingMode::Instant, ShareProvider::Cap);
+        assert!(!local);
+        assert!(instant_sign_in_required(
+            RecordingMode::Instant,
+            false,
+            local
+        ));
+        assert!(!instant_sign_in_required(
+            RecordingMode::Instant,
+            true,
+            local
+        ));
+    }
+
+    #[test]
+    fn studio_is_never_local_instant_and_never_needs_a_sign_in() {
+        assert!(!local_instant(
+            RecordingMode::Studio,
+            ShareProvider::GoogleDrive
+        ));
+        assert!(!local_instant(RecordingMode::Studio, ShareProvider::Cap));
+        assert!(!instant_sign_in_required(
+            RecordingMode::Studio,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn drive_instant_uses_the_persons_own_max_resolution() {
+        assert_eq!(instant_max_resolution(false, true, 2160), 2160);
+        assert_eq!(
+            instant_max_resolution(false, false, 2160),
+            cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
+        );
+        assert_eq!(instant_max_resolution(true, false, 2160), 2160);
+        assert_eq!(instant_max_resolution(true, true, 2160), 2160);
+    }
+
+    #[test]
+    fn a_local_stop_returns_the_project_and_never_enqueues() {
+        assert_eq!(instant_stop_plan(false, true), StopPlan::Local);
+        assert!(!StopPlan::Local.enqueues());
+        assert_eq!(instant_stop_plan(true, false), StopPlan::Upload);
+        assert!(StopPlan::Upload.enqueues());
+        assert_eq!(instant_stop_plan(false, false), StopPlan::NoSession);
+        assert!(!StopPlan::NoSession.enqueues());
+    }
+
+    #[test]
+    fn local_in_progress_meta_has_no_upload_and_no_sharing() {
+        let dir = temp_project("in-progress");
+        let lock = Mutex::new(());
+        persist_local_in_progress_instant_meta(&dir, &lock).unwrap();
+        let meta = RecordingMeta::load_for_project(&dir).unwrap();
+        assert!(meta.upload.is_none());
+        assert!(meta.sharing.is_none());
+        assert!(matches!(
+            meta.inner,
+            RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true })
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_finished_meta_is_complete_with_no_sharing() {
+        let dir = temp_project("complete");
+        let lock = Mutex::new(());
+        persist_local_in_progress_instant_meta(&dir, &lock).unwrap();
+        mark_instant_recording_stopped(&dir, &lock).unwrap();
+        let completed = instant_recording::CompletedRecording {
+            project_path: dir.clone(),
+            display_source: ScreenCaptureTarget::CameraOnly,
+            meta: InstantRecordingMeta::Complete {
+                fps: 30,
+                sample_rate: Some(48_000),
+            },
+            health: cap_recording::RecordingHealth::Healthy,
+            clean_completion: None,
+        };
+        persist_local_instant_meta(&completed, &lock).unwrap();
+        let meta = RecordingMeta::load_for_project(&dir).unwrap();
+        assert!(meta.sharing.is_none());
+        assert!(meta.upload.is_none());
+        assert!(matches!(
+            meta.inner,
+            RecordingMetaInner::Instant(InstantRecordingMeta::Complete { fps: 30, .. })
+        ));
+        assert!(dir.join("project-config.json").is_file());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
