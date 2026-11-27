@@ -2470,6 +2470,8 @@ impl LibraryWindow {
                         let item = &self.scan.items[i as usize];
                         div()
                             .id(SharedString::from(format!("pin-{i}")))
+                            .role(gpui::Role::Button)
+                            .aria_label(SharedString::from(item.title.clone()))
                             .h(px(32.))
                             .px(px(12.))
                             .flex()
@@ -2643,8 +2645,13 @@ impl LibraryWindow {
     ) -> AnyElement {
         let p = self.palette;
         let dark = p.dark;
+        let label: SharedString = label.into();
         div()
             .id(id.into())
+            // Each press moves the rule to its next value, so a screen
+            // reader hears the new value as the button's name.
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
             .h(px(30.))
             .px(px(10.))
             .flex()
@@ -2659,7 +2666,7 @@ impl LibraryWindow {
             .cursor_pointer()
             .text_size(px(13.))
             .text_color(p.text)
-            .child(label.into())
+            .child(label)
             .child(
                 svg()
                     .path("icons/chevrons-up-down.svg")
@@ -3052,6 +3059,8 @@ impl LibraryWindow {
             .child(
                 div()
                     .id("rule-add")
+                    .role(gpui::Role::Button)
+                    .aria_label(tr::library::add_rule())
                     .flex()
                     .items_center()
                     .gap(px(6.))
@@ -3114,6 +3123,8 @@ impl LibraryWindow {
                     .child(
                         div()
                             .id("smart-cancel")
+                            .role(gpui::Role::Button)
+                            .aria_label(tr::common::cancel())
                             .h(px(32.))
                             .px(px(14.))
                             .flex()
@@ -3131,6 +3142,12 @@ impl LibraryWindow {
                     .child(
                         div()
                             .id("smart-save")
+                            .role(gpui::Role::Button)
+                            .aria_label(if editor.editing.is_some() {
+                                tr::common::save()
+                            } else {
+                                tr::library::create()
+                            })
                             .h(px(32.))
                             .px(px(16.))
                             .flex()
