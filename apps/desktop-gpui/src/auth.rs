@@ -812,6 +812,42 @@ fn state_required(support: SignInStateSupport, confirmed_before: bool) -> bool {
     }
 }
 
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .fold(0u8, |diff, (left, right)| diff | (left ^ right))
+            == 0
+}
+
+fn parse_auth_params(url: &str) -> Option<AuthParams> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let query = query_map(&parsed);
+    if let Some(api_key) = query.get("api_key")
+        && let Some(user_id) = query.get("user_id")
+    {
+        return Some(AuthParams::ApiKey {
+            api_key: api_key.clone(),
+            user_id: user_id.clone(),
+        });
+    }
+    if let Some(token) = query.get("token")
+        && let Some(user_id) = query.get("user_id")
+    {
+        let expires = query
+            .get("expires")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        return Some(AuthParams::Session {
+            token: token.clone(),
+            user_id: user_id.clone(),
+            expires,
+        });
+    }
+    None
+}
+
 fn query_map(url: &reqwest::Url) -> HashMap<String, String> {
     url.query_pairs()
         .map(|(key, value)| (key.into_owned(), value.into_owned()))
