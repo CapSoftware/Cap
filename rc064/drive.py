@@ -1417,10 +1417,87 @@ def perf_playback(side, sb, project):
             time.sleep(10)
         entry["playback_resources"] = s.summary()
         time.sleep(4)
-    entry["frame_stats"] = tail(proc, 2, grep=["frame stats"])
+    entry["frame_stats"] = tail(proc, 4, grep=["frame stats", "playback fps"])
     entry["log_errors"] = tail(proc, 6, grep=["ERROR", "panicked"])
     kill(proc)
     return entry
+
+
+def flow_playab():
+    """One project (recorded by the oldest build) played by every build, rotated."""
+    rounds = int(os.environ.get("GATE_PLAY_ROUNDS", "6"))
+    src_side = SIDES[0]
+    sb, entry = perf_record(src_side, "playsrc", "studio", 60, 30, False)
+    record("playab_source", src_side, entry)
+    if not entry.get("project"):
+        return
+    project = Path(entry["project"])
+    for rnd in range(rounds):
+        order = SIDES[rnd % len(SIDES):] + SIDES[: rnd % len(SIDES)]
+        for side in order:
+            view = Sandbox(f"playab-{side}-{rnd}")
+            dest = view.root / "recordings" / project.name
+            shutil.copytree(project, dest)
+            e = perf_playback(side, view, dest)
+            e["round"] = rnd
+            record("playab", side, e)
+            log("playab", side, rnd, g_cpu(e))
+
+
+def g_cpu(e):
+    return (e.get("playback_resources") or {}).get("cpu_mean_pct")
+
+
+def rss_by_mapping(pid):
+    """Linux: RSS kB per mapping name (binary, libs, [heap], anon) incl. children."""
+    out = {}
+    try:
+        procs = [psutil.Process(pid)] + psutil.Process(pid).children(recursive=True)
+    except psutil.Error:
+        return out
+    for p in procs:
+        try:
+            name = None
+            for line in open(f"/proc/{p.pid}/smaps"):
+                parts = line.split()
+                if not parts:
+                    continue
+                if "-" in parts[0] and len(parts) >= 5 and not parts[0].endswith(":"):
+                    path = parts[5] if len(parts) > 5 else "[anon]"
+                    name = os.path.basename(path) if path.startswith("/") else path
+                elif parts[0] == "Rss:" and name:
+                    out[name] = out.get(name, 0) + int(parts[1])
+        except OSError:
+            continue
+    return dict(sorted(out.items(), key=lambda kv: -kv[1])[:40])
+
+
+def flow_memmap():
+    """Idle memory by mapping, 3 rounds rotated (Linux: smaps; macOS: footprint)."""
+    for rnd in range(3):
+        order = SIDES[rnd % len(SIDES):] + SIDES[: rnd % len(SIDES)]
+        for side in order:
+            sb = Sandbox(f"memmap-{side}-{rnd}")
+            proc = sb.launch(side, "memmap")
+            wait_window(proc, 90)
+            time.sleep(10)
+            entry = {"round": rnd}
+            try:
+                p = psutil.Process(proc.pid)
+                entry["rss_mb"] = round(sum(x.memory_info().rss for x in [p] + p.children(recursive=True)) / 1048576, 1)
+                entry["threads"] = p.num_threads()
+                entry["children"] = [c.name() for c in p.children(recursive=True)]
+            except psutil.Error:
+                pass
+            if OS == "Linux":
+                entry["by_mapping_kb"] = rss_by_mapping(proc.pid)
+            elif OS == "Darwin":
+                r = subprocess.run(["footprint", str(proc.pid)], capture_output=True, text=True, timeout=60)
+                entry["footprint"] = r.stdout[-3000:]
+            entry["log_tail"] = tail(proc, 30)
+            kill(proc)
+            record("memmap", side, entry)
+            log("memmap", side, rnd, entry.get("rss_mb"), entry.get("threads"))
 
 
 def flow_perf():
@@ -1579,6 +1656,8 @@ def main():
         "editor_ux": flow_editor_ux,
         "perf": flow_perf,
         "devices": flow_devices,
+        "playab": flow_playab,
+        "memmap": flow_memmap,
     }
     for name, fn in flows.items():
         if "all" not in FLOWS and name not in FLOWS:
