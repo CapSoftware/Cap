@@ -64,6 +64,7 @@ describe("callAiApi provider fallback on invalid output", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.spyOn(console, "error").mockImplementation(() => {});
+		vi.spyOn(console, "warn").mockImplementation(() => {});
 		getAiProviderChainMock.mockReturnValue([
 			makeSelection("groq"),
 			makeSelection("openai"),
@@ -125,6 +126,19 @@ describe("callAiApi provider fallback on invalid output", () => {
 		expect(generateTextMock).toHaveBeenCalledTimes(2);
 	});
 
+	it("accepts output the parser can repair without trying the next provider", async () => {
+		generateTextMock.mockResolvedValueOnce({
+			text: '{"title":"Data checks","summary":"Ask for the data ("rows").","chapters":[],}',
+		});
+
+		await expect(callAiApi("prompt", parseAiResponse)).resolves.toEqual({
+			title: "Data checks",
+			summary: 'Ask for the data ("rows").',
+			chapters: [],
+		});
+		expect(generateTextMock).toHaveBeenCalledTimes(1);
+	});
+
 	it("keeps request-level chain failures distinguishable from invalid output", async () => {
 		const outage = new Error("connect ECONNREFUSED");
 		generateTextMock
@@ -184,5 +198,90 @@ describe("map-reduce output parsers", () => {
 		expect(() => parseFinalSummary('{"title":"Only a title"}')).toThrow();
 		expect(() => parseFinalSummary('{"summary":"Only a summary"}')).toThrow();
 		expect(() => parseFinalSummary('{"title":"","summary":""}')).toThrow();
+	});
+});
+
+describe("malformed JSON from local models", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+	});
+
+	it("keeps unescaped quotes inside a string", () => {
+		expect(
+			parseChunkAnalysis(
+				'```json\n{\n  "summary": "Always request the underlying data ("rows") behind a number.",\n  "keyPoints": ["Ask for the "rows", then verify them."],\n  "chapters": [{ "title": "The "rows" rule", "start": 0 }]\n}\n```',
+			),
+		).toEqual({
+			summary: 'Always request the underlying data ("rows") behind a number.',
+			keyPoints: ['Ask for the "rows", then verify them.'],
+			chapters: [{ title: 'The "rows" rule', start: 0 }],
+		});
+
+		expect(
+			parseAiResponse('{"title":"Demo","summary":"He said "hi to everyone."}'),
+		).toMatchObject({ summary: 'He said "hi to everyone.' });
+	});
+
+	it("drops trailing commas", () => {
+		expect(
+			parseChunkAnalysis(
+				'{\n  "summary": "Covers the check-ins.",\n  "keyPoints": [\n    "Monthly check-ins.",\n    "Afternoons work best.",\n  ],\n  "chapters": [{ "title": "Check-ins", "start": 0 },],\n}',
+			),
+		).toEqual({
+			summary: "Covers the check-ins.",
+			keyPoints: ["Monthly check-ins.", "Afternoons work best."],
+			chapters: [{ title: "Check-ins", start: 0 }],
+		});
+	});
+
+	it("keeps escaped quotes and braces inside strings", () => {
+		expect(
+			parseFinalSummary(
+				'{"title":"Data, \\"rows\\"","summary":"Ends with a brace } and a quote \\".",}',
+			),
+		).toEqual({
+			title: 'Data, "rows"',
+			summary: 'Ends with a brace } and a quote ".',
+		});
+	});
+
+	it("ignores notes after the JSON object", () => {
+		expect(
+			parseAiResponse(
+				'{"title":"Demo","summary":"He said "hi" to all."}\n\nNote: I kept {braces}.',
+			),
+		).toMatchObject({ summary: 'He said "hi" to all.' });
+	});
+
+	it("warns only when it repairs the output", () => {
+		parseFinalSummary('{"title":"Demo","summary":"Valid."}');
+		expect(console.warn).not.toHaveBeenCalled();
+
+		parseFinalSummary('{"title":"Demo","summary":"Data ("rows")."}');
+		expect(console.warn).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		'{"title":"Demo" "summary":"Missing a comma."}',
+		'{"title":"Demo","summary":"Check "rows": all of them."}',
+	])("throws the original error when %s cannot be repaired", (output) => {
+		let original: unknown;
+		try {
+			JSON.parse(output);
+		} catch (error) {
+			original = error;
+		}
+
+		expect(original).toBeInstanceOf(SyntaxError);
+		expect(() => parseAiResponse(output)).toThrow((original as Error).message);
+		expect(console.warn).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["No JSON here.", "did not contain a JSON object"],
+		['{"title":"Cut off","summary":"He said "hi', "incomplete JSON object"],
+	])("keeps Cap's error for %s", (output, message) => {
+		expect(() => parseAiResponse(output)).toThrow(message);
 	});
 });
