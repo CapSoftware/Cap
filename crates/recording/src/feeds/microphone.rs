@@ -3037,14 +3037,14 @@ impl MicrophoneFeed {
     ) -> bool {
         #[cfg(any(target_os = "linux", windows))]
         {
-            return stream_health.get(&id).is_some_and(|health| {
+            stream_health.get(&id).is_some_and(|health| {
                 let failed = health.failed.load(Ordering::Acquire);
                 #[cfg(windows)]
                 let lost = health.device_lost.load(Ordering::Acquire);
                 #[cfg(not(windows))]
                 let lost = false;
                 failed || lost
-            });
+            })
         }
         #[cfg(not(any(target_os = "linux", windows)))]
         {
