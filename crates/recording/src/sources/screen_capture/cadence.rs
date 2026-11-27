@@ -40,6 +40,7 @@ pub struct FrameCadenceGate {
     last_ts: Option<i64>,
     decimating: bool,
     next_due: i64,
+    nearest_deadline: bool,
 }
 
 impl FrameCadenceGate {
@@ -50,6 +51,18 @@ impl FrameCadenceGate {
             last_ts: None,
             decimating: false,
             next_due: 0,
+            nearest_deadline: false,
+        }
+    }
+
+    /// While decimating, takes the source frame nearest each deadline rather
+    /// than the first one at or after it. A refresh landing a hair early would
+    /// otherwise wait a whole source interval, turning 30 fps from 60 Hz into
+    /// 16/50 ms pairs and 24 fps into 33/66 ms steps.
+    pub fn nearest_deadline(nominal_interval: i64) -> Self {
+        Self {
+            nearest_deadline: true,
+            ..Self::new(nominal_interval)
         }
     }
 
@@ -98,7 +111,14 @@ impl FrameCadenceGate {
             return true;
         }
 
-        if ts >= self.next_due {
+        let early = if self.nearest_deadline {
+            self.ema_delta
+                .map_or(0, |ema| (ema.min(nominal) / 2.0) as i64 - 1)
+                .max(0)
+        } else {
+            0
+        };
+        if ts + early >= self.next_due {
             // Advance from the deadline, not the admitted timestamp: dense
             // fast sources always overshoot the deadline a little, and
             // anchoring to the frame would compound that overshoot into an
@@ -203,6 +223,72 @@ mod tests {
         assert_decimates_to_nominal(8_333, "120Hz");
         assert_decimates_to_nominal(13_333, "75Hz"); // per-frame thresholds miss this one
         assert_decimates_to_nominal(4_167, "240Hz");
+    }
+
+    fn admitted_steps(
+        mut gate: FrameCadenceGate,
+        source_interval: i64,
+        jitter_max: i64,
+    ) -> Vec<i64> {
+        let timestamps: Vec<i64> = (0..3_000)
+            .map(|i| i * source_interval + if i > 0 { jitter(i, jitter_max) } else { 0 })
+            .collect();
+        let admitted = run_source(&mut gate, &timestamps);
+        admitted[20..]
+            .windows(2)
+            .map(|w| ((w[1] - w[0]) as f64 / source_interval as f64).round() as i64)
+            .collect()
+    }
+
+    #[test]
+    fn decimating_a_jittery_60hz_source_keeps_the_even_cadence() {
+        let steps_30 = admitted_steps(FrameCadenceGate::nearest_deadline(33_333), 16_667, 300);
+        assert!(
+            steps_30.iter().all(|&s| s == 2),
+            "30 fps from 60 Hz must take every second refresh: {:?}",
+            steps_30.iter().filter(|&&s| s != 2).count()
+        );
+
+        let steps_24 = admitted_steps(FrameCadenceGate::nearest_deadline(41_667), 16_667, 300);
+        assert!(
+            steps_24.iter().all(|&s| s == 2 || s == 3),
+            "24 fps from 60 Hz must alternate two and three refreshes: {} other steps",
+            steps_24.iter().filter(|&&s| s != 2 && s != 3).count()
+        );
+        let mean = steps_24.iter().sum::<i64>() as f64 / steps_24.len() as f64;
+        assert!((mean - 2.5).abs() < 0.01, "24 fps mean step {mean}");
+    }
+
+    #[test]
+    fn nearest_deadline_never_admits_above_the_nominal_rate() {
+        for (nominal, source) in [
+            (33_333, 16_667),
+            (41_667, 16_667),
+            (16_667, 6_944),
+            (16_667, 4_167),
+        ] {
+            let mut gate = FrameCadenceGate::nearest_deadline(nominal);
+            let timestamps: Vec<i64> = (0..60_000_000 / source)
+                .map(|i| i * source + if i > 0 { jitter(i, source / 20) } else { 0 })
+                .collect();
+            let admitted = run_source(&mut gate, &timestamps).len() as i64;
+            // One ladder slot per nominal interval, plus the frame admitted
+            // before decimation engages.
+            let allowed = (timestamps.last().unwrap() - timestamps[0]) / nominal + 2;
+            assert!(
+                admitted <= allowed,
+                "{nominal} from {source}: admitted {admitted} in 60 s, nominal allows {allowed}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_gate_keeps_first_frame_at_or_after_each_deadline() {
+        let steps = admitted_steps(FrameCadenceGate::new(33_333), 16_667, 300);
+        assert!(
+            steps.iter().any(|&s| s == 3),
+            "the default gate keeps its existing behaviour for its other callers"
+        );
     }
 
     #[test]

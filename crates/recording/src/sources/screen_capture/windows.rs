@@ -374,6 +374,122 @@ pub fn window_capture_size(window: &WindowId) -> Option<PhysicalSize> {
     even_capture_size(size.Width, size.Height)
 }
 
+// Windows Graphics Capture refuses any refresh that lands sooner than
+// MinUpdateInterval after the last frame it delivered. Set to exactly one
+// frame interval, a refresh arriving a hair early is refused and the next one
+// is a whole refresh later: 30 fps on a 60 Hz display recorded about 26 fps
+// with frames 50 ms apart. The interval sits half a refresh away from every
+// refresh it could clash with: when the display rate is a whole multiple of
+// the frame rate, Windows keeps every k-th refresh itself; otherwise it offers
+// every refresh and the cadence gate keeps the one nearest each frame slot,
+// before any copy.
+fn wgc_min_update_interval(fps: u32, refresh_hz: f64) -> Duration {
+    let fps = f64::from(fps.max(1));
+    if !refresh_hz.is_finite() || refresh_hz < fps * 0.98 {
+        return Duration::from_secs_f64(0.5 / fps);
+    }
+    let ratio = refresh_hz / fps;
+    let whole = ratio.round();
+    let refreshes = if (ratio - whole).abs() <= 0.02 * whole {
+        whole - 0.5
+    } else {
+        0.5
+    };
+    Duration::from_secs_f64(refreshes / refresh_hz)
+}
+
+/// Why a capture keeps the update interval and cadence gate it had before
+/// they followed the display refresh. Everything not measured yet stays on
+/// that path; an unanswered query counts as not measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeptPacing {
+    NoMinUpdateInterval,
+    RemoteSession,
+    HdrDisplay,
+    MixedDpi,
+    AdapterNotMeasured,
+    DisplayOnOtherAdapter,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PacingFacts {
+    min_update_interval: Option<bool>,
+    remote_session: Option<bool>,
+    adapter: scap_direct3d::AdapterFacts,
+    uniform_dpi: Option<bool>,
+}
+
+const NVIDIA_VENDOR_ID: u32 = 0x10DE;
+const MICROSOFT_VENDOR_ID: u32 = 0x1414;
+
+fn refresh_pacing(facts: &PacingFacts) -> Result<(), KeptPacing> {
+    match facts.min_update_interval {
+        Some(true) => {}
+        Some(false) => return Err(KeptPacing::NoMinUpdateInterval),
+        None => return Err(KeptPacing::Unknown),
+    }
+    match facts.remote_session {
+        Some(false) => {}
+        Some(true) => return Err(KeptPacing::RemoteSession),
+        None => return Err(KeptPacing::Unknown),
+    }
+    match facts.adapter.hdr {
+        Some(false) => {}
+        Some(true) => return Err(KeptPacing::HdrDisplay),
+        None => return Err(KeptPacing::Unknown),
+    }
+    match facts.uniform_dpi {
+        Some(true) => {}
+        Some(false) => return Err(KeptPacing::MixedDpi),
+        None => return Err(KeptPacing::Unknown),
+    }
+    match (
+        facts.adapter.software,
+        facts.adapter.vendor_id,
+        facts.adapter.drives_monitor,
+    ) {
+        (Some(true), _, _) => Ok(()),
+        (Some(false), Some(MICROSOFT_VENDOR_ID), _) => Ok(()),
+        (Some(false), Some(NVIDIA_VENDOR_ID), Some(true)) => Ok(()),
+        (Some(false), Some(NVIDIA_VENDOR_ID), Some(false)) => {
+            Err(KeptPacing::DisplayOnOtherAdapter)
+        }
+        (Some(false), Some(_), _) => Err(KeptPacing::AdapterNotMeasured),
+        _ => Err(KeptPacing::Unknown),
+    }
+}
+
+fn pacing_facts(display_id: &DisplayId, d3d_device: &ID3D11Device) -> PacingFacts {
+    let remote_session = Some(unsafe {
+        ::windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+            ::windows::Win32::UI::WindowsAndMessaging::SM_REMOTESESSION,
+        ) != 0
+    });
+    let adapter = Display::from_id(display_id)
+        .map(|display| scap_direct3d::adapter_facts(d3d_device, display.raw_handle().inner()))
+        .unwrap_or_default();
+    PacingFacts {
+        min_update_interval: scap_direct3d::Settings::can_min_update_interval().ok(),
+        remote_session,
+        adapter,
+        uniform_dpi: uniform_display_scale(),
+    }
+}
+
+fn uniform_display_scale() -> Option<bool> {
+    let scales = Display::list()
+        .iter()
+        .map(|display| {
+            let physical = display.physical_size()?.width();
+            let logical = display.logical_size()?.width();
+            (logical > 0.0).then(|| physical / logical)
+        })
+        .collect::<Option<Vec<f64>>>()?;
+    let first = *scales.first()?;
+    Some(scales.iter().all(|scale| (scale - first).abs() < 0.01))
+}
+
 fn even_capture_size(width: i32, height: i32) -> Option<PhysicalSize> {
     let width = (width.max(0) as u32) & !1;
     let height = (height.max(0) as u32) & !1;
@@ -436,9 +552,29 @@ impl ScreenCaptureConfig<Direct3DCapture> {
             settings.is_cursor_capture_enabled = Some(self.config.show_cursor);
         }
 
+        let refresh_hz = Display::from_id(&self.config.display)
+            .map(|display| display.refresh_rate())
+            .unwrap_or(0.0);
+        let pacing = refresh_pacing(&pacing_facts(&self.config.display, &self.d3d_device));
+        match pacing {
+            Ok(()) => info!(
+                fps = self.config.fps,
+                refresh_hz, "Windows capture pacing follows the display refresh"
+            ),
+            Err(reason) => info!(
+                fps = self.config.fps,
+                refresh_hz,
+                ?reason,
+                "Windows capture pacing keeps the frame-interval update interval"
+            ),
+        }
+
         if let Ok(true) = scap_direct3d::Settings::can_min_update_interval() {
-            settings.min_update_interval =
-                Some(Duration::from_secs_f64(1.0 / self.config.fps as f64));
+            settings.min_update_interval = Some(if pacing.is_ok() {
+                wgc_min_update_interval(self.config.fps, refresh_hz)
+            } else {
+                Duration::from_secs_f64(1.0 / self.config.fps as f64)
+            });
         }
 
         settings.fps = Some(self.config.fps);
@@ -452,6 +588,7 @@ impl ScreenCaptureConfig<Direct3DCapture> {
                 window_id: self.config.window.clone(),
                 settings,
                 d3d_device: self.d3d_device.clone(),
+                refresh_pacing: pacing.is_ok(),
             },
             self.system_audio.then_some(SystemAudioSourceConfig),
         ))
@@ -470,6 +607,7 @@ pub struct VideoSourceConfig {
     window_id: Option<WindowId>,
     settings: scap_direct3d::Settings,
     pub d3d_device: ID3D11Device,
+    refresh_pacing: bool,
 }
 pub struct VideoSource {
     video_info: VideoInfo,
@@ -551,6 +689,7 @@ struct CreateCapturerParams<'a> {
     /// Nominal frame interval in QPC hundred-nanosecond units; `None`
     /// disables rate capping.
     cadence_interval_hns: Option<i64>,
+    refresh_pacing: bool,
     expected_width: u32,
     expected_height: u32,
     frame_scaler: Arc<Mutex<WindowsFrameScaler>>,
@@ -580,14 +719,37 @@ fn create_d3d_capturer(
             .map_err(|e| anyhow!("Failed to create GraphicsCaptureItem: {}", e))?,
     };
 
-    scap_direct3d::Capturer::new(
+    scap_direct3d::Capturer::new_with_admission(
         capture_item,
         params.settings.clone(),
+        {
+            // WGC delivers a frame per screen update (up to the monitor
+            // refresh rate on systems without MinUpdateInterval support), so
+            // cap delivery at the nominal rate before the frame is copied,
+            // converted or queued.
+            let video_decimated_counter = params.video_decimated_counter.clone();
+            let mut cadence_gate = params
+                .cadence_interval_hns
+                .filter(|_| params.refresh_pacing)
+                .map(FrameCadenceGate::nearest_deadline);
+            move |capture_time: windows::Foundation::TimeSpan| {
+                let admitted = cadence_gate
+                    .as_mut()
+                    .is_none_or(|gate| gate.admit(capture_time.Duration));
+                if !admitted {
+                    video_decimated_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                }
+                admitted
+            }
+        },
         {
             let video_frame_counter = params.video_frame_counter.clone();
             let video_drop_counter = params.video_drop_counter.clone();
             let video_decimated_counter = params.video_decimated_counter.clone();
-            let mut cadence_gate = params.cadence_interval_hns.map(FrameCadenceGate::new);
+            let mut cadence_gate = params
+                .cadence_interval_hns
+                .filter(|_| !params.refresh_pacing)
+                .map(FrameCadenceGate::new);
             let mut tx = params.video_tx.clone();
             let expected_width = params.expected_width;
             let expected_height = params.expected_height;
@@ -603,10 +765,6 @@ fn create_d3d_capturer(
                     return Err(windows::core::Error::new(windows::Win32::Foundation::E_INVALIDARG, "Empty screen frame"));
                 }
 
-                // WGC delivers a frame per screen update — up to the monitor
-                // refresh rate on systems without MinUpdateInterval support —
-                // so cap delivery at the nominal rate before any conversion
-                // or channel work.
                 if let Some(gate) = cadence_gate.as_mut()
                     && !gate.admit(capture_time.Duration)
                 {
@@ -736,6 +894,7 @@ impl output_pipeline::VideoSource for VideoSource {
             window_id,
             settings,
             d3d_device,
+            refresh_pacing,
         }: Self::Config,
         video_tx: mpsc::Sender<Self::Frame>,
         ctx: &mut output_pipeline::SetupCtx,
@@ -804,6 +963,7 @@ impl output_pipeline::VideoSource for VideoSource {
                             video_drop_counter: &video_drop_counter,
                             video_decimated_counter: &video_decimated_counter,
                             cadence_interval_hns,
+                            refresh_pacing,
                             expected_width,
                             expected_height,
                             frame_scaler: frame_scaler.clone(),
@@ -1630,6 +1790,194 @@ impl output_pipeline::AudioSource for SystemAudioSource {
             warn!("system audio capturer pause failed: {err}");
         }
         async { Ok(()) }
+    }
+}
+
+#[cfg(test)]
+mod update_interval_tests {
+    use super::*;
+
+    const EARLY_OR_LATE: f64 = 0.000_2;
+
+    fn refreshes_taken(interval: f64, refresh: f64, jitter: f64) -> f64 {
+        ((interval - jitter) / refresh).floor() + 1.0
+    }
+
+    #[test]
+    fn windows_keeps_whole_multiples_itself_and_offers_every_refresh_otherwise() {
+        for (reported, actual) in [
+            (50.0, 50.0),
+            (59.0, 59.94),
+            (60.0, 59.94),
+            (60.0, 60.0),
+            (75.0, 75.0),
+            (120.0, 120.0),
+            (144.0, 144.0),
+            (165.0, 165.0),
+            (240.0, 240.0),
+        ] {
+            let refresh = 1.0 / actual;
+            for fps in [15u32, 24, 25, 30, 48, 50, 60, 90, 100, 120, 144, 165, 240] {
+                if f64::from(fps) > reported {
+                    continue;
+                }
+                let interval = wgc_min_update_interval(fps, reported).as_secs_f64();
+                let ratio = actual / f64::from(fps);
+                let expected = if (ratio - ratio.round()).abs() <= 0.03 * ratio.round() {
+                    ratio.round()
+                } else {
+                    1.0
+                };
+                for jitter in [EARLY_OR_LATE, -EARLY_OR_LATE] {
+                    let taken = refreshes_taken(interval, refresh, jitter);
+                    assert_eq!(
+                        taken, expected,
+                        "{fps} fps on {actual} Hz (reported {reported}): takes every {taken} refreshes"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_full_frame_interval_skips_a_refresh_at_30_fps_on_60_hz() {
+        let refresh = 1.0 / 60.0;
+        assert_eq!(refreshes_taken(1.0 / 30.0, refresh, EARLY_OR_LATE), 2.0);
+        assert_eq!(refreshes_taken(1.0 / 30.0, refresh, -EARLY_OR_LATE), 3.0);
+    }
+
+    #[test]
+    fn never_longer_than_a_frame_whatever_the_display_reports() {
+        for reported in [
+            0.0, 1.0, 24.0, 30.0, 59.0, 59.94, 60.0, 64.0, 120.0, 144.0, 240.0, 1000.0,
+        ] {
+            for fps in [1u32, 15, 24, 25, 30, 48, 50, 60, 90, 120, 144, 240] {
+                let interval = wgc_min_update_interval(fps, reported).as_secs_f64();
+                assert!(
+                    interval < 1.0 / f64::from(fps),
+                    "{fps} fps with a reported {reported} Hz: {interval} s is not shorter than a frame"
+                );
+            }
+        }
+    }
+
+    fn answers() -> [Option<bool>; 3] {
+        [None, Some(true), Some(false)]
+    }
+
+    #[test]
+    fn only_measured_setups_follow_the_display_refresh() {
+        let mut enabled = 0;
+        for min_update_interval in answers() {
+            for remote_session in answers() {
+                for hdr in answers() {
+                    for uniform_dpi in answers() {
+                        for software in answers() {
+                            for drives_monitor in answers() {
+                                for vendor_id in
+                                    [None, Some(0x10DE), Some(0x1002), Some(0x8086), Some(0x1414)]
+                                {
+                                    let facts = PacingFacts {
+                                        min_update_interval,
+                                        remote_session,
+                                        adapter: scap_direct3d::AdapterFacts {
+                                            vendor_id,
+                                            software,
+                                            drives_monitor,
+                                            hdr,
+                                        },
+                                        uniform_dpi,
+                                    };
+                                    let measured = min_update_interval == Some(true)
+                                        && remote_session == Some(false)
+                                        && hdr == Some(false)
+                                        && uniform_dpi == Some(true)
+                                        && (software == Some(true)
+                                            || (software == Some(false)
+                                                && vendor_id == Some(0x1414))
+                                            || (software == Some(false)
+                                                && vendor_id == Some(0x10DE)
+                                                && drives_monitor == Some(true)));
+                                    assert_eq!(
+                                        refresh_pacing(&facts).is_ok(),
+                                        measured,
+                                        "{facts:?}"
+                                    );
+                                    enabled += usize::from(measured);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(enabled, 3 * 5 + 3 + 1);
+    }
+
+    #[test]
+    fn kept_pacing_names_the_reason() {
+        let measured = PacingFacts {
+            min_update_interval: Some(true),
+            remote_session: Some(false),
+            adapter: scap_direct3d::AdapterFacts {
+                vendor_id: Some(0x10DE),
+                software: Some(false),
+                drives_monitor: Some(true),
+                hdr: Some(false),
+            },
+            uniform_dpi: Some(true),
+        };
+        assert_eq!(refresh_pacing(&measured), Ok(()));
+        let with = |change: fn(&mut PacingFacts)| {
+            let mut facts = measured;
+            change(&mut facts);
+            refresh_pacing(&facts)
+        };
+        assert_eq!(
+            with(|f| f.min_update_interval = Some(false)),
+            Err(KeptPacing::NoMinUpdateInterval)
+        );
+        assert_eq!(
+            with(|f| f.remote_session = Some(true)),
+            Err(KeptPacing::RemoteSession)
+        );
+        assert_eq!(
+            with(|f| f.adapter.hdr = Some(true)),
+            Err(KeptPacing::HdrDisplay)
+        );
+        assert_eq!(
+            with(|f| f.uniform_dpi = Some(false)),
+            Err(KeptPacing::MixedDpi)
+        );
+        assert_eq!(
+            with(|f| f.adapter.vendor_id = Some(0x8086)),
+            Err(KeptPacing::AdapterNotMeasured)
+        );
+        assert_eq!(
+            with(|f| f.adapter.vendor_id = Some(0x1002)),
+            Err(KeptPacing::AdapterNotMeasured)
+        );
+        assert_eq!(
+            with(|f| f.adapter.drives_monitor = Some(false)),
+            Err(KeptPacing::DisplayOnOtherAdapter)
+        );
+        assert_eq!(
+            with(|f| f.adapter.vendor_id = None),
+            Err(KeptPacing::Unknown)
+        );
+        assert_eq!(with(|f| f.uniform_dpi = None), Err(KeptPacing::Unknown));
+    }
+
+    #[test]
+    fn an_unknown_refresh_rate_keeps_half_a_frame() {
+        assert_eq!(
+            wgc_min_update_interval(30, 0.0),
+            Duration::from_secs_f64(0.5 / 30.0)
+        );
+        assert_eq!(
+            wgc_min_update_interval(0, f64::NAN),
+            Duration::from_millis(500)
+        );
     }
 }
 
