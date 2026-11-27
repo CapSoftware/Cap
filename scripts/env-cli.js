@@ -1,7 +1,9 @@
 // @ts-check
 
 import * as crypto from "node:crypto";
+import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
+import { parseArgs } from "node:util";
 import {
 	confirm,
 	group,
@@ -25,19 +27,56 @@ const DOCKER_DB_ENVS = {
 	url: "mysql://root:@localhost:3306/planetscale",
 };
 
+const APPS = ["desktop", "web"];
+
+const USAGE =
+	"Pass --apps to write .env without prompts: `bun run env-setup --apps desktop`, or `--apps web --docker` for the web app with Docker's MySQL and MinIO.";
+
+/** @param {string} message */
+function fail(message) {
+	log.error(message);
+	process.exit(1);
+}
+
 async function main() {
+	const { values: args } = parseArgs({
+		options: {
+			apps: { type: "string" },
+			docker: { type: "boolean", default: false },
+			force: { type: "boolean", default: false },
+		},
+	});
+	const interactive = args.apps === undefined;
+
 	intro("Welcome to the Cap env setup CLI!");
 
-	const targets = await multiselect({
-		message: "Which apps will you be working on?",
-		options: [
-			{ value: "desktop", label: "Desktop" },
-			{ value: "web", label: "Web" },
-		],
-		required: true,
-	});
+	if (interactive && !process.stdin.isTTY)
+		fail(`env-setup asks its questions in a terminal. ${USAGE}`);
+
+	const targets = interactive
+		? await multiselect({
+				message: "Which apps will you be working on?",
+				options: [
+					{ value: "desktop", label: "Desktop" },
+					{ value: "web", label: "Web" },
+				],
+				required: true,
+			})
+		: (args.apps ?? "").split(",").map((app) => app.trim());
 
 	if (isCancel(targets)) return;
+
+	if (!interactive) {
+		const unknown = targets.filter((app) => !APPS.includes(app));
+		if (unknown.length > 0 || targets.length === 0)
+			fail(`--apps takes ${APPS.join(" and/or ")}, comma-separated. ${USAGE}`);
+		if (targets.includes("web") && !args.docker)
+			fail(
+				"Without Docker, the web app needs database and S3 settings; run `bun run env-setup` in a terminal to enter them, or add --docker.",
+			);
+		if (existsSync(".env") && !args.force)
+			fail(".env already exists; pass --force to replace it.");
+	}
 
 	const file = await fs
 		.readFile("./target/env-profiles/default.json", "utf8")
@@ -75,9 +114,11 @@ async function main() {
 		}
 		envs.DATABASE_ENCRYPTION_KEY = allEnvs.DATABASE_ENCRYPTION_KEY;
 
-		usingDockerEnvironment = await confirm({
-			message: "Will you be running S3 and MySQL via Docker?",
-		});
+		usingDockerEnvironment = interactive
+			? await confirm({
+					message: "Will you be running S3 and MySQL via Docker?",
+				})
+			: args.docker;
 
 		if (isCancel(usingDockerEnvironment)) return;
 		if (!usingDockerEnvironment) {
@@ -145,28 +186,36 @@ async function main() {
 	if (hasDesktop) {
 		envs.RUST_BACKTRACE = "1";
 
-		const values = await group(
-			{
-				VITE_SERVER_URL: () => {
-					if (!hasWeb)
-						return text({
-							message: "VITE_SERVER_URL",
-							placeholder: "https://cap.so",
-							defaultValue: "https://cap.so",
-						});
-				},
-				VITE_VERCEL_AUTOMATION_BYPASS_SECRET: () => {
-					if (!hasWeb)
-						return text({
-							message:
-								"VITE_VERCEL_AUTOMATION_BYPASS_SECRET - skip if you're not a Cap team member",
-							placeholder: allEnvs.VITE_VERCEL_AUTOMATION_BYPASS_SECRET,
-							defaultValue: allEnvs.VITE_VERCEL_AUTOMATION_BYPASS_SECRET,
-						});
-				},
-			},
-			{ onCancel: () => process.exit(0) },
-		);
+		const values = interactive
+			? await group(
+					{
+						VITE_SERVER_URL: () => {
+							if (!hasWeb)
+								return text({
+									message: "VITE_SERVER_URL",
+									placeholder: "https://cap.so",
+									defaultValue: "https://cap.so",
+								});
+						},
+						VITE_VERCEL_AUTOMATION_BYPASS_SECRET: () => {
+							if (!hasWeb)
+								return text({
+									message:
+										"VITE_VERCEL_AUTOMATION_BYPASS_SECRET - skip if you're not a Cap team member",
+									placeholder: allEnvs.VITE_VERCEL_AUTOMATION_BYPASS_SECRET,
+									defaultValue: allEnvs.VITE_VERCEL_AUTOMATION_BYPASS_SECRET,
+								});
+						},
+					},
+					{ onCancel: () => process.exit(0) },
+				)
+			: hasWeb
+				? {}
+				: {
+						VITE_SERVER_URL: "https://cap.so",
+						VITE_VERCEL_AUTOMATION_BYPASS_SECRET:
+							allEnvs.VITE_VERCEL_AUTOMATION_BYPASS_SECRET,
+					};
 
 		for (const [key, value] of Object.entries(values)) {
 			if (value === undefined || value === "undefined") continue;
