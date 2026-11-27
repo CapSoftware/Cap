@@ -761,11 +761,14 @@ pub fn people_line(meta: &DocMeta) -> Option<String> {
         }
         return Some(names);
     }
+    if let Some(app) = meeting.app_name.as_deref().filter(|a| !a.trim().is_empty()) {
+        return Some(app.to_string());
+    }
+    // No call app and no names: the voices the transcript heard.
     meeting
-        .app_name
-        .as_deref()
-        .filter(|a| !a.trim().is_empty())
-        .map(str::to_string)
+        .speaker_count()
+        .filter(|count| *count > 1)
+        .map(|count| tr::documents::home::people(count as usize).to_string())
 }
 
 impl Home {

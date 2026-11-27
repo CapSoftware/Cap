@@ -2617,3 +2617,36 @@ fn transcript_rows_carry_the_voice_choices() {
     let rows = turns(&transcript);
     assert!(!rows[0].you && rows[0].disowned);
 }
+/// The notes list's people segment: names first, then the call app, then the
+/// voices the transcript heard; "Just you" (None here) only for one voice.
+#[test]
+fn a_meeting_row_says_just_you_only_when_one_voice_was_heard() {
+    let at = Utc.with_ymd_and_hms(2026, 11, 27, 10, 7, 0).unwrap();
+    let row = |app: Option<&str>, speakers: Option<usize>, people: &[&str]| {
+        let mut meta = meta("Launch sync", DocKind::Meeting, at);
+        let mut meeting = MeetingDetails {
+            duration_ms: 180_000,
+            app_id: app.map(|a| a.to_lowercase()),
+            app_name: app.map(str::to_string),
+            participants: people.iter().map(|p| p.to_string()).collect(),
+            ..MeetingDetails::default()
+        };
+        if let Some(count) = speakers {
+            meeting.set_speaker_count(count);
+        }
+        meta.meeting = Some(meeting);
+        super::home::people_line(&meta)
+    };
+    assert_eq!(row(None, Some(1), &[]), None);
+    assert_eq!(row(None, Some(0), &[]), None);
+    assert_eq!(row(None, Some(2), &[]), Some("2 people".to_string()));
+    assert_eq!(row(None, Some(4), &[]), Some("4 people".to_string()));
+    assert_eq!(row(Some("Zoom"), Some(3), &[]), Some("Zoom".to_string()));
+    assert_eq!(row(Some("Zoom"), Some(1), &[]), Some("Zoom".to_string()));
+    assert_eq!(
+        row(Some("Zoom"), Some(2), &["Alex"]),
+        Some("Alex".to_string())
+    );
+    // saved before the count was kept: unchanged ("Just you" with no app)
+    assert_eq!(row(None, None, &[]), None);
+}

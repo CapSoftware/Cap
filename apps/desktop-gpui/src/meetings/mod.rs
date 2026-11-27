@@ -2708,6 +2708,7 @@ impl Meetings {
                 .unwrap_or_else(|| recording.started.elapsed().as_millis() as u64);
         let doc_id = recording.doc_id.clone();
         let chars = recording.transcript.stats().total_chars as u64;
+        let speakers = recording.transcript.speaker_count();
         if let Some(library) = self.library().cloned()
             && let (_lock, Ok(mut meta)) = (lock_meta(), library.load(&doc_id))
         {
@@ -2717,6 +2718,7 @@ impl Meetings {
                 meeting.duration_ms = meeting.duration_ms.max(duration_ms);
                 meeting.stop_reason = Some(reason);
                 meeting.transcript_chars = chars;
+                meeting.set_speaker_count(speakers);
                 meeting.audio = tracks;
             }
             // One hold-up stops both tracks, so the longer track's total is
@@ -3128,6 +3130,7 @@ impl Meetings {
         finishing.transcript.retract_partials(Source::Mic);
         finishing.transcript.retract_partials(Source::System);
         let chars = finishing.transcript.stats().total_chars;
+        let speakers = finishing.transcript.speaker_count();
         let engine = finishing.engine;
         cx.background_executor()
             .spawn(async move {
@@ -3145,6 +3148,7 @@ impl Meetings {
             && let Some(meeting) = meta.meeting.as_mut()
         {
             meeting.transcript_chars = chars as u64;
+            meeting.set_speaker_count(speakers);
             // Audio still waiting for its words is tried again next launch;
             // gaps with no saved audio can't be, so they don't keep it waiting.
             let open = finishing.open_gaps > finishing.unrepairable;
@@ -4287,6 +4291,7 @@ impl Meetings {
                 };
                 let chars = transcript.stats().total_chars;
                 meeting.transcript_chars = chars as u64;
+                meeting.set_speaker_count(transcript.speaker_count());
                 if self.settings.notes.auto_generate
                     && !meeting.has_enhanced
                     && (finishing.generate_notes || chars >= min_chars)
@@ -5303,10 +5308,20 @@ fn late_labels(
         .and_then(|meta| Meetings::self_name(&meta));
     let renames =
         late_summary_renames(&transcript, &after, &pass.merged, self_name.as_deref());
+    let speakers = after.speaker_count();
     let lines = vec![LogLine::Speakers { assign }, LogLine::SpeakerNames { names }];
     if let Err(error) = append_jsonl(&path, &lines) {
         tracing::warn!(%error, "could not add Nemotron's labels to the meeting transcript");
         return None;
+    }
+    if let (_lock, Ok(mut meta)) = (lock_meta(), library.load(doc_id))
+        && let Some(meeting) = meta.meeting.as_mut()
+        && meeting.speaker_count() != Some(speakers as u64)
+    {
+        meeting.set_speaker_count(speakers);
+        if let Err(error) = library.save(&meta) {
+            tracing::warn!(%error, "could not save the meeting's speakers");
+        }
     }
     Some(renames)
 }

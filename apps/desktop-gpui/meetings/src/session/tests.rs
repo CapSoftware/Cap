@@ -327,6 +327,8 @@ fn join_and_take_notes_ends_with_its_short_call() {
         .expect(&[(85_000, "ending 105000")]);
     s.at(105_000)
         .expect(&[(105_000, "clear"), (105_000, "stop CallEnded")]);
+    // never left: the note keeps its call app ("Zoom" in its header and row)
+    assert_eq!(s.session.attached_app(), Some("zoom"));
 }
 
 #[test]

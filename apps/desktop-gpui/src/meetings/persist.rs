@@ -790,6 +790,7 @@ pub fn recover_unfinished(library: &Library, opened: &OpenedHere) -> Vec<String>
         meeting.ended_at = Some(started_at + Duration::milliseconds(meeting.duration_ms as i64));
         meeting.stop_reason = Some(StopReason::Error);
         meeting.transcript_chars = stats.total_chars as u64;
+        meeting.set_speaker_count(transcript.speaker_count());
         if !tracks.is_empty() {
             meeting.audio = tracks;
         }

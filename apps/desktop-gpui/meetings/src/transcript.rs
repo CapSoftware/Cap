@@ -579,6 +579,19 @@ impl Transcript {
         self.speaker(source, speaker, speaker_id).english(self_name)
     }
 
+    /// How many people the transcript heard: each voice with a line left
+    /// in, the user included. Everyone on the computer's audio whose voices
+    /// were not told apart counts once.
+    pub fn speaker_count(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        for turn in self.turns() {
+            if !self.turn_left_out(&turn) {
+                seen.insert(self.turn_speaker(&turn));
+            }
+        }
+        seen.len()
+    }
+
     /// Everyone heard in the meeting by name, the user first, for the
     /// participant list of a prompt. Numbered voices are left out.
     pub fn named_speakers(&self, self_name: Option<&str>) -> Vec<(String, bool)> {
