@@ -211,6 +211,8 @@ export const RATE_LIMIT_IDS = {
 	GUEST_CHECKOUT: "rl_guest_checkout",
 	/** Unauthed desktop log → Discord forwarding (spam). Suggested: 10 / 1m per IP. */
 	DESKTOP_LOGS: "rl_desktop_logs",
+	/** Desktop upload-health probes (storage write/delete guard). Suggested: 12 / 1m per user. */
+	DESKTOP_UPLOAD_HEALTH: "rl_desktop_upload_health",
 	/** Signed-in desktop feedback emails. Suggested: 10 / 1h per key (user). */
 	DESKTOP_FEEDBACK: "rl_desktop_feedback",
 	/** Desktop app keys issued per account, counted apart from the keys that sign-out deletes. Suggested: 20 / 1h per key (user). */

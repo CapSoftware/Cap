@@ -4639,6 +4639,7 @@ impl SettingsWindow {
                 match result {
                     Ok((200, _)) => {
                         this.s3_fetch(window, cx);
+                        crate::network_health::run_upload_health_check(cx);
                         this.info_dialog(tr::settings::integrations::s3::saved(), window, cx);
                     }
                     _ => {
@@ -4678,6 +4679,7 @@ impl SettingsWindow {
                 match result {
                     Ok((200, _)) => {
                         this.s3_fetch(window, cx);
+                        crate::network_health::run_upload_health_check(cx);
                         this.info_dialog(tr::settings::integrations::s3::deleted(), window, cx);
                     }
                     _ => {
@@ -4873,6 +4875,7 @@ impl SettingsWindow {
                             if connected {
                                 this.pages.gdrive.waiting = false;
                                 this.gdrive_fetch_s3_presence(window, cx);
+                                crate::network_health::run_upload_health_check(cx);
                             }
                             cx.notify();
                             window.refresh();
@@ -4986,7 +4989,10 @@ impl SettingsWindow {
             |this, result, window, cx| {
                 this.pages.gdrive.set_active_pending = false;
                 match result {
-                    Ok((200, _)) => this.gdrive_refresh(window, cx),
+                    Ok((200, _)) => {
+                        this.gdrive_refresh(window, cx);
+                        crate::network_health::run_upload_health_check(cx);
+                    }
                     _ => {
                         this.pages.gdrive.error = Some(
                             tr::settings::integrations::gdrive::set_active_failed().to_string(),
@@ -5028,6 +5034,7 @@ impl SettingsWindow {
                 match result {
                     Ok((200, _)) => {
                         this.gdrive_refresh(window, cx);
+                        crate::network_health::run_upload_health_check(cx);
                         this.info_dialog(
                             tr::settings::integrations::gdrive::disconnected(),
                             window,

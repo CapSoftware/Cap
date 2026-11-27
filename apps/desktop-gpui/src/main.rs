@@ -81,6 +81,7 @@ mod meetings;
 mod meetings_ui;
 mod menus;
 mod mode_select_window;
+mod network_health;
 mod notifications;
 mod onboarding_audio;
 mod onboarding_doodles;
@@ -564,6 +565,7 @@ fn main() {
         single_instance::init_linux_reopen(cx);
         updates::schedule_startup_check(cx);
         app_windows::schedule_launch_render_warmup(cx);
+        network_health::schedule_startup_check(cx);
         upload::queue::init(cx);
         upload::instant_cleanup::init(cx);
         automation::init(cx);
