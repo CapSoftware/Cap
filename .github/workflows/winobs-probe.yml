@@ -2,7 +2,7 @@ name: winobs probe build
 
 on:
   push:
-    branches: ["ci/winobs-probe"]
+    branches: ["ci/winobs-probe", "ci/winobs-probeonly"]
 
 permissions:
   contents: read
@@ -54,6 +54,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/pkg/bin"
           cp "target/$TARGET/release/wgcprobe.exe" "$RUNNER_TEMP/pkg/bin/"
       - name: Build release CLI and muxer (release profile, as desktop-release.yml)
+        if: ${{ github.ref_name != 'ci/winobs-probeonly' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -77,7 +78,7 @@ jobs:
               otool -L "$pkg/bin/cap" > "$pkg/info.txt"
               ;;
             Windows)
-              cp "$rel/cap.exe" "$rel/cap-muxer.exe" "$pkg/bin/"
+              cp "$rel/cap.exe" "$rel/cap-muxer.exe" "$pkg/bin/" || true
               for d in target/ffmpeg/bin target/native-deps/dxc target/native-deps/onnxruntime/lib target/native-deps/vcruntime "$rel"; do
                 if [ -d "$d" ]; then find "$d" -maxdepth 1 -iname '*.dll' -exec cp {} "$pkg/bin/" \; ; fi
               done
