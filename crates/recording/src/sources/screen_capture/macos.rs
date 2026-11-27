@@ -1065,12 +1065,11 @@ impl output_pipeline::VideoSource for VideoSource {
                         )
                         .await
                         {
-                            HiddenSinkMove::Moved(windows) => {
+                            HiddenSinkMove::Moved => {
                                 info!(
-                                    excluded = windows.len(),
+                                    excluded = watch.exclusion.windows.len(),
                                     "Moved the hidden audio sink exclusion off a window that is now shown"
                                 );
-                                watch.exclusion.windows = windows;
                                 watch.retry.reset();
                                 false
                             }
@@ -1496,7 +1495,7 @@ struct HiddenSinkWatch {
 
 enum HiddenSinkMove {
     Waiting,
-    Moved(Vec<u32>),
+    Moved,
     /// A filter without hidden-sink exclusions is in place; nothing to watch.
     Released,
     NeedsFallback,
@@ -1516,12 +1515,18 @@ async fn move_hidden_sink_exclusion(
                 .await
             {
                 Ok(next) if next.windows.is_empty() => HiddenSinkMove::Released,
-                Ok(next) if !hidden_sink::any_shown_or_closed(&next.windows) => {
-                    HiddenSinkMove::Moved(next.windows)
+                Ok(next) => {
+                    // The filter excluding these windows is applied now, so they
+                    // are what the watcher checks even if the fallback fails.
+                    watch.exclusion.windows = next.windows;
+                    if hidden_sink::any_shown_or_closed(&watch.exclusion.windows) {
+                        // The window server and ScreenCaptureKit disagree on
+                        // what is shown; never leave a shown window excluded.
+                        HiddenSinkMove::NeedsFallback
+                    } else {
+                        HiddenSinkMove::Moved
+                    }
                 }
-                // The window server and ScreenCaptureKit disagree on what is
-                // shown; never leave a shown window excluded.
-                Ok(_) => HiddenSinkMove::NeedsFallback,
                 Err(error) => HiddenSinkMove::Failed(error),
             }
         }
