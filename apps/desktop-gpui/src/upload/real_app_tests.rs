@@ -541,6 +541,72 @@ async fn real_app_camera_only_upload_deleted_during_retry_is_not_recreated() {
     assert!(!log.contains("panicked at"), "the app panicked");
 }
 
+/// The owner replaces the cap's video on the web, for example with a web
+/// edit, before the Instant upload finishes. The server answers completion
+/// with 409 "output-replaced": the queue stops there without uploading the
+/// recording again, and keeps the local recording.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_instant_upload_replaced_on_the_web_stops_quietly() {
+    let mock = MockCap::start(Vec::new()).await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    let app = sandbox.launch("record", &[("CAP_GPUI_AUTO_RECORD", "instant:6")]);
+    wait_for_app(
+        &sandbox,
+        &app,
+        "the recording's video id",
+        Duration::from_secs(120),
+        || {
+            sandbox
+                .projects()
+                .first()
+                .and_then(|project| state(project))
+                .is_some_and(|state| state["video_id"].is_string())
+        },
+    )
+    .await;
+    let project = sandbox.projects().remove(0);
+    let video = state(&project).unwrap()["video_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    mock.replace_on_web(&video);
+    wait_for_app(
+        &sandbox,
+        &app,
+        "the upload to stop",
+        Duration::from_secs(240),
+        || {
+            state(&project).is_some_and(|state| {
+                state["phase"] == "Failed"
+                    || state["phase"] == "Verified"
+                    || state["attempt_count"].as_u64().unwrap_or(0) > 1
+            })
+        },
+    )
+    .await;
+    kill(app);
+    let log = sandbox.log("record");
+    let state = state(&project).unwrap();
+    assert_eq!(state["phase"], "Failed", "{state}");
+    assert_eq!(
+        state["last_error"],
+        super::queue::RECORDING_REPLACED_ON_WEB,
+        "{state}"
+    );
+    assert_eq!(state["attempt_count"], 1, "{state}");
+    assert!(state["next_retry_at"].is_null(), "{state}");
+    assert_eq!(
+        mock.count("POST", "/api/upload/recording-complete"),
+        1,
+        "{}",
+        mock.timeline()
+    );
+    assert!(media_files(&project) > 0);
+    assert!(mock.deleted().is_empty(), "{:?}", mock.deleted());
+    assert!(!log.contains("panicked at"), "the app panicked");
+}
+
 /// Main window when recording starts: Close hides the main window and
 /// Minimise sends it to the Dock, and the reshow at the end of the recording
 /// brings either back on screen. Read from the window state the auto-record
