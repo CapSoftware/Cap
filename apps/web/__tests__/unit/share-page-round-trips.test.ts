@@ -5,7 +5,11 @@ import { Context, Effect } from "effect";
 import { type ComponentProps, isValidElement, type ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ query: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+	query: vi.fn(),
+	note: false,
+	access: "allowed" as "allowed" | "private" | "password",
+}));
 
 vi.mock("server-only", () => ({}));
 vi.mock("@cap/database", async () => {
@@ -45,7 +49,15 @@ vi.mock("@/lib/server", async () => {
 		runPromise: <A, E>(effect: Effect.Effect<A, E, unknown>) =>
 			effect.pipe(
 				Effect.provideService(Context.GenericTag("SharePerfPolicy"), {
-					canViewLoaded: () => Effect.void,
+					canViewLoaded: () =>
+						mocks.access === "allowed"
+							? Effect.void
+							: Effect.fail({
+									_tag:
+										mocks.access === "private"
+											? "PolicyDenied"
+											: "VerifyVideoPasswordError",
+								}),
 				}),
 				Effect.provideService(Context.GenericTag("SharePerfDatabase"), {
 					use: <T>(callback: (client: ReturnType<typeof db>) => Promise<T>) =>
@@ -84,6 +96,7 @@ vi.mock("@/lib/share-playback", () => ({
 vi.mock("@/lib/share-web-url", () => ({
 	resolveShareWebUrl: vi.fn(),
 	resolveForeignShareRedirect: async () => null,
+	resolveRestrictedShareRedirect: async () => null,
 }));
 vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
 vi.mock("@/utils/flags", () => ({ isAiGenerationEnabled: async () => true }));
@@ -126,6 +139,22 @@ const recording = {
 	transcriptionStatus: "COMPLETE",
 };
 
+const NOTE_TEXT = "NOTE-TEXT-acquisition-of-initech";
+const sharedNote = {
+	...recording,
+	isNote: 1,
+	source: { type: "local" },
+	metadata: null,
+	transcriptionStatus: "SKIPPED",
+};
+const noteContent = {
+	summaryMarkdown: `## Summary\n\n${NOTE_TEXT}`,
+	notesMarkdown: NOTE_TEXT,
+	transcript: [{ speaker: "Sam", startMs: 0, text: NOTE_TEXT }],
+	participants: ["Sam"],
+	meetingStartedAt: createdAt,
+};
+
 function project(
 	query: string,
 	tables: Record<string, Record<string, unknown>>,
@@ -148,7 +177,7 @@ function rowsFor(query: string) {
 	) {
 		return [
 			project(query, {
-				videos: recording,
+				videos: mocks.note ? sharedNote : recording,
 				users: { id: "owner", name: "Owner", email: "owner@example.com" },
 				organizations: organization,
 				shared_videos: { organizationId: "shared-org" },
@@ -228,6 +257,8 @@ function rowsFor(query: string) {
 	}
 	if (query.includes("from `space_members`")) return [["space-member"]];
 	if (query.includes("from `video_edits`")) return [];
+	if (query.includes("from `video_notes`"))
+		return [project(query, { video_notes: noteContent })];
 	throw new Error(`Unexpected query: ${query}`);
 }
 
@@ -261,7 +292,11 @@ async function loadPage() {
 	};
 }
 
-beforeEach(() => mocks.query.mockReset());
+beforeEach(() => {
+	mocks.query.mockReset();
+	mocks.note = false;
+	mocks.access = "allowed";
+});
 
 describe("share page database round trips", () => {
 	it("keeps download permission and edit checks within the existing page load", async () => {
@@ -329,4 +364,48 @@ describe("share page database round trips", () => {
 			);
 		},
 	);
+});
+
+describe("share page note content", () => {
+	const noteQueries = () =>
+		mocks.query.mock.calls
+			.map(([query]) => String(query))
+			.filter((query) => query.includes("`video_notes`"));
+
+	const openNote = (access: typeof mocks.access) => {
+		mocks.note = true;
+		mocks.access = access;
+		mocks.query.mockImplementation(async (query: string) => {
+			try {
+				return { rows: rowsFor(query) };
+			} catch {
+				return { rows: [] };
+			}
+		});
+		return ShareVideoPage({
+			params: Promise.resolve({ videoId: recording.id }),
+			searchParams: Promise.resolve({}),
+		}) as Promise<ReactElement<Record<string, unknown>>>;
+	};
+
+	it.each(["private", "password"] as const)(
+		"never reads the text of a %s note the viewer cannot open",
+		async (access) => {
+			const page = await openNote(access);
+
+			expect(noteQueries()).toEqual([]);
+			expect(JSON.stringify(page)).not.toContain(NOTE_TEXT);
+			expect(page.props).toMatchObject({ isNote: true });
+		},
+	);
+
+	it("reads the note only for a viewer the policy lets in", async () => {
+		const page = await openNote("allowed");
+		const authorized = page.props.children as ReactElement;
+		await (authorized.type as (props: unknown) => Promise<unknown>)(
+			authorized.props,
+		);
+
+		expect(noteQueries()).toHaveLength(1);
+	});
 });
