@@ -46,6 +46,7 @@ async function main() {
 			watchPaths: [
 				path.join(repoRoot, "crates", "cap-muxer"),
 				path.join(repoRoot, "crates", "cap-muxer-protocol"),
+				path.join(repoRoot, "Cargo.toml"),
 				path.join(repoRoot, "Cargo.lock"),
 			],
 		},
@@ -63,6 +64,7 @@ async function main() {
 				path.join(repoRoot, "crates", "media-info"),
 				path.join(repoRoot, "crates", "project"),
 				path.join(repoRoot, "crates", "rendering"),
+				path.join(repoRoot, "Cargo.toml"),
 				path.join(repoRoot, "Cargo.lock"),
 			],
 		},
