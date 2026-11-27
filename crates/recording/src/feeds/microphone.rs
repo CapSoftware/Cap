@@ -3027,6 +3027,24 @@ pub struct SetInput {
 
 pub struct CheckInput(pub String);
 
+impl MicrophoneFeed {
+    fn attached_stream_unusable(&self, _id: u32) -> bool {
+        #[cfg(any(target_os = "linux", windows))]
+        {
+            return self.stream_health.get(&_id).is_some_and(|health| {
+                let failed = health.failed.load(Ordering::Acquire);
+                #[cfg(windows)]
+                let lost = health.device_lost.load(Ordering::Acquire);
+                #[cfg(not(windows))]
+                let lost = false;
+                failed || lost
+            });
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
+        false
+    }
+}
+
 impl Message<CheckInput> for MicrophoneFeed {
     type Reply = bool;
 
@@ -3039,6 +3057,7 @@ impl Message<CheckInput> for MicrophoneFeed {
             return false;
         };
         attached.label == msg.0
+            && !self.attached_stream_unusable(attached.id)
             && self.last_samples.is_some_and(|(id, received)| {
                 id == attached.id && received.elapsed() < Duration::from_millis(250)
             })
@@ -3871,6 +3890,22 @@ impl Message<Lock> for MicrophoneFeed {
             };
 
             state.handle_input_connected(data);
+        }
+
+        if let Some(attached) = &state.attached
+            && self.attached_stream_unusable(attached.id)
+        {
+            let dead = state.attached.take().expect("checked above");
+            let _ = dead.done_tx.send(());
+            #[cfg(any(target_os = "linux", windows))]
+            self.stream_health.remove(&dead.id);
+            #[cfg(windows)]
+            {
+                self.recording_reconnect = None;
+            }
+            return Err(LockFeedError::InitializeFailed(SetInputError::BuildStream(
+                "Requested microphone backend is already failed".into(),
+            )));
         }
 
         let Some(attached) = state.attached.take() else {
@@ -6789,6 +6824,51 @@ mod recording_subscription_tests {
         .join()
         .unwrap();
         assert_eq!(registered, [true, true]);
+    }
+
+    #[tokio::test]
+    async fn lock_rejects_and_retires_already_failed_or_lost_attached_stream() {
+        for device_lost in [false, true] {
+            let (error_tx, _error_rx) = flume::bounded(1);
+            let (done_tx, done_rx) = mpsc::sync_channel(1);
+            let mut feed = MicrophoneFeed::new(error_tx);
+            let health = Arc::new(StreamHealth::new(7));
+            if device_lost {
+                health.device_lost.store(true, Ordering::Release);
+            } else {
+                health.failed.store(true, Ordering::Release);
+            }
+            feed.stream_health.insert(7, health);
+            feed.state = State::Open(OpenState {
+                connecting: None,
+                attached: Some(AttachedState {
+                    id: 7,
+                    label: "headset".into(),
+                    config: config(),
+                    buffer_size_frames: None,
+                    done_tx,
+                }),
+            });
+
+            let actor = MicrophoneFeed::spawn(feed);
+            assert!(!actor.ask(CheckInput("headset".into())).await.unwrap());
+            let first = actor.ask(Lock).await;
+            assert!(matches!(
+                first,
+                Err(kameo::error::SendError::HandlerError(
+                    LockFeedError::InitializeFailed(SetInputError::BuildStream(_))
+                ))
+            ));
+            assert!(done_rx.try_recv().is_ok());
+            assert!(matches!(
+                actor.ask(Lock).await,
+                Err(kameo::error::SendError::HandlerError(
+                    LockFeedError::NoInput
+                ))
+            ));
+            actor.kill();
+            actor.wait_for_stop().await;
+        }
     }
 }
 
