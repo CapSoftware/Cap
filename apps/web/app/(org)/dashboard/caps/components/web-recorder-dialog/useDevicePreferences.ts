@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export const REMEMBER_DEVICES_KEY = "cap-web-recorder-remember-devices";
 export const PREFERRED_CAMERA_KEY = "cap-web-recorder-preferred-camera";
@@ -108,6 +108,8 @@ export const useDevicePreferences = ({
 		}
 	}, [open, rememberDevices, availableMics, selectedMicId]);
 
+	const isMicExplicitlyOff = useCallback(() => micExplicitlyOffRef.current, []);
+
 	const handleCameraChange = (cameraId: string | null) => {
 		setSelectedCameraId(cameraId);
 
@@ -212,6 +214,7 @@ export const useDevicePreferences = ({
 		systemAudioEnabled,
 		setSelectedCameraId,
 		setSelectedMicId,
+		isMicExplicitlyOff,
 		handleCameraChange,
 		handleMicChange,
 		handleSystemAudioChange,

@@ -808,6 +808,24 @@ describe("GET /create", () => {
 		});
 	});
 
+	it("does not create a cap again when the desktop asks for the one it made earlier", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where.mockResolvedValueOnce([]);
+
+		const response = await app.request(
+			"https://cap.test/create?recordingMode=desktopMP4&videoId=abcdefghjkmnpqr&createWithId=true&requireExisting=true",
+		);
+
+		expect(response.status).toBe(404);
+		expect(await response.json()).toEqual({ error: "Video not found" });
+		expect(insertedValues(schema.videos)).toBeUndefined();
+	});
+
 	it("honours an explicit orgId the user belongs to", async () => {
 		mockGetCurrentUser.mockResolvedValue({
 			id: "user-1",
