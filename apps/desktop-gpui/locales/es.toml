@@ -1092,11 +1092,12 @@ view_all_screenshots = "Ver todas las capturas"
 
 [main.link_start]
 camera = "Cámara: {name}"
-instant = "Un enlace pidió a Cap grabar {target} en modo Instant."
+instant = "Modo Instant: {target}"
 microphone = "Micrófono: {name}"
 none = "Ninguno"
+requested = "Un enlace quiere iniciar una grabación."
 start = "Iniciar grabación"
-studio = "Un enlace pidió a Cap grabar {target} en modo Studio."
+studio = "Modo Studio: {target}"
 system_audio = "Audio del sistema: activado"
 title = "¿Iniciar la grabación?"
 

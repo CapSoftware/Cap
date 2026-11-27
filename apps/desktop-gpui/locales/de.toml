@@ -1092,11 +1092,12 @@ view_all_screenshots = "Alle Bildschirmfotos anzeigen"
 
 [main.link_start]
 camera = "Kamera: {name}"
-instant = "Ein Link möchte {target} im Instant-Modus aufnehmen."
+instant = "Instant-Modus: {target}"
 microphone = "Mikrofon: {name}"
 none = "Keins"
+requested = "Ein Link möchte eine Aufnahme starten."
 start = "Aufnahme starten"
-studio = "Ein Link möchte {target} im Studio-Modus aufnehmen."
+studio = "Studio-Modus: {target}"
 system_audio = "Systemaudio: an"
 title = "Aufnahme starten?"
 

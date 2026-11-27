@@ -1092,11 +1092,12 @@ view_all_screenshots = "查看所有截图"
 
 [main.link_start]
 camera = "摄像头：{name}"
-instant = "某个链接请求 Cap 以 Instant 模式录制 {target}。"
+instant = "Instant 模式：{target}"
 microphone = "麦克风：{name}"
 none = "无"
+requested = "某个链接请求开始录制。"
 start = "开始录制"
-studio = "某个链接请求 Cap 以 Studio 模式录制 {target}。"
+studio = "Studio 模式：{target}"
 system_audio = "系统音频：开启"
 title = "开始录制？"
 

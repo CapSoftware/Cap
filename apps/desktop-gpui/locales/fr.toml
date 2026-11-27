@@ -1092,11 +1092,12 @@ view_all_screenshots = "Voir toutes les captures d'écran"
 
 [main.link_start]
 camera = "Caméra : {name}"
-instant = "Un lien demande à Cap d'enregistrer {target} en mode Instant."
+instant = "Mode Instant : {target}"
 microphone = "Micro : {name}"
 none = "Aucun"
+requested = "Un lien veut démarrer un enregistrement."
 start = "Démarrer l'enregistrement"
-studio = "Un lien demande à Cap d'enregistrer {target} en mode Studio."
+studio = "Mode Studio : {target}"
 system_audio = "Audio système : activé"
 title = "Démarrer l'enregistrement ?"
 

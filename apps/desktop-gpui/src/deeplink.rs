@@ -736,11 +736,12 @@ fn start_confirmation_detail(
 ) -> String {
     let none = tr::main::link_start::none();
     let mut lines = vec![
+        tr::main::link_start::requested().to_string(),
+        String::new(),
         match mode {
             recording::RecordingMode::Studio => tr::main::link_start::studio(target),
             recording::RecordingMode::Instant => tr::main::link_start::instant(target),
         },
-        String::new(),
         tr::main::link_start::microphone(microphone.unwrap_or(none)),
         tr::main::link_start::camera(camera.unwrap_or(none)),
     ];
@@ -842,7 +843,11 @@ mod tests {
             !instant.contains(tr::main::link_start::system_audio()),
             "{instant}"
         );
-        assert_ne!(studio.lines().next(), instant.lines().next());
+        assert_eq!(
+            studio.lines().next(),
+            Some(tr::main::link_start::requested())
+        );
+        assert_ne!(studio.lines().nth(2), instant.lines().nth(2));
     }
 
     #[test]

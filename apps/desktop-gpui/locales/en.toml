@@ -1094,11 +1094,12 @@ view_all_screenshots = "View All Screenshots"
 
 [main.link_start]
 camera = { text = "Camera: {name}", context = "{name} is a camera name." }
-instant = { text = "A link asked Cap to record {target} in Instant mode.", context = "{target} is a display or window name." }
+instant = { text = "Instant mode: {target}", context = "{target} is a display or window name." }
 microphone = { text = "Microphone: {name}", context = "{name} is a microphone name." }
 none = { text = "None", context = "Shown in place of a microphone or camera name when none is used." }
+requested = "A link wants to start a recording."
 start = "Start recording"
-studio = { text = "A link asked Cap to record {target} in Studio mode.", context = "{target} is a display or window name." }
+studio = { text = "Studio mode: {target}", context = "{target} is a display or window name." }
 system_audio = "System audio: on"
 title = "Start recording?"
 

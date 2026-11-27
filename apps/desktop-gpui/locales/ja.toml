@@ -1092,11 +1092,12 @@ view_all_screenshots = "すべてのスクリーンショットを表示"
 
 [main.link_start]
 camera = "カメラ: {name}"
-instant = "リンクから {target} を Instant モードで録画するよう求められました。"
+instant = "Instant モード: {target}"
 microphone = "マイク: {name}"
 none = "なし"
+requested = "リンクが録画の開始を求めています。"
 start = "録画を開始"
-studio = "リンクから {target} を Studio モードで録画するよう求められました。"
+studio = "Studio モード: {target}"
 system_audio = "システムオーディオ: オン"
 title = "録画を開始しますか？"
 

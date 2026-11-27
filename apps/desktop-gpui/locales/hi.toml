@@ -1092,11 +1092,12 @@ view_all_screenshots = "सभी स्क्रीनशॉट देखें
 
 [main.link_start]
 camera = "कैमरा: {name}"
-instant = "एक लिंक ने Cap से {target} को Instant मोड में रिकॉर्ड करने को कहा है।"
+instant = "Instant मोड: {target}"
 microphone = "माइक्रोफ़ोन: {name}"
 none = "कोई नहीं"
+requested = "एक लिंक रिकॉर्डिंग शुरू करना चाहता है।"
 start = "रिकॉर्डिंग शुरू करें"
-studio = "एक लिंक ने Cap से {target} को Studio मोड में रिकॉर्ड करने को कहा है।"
+studio = "Studio मोड: {target}"
 system_audio = "सिस्टम ऑडियो: चालू"
 title = "रिकॉर्डिंग शुरू करें?"
 

@@ -318,6 +318,10 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::main::link_start::title(), "Start recording?"),
         (tr::main::link_start::start(), "Start recording"),
         (tr::main::link_start::none(), "None"),
+        (
+            tr::main::link_start::requested(),
+            "A link wants to start a recording.",
+        ),
         (tr::main::link_start::system_audio(), "System audio: on"),
         (tr::main::mic_warning::title(), "No microphone detected"),
         (
