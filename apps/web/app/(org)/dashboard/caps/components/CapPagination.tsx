@@ -12,13 +12,13 @@ import { getPaginationItems } from "./pagination-items";
 interface CapPaginationProps {
 	currentPage: number;
 	totalPages: number;
-	hrefForPage?: (page: number) => string;
+	hrefForPage: (page: number) => string;
 }
 
 export const CapPagination: React.FC<CapPaginationProps> = ({
 	currentPage,
 	totalPages,
-	hrefForPage = (page) => `/dashboard/caps?page=${page}`,
+	hrefForPage,
 }) => {
 	return (
 		<Pagination>

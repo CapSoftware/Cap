@@ -236,6 +236,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 								isOwnerOrMember={isOwnerOrMember}
 								isOwner={isOwner}
 								onSeek={onSeek}
+								hideTimestamps={isNote}
 								videoId={data.id}
 								ownerName={data.owner.name}
 								canRecordMedia={canRecordMedia && !isScreenshot}

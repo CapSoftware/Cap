@@ -7,7 +7,11 @@ import {
 	NotesDoodle,
 } from "../../_components/library-doodles";
 
-export function NotesEmptyState() {
+export function NotesEmptyState({
+	secondary = false,
+}: {
+	secondary?: boolean;
+}) {
 	return (
 		<div
 			className={clsx(
@@ -28,7 +32,7 @@ export function NotesEmptyState() {
 				href="/download"
 				className="flex relative gap-2 justify-center items-center px-4 mt-1 h-9"
 				size="sm"
-				variant="dark"
+				variant={secondary ? "secondary" : "dark"}
 			>
 				<FontAwesomeIcon className="size-3.5" icon={faDownload} />
 				Download Cap

@@ -38,6 +38,7 @@ export const Comments = Object.assign(
 			setOptimisticComments: (newComment: CommentType) => void;
 			handleCommentSuccess: (comment: CommentType) => void;
 			onSeek?: (time: number) => void;
+			hideTimestamps?: boolean;
 			setShowAuthOverlay: (v: boolean) => void;
 			commentsDisabled: boolean;
 			ownerName?: string | null;
@@ -294,6 +295,7 @@ export const Comments = Object.assign(
 									onCancelReply={handleCancelReply}
 									onDelete={handleDeleteComment}
 									onSeek={onSeek}
+									hideTimestamps={props.hideTimestamps}
 								/>
 							);
 						})}

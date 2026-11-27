@@ -417,7 +417,7 @@ export const Caps = ({
 					<EmptyCapState />
 				</div>
 				<CapListHeader title={CAP_KIND_LABEL.notes} />
-				<NotesEmptyState />
+				<NotesEmptyState secondary />
 			</div>
 		);
 
@@ -611,7 +611,7 @@ export const Caps = ({
 						currentPage={page}
 						totalPages={totalPages}
 						hrefForPage={(target) =>
-							`${isArchivedView ? "/dashboard/caps/archived" : kind ? capKindHref(kind) : "/dashboard/caps"}?page=${target}`
+							`${isArchivedView ? "/dashboard/caps/archived" : capKindHref(kind ?? "videos")}?page=${target}`
 						}
 					/>
 				</div>

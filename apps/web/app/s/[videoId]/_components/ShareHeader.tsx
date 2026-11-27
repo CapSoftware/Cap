@@ -1140,7 +1140,7 @@ export const ShareHeader = ({
 							<div className="flex min-w-0 items-center gap-2">
 								{data.name && (
 									<SignedImageUrl
-										name={data.name}
+										name={data.owner.name ?? "Someone"}
 										image={data.owner.image}
 										className="size-8 shrink-0"
 										letterClass="text-base"
