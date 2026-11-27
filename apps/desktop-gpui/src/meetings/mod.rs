@@ -3056,6 +3056,7 @@ impl Meetings {
         if verdict.restart {
             tracing::warn!(
                 restarts = recording.watchdog.restarts,
+                quiet_restarts = recording.watchdog.quiet_restarts,
                 ?view,
                 "the call's audio stopped arriving, restarting its capture"
             );

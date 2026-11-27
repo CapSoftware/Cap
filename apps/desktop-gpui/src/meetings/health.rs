@@ -269,8 +269,7 @@ pub struct Verdict {
 }
 
 pub const RESTARTS_MAX: u32 = 10;
-/// The wait after a restart before the next: doubling, so a call that is
-/// simply quiet can't use them all up.
+/// The wait after a restart before the next, doubling each time.
 const RESTART_FIRST_GAP: Duration = Duration::from_secs(10);
 const RESTART_MAX_GAP: Duration = Duration::from_secs(120);
 const NO_AUDIO_WARN: Duration = Duration::from_secs(10);
@@ -284,10 +283,16 @@ const SPEAKING_BUT_QUIET: Duration = Duration::from_secs(30);
 /// Notices a computer-audio capture that went quiet while a call is on: no
 /// audio at all (a dead tap or loopback), digital silence for a minute, or
 /// the meeting app showing someone talking while nothing is heard. It
-/// restarts the capture, at most ten times a meeting and a minute apart.
+/// restarts the capture, at most ten times a meeting for a capture that
+/// looks dead and ten for digital silence alone.
 #[derive(Debug, Default)]
 pub struct Watchdog {
+    /// Restarts of a capture that looked dead.
     pub restarts: u32,
+    /// Restarts for digital silence alone. Counted apart: a far side that
+    /// stays quiet for a few minutes at a time uses all of these within one
+    /// meeting, and a capture that dies afterwards still needs its own.
+    pub quiet_restarts: u32,
     last: Option<Instant>,
 }
 
@@ -325,17 +330,20 @@ impl Watchdog {
         }
         let speaking_quiet = view.remote_speaking && since_sound >= SPEAKING_BUT_QUIET;
         let not_hearing = since_real >= NO_AUDIO_WARN || view.gave_up || speaking_quiet;
-        let due = since_real >= NO_AUDIO_RESTART
-            || since_sound >= SILENCE_RESTART
-            || speaking_quiet
-            || view.gave_up;
-        let restart = due
-            && self.restarts < RESTARTS_MAX
+        let dead = since_real >= NO_AUDIO_RESTART || speaking_quiet || view.gave_up;
+        let quiet = since_sound >= SILENCE_RESTART;
+        let spent = if dead {
+            &mut self.restarts
+        } else {
+            &mut self.quiet_restarts
+        };
+        let restart = (dead || quiet)
+            && *spent < RESTARTS_MAX
             && self
                 .last
-                .is_none_or(|at| now.saturating_duration_since(at) >= restart_gap(self.restarts));
+                .is_none_or(|at| now.saturating_duration_since(at) >= restart_gap(*spent));
         if restart {
-            self.restarts += 1;
+            *spent += 1;
             self.last = Some(now);
         }
         Verdict {
@@ -590,6 +598,22 @@ mod tests {
         let mut w = Watchdog::default();
         let speaking = TapView { remote_speaking: true, ..calling(0, 31) };
         assert_eq!(w.check(t0, speaking), Verdict { not_hearing: true, restart: true });
+    }
+
+    #[test]
+    fn a_quiet_call_leaves_the_restarts_a_dead_capture_needs() {
+        let t0 = Instant::now();
+        let mut w = Watchdog::default();
+        let mut quiet = 0;
+        for s in 0..1800 {
+            quiet += u32::from(w.check(t0 + secs(s), calling(0, s)).restart);
+        }
+        assert_eq!(quiet, RESTARTS_MAX, "half an hour of silence is retried ten times, no more");
+        assert_eq!(
+            w.check(t0 + secs(1800), calling(6, 1800)),
+            Verdict { not_hearing: false, restart: true },
+            "a capture that dies after it still starts again"
+        );
     }
 
     #[test]
