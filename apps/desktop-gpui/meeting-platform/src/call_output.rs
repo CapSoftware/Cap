@@ -145,6 +145,9 @@ pub struct Followed {
     /// Processes playing on other outputs right now (not Cap, not the
     /// system sounds).
     pub elsewhere: Vec<u32>,
+    /// `call` or a process it started plays on another output too. Reading
+    /// the call's process tree would then take that output in as well.
+    pub call_elsewhere: bool,
 }
 
 /// [`Followed`] for `endpoint`, from the same look the choice came from.
@@ -164,11 +167,17 @@ pub fn followed(
         .collect();
     elsewhere.sort_unstable();
     elsewhere.dedup();
+    let call_elsewhere = call.is_some_and(|root| {
+        elsewhere
+            .iter()
+            .any(|pid| chain(*pid, procs).contains(&root))
+    });
     Followed {
         endpoint: endpoint.to_string(),
         call,
         on_output: pids_on(endpoint, playing.iter()),
         elsewhere,
+        call_elsewhere,
     }
 }
 
@@ -331,6 +340,7 @@ mod tests {
                 call: Some(4100),
                 on_output: vec![700, 4100],
                 elsewhere: vec![800],
+                call_elsewhere: false,
             }
         );
         // The call on the default output with music on the headset: the
@@ -403,6 +413,42 @@ mod tests {
             choose(Some(SPEAKERS), &playing, &[], &HashMap::new(), OURS),
             None
         );
+    }
+
+    #[test]
+    fn the_call_playing_on_another_output_too_is_marked() {
+        let recording = [session(HEADSET_MIC, 4100)];
+        let tree = procs(&[
+            (4000, 1, "chrome.exe"),
+            (4100, 4000, "chrome.exe"),
+            (4150, 4100, "chrome.exe"),
+            (800, 1, "music.exe"),
+        ]);
+        // The browser's audio service plays the call on the speakers and
+        // another tab on the headset: its tree is on both outputs.
+        let playing = [session(SPEAKERS, 4100), session(HEADSET, 4100)];
+        let there = followed(SPEAKERS, &playing, &recording, &tree, OURS);
+        assert_eq!(there.call, Some(4100));
+        assert!(there.call_elsewhere);
+        // Another app elsewhere, the call only on this output: as before.
+        let playing = [session(SPEAKERS, 4100), session(HEADSET, 800)];
+        let there = followed(SPEAKERS, &playing, &recording, &tree, OURS);
+        assert_eq!(
+            (there.call, there.elsewhere.clone()),
+            (Some(4100), vec![800])
+        );
+        assert!(!there.call_elsewhere);
+        // A process the call started plays elsewhere.
+        let playing = [session(SPEAKERS, 4100), session(HEADSET, 4150)];
+        let there = followed(SPEAKERS, &playing, &recording, &tree, OURS);
+        assert_eq!(there.call, Some(4100));
+        assert!(there.call_elsewhere);
+        // The browser that started the call's audio service (not in the
+        // call's tree) plays elsewhere: the call alone can still be read.
+        let playing = [session(SPEAKERS, 4100), session(HEADSET, 4000)];
+        let there = followed(SPEAKERS, &playing, &recording, &tree, OURS);
+        assert_eq!(there.call, Some(4100));
+        assert!(!there.call_elsewhere);
     }
 
     #[test]

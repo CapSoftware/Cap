@@ -1495,9 +1495,14 @@ impl SystemPlatform {
                             && reader.zip(there.as_ref()).is_some_and(|(pid, there)| {
                                 there.elsewhere.iter().any(|other| *other != pid)
                             });
+                        // Never when the call's process tree also plays on
+                        // another output: reading the tree would take that
+                        // output in too.
                         let call_only = match wanted.as_deref() {
                             Some(id) => there.as_ref().and_then(|there| {
-                                let call = there.call.filter(|_| there.endpoint == id)?;
+                                let call = there
+                                    .call
+                                    .filter(|_| there.endpoint == id && !there.call_elsewhere)?;
                                 let reader = cap_meeting_platform::running_reader()?;
                                 there
                                     .on_output
@@ -1505,7 +1510,8 @@ impl SystemPlatform {
                                     .then(|| (call, reader, id.to_string(), true))
                             }),
                             None if others => there.as_ref().and_then(|there| {
-                                Some((there.call?, reader?, there.endpoint.clone(), false))
+                                let call = there.call.filter(|_| !there.call_elsewhere)?;
+                                Some((call, reader?, there.endpoint.clone(), false))
                             }),
                             None => None,
                         }
@@ -1583,7 +1589,7 @@ impl SystemPlatform {
                                     restarts.fetch_add(1, Ordering::Relaxed);
                                     current = Some(WindowsLoopback::Default(next));
                                     if others {
-                                        tracing::info!("another output plays and no call is known; the default output is read as before");
+                                        tracing::info!("another output plays and the call alone cannot be read; the default output is read as before");
                                     } else {
                                         tracing::info!("the screen reader quit; computer audio is read as before");
                                     }
