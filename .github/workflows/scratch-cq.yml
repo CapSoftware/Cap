@@ -1,0 +1,199 @@
+name: Scratch CQ smoke on main
+# Temporary branch (deleted after use): builder CQ's Ask answer shots (stub server, real app,
+# narrow and wide windows) for base and head on Linux, Windows and macOS, plus the layout test red
+# on the test-only commit and green on head. Debug assertions on (the Notes state hooks). Scratch
+# profiles. Nothing ships.
+
+on:
+  push:
+    branches: [ci/cq-smoke]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: "true"
+  CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: "false"
+  CQ_SHAS: main=efe94b1d3c9c3f70d6a658011113f6217fcc522c
+  CQ_RED: b12493cf643b41cf32c248a382a7e291064c10ea
+  CQ_FILTER: "^long-(wide|narrow)$"
+
+jobs:
+  red-green:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/install-desktop-deps
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-meetings
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - name: Layout test on the test-only commit and on head
+        run: |
+          set +e -o pipefail
+          mkdir -p "$RUNNER_TEMP/out"
+          for pair in $CQ_SHAS; do
+            arm=${pair%%=*}; git checkout -q -f "${pair#*=}"
+            git clean -q -fd apps/desktop-gpui/src
+            RUST_TARGET_TRIPLE=x86_64-unknown-linux-gnu node scripts/setup.js > /dev/null
+            node scripts/sync-desktop-versions.mjs
+            ./scripts/prepare-gpui-dependency.sh
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib"
+            cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --bin cap-gpui \
+              a_long_list_item_in_an_answer 2>&1 | tail -25 | tee "$RUNNER_TEMP/out/test-$arm.txt"
+            echo "$arm exit ${PIPESTATUS[0]}" | tee -a "$RUNNER_TEMP/out/test-summary.txt"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cq-red-green
+          path: ${{ runner.temp }}/out
+          retention-days: 4
+
+  linux:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/install-desktop-deps
+      - run: sudo apt-get install -y -qq --no-install-recommends xvfb openbox dbus dbus-x11 pulseaudio fonts-noto-core imagemagick xdotool > /dev/null
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-meetings
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - name: Build
+        run: |
+          set -eo pipefail
+          cp -R .cq "$RUNNER_TEMP/cq"
+          bins=""
+          for pair in $CQ_SHAS; do
+            arm=${pair%%=*}; git checkout -q -f "${pair#*=}"
+            git clean -q -fd apps/desktop-gpui/src
+            perl -pi -e 's/let now = Utc::now\(\);/let now = Utc::now().date_naive().and_hms_opt(9, 0, 0).unwrap().and_utc();/' apps/desktop-gpui/src/meetings_ui/documents/dev.rs
+            grep -c 'and_hms_opt(9, 0, 0)' apps/desktop-gpui/src/meetings_ui/documents/dev.rs
+            RUST_TARGET_TRIPLE=x86_64-unknown-linux-gnu node scripts/setup.js > /dev/null
+            node scripts/sync-desktop-versions.mjs
+            ./scripts/prepare-gpui-dependency.sh
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui 2>&1 | tail -2
+            mkdir -p "$RUNNER_TEMP/$arm"; cp apps/desktop-gpui/target/release/cap-gpui "$RUNNER_TEMP/$arm/cap-gpui"
+            bins="$bins $arm=$RUNNER_TEMP/$arm/cap-gpui"
+          done
+          echo "CQ_BINS=$bins" >> "$GITHUB_ENV"
+      - name: Run
+        run: |
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib"
+          Xvfb :99 -screen 0 1600x1000x24 > /dev/null 2>&1 &
+          sleep 2
+          DISPLAY=:99 dbus-run-session -- bash -c 'openbox > /dev/null 2>&1 & pulseaudio --start --exit-idle-time=-1 > /dev/null 2>&1; sleep 1
+            bash "$0/cq/cq.sh" linux "$0/out" "$CQ_BINS" "$CQ_FILTER"' "$RUNNER_TEMP"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cq-linux
+          path: ${{ runner.temp }}/out
+          retention-days: 4
+
+  build-mac:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+      - run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage/bin" "$stage/Frameworks"
+          cp -R .cq "$stage/cq"
+          for pair in $CQ_SHAS; do
+            arm=${pair%%=*}; git checkout -q -f "${pair#*=}"
+            git clean -q -fd apps/desktop-gpui/src
+            perl -pi -e 's/let now = Utc::now\(\);/let now = Utc::now().date_naive().and_hms_opt(9, 0, 0).unwrap().and_utc();/' apps/desktop-gpui/src/meetings_ui/documents/dev.rs
+            grep -c 'and_hms_opt(9, 0, 0)' apps/desktop-gpui/src/meetings_ui/documents/dev.rs
+            node scripts/sync-desktop-versions.mjs
+            ./scripts/prepare-gpui-dependency.sh
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui 2>&1 | tail -2
+            cp apps/desktop-gpui/target/release/cap-gpui "$stage/bin/cap-gpui-$arm"
+            codesign --force -s - "$stage/bin/cap-gpui-$arm"
+          done
+          cp -RL target/Frameworks/Spacedrive.framework "$stage/Frameworks/"
+          tar -C "$stage" -czf "$RUNNER_TEMP/cq-mac.tgz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cq-mac-app
+          path: ${{ runner.temp }}/cq-mac.tgz
+          retention-days: 2
+
+  run-mac:
+    needs: build-mac
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cq-mac-app
+          path: ${{ runner.temp }}
+      - name: Unpack, grants
+        run: |
+          set -euo pipefail
+          S="$RUNNER_TEMP/s"; mkdir -p "$S"; tar xzf "$RUNNER_TEMP/cq-mac.tgz" -C "$S"; echo "S=$S" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/Frameworks"; cp -R "$S/Frameworks/"* "$RUNNER_TEMP/Frameworks/"
+          U="$HOME/Library/Application Support/com.apple.TCC/TCC.db"; SY="/Library/Application Support/com.apple.TCC/TCC.db"
+          for client in /usr/local/opt/runner/provisioner/provisioner /usr/local/opt/runner/runprovisioner.sh \
+            /opt/hca/hosted-compute-agent /opt/hca/start_hca.sh /bin/bash /bin/zsh /bin/sh \
+            /usr/sbin/screencapture "$S"/bin/cap-gpui-*; do
+            for service in kTCCServiceScreenCapture kTCCServiceMicrophone; do
+              row="'$service','$client',1,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,1687786159,NULL,NULL,'UNUSED',1687786159"
+              sqlite3 "$U" "insert or replace into access values ($row)" 2> /dev/null || true
+              sudo sqlite3 "$SY" "insert or replace into access values ($row)" 2> /dev/null || true
+            done
+          done
+          sudo killall tccd 2> /dev/null; killall tccd 2> /dev/null; sleep 2
+      - name: Run
+        run: |
+          set +e
+          bins=""
+          for pair in $CQ_SHAS; do arm=${pair%%=*}; bins="$bins $arm=$S/bin/cap-gpui-$arm"; done
+          bash "$S/cq/cq.sh" mac "$RUNNER_TEMP/out" "$bins" "$CQ_FILTER"
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cq-mac
+          path: ${{ runner.temp }}/out
+          retention-days: 4
