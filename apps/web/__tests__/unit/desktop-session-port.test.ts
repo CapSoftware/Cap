@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import {
+	buildDesktopCallbackParams,
 	buildLoopbackCallbackUrl,
 	createDesktopRedirectPage,
 	desktopSessionRequestQuerySchema,
@@ -201,5 +202,78 @@ describe("desktop redirect page escaping (defence in depth)", () => {
 		// The href is entity-encoded, not raw.
 		expect(html).not.toContain('href="http://127.0.0.1:1/?x=<');
 		expect(html).toContain("&lt;/script&gt;");
+	});
+});
+
+describe("desktop session request `state`", () => {
+	const state = "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MA";
+
+	it("is optional so older desktop clients keep working", () => {
+		const result = desktopSessionRequestQuerySchema.safeParse({
+			port: "8999",
+			platform: "desktop",
+			type: "api_key",
+		});
+		expect(result.success).toBe(true);
+		if (result.success) expect(result.data.state).toBeUndefined();
+		const params = buildDesktopCallbackParams(
+			{ type: "api_key", api_key: "key" },
+			"user_1",
+			undefined,
+		);
+		expect(params.has("state")).toBe(false);
+		expect(params.toString()).toBe("type=api_key&api_key=key&user_id=user_1");
+	});
+
+	it("is echoed back on the loopback and deep link callbacks", () => {
+		const result = desktopSessionRequestQuerySchema.safeParse({
+			port: "8999",
+			state,
+		});
+		expect(result.success).toBe(true);
+		if (!result.success) return;
+		const params = buildDesktopCallbackParams(
+			{ type: "api_key", api_key: "key" },
+			"user_1",
+			result.data.state,
+		);
+		expect(
+			new URL(buildLoopbackCallbackUrl(8999, params)).searchParams.get("state"),
+		).toBe(state);
+		expect(
+			new URL(`cap-desktop://signin?${params}`).searchParams.get("state"),
+		).toBe(state);
+	});
+
+	it("cannot override the issued credential fields", () => {
+		const params = buildDesktopCallbackParams(
+			{ type: "api_key", api_key: "key" },
+			"user_1",
+			state,
+		);
+		expect(params.getAll("api_key")).toEqual(["key"]);
+		expect(params.getAll("user_id")).toEqual(["user_1"]);
+		expect(params.getAll("state")).toEqual([state]);
+	});
+
+	it.each([
+		"",
+		"short",
+		"a".repeat(129),
+		"has space in it 1234",
+		"abc&api_key=evil123456",
+		"abcdefghijklmnop#frag",
+		"abcdefghijklmnop/../x",
+	])("rejects malformed state %j", (value) => {
+		expect(
+			desktopSessionRequestQuerySchema.safeParse({ state: value }).success,
+		).toBe(false);
+	});
+
+	it("rejects a duplicated `state` query param", () => {
+		expect(
+			desktopSessionRequestQuerySchema.safeParse({ state: [state, state] })
+				.success,
+		).toBe(false);
 	});
 });
