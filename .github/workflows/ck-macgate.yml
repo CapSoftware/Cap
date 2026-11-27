@@ -1,0 +1,64 @@
+name: Scratch CK macOS meeting gate builds
+# Temporary branch (deleted after use): builder CK's base and head builds for the Settings sidebar
+# screen-reader check: Windows (UI Automation, on the runner) and macOS (artifacts for the Mac mini's
+# AX check). Nothing ships.
+
+on:
+  push:
+    branches: [ci/ck-macgate*]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: "true"
+  CK_BASE: 3519358233729fcf297bbdad0de5d91fcc3547a1
+  CK_HEAD: ff4d34e2686482cfcc793769cdd75806476d51c9
+
+jobs:
+  macos-build:
+    name: macOS build ${{ matrix.which }}
+    strategy:
+      matrix:
+        which: [base, head]
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ matrix.which == 'base' && env.CK_BASE || env.CK_HEAD }}
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+      - shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+      - shell: bash
+        run: bash scripts/prepare-gpui-dependency.sh
+      - shell: bash
+        working-directory: apps/desktop-gpui
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -euo pipefail
+          cargo +1.95.0 build --release -p cap-desktop-gpui --bin cap-gpui
+          tdir="$(cargo +1.95.0 metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+          mkdir -p "$RUNNER_TEMP/out/dylibs"
+          cp "$tdir/release/cap-gpui" "$RUNNER_TEMP/out/cap-gpui"
+          fw="$(find "$GITHUB_WORKSPACE" "$tdir" -type d -name Spacedrive.framework -path '*native-deps*' 2>/dev/null | head -1)"
+          find "$fw" -type f -name '*.dylib' -exec cp {} "$RUNNER_TEMP/out/dylibs/" \;
+          git rev-parse HEAD > "$RUNNER_TEMP/out/source.sha"
+          cd "$RUNNER_TEMP/out" && shasum -a 256 cap-gpui > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ck-macgate-${{ matrix.which }}
+          path: ${{ runner.temp }}/out
+          retention-days: 2
+          if-no-files-found: error
