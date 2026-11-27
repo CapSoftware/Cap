@@ -1,7 +1,9 @@
 #![cfg(windows)]
 
+mod adapter_facts;
 mod windows_version;
 
+pub use adapter_facts::{AdapterFacts, adapter_facts};
 pub use windows_version::WindowsVersion;
 
 use std::{
