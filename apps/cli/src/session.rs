@@ -43,6 +43,7 @@ pub struct Session {
 #[serde(rename_all = "camelCase")]
 pub enum StopReason {
     LowStorage,
+    CaptureFailed,
 }
 
 pub fn now_unix() -> Option<u64> {

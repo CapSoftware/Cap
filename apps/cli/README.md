@@ -89,6 +89,13 @@ would no longer fit, it stops by itself, saves everything captured so far, emits
 is complete: validate and export it as usual. A detached recording records the same in its session
 (`storageLow`, `stopReason` in `cap record status`), and `cap record stop` reports it and exits `3`.
 
+### Capture failures
+
+When a Studio capture fails part way (for example the encoder stops), `cap record` recovers what was captured
+until then, like opening the recording in Cap Desktop does, emits `stopped` with `"reason":"captureFailed"` and
+an `error` event with `"code":"captureFailed"`, and exits `4`. `cap export` of a Studio project that an earlier
+version left marked failed recovers it the same way before exporting.
+
 ## Commands
 
 - `cap record start` / `record stop` / `record status` — record (foreground, or `--detach` for background) and manage sessions.
