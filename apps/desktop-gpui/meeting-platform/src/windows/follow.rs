@@ -227,8 +227,8 @@ fn look(
 }
 
 /// Looks for the output a call plays to every `every`, on its own thread,
-/// and sends each change (`None`: the default output). The first look is
-/// sent at once.
+/// and sends each change (`None`: the default output), or that output again
+/// when what plays there changes. The first look is sent at once.
 pub struct CallOutputWatch {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -255,12 +255,17 @@ impl CallOutputWatch {
                     let mut managers = Managers::default();
                     let mut chooser = Chooser::default();
                     let mut last: Option<Option<String>> = None;
+                    let mut last_seen: Option<Option<Followed>> = None;
                     while !stop.load(Ordering::Acquire) {
                         let (now, seen) = look(&enumerator, &mut managers, &mut chooser);
+                        // What plays there changing is sent too (the same
+                        // output again), so the reader acts on it at once.
+                        let moved = last_seen.as_ref() != Some(&seen);
                         if let Ok(mut slot) = there.lock() {
-                            *slot = seen;
+                            *slot = seen.clone();
                         }
-                        if last.as_ref() != Some(&now) {
+                        last_seen = Some(seen);
+                        if last.as_ref() != Some(&now) || moved {
                             if changes.send(now.clone()).is_err() {
                                 return;
                             }
