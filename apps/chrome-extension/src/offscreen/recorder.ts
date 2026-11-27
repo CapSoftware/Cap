@@ -21,6 +21,7 @@ import {
 } from "@cap/recorder-core";
 
 import {
+	ApiRequestError,
 	createInstantRecording,
 	deleteInstantRecording,
 	updateUploadProgress,
@@ -41,6 +42,7 @@ import {
 } from "../shared/storage";
 import type {
 	ConnectCameraPreviewRequest,
+	ExtensionAuth,
 	ExtensionSettings,
 	MediaPermissionSnapshot,
 	MediaPermissionState,
@@ -179,6 +181,22 @@ const playRecordingSound = (
 	audio.addEventListener("ended", releaseAudio, { once: true });
 	audio.addEventListener("error", releaseAudio, { once: true });
 	void audio.play().catch(releaseAudio);
+};
+
+// Only the worker owns the stored key; it signs out if this key is still the
+// one in use, so a rejection racing a fresh sign-in leaves the new key alone.
+const reportRejectedAuth = (error: unknown, auth: ExtensionAuth) => {
+	if (!(error instanceof ApiRequestError) || error.status !== 401) return;
+	chrome.runtime.sendMessage(
+		{
+			target: "service-worker",
+			type: "auth-rejected",
+			authApiKey: auth.authApiKey,
+		} satisfies ServiceWorkerRequest,
+		() => {
+			void chrome.runtime.lastError;
+		},
+	);
 };
 
 const broadcastStatus = () => {
@@ -970,6 +988,9 @@ const startRecording = async (request: StartRecordingRequest) => {
 				audioCodec,
 				supportsUploadProgress: true,
 			},
+		}).catch((error: unknown) => {
+			reportRejectedAuth(error, request.auth);
+			throw error;
 		});
 		ownedVideoId = creation.id;
 		throwIfStartCanceled();
@@ -1013,7 +1034,13 @@ const startRecording = async (request: StartRecordingRequest) => {
 					videoId: creation.id,
 					uploaded,
 					total,
-				}).then(() => undefined),
+				}).then(
+					() => undefined,
+					(error: unknown) => {
+						reportRejectedAuth(error, request.auth);
+						throw error;
+					},
+				),
 			onChunkStateChange: (nextChunks) => {
 				if (
 					status.phase === "recording" ||
@@ -1643,7 +1670,13 @@ const runFailedUploadRetry = async (
 					videoId: typedVideoId,
 					uploaded,
 					total,
-				}).then(() => undefined),
+				}).then(
+					() => undefined,
+					(error: unknown) => {
+						reportRejectedAuth(error, auth);
+						throw error;
+					},
+				),
 			onChunkStateChange: (nextChunks) => {
 				if (retryOwnsStatus() && status.phase === "uploading") {
 					status = { ...status, upload: summarizeChunks(nextChunks) };

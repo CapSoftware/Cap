@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAuthStart } from "./api";
+import {
+	ApiRequestError,
+	createAuthStart,
+	fetchBootstrap,
+	SESSION_EXPIRED_MESSAGE,
+} from "./api";
 import type { ExtensionSettings } from "./types";
 
 const signInError = (apiBaseUrl: string) =>
@@ -43,5 +48,27 @@ describe("sign-in when the auth route can't be reached", () => {
 		]) {
 			expect(await signInError(apiBaseUrl)).toContain("bun run dev:extension");
 		}
+	});
+});
+
+describe("a rejected extension key", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it.each([
+		[401, SESSION_EXPIRED_MESSAGE],
+		[403, "nope"],
+	])("reports status %i with a usable message", async (status, message) => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("nope", { status })),
+		);
+		const error = await fetchBootstrap(
+			{ apiBaseUrl: "https://cap.so" } as ExtensionSettings,
+			{ authApiKey: "k", userId: "u" },
+		).catch((e: unknown) => e);
+		expect(error).toBeInstanceOf(ApiRequestError);
+		expect(error).toMatchObject({ status, message });
 	});
 });
