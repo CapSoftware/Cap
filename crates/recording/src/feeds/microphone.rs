@@ -3028,10 +3028,16 @@ pub struct SetInput {
 pub struct CheckInput(pub String);
 
 impl MicrophoneFeed {
-    fn attached_stream_unusable(&self, _id: u32) -> bool {
+    fn stream_unusable(
+        #[cfg(any(target_os = "linux", windows))] stream_health: &std::collections::HashMap<
+            u32,
+            Arc<StreamHealth>,
+        >,
+        id: u32,
+    ) -> bool {
         #[cfg(any(target_os = "linux", windows))]
         {
-            return self.stream_health.get(&_id).is_some_and(|health| {
+            return stream_health.get(&id).is_some_and(|health| {
                 let failed = health.failed.load(Ordering::Acquire);
                 #[cfg(windows)]
                 let lost = health.device_lost.load(Ordering::Acquire);
@@ -3041,7 +3047,10 @@ impl MicrophoneFeed {
             });
         }
         #[cfg(not(any(target_os = "linux", windows)))]
-        false
+        {
+            let _ = id;
+            false
+        }
     }
 }
 
@@ -3057,7 +3066,11 @@ impl Message<CheckInput> for MicrophoneFeed {
             return false;
         };
         attached.label == msg.0
-            && !self.attached_stream_unusable(attached.id)
+            && !Self::stream_unusable(
+                #[cfg(any(target_os = "linux", windows))]
+                &self.stream_health,
+                attached.id,
+            )
             && self.last_samples.is_some_and(|(id, received)| {
                 id == attached.id && received.elapsed() < Duration::from_millis(250)
             })
@@ -3893,7 +3906,11 @@ impl Message<Lock> for MicrophoneFeed {
         }
 
         if let Some(attached) = &state.attached
-            && self.attached_stream_unusable(attached.id)
+            && Self::stream_unusable(
+                #[cfg(any(target_os = "linux", windows))]
+                &self.stream_health,
+                attached.id,
+            )
         {
             let dead = state.attached.take().expect("checked above");
             let _ = dead.done_tx.send(());
