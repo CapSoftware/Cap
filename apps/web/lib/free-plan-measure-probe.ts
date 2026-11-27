@@ -2,6 +2,7 @@ import type { videos } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import type { Video } from "@cap/web-domain";
+import { Effect } from "effect";
 import { after } from "next/server";
 import {
 	exceedsFreePlanMeasuredDuration,
@@ -119,18 +120,43 @@ async function withMeasurementSlot<T>(task: () => Promise<T>): Promise<T> {
 	}
 }
 
+// `sameObject` says the object still carried the completion's identity both
+// before and after the probe, so the length belongs to that upload and not
+// to a replacement written meanwhile.
 async function probeStoredObject(
 	video: typeof videos.$inferSelect,
 	key: string,
-): Promise<FreePlanMeasureOutcome | "unavailable"> {
-	if (!isMediaServerConfigured()) return "unavailable";
+	identity: string | null,
+): Promise<{
+	outcome: FreePlanMeasureOutcome | "unavailable";
+	sameObject: boolean;
+}> {
+	if (!isMediaServerConfigured())
+		return { outcome: "unavailable", sameObject: false };
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
 	).pipe(runWorkflowPromise);
+	const currentIdentity = () =>
+		bucket.headObject(key).pipe(
+			Effect.map((head) => head.ETag ?? null),
+			Effect.orElseSucceed(() => null),
+			runWorkflowPromise,
+		);
+	const before = identity ? await currentIdentity() : null;
 	const url = await bucket
 		.getInternalSignedObjectUrl(key, { expiresIn: PROBE_URL_EXPIRES_SECONDS })
 		.pipe(runWorkflowPromise);
-	const attempt = await tryProbeVideoViaMediaServer(url);
+	const outcome = probeOutcome(await tryProbeVideoViaMediaServer(url));
+	const sameObject =
+		identity !== null &&
+		before === identity &&
+		(await currentIdentity()) === identity;
+	return { outcome, sameObject };
+}
+
+function probeOutcome(
+	attempt: Awaited<ReturnType<typeof tryProbeVideoViaMediaServer>>,
+): FreePlanMeasureOutcome | "unavailable" {
 	if (attempt.status === "ok")
 		return {
 			kind: "measured",
@@ -180,15 +206,11 @@ export function measureFreePlanObject(
 				)
 			: Promise.resolve()
 	)
-		.then(() => withMeasurementSlot(() => measureNow(videoId, key, anyAge)))
-		.then((outcome) => {
-			if (identity && outcome.kind === "measured") {
-				if (measuredIdentities.size >= MAX_TRACKED_VIDEOS)
-					measuredIdentities.clear();
-				measuredIdentities.set(id, { identity, outcome });
-			}
-			return outcome;
-		})
+		.then(() =>
+			withMeasurementSlot(() =>
+				measureNow(videoId, key, anyAge, identity ?? null),
+			),
+		)
 		.finally(() => {
 			if (inFlight.get(id) === measurement) inFlight.delete(id);
 		});
@@ -222,10 +244,21 @@ async function restoreMeasure(
 	return outcome;
 }
 
+function rememberIdentity(
+	id: string,
+	identity: string | null,
+	outcome: FreePlanMeasureOutcome,
+) {
+	if (!identity) return;
+	if (measuredIdentities.size >= MAX_TRACKED_VIDEOS) measuredIdentities.clear();
+	measuredIdentities.set(id, { identity, outcome });
+}
+
 async function measureNow(
 	videoId: Video.VideoId,
 	key: string,
 	anyAge: boolean,
+	identity: string | null,
 ): Promise<FreePlanMeasureOutcome> {
 	try {
 		if (!buildEnv.NEXT_PUBLIC_IS_CAP) return SKIPPED;
@@ -233,7 +266,11 @@ async function measureNow(
 		if (!video) return SKIPPED;
 		if (!isVideosOwnFile(video, key) && !admitFile(videoId, key))
 			return UNMEASURED;
-		const outcome = await probeStoredObject(video, key);
+		const { outcome, sameObject } = await probeStoredObject(
+			video,
+			key,
+			identity,
+		);
 		const id = objectKey(videoId, key);
 		if (outcome === "unavailable") {
 			if (unavailableUntil.size >= MAX_UNAVAILABLE_ENTRIES)
@@ -250,9 +287,16 @@ async function measureNow(
 		timedOutUntil.delete(id);
 		if (outcome.kind !== "measured") return outcome;
 		const existing = readFreePlanMeasure(video.metadata);
-		if (outcome.seconds === null && existing && measureHoldsVideo(existing))
-			return { kind: "measured", seconds: existing.seconds };
+		if (outcome.seconds === null && existing && measureHoldsVideo(existing)) {
+			const kept: FreePlanMeasureOutcome = {
+				kind: "measured",
+				seconds: existing.seconds,
+			};
+			if (sameObject) rememberIdentity(id, identity, kept);
+			return kept;
+		}
 		await recordFreePlanMeasure(videoId, key, outcome.seconds);
+		if (sameObject) rememberIdentity(id, identity, outcome);
 		if (measuredFiles.size >= MAX_TRACKED_VIDEOS) measuredFiles.clear();
 		measuredFiles.set(id, {
 			outcome,
