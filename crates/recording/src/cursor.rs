@@ -52,26 +52,38 @@ pub struct CursorCaptureTarget {
     pub crop_bounds: CursorCropBounds,
     pub display: scap_targets::Display,
     pub window: Option<scap_targets::WindowId>,
+    /// The size of the frames the screen capture writes. A window-only
+    /// capture keeps it when the window is resized, so the cursor is placed
+    /// against it rather than against the window alone.
+    pub frame_size: Option<(u32, u32)>,
 }
 
+/// `frame_aspect` is the shape of the recording's frame, width over height.
 #[cfg(target_os = "macos")]
 fn macos_window_crop(
     window: &scap_targets::WindowId,
     display: &scap_targets::Display,
+    frame_aspect: Option<f64>,
 ) -> Option<CursorCropBounds> {
+    use crate::sources::screen_capture::window_frame_bounds;
     use scap_targets::bounds::{LogicalBounds, LogicalPosition};
 
     let window_bounds = scap_targets::Window::from_id_direct(window)?
         .raw_handle()
         .logical_bounds()?;
     let display_position = display.raw_handle().logical_position();
-    Some(CursorCropBounds::new_macos(LogicalBounds::new(
+    let bounds = LogicalBounds::new(
         LogicalPosition::new(
             window_bounds.position().x() - display_position.x(),
             window_bounds.position().y() - display_position.y(),
         ),
         window_bounds.size(),
-    )))
+    );
+    let frame = match frame_aspect {
+        Some(aspect) => window_frame_bounds(bounds, aspect),
+        None => bounds,
+    };
+    Some(CursorCropBounds::new_macos(frame))
 }
 
 #[cfg(windows)]
@@ -720,6 +732,11 @@ pub fn spawn_cursor_recorder(
         let mut last_window_position = None;
         #[cfg(any(windows, target_os = "macos"))]
         let mut last_window_crop: Option<CursorCropBounds> = None;
+        #[cfg(target_os = "macos")]
+        let window_frame_aspect = target
+            .frame_size
+            .filter(|(width, height)| *width > 0 && *height > 0)
+            .map(|(width, height)| f64::from(width) / f64::from(height));
         // device_query's `DeviceState::new` asserts Accessibility trust on
         // macOS (and prompts for it). From macOS 27.3 Cap no longer needs that
         // grant: cursor position and mouse buttons read fine without it, and
@@ -820,7 +837,7 @@ pub fn spawn_cursor_recorder(
             let window_crop = target
                 .window
                 .as_ref()
-                .and_then(|window| macos_window_crop(window, &display));
+                .and_then(|window| macos_window_crop(window, &display, window_frame_aspect));
             #[cfg(any(windows, target_os = "macos"))]
             let position_changed =
                 position_changed || (window_crop.is_some() && window_crop != last_window_crop);
