@@ -1,6 +1,7 @@
 "use server";
 
 import { db } from "@cap/database";
+import { isEmailShape } from "@cap/database/auth/domain-utils";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { sendEmail } from "@cap/database/emails/config";
 import { VideoViewerInvite } from "@cap/database/emails/video-viewer-invite";
@@ -12,7 +13,6 @@ import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 async function getOwnedVideo(videoId: Video.VideoId) {
 	const user = await getCurrentUser();
@@ -30,7 +30,7 @@ async function getOwnedVideo(videoId: Video.VideoId) {
 
 function normalizeEmail(email: string) {
 	const normalized = email.trim().toLowerCase();
-	if (normalized.length > 254 || !EMAIL_PATTERN.test(normalized)) {
+	if (normalized.length > 254 || !isEmailShape(normalized)) {
 		return null;
 	}
 	return normalized;
