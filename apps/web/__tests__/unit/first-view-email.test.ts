@@ -122,6 +122,18 @@ describe("first view email", () => {
 		},
 	);
 
+	it("claims the first view without marking the Cap as changed, so the next viewers are still counted", async () => {
+		storeVideo({});
+
+		await anonymousView();
+
+		const claim = mocks.query.mock.calls
+			.map(([query]) => query as string)
+			.find((query) => query.startsWith("update `videos`"));
+		expect(claim).toContain("`firstViewEmailSentAt` = ?");
+		expect(claim).toContain("`updatedAt` = `videos`.`updatedAt`");
+	});
+
 	it("does not record the owner watching their own Cap as its first view", async () => {
 		const video = storeVideo({});
 

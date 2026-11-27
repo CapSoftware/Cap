@@ -184,7 +184,11 @@ describe("share page playback source storage", () => {
 					bucket,
 					storageIntegrationId,
 				}),
-			).toEqual({ url: signed, defaultStorage });
+			).toEqual({
+				url: signed,
+				key: expect.stringMatching(/\/result\.mp4$/),
+				defaultStorage,
+			});
 		},
 	);
 });

@@ -1565,6 +1565,10 @@ studio = "Enregistrement local en qualité maximale, à modifier plus tard."
 subtitle = "Choisissez comment capturer votre écran"
 title = "Choisir le mode d'enregistrement"
 
+[dialog.saving]
+in_background = "Votre enregistrement est encore en cours de sauvegarde et apparaîtra dans votre bibliothèque une fois terminé. Vous pouvez lancer un nouvel enregistrement dès maintenant."
+title = "Sauvegarde en cours"
+
 [dialog.storage]
 stopped_kept = "L'enregistrement s'est arrêté, car l'espace de stockage est faible. Vos fichiers ont été conservés. Libérez de l'espace, puis récupérez l'enregistrement ci-dessous."
 stopped_saved = "L'enregistrement s'est arrêté, car l'espace de stockage est faible. Votre enregistrement a été sauvegardé."
@@ -2870,6 +2874,7 @@ position = "Position"
 refining_word_timings = "Affinage du minutage des mots…"
 regenerate = "Régénérer les sous-titres"
 reset_position = "Réinitialiser la position"
+show_existing = "Afficher les sous-titres"
 show_filler_words = "Afficher les mots de remplissage"
 size_label = "Taille"
 style = "Style"
