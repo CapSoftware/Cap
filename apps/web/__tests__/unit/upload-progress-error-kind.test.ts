@@ -19,6 +19,11 @@ describe("upload progress error kinds", () => {
 				"ffmpeg exited with code 1: Invalid data found when processing input",
 			),
 		).toBeUndefined();
+		expect(
+			Video.getUploadProgressErrorKind(
+				"free-plan-duration-exceeded: Recording exceeds the free plan duration limit.",
+			),
+		).toBe("upgrade-required");
 		expect(Video.getUploadProgressErrorKind(null)).toBeUndefined();
 	});
 

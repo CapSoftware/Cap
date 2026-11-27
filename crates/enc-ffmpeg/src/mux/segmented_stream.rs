@@ -7,7 +7,11 @@ use std::{
     ffi::CString,
     io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc, Condvar, Mutex, MutexGuard,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    thread::JoinHandle,
     time::Duration,
 };
 
@@ -64,6 +68,7 @@ const RUNTIME_SOFTWARE_FALLBACK: bool = cfg!(any(windows, target_os = "macos"));
 struct SinkProbe<'a, S: ?Sized> {
     inner: &'a mut S,
     failed: bool,
+    written: u64,
 }
 
 impl<'a, S: PacketSink + ?Sized> SinkProbe<'a, S> {
@@ -71,6 +76,7 @@ impl<'a, S: PacketSink + ?Sized> SinkProbe<'a, S> {
         Self {
             inner,
             failed: false,
+            written: 0,
         }
     }
 }
@@ -83,6 +89,7 @@ impl<S: PacketSink + ?Sized> PacketSink for SinkProbe<'_, S> {
     fn write_packet(&mut self, packet: ffmpeg::Packet) -> Result<(), ffmpeg::Error> {
         let result = self.inner.write_packet(packet);
         self.failed |= result.is_err();
+        self.written += u64::from(result.is_ok());
         result
     }
 }
@@ -131,6 +138,17 @@ pub(crate) fn notify_segment(sender: &SegmentSender, event: SegmentCompletedEven
 }
 
 fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
+    atomic_write_json_unless(path, data, || false)
+}
+
+/// Writes like [`atomic_write_json`], but drops the write instead of
+/// publishing it when `cancelled` turns true before the rename, so abandoned
+/// bookkeeping cannot replace a manifest after its muxer has finished.
+fn atomic_write_json_unless<T: Serialize>(
+    path: &Path,
+    data: &T,
+    cancelled: impl Fn() -> bool,
+) -> std::io::Result<()> {
     let temp_path = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(data)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -138,6 +156,14 @@ fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()>
     let mut file = std::fs::File::create(&temp_path)?;
     file.write_all(json.as_bytes())?;
     file.sync_all()?;
+
+    if cancelled() {
+        drop(file);
+        if let Err(error) = std::fs::remove_file(&temp_path) {
+            tracing::debug!(%error, path = %temp_path.display(), "Could not remove an unpublished manifest");
+        }
+        return Ok(());
+    }
 
     std::fs::rename(&temp_path, path)?;
 
@@ -192,24 +218,26 @@ pub struct SegmentedVideoEncoder {
     pending_fallback: Option<EncoderFallback>,
     unrecovered_codec_failure: Option<(String, ffmpeg::Error)>,
     flush_failure: Option<EncoderFlushFailure>,
+    packets_written: Arc<AtomicU64>,
+    packets_lost: Arc<AtomicU64>,
 }
 
 struct SegmentMux {
-    base_path: PathBuf,
     output: format::context::Output,
-
-    current_index: u32,
-
-    completed_segments: Vec<VideoSegmentInfo>,
-
     frames_since_segment_scan: u32,
-
-    codec_info: CodecInfo,
-
-    segment_tx: SegmentSender,
-    init_notified: bool,
+    bookkeeping: Bookkeeping,
     initial_manifest_pending: bool,
     encoder_tail_lost: bool,
+}
+
+struct SegmentLedger {
+    base_path: PathBuf,
+    current_index: u32,
+    completed_segments: Vec<VideoSegmentInfo>,
+    codec_info: CodecInfo,
+    segment_tx: SegmentSender,
+    init_notified: bool,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl MuxTarget for SegmentMux {
@@ -226,15 +254,241 @@ impl MuxTarget for SegmentMux {
     }
 
     fn packet_written(&mut self) {
-        // The encoder holds one packet back to stamp real durations, so the
-        // init segment materializes a frame later than the first queue call;
-        // keep trying until it lands (no-op once notified).
-        self.try_notify_init_segment();
-
         self.frames_since_segment_scan += 1;
-        if self.frames_since_segment_scan >= 10 {
+        let scan = self.frames_since_segment_scan >= 10;
+        if scan {
             self.frames_since_segment_scan = 0;
-            self.flush_pending_segments();
+        }
+        self.bookkeeping.packet_written(scan);
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+enum Bookkeeping {
+    Inline(SegmentLedger),
+    Background(BackgroundBookkeeping),
+}
+
+impl Bookkeeping {
+    fn packet_written(&mut self, scan: bool) {
+        match self {
+            Self::Inline(ledger) => {
+                // The encoder holds one packet back to stamp real durations, so the
+                // init segment materializes a frame later than the first queue call;
+                // keep trying until it lands (no-op once notified).
+                ledger.try_notify_init_segment();
+                if scan {
+                    ledger.flush_pending_segments();
+                }
+            }
+            Self::Background(background) => background.request(scan),
+        }
+    }
+
+    fn try_notify_init_segment(&mut self) {
+        match self {
+            Self::Inline(ledger) => ledger.try_notify_init_segment(),
+            Self::Background(background) => background.request(false),
+        }
+    }
+
+    fn read<R>(&self, f: impl FnOnce(&SegmentLedger) -> R) -> R {
+        match self {
+            Self::Inline(ledger) => f(ledger),
+            Self::Background(background) => f(lock(&background.shared.ledger)
+                .as_ref()
+                .expect("segment ledger is only taken when bookkeeping stops")),
+        }
+    }
+
+    fn move_to_background(&mut self) -> std::io::Result<()> {
+        let Self::Inline(ledger) = self else {
+            return Ok(());
+        };
+        let init_notified = ledger.init_notified;
+        let shared = Arc::new(BookkeepingShared {
+            ledger: Mutex::new(None),
+            requests: Mutex::new(BookkeepingRequests::default()),
+            changed: Condvar::new(),
+            init_notified: AtomicBool::new(init_notified),
+            cancelled: ledger.cancelled.clone(),
+        });
+        let thread = std::thread::Builder::new()
+            .name("segment-bookkeeping".to_string())
+            .spawn({
+                let shared = shared.clone();
+                move || run_bookkeeping(&shared)
+            })?;
+        let Self::Inline(ledger) = std::mem::replace(
+            self,
+            Self::Background(BackgroundBookkeeping {
+                shared: shared.clone(),
+                thread: Some(thread),
+            }),
+        ) else {
+            unreachable!("checked above");
+        };
+        *lock(&shared.ledger) = Some(ledger);
+        Ok(())
+    }
+
+    fn reclaim_within(&mut self, limit: Duration) -> Option<&mut SegmentLedger> {
+        if let Self::Background(background) = self {
+            *self = Self::Inline(background.stop_within(limit)?);
+        }
+        match self {
+            Self::Inline(ledger) => Some(ledger),
+            Self::Background(_) => unreachable!("bookkeeping reclaimed above"),
+        }
+    }
+}
+
+#[derive(Default)]
+struct BookkeepingRequests {
+    pending: bool,
+    scan: bool,
+    busy: bool,
+    stop: bool,
+    exited: bool,
+}
+
+struct BookkeepingShared {
+    ledger: Mutex<Option<SegmentLedger>>,
+    requests: Mutex<BookkeepingRequests>,
+    changed: Condvar,
+    init_notified: AtomicBool,
+    cancelled: Arc<AtomicBool>,
+}
+
+/// Runs the ledger's segment scans on a helper thread: reopening a segment
+/// that was just written can block for a long time on Windows, and the
+/// encoder must keep accepting frames meanwhile. Requests coalesce, and every
+/// scan walks all segments that have landed since the last one, so the
+/// results match inline scanning; `finish` takes the ledger back first.
+struct BackgroundBookkeeping {
+    shared: Arc<BookkeepingShared>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl BackgroundBookkeeping {
+    fn request(&self, scan: bool) {
+        if !scan && self.shared.init_notified.load(Ordering::Acquire) {
+            return;
+        }
+        let mut requests = lock(&self.shared.requests);
+        requests.pending = true;
+        requests.scan |= scan;
+        drop(requests);
+        self.shared.changed.notify_one();
+    }
+
+    fn stop_within(&mut self, limit: Duration) -> Option<SegmentLedger> {
+        if let Some(thread) = self.thread.take() {
+            let deadline = std::time::Instant::now().checked_add(limit);
+            let mut requests = lock(&self.shared.requests);
+            requests.stop = true;
+            self.shared.changed.notify_all();
+            while !requests.exited {
+                requests = match deadline {
+                    None => self
+                        .shared
+                        .changed
+                        .wait(requests)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                    Some(deadline) => {
+                        let remaining =
+                            deadline.saturating_duration_since(std::time::Instant::now());
+                        if remaining.is_zero() {
+                            break;
+                        }
+                        self.shared
+                            .changed
+                            .wait_timeout(requests, remaining)
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .0
+                    }
+                };
+            }
+            if !requests.exited {
+                drop(requests);
+                self.shared.cancelled.store(true, Ordering::Release);
+                tracing::warn!(
+                    limit_ms = limit.as_millis() as u64,
+                    "Segment bookkeeping did not finish in time; leaving the segments for recovery"
+                );
+                return None;
+            }
+            drop(requests);
+            if thread.join().is_err() {
+                tracing::error!("Segment bookkeeping thread panicked");
+            }
+        }
+        lock(&self.shared.ledger).take()
+    }
+}
+
+struct BookkeepingExit<'a>(&'a BookkeepingShared);
+
+impl Drop for BookkeepingExit<'_> {
+    fn drop(&mut self) {
+        lock(&self.0.requests).exited = true;
+        self.0.changed.notify_all();
+    }
+}
+
+impl Drop for BackgroundBookkeeping {
+    fn drop(&mut self) {
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        self.shared.cancelled.store(true, Ordering::Release);
+        let busy = {
+            let mut requests = lock(&self.shared.requests);
+            requests.stop = true;
+            requests.busy
+        };
+        self.shared.changed.notify_all();
+        if !busy && thread.join().is_err() {
+            tracing::error!("Segment bookkeeping thread panicked");
+        }
+    }
+}
+
+fn run_bookkeeping(shared: &BookkeepingShared) {
+    let _exit = BookkeepingExit(shared);
+    loop {
+        let scan = {
+            let mut requests = lock(&shared.requests);
+            requests.busy = false;
+            loop {
+                if requests.stop {
+                    return;
+                }
+                if std::mem::take(&mut requests.pending) {
+                    requests.busy = true;
+                    break std::mem::take(&mut requests.scan);
+                }
+                requests = shared
+                    .changed
+                    .wait(requests)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
+        };
+        let mut ledger = lock(&shared.ledger);
+        let Some(ledger) = ledger.as_mut().filter(|ledger| !ledger.is_cancelled()) else {
+            return;
+        };
+        ledger.try_notify_init_segment();
+        if ledger.init_notified {
+            shared.init_notified.store(true, Ordering::Release);
+        }
+        if scan {
+            ledger.flush_pending_segments();
         }
     }
 }
@@ -501,19 +755,22 @@ impl SegmentedVideoEncoder {
             "Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments)"
         );
 
+        let segment_tx = SegmentSender::default();
         let mux = SegmentMux {
-            base_path: base_path.clone(),
             output,
-            current_index: 1,
-            completed_segments: Vec::new(),
             frames_since_segment_scan: 0,
-            codec_info,
-            segment_tx: SegmentSender::default(),
-            init_notified: false,
+            bookkeeping: Bookkeeping::Inline(SegmentLedger {
+                base_path: base_path.clone(),
+                current_index: 1,
+                completed_segments: Vec::new(),
+                codec_info,
+                segment_tx: segment_tx.clone(),
+                init_notified: false,
+                cancelled: Arc::default(),
+            }),
             initial_manifest_pending: true,
             encoder_tail_lost: false,
         };
-        let segment_tx = mux.segment_tx.clone();
 
         let mut instance = Self {
             base_path,
@@ -527,12 +784,22 @@ impl SegmentedVideoEncoder {
             pending_fallback: None,
             unrecovered_codec_failure: None,
             flush_failure: None,
+            packets_written: Arc::new(AtomicU64::new(0)),
+            packets_lost: Arc::new(AtomicU64::new(0)),
         };
 
         if write_behind {
             let budget = super::write_behind::video_budget_bytes(instance.encoder.bit_rate());
             match instance.mux.enable_write_behind("video", budget) {
-                Ok(()) => tracing::debug!(budget_bytes = budget, "Video write-behind enabled"),
+                Ok(()) => {
+                    tracing::debug!(budget_bytes = budget, "Video write-behind enabled");
+                    if let Some(written) = instance.mux.written_packets_counter() {
+                        instance.packets_written = written;
+                    }
+                    if let Some(lost) = instance.mux.lost_packets_counter() {
+                        instance.packets_lost = lost;
+                    }
+                }
                 Err(error) => {
                     tracing::warn!(%error, "Video write-behind unavailable, muxing inline");
                 }
@@ -555,8 +822,20 @@ impl SegmentedVideoEncoder {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx);
         if !self.mux.is_write_behind() {
-            self.mux.with_target(SegmentMux::try_notify_init_segment);
+            self.mux
+                .with_target(|mux| mux.bookkeeping.try_notify_init_segment());
         }
+    }
+
+    /// Moves segment bookkeeping (reading back, fsyncing and announcing each
+    /// finished segment, and rewriting the in-progress manifest) to a helper
+    /// thread, so queueing a frame never waits on reopening a segment. The
+    /// files written and the events sent are unchanged; `finish` completes
+    /// the bookkeeping before it writes the final manifest. Keeps inline
+    /// bookkeeping if the thread cannot start.
+    pub fn offload_segment_bookkeeping(&mut self) -> std::io::Result<()> {
+        self.mux
+            .with_target(|mux| mux.bookkeeping.move_to_background())
     }
 
     /// Whether frames should be queued as CVPixelBuffers via
@@ -592,9 +871,14 @@ impl SegmentedVideoEncoder {
         // anchors pts at the first frame, so capture gaps (static content,
         // stream restarts, dropped frames) stay in the timeline instead of
         // compressing it and drifting video ahead of audio.
+        let inline = !self.mux.is_write_behind();
         let mut sink = SinkProbe::new(&mut self.mux);
         let result = self.encoder.queue_frame_to(frame, timestamp, &mut sink);
         let sink_failed = sink.failed;
+        if inline {
+            self.packets_written
+                .fetch_add(sink.written, std::sync::atomic::Ordering::Relaxed);
+        }
         match result {
             Ok(()) => self.codec_failures.record(false),
             Err(EncodeError::Encode(error)) if !sink_failed => {
@@ -674,6 +958,15 @@ impl SegmentedVideoEncoder {
     }
 
     pub fn finish(&mut self) -> Result<(), FinishError> {
+        self.finish_within(Duration::MAX)
+    }
+
+    /// Like [`Self::finish`], but waits at most `bookkeeping_limit` for segment
+    /// bookkeeping still running on its helper thread. When the limit passes,
+    /// finishing fails with [`super::write_behind::StorageStalled`] and leaves
+    /// the segments on disk for recovery, as an encoder that missed its finish
+    /// limit does.
+    pub fn finish_within(&mut self, bookkeeping_limit: Duration) -> Result<(), FinishError> {
         // A hardware encoder that dies at the very end loses only the frames
         // it still held, so its flush error alone does not fail the
         // recording. One that already lost frames it could not hand on does.
@@ -686,10 +979,15 @@ impl SegmentedVideoEncoder {
         let mut tolerated_flush_error = None;
         let tail_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let finalize_tail_lost = tail_lost.clone();
+        let packets_written = self.packets_written.clone();
         let finished = self.mux.finish(
             |mux| {
+                let inline = !mux.is_write_behind();
                 let mut sink = SinkProbe::new(mux);
                 let result = encoder.flush_to(&mut sink);
+                if inline {
+                    packets_written.fetch_add(sink.written, std::sync::atomic::Ordering::Relaxed);
+                }
                 match result {
                     Err(error) if tolerate_codec_flush_failure && !sink.failed => {
                         tracing::warn!(
@@ -710,7 +1008,7 @@ impl SegmentedVideoEncoder {
                 let flush_result = flush_result.inspect_err(|error| {
                     tracing::warn!(%error, "Video encoder flush failed");
                 });
-                match (mux.finish(flush_result), unrecovered) {
+                match (mux.finish(flush_result, bookkeeping_limit), unrecovered) {
                     (Err(FinishError::FFmpeg(_)), Some((encoder, error))) => {
                         Err(FinishError::EncoderStopped { encoder, error })
                     }
@@ -731,6 +1029,19 @@ impl SegmentedVideoEncoder {
     /// is marked `encoder_tail_lost` too.
     pub fn take_flush_failure(&mut self) -> Option<EncoderFlushFailure> {
         self.flush_failure.take()
+    }
+
+    pub fn packets_written(&self) -> u64 {
+        self.packets_written
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn packets_written_counter(&self) -> Arc<AtomicU64> {
+        self.packets_written.clone()
+    }
+
+    pub fn packets_lost(&self) -> u64 {
+        self.packets_lost.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -759,8 +1070,10 @@ impl SegmentedVideoEncoder {
     }
 
     pub fn completed_segments(&self) -> Vec<VideoSegmentInfo> {
-        self.mux
-            .with_target_ref(|mux| mux.completed_segments.clone())
+        self.mux.with_target_ref(|mux| {
+            mux.bookkeeping
+                .read(|ledger| ledger.completed_segments.clone())
+        })
     }
 
     pub fn current_encoder(&self) -> Option<&H264Encoder> {
@@ -780,7 +1093,8 @@ impl SegmentedVideoEncoder {
     }
 
     pub fn current_index(&self) -> u32 {
-        self.mux.with_target_ref(|mux| mux.current_index)
+        self.mux
+            .with_target_ref(|mux| mux.bookkeeping.read(|ledger| ledger.current_index))
     }
 
     pub fn init_segment_path(&self) -> PathBuf {
@@ -821,8 +1135,47 @@ impl SegmentedVideoEncoder {
 impl SegmentMux {
     fn write_initial_manifest(&mut self) {
         if std::mem::take(&mut self.initial_manifest_pending) {
-            self.write_in_progress_manifest();
+            self.bookkeeping
+                .read(SegmentLedger::write_in_progress_manifest);
         }
+    }
+
+    fn finish(
+        &mut self,
+        flush_result: Result<(), ffmpeg::Error>,
+        bookkeeping_limit: Duration,
+    ) -> Result<(), FinishError> {
+        let trailer_result = self.output.write_trailer().inspect_err(|error| {
+            tracing::warn!(%error, "Video trailer publication failed");
+        });
+
+        let encoder_tail_lost = self.encoder_tail_lost;
+        let Some(ledger) = self.bookkeeping.reclaim_within(bookkeeping_limit) else {
+            return Err(std::io::Error::from(super::write_behind::StorageStalled).into());
+        };
+        ledger.try_notify_init_segment();
+        ledger.finalize_pending_tmp_files();
+        ledger.flush_pending_segments();
+
+        ledger.collect_orphaned_segments();
+
+        if let Err(error) = flush_result.and(trailer_result) {
+            ledger.write_in_progress_manifest();
+            return Err(error.into());
+        }
+        if let Err(error) = super::dash_output::verify_final_manifest(&ledger.base_path) {
+            ledger.write_in_progress_manifest();
+            return Err(error.into());
+        }
+        ledger.finalize_manifest(encoder_tail_lost)?;
+
+        Ok(())
+    }
+}
+
+impl SegmentLedger {
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
     }
 
     fn try_notify_init_segment(&mut self) {
@@ -863,10 +1216,16 @@ impl SegmentMux {
                     break;
                 }
             };
+            if self.is_cancelled() {
+                return;
+            }
             // The manifest is fsynced, so the fragment must be durable before
             // it is declared complete or a power loss leaves a torn file the
             // manifest still vouches for.
             sync_file(&segment_path);
+            if self.is_cancelled() {
+                return;
+            }
 
             self.completed_segments.push(VideoSegmentInfo {
                 path: segment_path.clone(),
@@ -885,7 +1244,7 @@ impl SegmentMux {
             self.current_index += 1;
         }
 
-        if self.current_index != first_index {
+        if self.current_index != first_index && !self.is_cancelled() {
             self.write_in_progress_manifest();
         }
     }
@@ -938,36 +1297,13 @@ impl SegmentMux {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        if let Err(e) = atomic_write_json(&manifest_path, &manifest) {
+        if let Err(e) = atomic_write_json_unless(&manifest_path, &manifest, || self.is_cancelled())
+        {
             tracing::warn!(
                 "Failed to write in-progress manifest to {}: {e}",
                 manifest_path.display()
             );
         }
-    }
-
-    fn finish(&mut self, flush_result: Result<(), ffmpeg::Error>) -> Result<(), FinishError> {
-        let trailer_result = self.output.write_trailer().inspect_err(|error| {
-            tracing::warn!(%error, "Video trailer publication failed");
-        });
-
-        self.try_notify_init_segment();
-        self.finalize_pending_tmp_files();
-        self.flush_pending_segments();
-
-        self.collect_orphaned_segments();
-
-        if let Err(error) = flush_result.and(trailer_result) {
-            self.write_in_progress_manifest();
-            return Err(error.into());
-        }
-        if let Err(error) = super::dash_output::verify_final_manifest(&self.base_path) {
-            self.write_in_progress_manifest();
-            return Err(error.into());
-        }
-        self.finalize_manifest()?;
-
-        Ok(())
     }
 
     fn finalize_pending_tmp_files(&self) {
@@ -1103,7 +1439,7 @@ impl SegmentMux {
         self.completed_segments.sort_by_key(|s| s.index);
     }
 
-    fn finalize_manifest(&self) -> std::io::Result<()> {
+    fn finalize_manifest(&self, encoder_tail_lost: bool) -> std::io::Result<()> {
         let total_duration: Duration = self.completed_segments.iter().map(|s| s.duration).sum();
 
         let manifest = Manifest {
@@ -1129,7 +1465,7 @@ impl SegmentMux {
                 .collect(),
             total_duration: Some(total_duration.as_secs_f64()),
             is_complete: true,
-            encoder_tail_lost: self.encoder_tail_lost,
+            encoder_tail_lost,
         };
 
         let manifest_path = self.base_path.join("manifest.json");
@@ -1269,6 +1605,495 @@ mod tests {
             .collect()
     }
 
+    type SegmentEventSummary = (String, u32, u64, u64, bool);
+
+    struct RecordedOutput {
+        files: std::collections::BTreeMap<String, Vec<u8>>,
+        events: Vec<SegmentEventSummary>,
+        completed: Vec<(u32, Duration, Option<u64>)>,
+        current_index: u32,
+    }
+
+    fn bookkeeping_test_config(camera: bool) -> SegmentedVideoEncoderConfig {
+        if camera {
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_secs(3),
+                ..Default::default()
+            }
+        } else {
+            SegmentedVideoEncoderConfig::default()
+        }
+    }
+
+    fn libx264_encoder(
+        base_path: &Path,
+        timed_fragments: bool,
+        background: bool,
+        camera: bool,
+    ) -> (SegmentedVideoEncoder, mpsc::Receiver<SegmentCompletedEvent>) {
+        let mut encoder = SegmentedVideoEncoder::init_with_options(
+            base_path.to_path_buf(),
+            test_video_info(),
+            bookkeeping_test_config(camera),
+            timed_fragments,
+            false,
+            Some(&["libx264"]),
+        )
+        .unwrap();
+        if background {
+            encoder.offload_segment_bookkeeping().unwrap();
+        }
+        let is_background = encoder
+            .mux
+            .with_target_ref(|mux| matches!(mux.bookkeeping, Bookkeeping::Background(_)));
+        assert_eq!(is_background, background);
+        let (tx, rx) = mpsc::channel();
+        encoder.set_segment_callback(tx);
+        (encoder, rx)
+    }
+
+    fn event_summary(event: &SegmentCompletedEvent) -> SegmentEventSummary {
+        (
+            event
+                .path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            event.index,
+            event.duration.to_bits(),
+            event.file_size,
+            event.is_init,
+        )
+    }
+
+    fn mask_wall_clock(text: &str) -> String {
+        let mut masked = text.to_string();
+        for attribute in ["availabilityStartTime=\"", "publishTime=\""] {
+            let mut from = 0;
+            while let Some(start) = masked[from..].find(attribute) {
+                let value = from + start + attribute.len();
+                let end = value + masked[value..].find('"').unwrap();
+                masked.replace_range(value..end, "");
+                from = value;
+            }
+        }
+        masked
+            .lines()
+            .map(|line| {
+                if line.starts_with("#EXT-X-PROGRAM-DATE-TIME:") {
+                    "#EXT-X-PROGRAM-DATE-TIME:"
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn output_files(base_path: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+        std::fs::read_dir(base_path)
+            .unwrap()
+            .flatten()
+            .map(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let bytes = std::fs::read(entry.path()).unwrap();
+                let bytes = if name.ends_with(".mpd") || name.ends_with(".m3u8") {
+                    mask_wall_clock(&String::from_utf8(bytes).unwrap()).into_bytes()
+                } else {
+                    bytes
+                };
+                (name, bytes)
+            })
+            .collect()
+    }
+
+    fn finish_recording(
+        mut encoder: SegmentedVideoEncoder,
+        rx: mpsc::Receiver<SegmentCompletedEvent>,
+        base_path: &Path,
+    ) -> RecordedOutput {
+        encoder.finish().unwrap();
+        let completed = encoder
+            .completed_segments()
+            .iter()
+            .map(|segment| (segment.index, segment.duration, segment.file_size))
+            .collect();
+        let current_index = encoder.current_index();
+        drop(encoder);
+        RecordedOutput {
+            files: output_files(base_path),
+            events: rx.try_iter().map(|event| event_summary(&event)).collect(),
+            completed,
+            current_index,
+        }
+    }
+
+    const RECORDED_FRAMES: u64 = 600;
+
+    fn queue_test_frames(encoder: &mut SegmentedVideoEncoder, frames: std::ops::Range<u64>) {
+        for i in frames {
+            let _ = encoder.queue_frame(
+                create_test_frame(320, 240),
+                Duration::from_micros(i * 33_333),
+            );
+        }
+    }
+
+    fn record_libx264(
+        base_path: &Path,
+        timed_fragments: bool,
+        background: bool,
+        codec_failure_after: Option<usize>,
+        camera: bool,
+    ) -> RecordedOutput {
+        let (mut encoder, rx) = libx264_encoder(base_path, timed_fragments, background, camera);
+        if let Some(healthy_frames) = codec_failure_after {
+            encoder.force_runtime_fallback(true);
+            encoder.encoder.inject_codec_failure_after(
+                healthy_frames,
+                HARDWARE_FAILURE,
+                Some(H264Preset::Ultrafast),
+            );
+        }
+        queue_test_frames(&mut encoder, 0..RECORDED_FRAMES);
+        finish_recording(encoder, rx, base_path)
+    }
+
+    fn assert_same_output(expected: &RecordedOutput, actual: &RecordedOutput) {
+        assert_eq!(
+            expected.files.keys().collect::<Vec<_>>(),
+            actual.files.keys().collect::<Vec<_>>()
+        );
+        for (name, bytes) in &expected.files {
+            match (
+                std::str::from_utf8(bytes),
+                std::str::from_utf8(&actual.files[name]),
+            ) {
+                (Ok(expected_text), Ok(actual_text)) if !name.ends_with(".m4s") => {
+                    assert_eq!(expected_text, actual_text, "{name} differs")
+                }
+                _ => assert!(actual.files[name] == *bytes, "{name} differs"),
+            }
+        }
+        assert_eq!(expected.events, actual.events);
+        assert_eq!(expected.completed, actual.completed);
+        assert_eq!(expected.current_index, actual.current_index);
+    }
+
+    fn background_shared(encoder: &SegmentedVideoEncoder) -> Arc<BookkeepingShared> {
+        encoder.mux.with_target_ref(|mux| match &mux.bookkeeping {
+            Bookkeeping::Background(background) => background.shared.clone(),
+            Bookkeeping::Inline(_) => panic!("segment bookkeeping is inline"),
+        })
+    }
+
+    fn while_stalled<R: Send + 'static>(work: impl FnOnce() -> R + Send + 'static) -> R {
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done_tx.send(work());
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the encoder waited for stalled segment bookkeeping")
+    }
+
+    fn m4s_names(base_path: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(base_path)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".m4s"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn background_bookkeeping_writes_the_same_bytes_and_events_as_inline_for(camera: bool) {
+        ffmpeg::init().unwrap();
+        for (timed_fragments, codec_failure_after) in
+            [(false, None), (true, None), (true, Some(50))]
+        {
+            let temp = tempfile::tempdir().unwrap();
+            let run = |name: &str, background: bool| {
+                let path = temp.path().join(name);
+                record_libx264(
+                    &path,
+                    timed_fragments,
+                    background,
+                    codec_failure_after,
+                    camera,
+                )
+            };
+            let inline = run("inline", false);
+            let inline_again = run("inline-again", false);
+            let background = run("background", true);
+
+            assert!(
+                inline.events.iter().filter(|event| !event.4).count() >= 3,
+                "timed {timed_fragments} failure {codec_failure_after:?}: {:?} {:?}",
+                inline.events,
+                inline.files.keys().collect::<Vec<_>>()
+            );
+            assert!(inline.files.contains_key(INIT_SEGMENT_NAME));
+            assert!(inline.files.contains_key("media_0.m3u8"));
+            assert_same_output(&inline, &inline_again);
+            assert_same_output(&inline, &background);
+        }
+    }
+
+    fn queue_frame_keeps_returning_while_bookkeeping_is_stalled_for(camera: bool) {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let expected = record_libx264(&temp.path().join("inline"), true, false, None, camera);
+
+        let base_path = temp.path().join("stalled");
+        let (mut encoder, rx) = libx264_encoder(&base_path, true, true, camera);
+        let initial_manifest = std::fs::read(base_path.join("manifest.json")).unwrap();
+        let shared = background_shared(&encoder);
+        let stalled = lock(&shared.ledger);
+        let encoder = while_stalled(move || {
+            queue_test_frames(&mut encoder, 0..RECORDED_FRAMES);
+            encoder
+        });
+        assert!(m4s_names(&base_path).len() >= 3);
+        assert_eq!(
+            std::fs::read(base_path.join("manifest.json")).unwrap(),
+            initial_manifest
+        );
+        let early: Vec<_> = rx.try_iter().map(|event| event_summary(&event)).collect();
+        assert!(early.iter().all(|event| event.4));
+        drop(stalled);
+
+        let mut actual = finish_recording(encoder, rx, &base_path);
+        actual.events.splice(0..0, early);
+        assert_same_output(&expected, &actual);
+    }
+
+    fn finish_waits_for_bookkeeping_in_flight_for(camera: bool) {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let expected = record_libx264(&temp.path().join("inline"), true, false, None, camera);
+
+        let base_path = temp.path().join("stalled");
+        let (mut encoder, rx) = libx264_encoder(&base_path, true, true, camera);
+        queue_test_frames(&mut encoder, 0..RECORDED_FRAMES - 1);
+        let shared = background_shared(&encoder);
+        let stalled = lock(&shared.ledger);
+        queue_test_frames(&mut encoder, RECORDED_FRAMES - 1..RECORDED_FRAMES);
+        let (done_tx, done_rx) = mpsc::channel();
+        let finishing = std::thread::spawn({
+            let base_path = base_path.clone();
+            move || {
+                let actual = finish_recording(encoder, rx, &base_path);
+                let _ = done_tx.send(());
+                actual
+            }
+        });
+        assert!(done_rx.recv_timeout(Duration::from_millis(500)).is_err());
+        assert_eq!(read_manifest(&base_path)["is_complete"], false);
+        drop(stalled);
+        done_rx
+            .recv_timeout(Duration::from_secs(60))
+            .expect("finish completes once the bookkeeping is released");
+        let actual = finishing.join().unwrap();
+
+        assert_eq!(read_manifest(&base_path)["is_complete"], true);
+        assert_same_output(&expected, &actual);
+    }
+
+    fn bookkeeping_that_never_returns_leaves_a_recoverable_recording_for(camera: bool) {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let (mut encoder, rx) = libx264_encoder(&base_path, true, true, camera);
+        let initial_manifest = std::fs::read(base_path.join("manifest.json")).unwrap();
+        let shared = background_shared(&encoder);
+        let stalled = lock(&shared.ledger);
+        while_stalled(move || {
+            queue_test_frames(&mut encoder, 0..RECORDED_FRAMES);
+            drop(encoder);
+        });
+        drop(stalled);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while Arc::strong_count(&shared) > 1 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(Arc::strong_count(&shared), 1);
+        assert!(rx.try_iter().all(|event| event.is_init));
+        assert_eq!(
+            std::fs::read(base_path.join("manifest.json")).unwrap(),
+            initial_manifest
+        );
+        let segments = m4s_names(&base_path);
+        assert!(segments.len() >= 3);
+        for name in &segments {
+            read_fragment_metadata(&base_path.join(name)).unwrap();
+        }
+        assert!(base_path.join(INIT_SEGMENT_NAME).is_file());
+    }
+
+    fn finish_within_gives_up_on_stalled_bookkeeping_and_leaves_a_recoverable_recording_for(
+        camera: bool,
+    ) {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let (mut encoder, rx) = libx264_encoder(&base_path, true, true, camera);
+        let initial_manifest = std::fs::read(base_path.join("manifest.json")).unwrap();
+        let shared = background_shared(&encoder);
+        let stalled = lock(&shared.ledger);
+        let result = while_stalled(move || {
+            queue_test_frames(&mut encoder, 0..RECORDED_FRAMES);
+            let result = encoder.finish_within(Duration::from_millis(200));
+            drop(encoder);
+            result
+        });
+        let error = result.expect_err("finishing gives up while bookkeeping is stalled");
+        assert!(matches!(
+            &error,
+            FinishError::Io(io) if super::super::write_behind::StorageStalled::is_in(io)
+        ));
+        assert!(base_path.join("dash_manifest.mpd").is_file());
+        drop(stalled);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while Arc::strong_count(&shared) > 1 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(Arc::strong_count(&shared), 1);
+        assert!(rx.try_iter().all(|event| event.is_init));
+        assert_eq!(
+            std::fs::read(base_path.join("manifest.json")).unwrap(),
+            initial_manifest
+        );
+        let segments = m4s_names(&base_path);
+        assert!(segments.len() >= 4);
+        for name in &segments {
+            read_fragment_metadata(&base_path.join(name)).unwrap();
+        }
+    }
+
+    fn finish_within_waits_for_bookkeeping_that_returns_in_time_for(camera: bool) {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let expected = record_libx264(&temp.path().join("inline"), true, false, None, camera);
+
+        let base_path = temp.path().join("limited");
+        let (mut encoder, rx) = libx264_encoder(&base_path, true, true, camera);
+        queue_test_frames(&mut encoder, 0..RECORDED_FRAMES);
+        encoder.finish_within(Duration::from_secs(30)).unwrap();
+        let completed = encoder
+            .completed_segments()
+            .iter()
+            .map(|segment| (segment.index, segment.duration, segment.file_size))
+            .collect();
+        let current_index = encoder.current_index();
+        drop(encoder);
+        let actual = RecordedOutput {
+            files: output_files(&base_path),
+            events: rx.try_iter().map(|event| event_summary(&event)).collect(),
+            completed,
+            current_index,
+        };
+        assert_same_output(&expected, &actual);
+    }
+
+    #[test]
+    fn background_bookkeeping_writes_the_same_bytes_and_events_as_inline() {
+        background_bookkeeping_writes_the_same_bytes_and_events_as_inline_for(false);
+    }
+
+    #[test]
+    fn camera_background_bookkeeping_writes_the_same_bytes_and_events_as_inline() {
+        background_bookkeeping_writes_the_same_bytes_and_events_as_inline_for(true);
+    }
+
+    #[test]
+    fn queue_frame_keeps_returning_while_bookkeeping_is_stalled() {
+        queue_frame_keeps_returning_while_bookkeeping_is_stalled_for(false);
+    }
+
+    #[test]
+    fn camera_queue_frame_keeps_returning_while_bookkeeping_is_stalled() {
+        queue_frame_keeps_returning_while_bookkeeping_is_stalled_for(true);
+    }
+
+    #[test]
+    fn finish_waits_for_bookkeeping_in_flight() {
+        finish_waits_for_bookkeeping_in_flight_for(false);
+    }
+
+    #[test]
+    fn camera_finish_waits_for_bookkeeping_in_flight() {
+        finish_waits_for_bookkeeping_in_flight_for(true);
+    }
+
+    #[test]
+    fn bookkeeping_that_never_returns_leaves_a_recoverable_recording() {
+        bookkeeping_that_never_returns_leaves_a_recoverable_recording_for(false);
+    }
+
+    #[test]
+    fn camera_bookkeeping_that_never_returns_leaves_a_recoverable_recording() {
+        bookkeeping_that_never_returns_leaves_a_recoverable_recording_for(true);
+    }
+
+    #[test]
+    fn finish_within_gives_up_on_stalled_bookkeeping_and_leaves_a_recoverable_recording() {
+        finish_within_gives_up_on_stalled_bookkeeping_and_leaves_a_recoverable_recording_for(false);
+    }
+
+    #[test]
+    fn camera_finish_within_gives_up_on_stalled_bookkeeping_and_leaves_a_recoverable_recording() {
+        finish_within_gives_up_on_stalled_bookkeeping_and_leaves_a_recoverable_recording_for(true);
+    }
+
+    #[test]
+    fn finish_within_waits_for_bookkeeping_that_returns_in_time() {
+        finish_within_waits_for_bookkeeping_that_returns_in_time_for(false);
+    }
+
+    #[test]
+    fn camera_finish_within_waits_for_bookkeeping_that_returns_in_time() {
+        finish_within_waits_for_bookkeeping_that_returns_in_time_for(true);
+    }
+
+    #[test]
+    fn cancelled_manifest_write_publishes_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("manifest.json");
+        std::fs::write(&path, b"previous").unwrap();
+
+        atomic_write_json_unless(&path, &serde_json::json!({ "next": true }), || true).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous");
+        assert!(!temp.path().join("manifest.json.tmp").exists());
+
+        atomic_write_json_unless(&path, &serde_json::json!({ "next": true }), || false).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["next"], true);
+    }
+
+    #[test]
+    fn idle_background_bookkeeping_joins_on_drop() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let (encoder, _rx) = libx264_encoder(temp.path(), true, true, false);
+        let shared = background_shared(&encoder);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while {
+            let requests = lock(&shared.requests);
+            requests.busy || requests.pending
+        } && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        drop(encoder);
+        assert_eq!(Arc::strong_count(&shared), 1);
+    }
+
     fn published_index(base_path: &Path) -> (Vec<String>, String, serde_json::Value) {
         let mut names: Vec<String> = std::fs::read_dir(base_path)
             .unwrap()
@@ -1284,6 +2109,42 @@ mod tests {
             segment.as_object_mut().unwrap().remove("file_size");
         }
         (names, mpd, manifest)
+    }
+
+    #[test]
+    fn write_behind_counts_the_packets_the_writer_put_in_the_file() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let mut encoder = SegmentedVideoEncoder::init_write_behind(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+            false,
+        )
+        .unwrap();
+        assert!(encoder.mux.is_write_behind());
+        let counter = encoder.packets_written_counter();
+        for i in 0..120u64 {
+            encoder
+                .queue_frame(
+                    create_test_frame(320, 240),
+                    Duration::from_micros(i * 33_333),
+                )
+                .unwrap();
+        }
+        encoder
+            .finish_with_timestamp(Duration::from_secs(4))
+            .unwrap();
+        let decoded = decode_every_packet(&recorded_track(&base_path));
+        assert!(decoded.frames >= 119);
+        assert_eq!(encoder.packets_written(), decoded.frames as u64);
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::Relaxed),
+            decoded.frames as u64,
+            "a counter taken before recording follows the writer"
+        );
+        assert_eq!(encoder.packets_lost(), 0);
     }
 
     #[test]
@@ -2128,6 +2989,11 @@ mod tests {
             decoded.frames,
             total_frames as usize - HARDWARE_FAILURES_BEFORE_FALLBACK as usize
         );
+        assert_eq!(
+            encoder.packets_written(),
+            decoded.frames as u64,
+            "the frame that triggered the switch is not counted as written"
+        );
         assert!(
             (decoded.last_pts_secs - (total_frames - 1) as f64 / 30.0).abs() < 0.01,
             "frames after the switch keep the capture timeline, last pts {:.3}s",
@@ -2292,7 +3158,12 @@ mod tests {
         assert_eq!(failure.error, HARDWARE_FAILURE);
         assert_eq!(failure.encoder, "libx264");
         assert!(encoder.take_flush_failure().is_none());
-        decode_every_packet(&recorded_track(temp.path()));
+        let decoded = decode_every_packet(&recorded_track(temp.path()));
+        assert_eq!(encoder.packets_written(), decoded.frames as u64);
+        assert!(
+            encoder.packets_written() < 90,
+            "frames the encoder held at the failed flush are not counted as written"
+        );
     }
 
     #[test]
@@ -2339,6 +3210,7 @@ mod tests {
         assert_eq!(manifest["is_complete"], true);
         assert!(manifest.get("encoder_tail_lost").is_none());
         assert!(encoder.take_flush_failure().is_none());
+        assert_eq!(encoder.packets_written(), 90);
     }
 
     #[test]

@@ -5,6 +5,10 @@ import { videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
+// The only metadata an owner sets through this route. Everything else is
+// written by the server and kept as stored.
+const CLIENT_KEYS = ["customCreatedAt", "sourceName"] as const;
+
 export async function PUT(request: NextRequest) {
 	const user = isCrossSiteCookieWrite(request) ? null : await getCurrentUser();
 	const { videoId, metadata } = await request.json();
@@ -35,7 +39,14 @@ export async function PUT(request: NextRequest) {
 		return Response.json({ error: true }, { status: 400 });
 	}
 
-	const { agentUpload: _agentUpload, ...clientMetadata } = metadata;
+	const clientMetadata: Record<string, unknown> = {};
+	for (const key of CLIENT_KEYS) {
+		if (!(key in metadata)) continue;
+		const value = (metadata as Record<string, unknown>)[key];
+		if (value !== null && typeof value !== "string")
+			return Response.json({ error: true }, { status: 400 });
+		clientMetadata[key] = value;
+	}
 
 	await db().transaction(async (tx) => {
 		const [locked] = await tx
@@ -44,15 +55,15 @@ export async function PUT(request: NextRequest) {
 			.where(eq(videos.id, videoId))
 			.for("update");
 
-		const storedAgentUpload = locked?.metadata?.agentUpload;
+		const next: Record<string, unknown> = { ...(locked?.metadata ?? {}) };
+		for (const [key, value] of Object.entries(clientMetadata)) {
+			if (value === null) delete next[key];
+			else next[key] = value;
+		}
 
 		await tx
 			.update(videos)
-			.set({
-				metadata: storedAgentUpload
-					? { ...clientMetadata, agentUpload: storedAgentUpload }
-					: clientMetadata,
-			})
+			.set({ metadata: next })
 			.where(eq(videos.id, videoId));
 	});
 

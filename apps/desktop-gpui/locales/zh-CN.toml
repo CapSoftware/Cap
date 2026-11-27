@@ -1090,6 +1090,17 @@ screenshots_description = "你的截图会显示在这里。截一张图开始�
 view_all_recordings = "查看所有录制"
 view_all_screenshots = "查看所有截图"
 
+[main.link_start]
+camera = "摄像头：{name}"
+instant = "Instant 模式：{target}"
+microphone = "麦克风：{name}"
+none = "无"
+requested = "某个链接请求开始录制。"
+start = "开始录制"
+studio = "Studio 模式：{target}"
+system_audio = "系统音频：开启"
+title = "开始录制？"
+
 [main.mic_warning]
 body = "这段录制不会包含你的声音。请选择一个麦克风，或在没有麦克风的情况下继续。"
 dont_show_again = "不再显示"
@@ -1564,6 +1575,10 @@ screenshot = "即时截图并添加标注。"
 studio = "最高画质的本地录制，便于稍后编辑。"
 subtitle = "选择你想如何捕获屏幕"
 title = "选择录制模式"
+
+[dialog.saving]
+in_background = "你的录制仍在保存，完成后会显示在你的资料库中。你现在可以开始新的录制。"
+title = "仍在保存"
 
 [dialog.storage]
 stopped_kept = "存储空间不足，录制已停止。录制文件已保留。请释放空间，然后在下方恢复录制。"
@@ -2871,6 +2886,7 @@ position = "位置"
 refining_word_timings = "正在优化单词时间…"
 regenerate = "重新生成字幕"
 reset_position = "重置位置"
+show_existing = "显示字幕"
 show_filler_words = "显示语气词"
 size_label = "大小"
 style = "样式"

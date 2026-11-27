@@ -1090,6 +1090,17 @@ screenshots_description = "Vos captures d'écran apparaîtront ici. Prenez une c
 view_all_recordings = "Voir tous les enregistrements"
 view_all_screenshots = "Voir toutes les captures d'écran"
 
+[main.link_start]
+camera = "Caméra : {name}"
+instant = "Mode Instant : {target}"
+microphone = "Micro : {name}"
+none = "Aucun"
+requested = "Un lien veut démarrer un enregistrement."
+start = "Démarrer l'enregistrement"
+studio = "Mode Studio : {target}"
+system_audio = "Audio système : activé"
+title = "Démarrer l'enregistrement ?"
+
 [main.mic_warning]
 body = "Cet enregistrement n'inclura pas votre voix. Sélectionnez un micro ou continuez sans."
 dont_show_again = "Ne plus afficher"
@@ -1564,6 +1575,10 @@ screenshot = "Prenez et annotez des captures d'écran instantanément."
 studio = "Enregistrement local en qualité maximale, à modifier plus tard."
 subtitle = "Choisissez comment capturer votre écran"
 title = "Choisir le mode d'enregistrement"
+
+[dialog.saving]
+in_background = "Votre enregistrement est encore en cours de sauvegarde et apparaîtra dans votre bibliothèque une fois terminé. Vous pouvez lancer un nouvel enregistrement dès maintenant."
+title = "Sauvegarde en cours"
 
 [dialog.storage]
 stopped_kept = "L'enregistrement s'est arrêté, car l'espace de stockage est faible. Vos fichiers ont été conservés. Libérez de l'espace, puis récupérez l'enregistrement ci-dessous."
@@ -2871,6 +2886,7 @@ position = "Position"
 refining_word_timings = "Affinage du minutage des mots…"
 regenerate = "Régénérer les sous-titres"
 reset_position = "Réinitialiser la position"
+show_existing = "Afficher les sous-titres"
 show_filler_words = "Afficher les mots de remplissage"
 size_label = "Taille"
 style = "Style"

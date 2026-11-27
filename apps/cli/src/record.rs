@@ -5,7 +5,7 @@ use cap_recording::{
     CameraFeed, DoneFut, MicrophoneFeed, PipelineStoppedByUser,
     feeds::{camera, microphone},
     instant_recording,
-    screen_capture::ScreenCaptureTarget,
+    screen_capture::{ScreenCaptureTarget, frame_accounting::ScreenFrameTotals},
     studio_recording::{self, ActorHandle as StudioActorHandle},
     upload_resume::UploadLock,
 };
@@ -513,6 +513,7 @@ impl RecordStopArgs {
                 &RecordEvent::Stopped {
                     path: &session.path.display().to_string(),
                     recording_meta_exists: session.recording_meta_exists.unwrap_or(true),
+                    screen_frames: None,
                 },
             )?;
             cleanup_session(&id, &session.path);
@@ -533,6 +534,7 @@ impl RecordStopArgs {
                         &RecordEvent::Stopped {
                             path: &current.path.display().to_string(),
                             recording_meta_exists: current.recording_meta_exists.unwrap_or(true),
+                            screen_frames: None,
                         },
                     )?;
                     cleanup_session(&id, &current.path);
@@ -566,6 +568,7 @@ impl RecordStopArgs {
                     &RecordEvent::Stopped {
                         path: &current.path.display().to_string(),
                         recording_meta_exists: true,
+                        screen_frames: None,
                     },
                 );
             }
@@ -741,6 +744,16 @@ impl ActorHandle {
 
     async fn stop(&self) -> Result<CompletedRecording, String> {
         match self {
+            #[cfg(windows)]
+            Self::Studio(actor) => {
+                let outcome = actor.stop_with_outcome().await;
+                let outcome = match outcome.finishing.clone() {
+                    Some(finishing) => wait_for_studio_finish(finishing).await,
+                    None => outcome,
+                };
+                outcome.result.map(Box::new).map(CompletedRecording::Studio)
+            }
+            #[cfg(not(windows))]
             Self::Studio(actor) => actor
                 .stop()
                 .await
@@ -754,6 +767,68 @@ impl ActorHandle {
                 .map_err(|e| format!("{e:#}")),
         }
     }
+}
+
+/// How long `cap record` waits for Studio tracks still finishing after the
+/// stop limit before it exits and leaves the recording to recovery.
+#[cfg(windows)]
+const STUDIO_FINISH_WAIT: Duration = Duration::from_secs(120);
+
+#[cfg(windows)]
+static STUDIO_STILL_FINISHING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(windows)]
+async fn wait_for_studio_finish(
+    finishing: studio_recording::StudioFinishing,
+) -> studio_recording::StudioStopOutcome {
+    let path = finishing.project_path().display().to_string();
+    eprintln!(
+        "Recording is still finishing; waiting up to {}s for it to save: {path}",
+        STUDIO_FINISH_WAIT.as_secs()
+    );
+    match tokio::time::timeout(STUDIO_FINISH_WAIT, finishing.wait()).await {
+        Ok(outcome) => {
+            if outcome.result.is_ok() {
+                eprintln!("Recording finished saving: {path}");
+            }
+            outcome
+        }
+        Err(_) => {
+            STUDIO_STILL_FINISHING.store(true, std::sync::atomic::Ordering::SeqCst);
+            studio_recording::StudioStopOutcome {
+                capture_stopped: false,
+                result: Err(format!(
+                    "Recording is still finishing after {}s. Nothing was discarded; it will be recovered when it is next exported (cap export \"{path}\") or opened in Cap",
+                    STUDIO_FINISH_WAIT.as_secs()
+                )),
+                finishing: None,
+            }
+        }
+    }
+}
+
+/// Ends the process after `report` once `cap record` has given up waiting
+/// for Studio tracks still finishing. A writer still blocked in the OS keeps
+/// both the runtime and the normal process exit waiting on it, so the process
+/// terminates outright; the files are left in the state crash recovery
+/// expects.
+#[cfg(windows)]
+pub(crate) fn terminate_if_studio_still_finishing(report: impl FnOnce()) {
+    if !STUDIO_STILL_FINISHING.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    report();
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    unsafe {
+        let _ = windows::Win32::System::Threading::TerminateProcess(
+            windows::Win32::System::Threading::GetCurrentProcess(),
+            1,
+        );
+    }
+    std::process::exit(1);
 }
 
 enum CompletedRecording {
@@ -1206,6 +1281,10 @@ fn emit_stopped(format: OutputFormat, completed: &CompletedRecording) -> Result<
         &RecordEvent::Stopped {
             path: &completed.project_path().display().to_string(),
             recording_meta_exists,
+            screen_frames: match completed {
+                CompletedRecording::Studio(recording) => recording.screen_frames,
+                CompletedRecording::Instant(_) => None,
+            },
         },
     )
 }
@@ -1329,6 +1408,8 @@ enum RecordEvent<'a> {
     Stopped {
         path: &'a str,
         recording_meta_exists: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        screen_frames: Option<ScreenFrameTotals>,
     },
     Error {
         error: &'a str,
@@ -1347,10 +1428,20 @@ fn emit_record_event(format: OutputFormat, event: &RecordEvent<'_>) -> Result<()
                 RecordEvent::Stopped {
                     path,
                     recording_meta_exists,
+                    screen_frames,
                 } => {
                     println!("Recording stopped: {path}");
                     if !recording_meta_exists {
                         println!("warning: recording-meta.json was not written");
+                    }
+                    if let Some(frames) = screen_frames {
+                        println!(
+                            "Screen frames: {} written, {} lost of {} on screen ({:.2}%)",
+                            frames.written,
+                            frames.lost(),
+                            frames.displayed,
+                            frames.lost_pct()
+                        );
                     }
                 }
                 RecordEvent::Error { error } => println!("Recording error: {error}"),
@@ -1763,11 +1854,27 @@ mod tests {
         let stopped = serde_json::to_value(RecordEvent::Stopped {
             path: "p",
             recording_meta_exists: true,
+            screen_frames: None,
         })
         .unwrap();
         assert_eq!(stopped["type"], "stopped");
         assert_eq!(stopped["recordingMetaExists"], true);
         assert!(stopped.get("recording_meta_exists").is_none());
+        assert!(stopped.get("screenFrames").is_none());
+
+        let counted = serde_json::to_value(RecordEvent::Stopped {
+            path: "p",
+            recording_meta_exists: true,
+            screen_frames: Some(ScreenFrameTotals {
+                displayed: 2400,
+                written: 2390,
+                lost_in_capture: 10,
+                ..Default::default()
+            }),
+        })
+        .unwrap();
+        assert_eq!(counted["screenFrames"]["displayed"], 2400);
+        assert_eq!(counted["screenFrames"]["lostInCapture"], 10);
     }
 
     #[test]

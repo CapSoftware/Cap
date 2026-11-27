@@ -1092,6 +1092,17 @@ screenshots_description = "Your screenshots will appear here. Take a screenshot 
 view_all_recordings = "View All Recordings"
 view_all_screenshots = "View All Screenshots"
 
+[main.link_start]
+camera = { text = "Camera: {name}", context = "{name} is a camera name." }
+instant = { text = "Instant mode: {target}", context = "{target} is a display or window name." }
+microphone = { text = "Microphone: {name}", context = "{name} is a microphone name." }
+none = { text = "None", context = "Shown in place of a microphone or camera name when none is used." }
+requested = "A link wants to start a recording."
+start = "Start recording"
+studio = { text = "Studio mode: {target}", context = "{target} is a display or window name." }
+system_audio = "System audio: on"
+title = "Start recording?"
+
 [main.mic_warning]
 body = "This recording will not include your voice. Select a microphone, or continue without one."
 dont_show_again = "Don't show again"
@@ -1566,6 +1577,10 @@ screenshot = "Capture and annotate screenshots instantly."
 studio = "Highest quality local recording for editing later."
 subtitle = "Select how you want to capture your screen"
 title = "Choose Recording Mode"
+
+[dialog.saving]
+in_background = "Your recording is still saving and will appear in your library when it is done. You can start a new recording now."
+title = "Still saving"
 
 [dialog.storage]
 stopped_kept = "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below."
@@ -2873,6 +2888,7 @@ position = "Position"
 refining_word_timings = "Refining word timings…"
 regenerate = "Regenerate Captions"
 reset_position = "Reset Position"
+show_existing = "Show Captions"
 show_filler_words = "Show Filler Words"
 size_label = "Size"
 style = "Style"

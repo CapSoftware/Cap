@@ -9,6 +9,7 @@ use std::time::SystemTime;
 use tracing::*;
 
 pub mod cadence;
+pub mod frame_accounting;
 
 #[cfg(target_os = "windows")]
 mod windows;
@@ -414,6 +415,24 @@ pub fn even_pixel_crop(bounds: CropBounds, scale: f64) -> CropBounds {
         bounds.position(),
         LogicalSize::new(pixels(size.width()), pixels(size.height())),
     )
+}
+
+/// The part of the screen a window-only frame covers once `window` has been
+/// resized to a shape other than the frame's `aspect` (width over height).
+/// ScreenCaptureKit scales the window to fit the frame and pins it to the
+/// top left, so the frame reaches past the window's right or bottom edge.
+#[cfg(target_os = "macos")]
+pub fn window_frame_bounds(window: CropBounds, aspect: f64) -> CropBounds {
+    let size = window.size();
+    if !aspect.is_finite() || aspect <= 0. || size.width() <= 0. || size.height() <= 0. {
+        return window;
+    }
+    let size = if size.width() / size.height() > aspect {
+        LogicalSize::new(size.width(), size.width() / aspect)
+    } else {
+        LogicalSize::new(size.height() * aspect, size.height())
+    };
+    LogicalBounds::new(window.position(), size)
 }
 
 #[cfg(windows)]
@@ -1324,5 +1343,50 @@ mod even_pixel_crop_tests {
         );
         assert_eq!(retina.size().width() * 2.0, 1690.);
         assert_eq!(retina.size().height() * 2.0, 1506.);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod window_frame_bounds_tests {
+    use super::*;
+
+    // A 684x462 pt window recorded into a 1368x924 frame, then resized.
+    const FRAME_ASPECT: f64 = 1368. / 924.;
+
+    #[test]
+    fn a_window_of_the_frames_shape_fills_the_frame() {
+        let window =
+            LogicalBounds::new(LogicalPosition::new(88., 71.), LogicalSize::new(684., 462.));
+        let frame = window_frame_bounds(window, FRAME_ASPECT);
+        assert_eq!(frame.position(), window.position());
+        assert!((frame.size().width() - 684.).abs() < 1e-9);
+        assert!((frame.size().height() - 462.).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_wider_window_leaves_the_frame_reaching_past_its_bottom() {
+        let window = LogicalBounds::new(
+            LogicalPosition::new(88., 71.),
+            LogicalSize::new(1084., 712.),
+        );
+        let frame = window_frame_bounds(window, FRAME_ASPECT);
+        assert_eq!(frame.position(), window.position());
+        assert_eq!(frame.size().width(), 1084.);
+        // 1084 pt across 1368 px is 1.262 px a point, so 712 pt fill 898.6 of
+        // the 924 rows and the last 25 are below the window.
+        assert!((frame.size().height() * 1368. / 1084. - 924.).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_narrower_window_leaves_the_frame_reaching_past_its_right_edge() {
+        let window = LogicalBounds::new(
+            LogicalPosition::new(88., 471.),
+            LogicalSize::new(434., 312.),
+        );
+        let frame = window_frame_bounds(window, FRAME_ASPECT);
+        assert_eq!(frame.position(), window.position());
+        assert_eq!(frame.size().height(), 312.);
+        // 312 pt fill the 924 rows, so 434 pt take 1285.3 of the 1368 columns.
+        assert!((frame.size().width() * 924. / 312. - 1368.).abs() < 1e-9);
     }
 }

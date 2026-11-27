@@ -467,6 +467,80 @@ async fn real_app_camera_only_instant_recording_uploads_once_and_verifies() {
     assert!(!log.contains("panicked at"), "the app panicked");
 }
 
+/// The owner deletes a camera-only Instant cap on the web while its upload
+/// waits to retry. The retry must not bring the cap back under the same link:
+/// it stops as deleted on the web and keeps the local recording. Runs only
+/// with `CAP_GPUI_REAL_APP_CAMERA=1`.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_camera_only_upload_deleted_during_retry_is_not_recreated() {
+    if std::env::var("CAP_GPUI_REAL_APP_CAMERA").is_err() {
+        eprintln!("skipped: set CAP_GPUI_REAL_APP_CAMERA=1 where a camera is attached");
+        return;
+    }
+    let mock = MockCap::start(vec![
+        rule(Route::Api("multipart/initiate"), Fault::Status(500)).times(1000),
+    ])
+    .await;
+    let sandbox = Sandbox::new(&mock.url, 0);
+    let app = sandbox.launch(
+        "camera-only",
+        &[
+            ("CAP_GPUI_AUTO_CAMERA", "1"),
+            ("CAP_GPUI_AUTO_OVERLAY", "camera"),
+            ("CAP_GPUI_AUTO_RECORD", "instant:8"),
+        ],
+    );
+    wait_for_app(
+        &sandbox,
+        &app,
+        "the first upload try to fail",
+        Duration::from_secs(240),
+        || {
+            sandbox
+                .projects()
+                .first()
+                .and_then(|project| state(project))
+                .is_some_and(|state| state["phase"] == "Retrying")
+        },
+    )
+    .await;
+    let project = sandbox.projects().remove(0);
+    let video = state(&project).unwrap()["video_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    mock.delete_on_web(&video);
+    wait_for_app(
+        &sandbox,
+        &app,
+        "the retry to stop or bring the cap back",
+        Duration::from_secs(300),
+        || {
+            !mock.recreated().is_empty()
+                || state(&project)
+                    .is_some_and(|state| state["phase"] == "Failed" || state["phase"] == "Verified")
+        },
+    )
+    .await;
+    kill(app);
+    let log = sandbox.log("camera-only");
+    let state = state(&project).unwrap();
+    assert!(mock.recreated().is_empty(), "{}", mock.timeline());
+    assert_eq!(state["kind"], "Mp4", "{state}");
+    assert_eq!(state["phase"], "Failed", "{state}");
+    assert_eq!(
+        state["last_error"],
+        super::queue::RECORDING_DELETED_ON_WEB,
+        "{state}"
+    );
+    assert!(mock.confirmations().is_empty(), "{}", mock.timeline());
+    let output = std::fs::metadata(project.join("content/output.mp4")).unwrap();
+    assert!(output.len() > 0);
+    assert!(mock.deleted().is_empty(), "{:?}", mock.deleted());
+    assert!(!log.contains("panicked at"), "the app panicked");
+}
+
 /// The owner replaces the cap's video on the web, for example with a web
 /// edit, before the Instant upload finishes. The server answers completion
 /// with 409 "output-replaced": the queue stops there without uploading the

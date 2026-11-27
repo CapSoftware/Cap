@@ -40,7 +40,8 @@ mod editor_export;
 mod editor_hover_bench;
 mod editor_latency;
 mod editor_latency_bench;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
+#[cfg_attr(windows, allow(dead_code))]
 mod editor_modal;
 mod editor_panels;
 mod editor_preparing;
@@ -371,6 +372,11 @@ fn main() {
     }
 
     single_instance::acquire();
+    #[cfg(target_os = "linux")]
+    {
+        app_sounds::prepare_output();
+        cap_editor::set_linux_output(cap_recording::sources::screen_capture::sound_server_output);
+    }
     let previous_session = crash_capture::begin_session(&diagnostics::logs_dir());
     encoder_recovery::configure(previous_session.as_ref());
     blur_recovery::configure(previous_session.as_ref());

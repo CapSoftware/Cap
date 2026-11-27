@@ -574,7 +574,11 @@ fn recover_incomplete_recording_in(
     let incomplete = RecoveryManager::inspect_recording(&canonical_path).ok_or_else(|| {
         tr::main::recovery::error::nothing_saved(canonical_path.display()).to_string()
     })?;
-    crate::recording::ensure_finalization_storage(&canonical_path).map_err(|error| {
+    crate::recording::ensure_finalization_storage(
+        &canonical_path,
+        cap_utils::disk_space::FinalizationKind::Studio,
+    )
+    .map_err(|error| {
         tr::main::recovery::error::storage(format!("{error:#}"), canonical_path.display())
             .to_string()
     })?;
@@ -702,6 +706,10 @@ fn recover_interrupted_for_editing_in(
     };
     if !interrupted {
         return Ok(false);
+    }
+    #[cfg(windows)]
+    if cap_recording::recovery::finishing::contains(project_path) {
+        return Err(tr::dialog::saving::in_background().to_string());
     }
     if RecoveryManager::inspect_recording(project_path).is_none() {
         let has_segments = match studio {
