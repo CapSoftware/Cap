@@ -40,6 +40,11 @@ jobs:
           cargo build --locked --release -p cap --bin cap
           cp target/release/cap "$RUNNER_TEMP/bins/base/cap"
           git checkout -q -
+          FW=$(find target -maxdepth 3 -type d -name Spacedrive.framework | head -1)
+          echo "framework: $FW"
+          mkdir -p "$RUNNER_TEMP/bins/Frameworks"
+          cp -R "$FW" "$RUNNER_TEMP/bins/Frameworks/"
+          "$RUNNER_TEMP/bins/base/cap" --version || true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
