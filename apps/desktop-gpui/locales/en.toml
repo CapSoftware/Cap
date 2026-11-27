@@ -1092,6 +1092,17 @@ screenshots_description = "Your screenshots will appear here. Take a screenshot 
 view_all_recordings = "View All Recordings"
 view_all_screenshots = "View All Screenshots"
 
+[main.link_start]
+camera = { text = "Camera: {name}", context = "{name} is a camera name." }
+instant = { text = "Instant mode: {target}", context = "{target} is a display or window name." }
+microphone = { text = "Microphone: {name}", context = "{name} is a microphone name." }
+none = { text = "None", context = "Shown in place of a microphone or camera name when none is used." }
+requested = "A link wants to start a recording."
+start = "Start recording"
+studio = { text = "Studio mode: {target}", context = "{target} is a display or window name." }
+system_audio = "System audio: on"
+title = "Start recording?"
+
 [main.mic_warning]
 body = "This recording will not include your voice. Select a microphone, or continue without one."
 dont_show_again = "Don't show again"

@@ -2813,6 +2813,15 @@ impl MainWindow {
         let Ok(permit) = self.prepare_deep_link_start(cx) else {
             return;
         };
+        self.start_after_microphone_check(config, permit, cx);
+    }
+
+    fn start_after_microphone_check(
+        &mut self,
+        config: recording::StartConfig,
+        permit: RecordingStartPermit,
+        cx: &mut Context<Self>,
+    ) {
         let microphone_available = config.microphone.as_ref().is_some_and(|name| {
             self.devices
                 .microphones
@@ -2888,7 +2897,21 @@ impl MainWindow {
         permit: RecordingStartPermit,
         cx: &mut Context<Self>,
     ) {
-        self.check_storage_before_start(config, false, permit, cx);
+        if !self.recording_start_is_current(&permit, cx) {
+            self.finish_recording_start(&permit);
+            return;
+        }
+        if self.enumerating || self.device_format_pending.is_some() {
+            self.finish_recording_start(&permit);
+            self.session.update(cx, |session, cx| {
+                session.error = Some(tr::main::error::devices_not_ready().into());
+                cx.notify();
+            });
+            cx.defer(app_windows::show_main_window);
+            cx.notify();
+            return;
+        }
+        self.start_after_microphone_check(config, permit, cx);
     }
 
     fn recording_start_is_current(&self, permit: &RecordingStartPermit, cx: &gpui::App) -> bool {
