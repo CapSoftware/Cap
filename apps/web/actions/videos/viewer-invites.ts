@@ -13,7 +13,6 @@ import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
-
 async function getOwnedVideo(videoId: Video.VideoId) {
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
