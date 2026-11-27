@@ -2247,6 +2247,7 @@ impl OverlayWindow {
             area_min_size(select.read(cx).recording_mode),
         );
 
+        #[cfg(windows)]
         let physical_bounds = display
             .raw_handle()
             .physical_bounds()
@@ -2256,6 +2257,8 @@ impl OverlayWindow {
                 width: bounds.size().width() as f32,
                 height: bounds.size().height() as f32,
             });
+        #[cfg(not(windows))]
+        let physical_bounds = None;
 
         Self {
             theme,
