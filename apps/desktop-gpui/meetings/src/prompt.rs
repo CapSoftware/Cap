@@ -667,21 +667,18 @@ impl PromptPlanner {
         {
             return;
         }
-        let event = self.match_event(now);
         // A browser using the microphone on a page Cap can't tell is a meeting
         // (tabs unreadable, or no meeting page among them) may be voice typing
         // or a voice note: it can be offered, but it only records on its own
-        // when the calendar has a meeting now.
+        // when the calendar has a meeting now. A meeting that has not begun is
+        // not tied to such a page, so it keeps its own reminder and automatic
+        // start.
         let recognised = call.kind != AppKind::Browser || call.web.is_some();
-        // An upcoming meeting is linked, but only one already on lets such a
-        // page record on its own.
-        let ongoing = event
-            .as_ref()
-            .is_some_and(|e| e.start <= now.wall && now.wall < e.end);
-        let auto = (self.config.auto_record.for_detected() && (recognised || ongoing))
-            || (self.config.auto_record.for_scheduled()
-                && event.is_some()
-                && (recognised || ongoing));
+        let event = self
+            .match_event(now)
+            .filter(|e| recognised || (e.start <= now.wall && now.wall < e.end));
+        let auto = (self.config.auto_record.for_detected() && (recognised || event.is_some()))
+            || (self.config.auto_record.for_scheduled() && event.is_some());
         if !self.config.detected_enabled && !auto {
             return;
         }
