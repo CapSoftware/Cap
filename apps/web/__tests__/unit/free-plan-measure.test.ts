@@ -39,6 +39,7 @@ import {
 	isVideoOverFreePlanDuration,
 	needsFreePlanMeasure,
 	readFreePlanMeasure,
+	recordFreePlanMeasure,
 	recordFreePlanOverLength,
 } from "@/lib/free-plan-measure";
 
@@ -304,6 +305,13 @@ describe("free plan measured lock", () => {
 		];
 		await recordFreePlanOverLength("video-1" as Video.VideoId, "k", 400);
 		expect(mocks.updates).toHaveLength(1);
+	});
+
+	it("records a measurement without marking the Cap as changed, so its views are still counted", async () => {
+		await recordFreePlanMeasure("video-1" as Video.VideoId, "k", 400);
+		expect(mocks.updates).toHaveLength(1);
+		expect(mocks.updates[0]).toHaveProperty("metadata");
+		expect(mocks.updates[0]).toHaveProperty("updatedAt");
 	});
 
 	it("does not record for Pro owners and remembers it", async () => {

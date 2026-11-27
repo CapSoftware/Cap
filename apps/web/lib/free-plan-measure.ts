@@ -138,8 +138,11 @@ export async function recordFreePlanMeasure(
 ): Promise<void> {
 	await db()
 		.update(videos)
+		// Views are not counted for two minutes after a Cap changes, and a
+		// measurement can be taken when someone opens it.
 		.set({
 			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.freePlanMeasure', JSON_OBJECT('key', ${key}, 'seconds', ${seconds}, 'at', ${new Date().toISOString()}))`,
+			updatedAt: sql`${videos.updatedAt}`,
 		})
 		.where(eq(videos.id, videoId));
 }
