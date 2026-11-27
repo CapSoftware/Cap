@@ -245,7 +245,7 @@ struct StudioLifecycleInner {
     terminal: tokio::sync::Mutex<Option<(StudioStopIntent, StudioStopReport)>>,
     terminal_started: std::sync::atomic::AtomicBool,
     runtime: std::sync::Mutex<Option<tokio::runtime::Handle>>,
-    recording_lock: std::sync::Mutex<Option<crate::recovery::RecordingLock>>,
+    recording_lock: crate::recovery::RecordingLockHolder,
 }
 
 #[cfg(target_os = "linux")]
@@ -259,7 +259,7 @@ impl StudioLifecycle {
             terminal: tokio::sync::Mutex::new(None),
             terminal_started: std::sync::atomic::AtomicBool::new(false),
             runtime: std::sync::Mutex::new(tokio::runtime::Handle::try_current().ok()),
-            recording_lock: std::sync::Mutex::new(None),
+            recording_lock: Default::default(),
         }))
     }
 
@@ -381,7 +381,7 @@ struct WindowsStudioTerminal {
     late_stop: LateStop,
     #[cfg(windows)]
     stop_cut: crate::output_pipeline::StopCut,
-    _recording_lock: Option<crate::recovery::RecordingLock>,
+    _recording_lock: crate::recovery::RecordingLockHolder,
 }
 
 #[cfg(windows)]
@@ -2900,6 +2900,10 @@ impl ActorBuilder {
         {
             *lifecycle.0.runtime.lock().unwrap() = Some(tokio::runtime::Handle::current());
         }
+        #[cfg(target_os = "linux")]
+        let recording_lock = lifecycle.0.recording_lock.clone();
+        #[cfg(not(target_os = "linux"))]
+        let recording_lock = crate::recovery::RecordingLockHolder::default();
         let startup = spawn_studio_recording_actor(
             #[cfg(target_os = "linux")]
             self.lifetime,
@@ -2924,6 +2928,7 @@ impl ActorBuilder {
             self.quality,
             self.video_bitrate,
             self.pretty_name,
+            recording_lock.clone(),
         );
         #[cfg(windows)]
         {
@@ -2985,6 +2990,7 @@ async fn spawn_studio_recording_actor(
     quality: crate::StudioQuality,
     video_bitrate: Option<u32>,
     pretty_name: Option<String>,
+    recording_lock: crate::recovery::RecordingLockHolder,
 ) -> anyhow::Result<ActorHandle> {
     use cap_utils::operation_diagnostics::{Field, Operation};
     let mut diagnostic = Operation::start(
@@ -3031,16 +3037,7 @@ async fn spawn_studio_recording_actor(
     }
     diagnostic.stage("initializing_capture");
     ensure_dir(&recording_dir)?;
-    let recording_lock = crate::recovery::RecordingLock::acquire_for_recording(&recording_dir);
-    #[cfg(target_os = "linux")]
-    {
-        *lifetime
-            .lifecycle
-            .0
-            .recording_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = recording_lock;
-    }
+    recording_lock.hold(&recording_dir);
 
     trace!("creating recording actor");
 

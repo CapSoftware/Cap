@@ -698,6 +698,11 @@ fn recover_interrupted_for_editing_in(
     let Some(studio) = meta.studio_meta() else {
         return Ok(false);
     };
+    if !matches!(studio.status(), StudioRecordingStatus::Complete)
+        && cap_recording::recovery::is_recording_elsewhere(project_path)
+    {
+        return Err(tr::main::recovery::error::still_recording().to_string());
+    }
     let interrupted = match studio.status() {
         StudioRecordingStatus::Complete => false,
         // The editor reads only the top-level fragments, so footage from a
@@ -714,9 +719,6 @@ fn recover_interrupted_for_editing_in(
     #[cfg(windows)]
     if cap_recording::recovery::finishing::contains(project_path) {
         return Err(tr::dialog::saving::in_background().to_string());
-    }
-    if cap_recording::recovery::is_recording_elsewhere(project_path) {
-        return Err(tr::main::recovery::error::still_recording().to_string());
     }
     if RecoveryManager::inspect_recording(project_path).is_none() {
         let has_segments = match studio {

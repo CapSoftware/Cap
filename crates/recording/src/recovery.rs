@@ -40,7 +40,7 @@ pub use preparing_observer::{
 pub use preparing_projection::{
     PreparingAudioInput, PreparingCursorImage, PreparingStudioSegment, PreparingVideoInput,
 };
-pub use recording_lock::{RecordingLock, is_recording_elsewhere};
+pub use recording_lock::{RecordingLock, RecordingLockHolder, is_recording_elsewhere};
 
 /// Studio projects whose stop returned while their tracks were still
 /// writing. Recovery leaves them alone until the stop completes, since it

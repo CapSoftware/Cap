@@ -101,6 +101,19 @@ fn held_here(project: &Path) -> bool {
             .is_ok_and(|project| held.iter().any(|entry| entry.project == project))
 }
 
+#[derive(Clone, Default)]
+pub struct RecordingLockHolder(std::sync::Arc<std::sync::OnceLock<RecordingLock>>);
+
+impl RecordingLockHolder {
+    pub fn hold(&self, project: &Path) {
+        if self.0.get().is_none()
+            && let Some(lock) = RecordingLock::acquire_for_recording(project)
+        {
+            let _ = self.0.set(lock);
+        }
+    }
+}
+
 pub(super) fn release(project: &Path) {
     let Ok(project) = project.canonicalize() else {
         return;
