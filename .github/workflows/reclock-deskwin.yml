@@ -1,0 +1,68 @@
+name: Scratch reclock desktop windows
+
+on:
+  push:
+    branches:
+      - ci/reclock-deskwin
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  BUILD_RUN: "46033815453"
+  DELAY_RUN: "46033820370"
+
+jobs:
+  windows:
+    name: Windows ${{ matrix.group }}
+    runs-on: windows-2022
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [pairing, regress, late]
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Binaries and tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          R="$(cygpath -m "$RUNNER_TEMP")/rl"; mkdir -p "$R/bin"
+          for a in base head; do
+            gh run download "$BUILD_RUN" -R "$GITHUB_REPOSITORY" -n "rl-windows-$a" -D "$R/dl-$a"
+            tar --force-local -xzf "$R/dl-$a/windows-$a.tgz" -C "$R/bin"
+            cat "$R/bin/windows-$a/head.sha"
+            if [ "${{ matrix.group }}" = late ]; then
+              gh run download "$DELAY_RUN" -R "$GITHUB_REPOSITORY" -n "rl-windows-$a-delay" -D "$R/dl-$a-delay"
+              tar --force-local -xzf "$R/dl-$a-delay/windows-$a-delay.tgz" -C "$R/bin"
+              cat "$R/bin/windows-$a-delay/head.sha"
+            fi
+          done
+          curl -sSL -o ff.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip
+          mkdir -p "$RUNNER_TEMP/ff" && unzip -q ff.zip -d "$RUNNER_TEMP/ff"
+          echo "$(cygpath -w "$(ls -d "$RUNNER_TEMP"/ff/*/bin)")" >> "$GITHUB_PATH"
+          python -m pip install psutil >/dev/null
+      - name: Cases
+        shell: bash
+        run: |
+          R="$(cygpath -m "$RUNNER_TEMP")/rl"
+          ffplay -loglevel error -f lavfi -i "color=c=gray:s=960x540:r=60,noise=alls=100:allf=t+u" -fs -an -window_title capnoise > /dev/null 2>&1 &
+          sleep 3
+          python .github/reclock/mkdesk.py "$R" windows ${{ matrix.group }} > "$R/cfg.json"
+          python .github/reclock/desk.py "$R/cfg.json"
+      - name: Pack
+        if: always()
+        shell: bash
+        run: tar --force-local -czf "$(cygpath -m "$RUNNER_TEMP")/desk.tgz" -C "$(cygpath -m "$RUNNER_TEMP")/rl" out || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rl-desk-windows-${{ matrix.group }}
+          path: ${{ runner.temp }}/desk.tgz
+          retention-days: 3
