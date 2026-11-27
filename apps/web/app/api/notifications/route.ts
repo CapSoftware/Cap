@@ -21,53 +21,54 @@ export async function GET() {
 	}
 
 	try {
-		const notificationsWithAuthors = await db()
-			.select({
-				notification: {
-					id: notifications.id,
+		const [notificationsWithAuthors, countResults] = await Promise.all([
+			db()
+				.select({
+					notification: {
+						id: notifications.id,
+						type: notifications.type,
+						data: notifications.data,
+						readAt: notifications.readAt,
+						createdAt: notifications.createdAt,
+					},
+					author: {
+						id: users.id,
+						name: users.name,
+						avatar: users.image,
+					},
+				})
+				.from(notifications)
+				.leftJoin(
+					users,
+					and(
+						ne(notifications.type, "anon_view"),
+						eq(jsonExtractString(notifications.data, "authorId"), users.id),
+					),
+				)
+				.where(
+					and(
+						eq(notifications.recipientId, currentUser.id),
+						eq(notifications.orgId, currentUser.activeOrganizationId),
+					),
+				)
+				.orderBy(
+					desc(isNull(notifications.readAt)),
+					desc(notifications.createdAt),
+				),
+			db()
+				.select({
 					type: notifications.type,
-					data: notifications.data,
-					readAt: notifications.readAt,
-					createdAt: notifications.createdAt,
-				},
-				author: {
-					id: users.id,
-					name: users.name,
-					avatar: users.image,
-				},
-			})
-			.from(notifications)
-			.leftJoin(
-				users,
-				and(
-					ne(notifications.type, "anon_view"),
-					eq(jsonExtractString(notifications.data, "authorId"), users.id),
-				),
-			)
-			.where(
-				and(
-					eq(notifications.recipientId, currentUser.id),
-					eq(notifications.orgId, currentUser.activeOrganizationId),
-				),
-			)
-			.orderBy(
-				desc(isNull(notifications.readAt)),
-				desc(notifications.createdAt),
-			);
-
-		const countResults = await db()
-			.select({
-				type: notifications.type,
-				count: sql`COUNT(*)`.as("count"),
-			})
-			.from(notifications)
-			.where(
-				and(
-					eq(notifications.recipientId, currentUser.id),
-					eq(notifications.orgId, currentUser.activeOrganizationId),
-				),
-			)
-			.groupBy(notifications.type);
+					count: sql`COUNT(*)`.as("count"),
+				})
+				.from(notifications)
+				.where(
+					and(
+						eq(notifications.recipientId, currentUser.id),
+						eq(notifications.orgId, currentUser.activeOrganizationId),
+					),
+				)
+				.groupBy(notifications.type),
+		]);
 
 		type NotificationCountKey = Exclude<NotificationType, "anon_view">;
 		const formattedCountResults: Record<NotificationCountKey, number> = {
