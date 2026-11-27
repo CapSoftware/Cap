@@ -79,6 +79,29 @@ pub enum SessionAction {
     LeftCall,
 }
 
+/// Which call that begins in a meeting started without one is that meeting's
+/// own (and ends it however short), rather than a call joined late.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum OwnCall {
+    #[default]
+    Unknown,
+    /// Cap opened the meeting's link as its notes started: the call that
+    /// begins next is that meeting.
+    Joining,
+    /// The linked calendar event's link opens in one of these call apps.
+    Apps(Vec<String>),
+}
+
+impl OwnCall {
+    fn is(&self, app_id: &str) -> bool {
+        match self {
+            OwnCall::Unknown => false,
+            OwnCall::Joining => true,
+            OwnCall::Apps(apps) => apps.iter().any(|app| app == app_id),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionConfig {
     pub stop_when_call_ends: bool,
@@ -141,6 +164,7 @@ pub struct Session {
     call_end_suppressed: bool,
     /// The call was joined after the meeting started without one.
     joined_late: bool,
+    own_call: OwnCall,
     resume_offer_until: Option<Millis>,
     resume_queued: bool,
     has_meeting: bool,
@@ -175,6 +199,7 @@ impl Session {
             warning: None,
             call_end_suppressed: false,
             joined_late: false,
+            own_call: OwnCall::Unknown,
             resume_offer_until: None,
             resume_queued: false,
             has_meeting: false,
@@ -269,6 +294,10 @@ impl Session {
         self.event_end = end;
     }
 
+    pub fn set_own_call(&mut self, own_call: OwnCall) {
+        self.own_call = own_call;
+    }
+
     pub fn start(&mut self, now: Millis, app_id: Option<String>) -> Vec<SessionAction> {
         let now = self.clamp(now);
         let mut out = self.advance(now);
@@ -282,6 +311,7 @@ impl Session {
         self.pending_notes = None;
         self.app_id = app_id;
         self.joined_late = false;
+        self.own_call = OwnCall::Unknown;
         self.event_end = None;
         self.recorded_before_ms = 0;
         self.mic_speech_ms = 0;
@@ -442,7 +472,7 @@ impl Session {
                 && self.recorded_ms() < self.config.join_window_ms
             {
                 self.app_id = Some(app_id.to_string());
-                self.joined_late = true;
+                self.joined_late = !self.own_call.is(app_id);
                 self.call_end_suppressed = false;
                 out.push(SessionAction::JoinedCall {
                     app_id: app_id.to_string(),
