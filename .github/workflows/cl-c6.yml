@@ -1,0 +1,271 @@
+name: Scratch CL Notes sidebar tab lists
+# Temporary branch (deleted after use): builder CL's screen-reader A/B for the Notes sidebar as one tab
+# list per section. Both arms built with debug assertions (Notes hooks). AT-SPI + Orca on Linux, UI
+# Automation + Narrator on Windows, AX + VoiceOver on macOS. Seeded synthetic notes, scratch profiles,
+# server URL on a closed local port. Pixel counts computed on the runners. Nothing ships.
+
+on:
+  push:
+    branches: [ci/cl-c6*]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: "true"
+  CL_BASE: ef4924ba667f4ce120b864766091432514451c3d
+  CL_HEAD: fdbec838ff6cbc19feb8fc96fa70fe05e4efb963
+
+jobs:
+  linux:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: CapSoftware/cap-performance-fixtures
+          path: performance-fixtures
+          persist-credentials: false
+      - uses: ./.github/actions/install-desktop-deps
+      - run: sudo apt-get install -y -qq --no-install-recommends xvfb openbox dbus dbus-x11 at-spi2-core gir1.2-atspi-2.0 python3-gi python3-pil pulseaudio fonts-noto-core orca speech-dispatcher imagemagick > /dev/null
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-meetings
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - name: Build base then head
+        run: |
+          set -eo pipefail
+          cp -R .cl "$RUNNER_TEMP/cl"
+          for pair in base=$CL_BASE head=$CL_HEAD; do
+            arm=${pair%%=*}; git checkout -q -f "${pair#*=}"
+            git clean -q -fd apps/desktop-gpui/src
+            RUST_TARGET_TRIPLE=x86_64-unknown-linux-gnu node scripts/setup.js > /dev/null
+            node scripts/sync-desktop-versions.mjs
+            ./scripts/prepare-gpui-dependency.sh
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui 2>&1 | tail -2
+            mkdir -p "$RUNNER_TEMP/$arm"; cp apps/desktop-gpui/target/release/cap-gpui "$RUNNER_TEMP/$arm/cap-gpui"
+            git rev-parse HEAD > "$RUNNER_TEMP/$arm/sha"
+          done
+      - name: Run
+        run: |
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib"
+          export CL_FIX="$GITHUB_WORKSPACE/performance-fixtures/reference-recording.cap"
+          T="$RUNNER_TEMP"
+          Xvfb :99 -screen 0 1600x1000x24 > /dev/null 2>&1 &
+          sleep 2
+          # No screen reader: no a11y bus at all.
+          DISPLAY=:99 dbus-run-session -- bash -c 'openbox > /dev/null 2>&1 & pulseaudio --start --exit-idle-time=-1 > /dev/null 2>&1; sleep 1
+            bash "$0/cl/cl6.sh" linux "$0/out" "$0/base/cap-gpui" "$0/head/cap-gpui" "p fo"' "$T"
+          DISPLAY=:99 XDG_SESSION_TYPE=x11 dbus-run-session -- bash -c '
+            openbox > /dev/null 2>&1 & pulseaudio --start --exit-idle-time=-1 > /dev/null 2>&1
+            /usr/libexec/at-spi-bus-launcher --launch-immediately > /dev/null 2>&1 &
+            sleep 2
+            bash "$0/cl/cl6.sh" linux "$0/out" "$0/base/cap-gpui" "$0/head/cap-gpui" "t x fn"' "$T"
+          cp "$T"/base/sha "$T/out/base.sha"; cp "$T"/head/sha "$T/out/head.sha"
+          echo "=========== results"; cat "$T/out/result.txt"
+          echo "=========== pixels"; python3 -W ignore "$T/cl/c1pix.py" "$T/out" linux
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cl-c6-linux
+          path: ${{ runner.temp }}/out
+          retention-days: 4
+
+  build-win:
+    runs-on: blacksmith-8vcpu-windows-2025
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+          prefix-key: v1-rust-meetings
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - name: Build base then head
+        shell: bash
+        run: |
+          set -eo pipefail
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage/gpui-windows-shaders"
+          cp -R .cl "$stage/cl"
+          for pair in base=$CL_BASE head=$CL_HEAD; do
+            arm=${pair%%=*}; git checkout -q -f "${pair#*=}"
+            git clean -q -fd apps/desktop-gpui/src
+            RUST_TARGET_TRIPLE=x86_64-pc-windows-msvc node scripts/setup.js > /dev/null
+            node scripts/sync-desktop-versions.mjs
+            ./scripts/prepare-gpui-dependency.sh
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui 2>&1 | tail -2
+            cp apps/desktop-gpui/target/release/cap-gpui.exe "$stage/cap-gpui-$arm.exe"
+          done
+          cp ../zed-cap/crates/gpui_windows/src/*.hlsl "$stage/gpui-windows-shaders/"
+          printf '%s' "$GITHUB_WORKSPACE" > "$stage/build-workspace.txt"
+          printf '%s' "$(cd ../zed-cap && pwd -W)" > "$stage/build-zed.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cl-c6-win-app
+          path: ${{ runner.temp }}/stage
+          retention-days: 1
+
+  run-win:
+    needs: build-win
+    runs-on: windows-2022
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: CapSoftware/cap-performance-fixtures
+          path: performance-fixtures
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: cl-c6-win-app
+          path: ${{ runner.temp }}/app
+      - shell: pwsh
+        run: |
+          $app = "$env:RUNNER_TEMP\app"
+          $workspace = (Get-Content "$app\build-workspace.txt" -Raw).Trim()
+          if ($workspace -ne $env:GITHUB_WORKSPACE) {
+            New-Item -ItemType Directory -Force (Split-Path $workspace) | Out-Null
+            cmd /c mklink /J "$workspace" "$env:GITHUB_WORKSPACE"
+            if ($LASTEXITCODE -ne 0) { throw "mklink failed" }
+          }
+          $shaders = Join-Path (Get-Content "$app\build-zed.txt" -Raw).Trim() "crates\gpui_windows\src"
+          New-Item -ItemType Directory -Force $shaders | Out-Null
+          Copy-Item "$app\gpui-windows-shaders\*.hlsl" $shaders
+      - shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+      - name: Run
+        shell: bash
+        run: |
+          cp target/release/*.dll "$RUNNER_TEMP/app/"
+          python -m pip install -q pillow
+          bash "$RUNNER_TEMP/app/cl/cl6.sh" windows "$RUNNER_TEMP/out" "$RUNNER_TEMP/app/cap-gpui-base.exe" "$RUNNER_TEMP/app/cap-gpui-head.exe" "p fo t x v fn" || echo "cl6.sh exit $?"
+          echo "=========== pixels"; python -W ignore "$RUNNER_TEMP/app/cl/c1pix.py" "$RUNNER_TEMP/out" windows
+          cat "$RUNNER_TEMP/out/result.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cl-c6-windows
+          path: ${{ runner.temp }}/out
+          retention-days: 4
+
+  build-mac:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+      - run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage/bin" "$stage/Frameworks"
+          cp -R .cl "$stage/cl"
+          for pair in base=$CL_BASE head=$CL_HEAD; do
+            arm=${pair%%=*}; git checkout -q -f "${pair#*=}"
+            git clean -q -fd apps/desktop-gpui/src
+            node scripts/sync-desktop-versions.mjs
+            ./scripts/prepare-gpui-dependency.sh
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui 2>&1 | tail -2
+            cp apps/desktop-gpui/target/release/cap-gpui "$stage/bin/cap-gpui-$arm"
+            codesign --force -s - "$stage/bin/cap-gpui-$arm"
+          done
+          cp -RL target/Frameworks/Spacedrive.framework "$stage/Frameworks/"
+          tar -C "$stage" -czf "$RUNNER_TEMP/cl-mac.tgz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cl-c6-mac-app
+          path: ${{ runner.temp }}/cl-mac.tgz
+          retention-days: 1
+
+  run-mac:
+    needs: build-mac
+    runs-on: macos-15
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: CapSoftware/cap-performance-fixtures
+          path: performance-fixtures
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: cl-c6-mac-app
+          path: ${{ runner.temp }}
+      - name: Unpack, tools, grants
+        run: |
+          set -euo pipefail
+          S="$RUNNER_TEMP/s"; mkdir -p "$S"; tar xzf "$RUNNER_TEMP/cl-mac.tgz" -C "$S"; echo "S=$S" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/Frameworks"; cp -R "$S/Frameworks/"* "$RUNNER_TEMP/Frameworks/"
+          swiftc -O -o "$S/cl/cdax" "$S/cl/cdax.swift" 2>&1 | grep -v warning | head -5 || true
+          codesign --force -s - "$S/cl/cdax"
+          U="$HOME/Library/Application Support/com.apple.TCC/TCC.db"; SY="/Library/Application Support/com.apple.TCC/TCC.db"
+          for client in /usr/local/opt/runner/provisioner/provisioner /usr/local/opt/runner/runprovisioner.sh \
+            /opt/hca/hosted-compute-agent /opt/hca/start_hca.sh /bin/bash /bin/zsh /bin/sh /usr/bin/osascript \
+            /usr/sbin/screencapture "$S/bin/cap-gpui-base" "$S/bin/cap-gpui-head" "$S/cl/cdax"; do
+            for service in kTCCServiceAccessibility kTCCServiceScreenCapture kTCCServiceMicrophone; do
+              row="'$service','$client',1,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,1687786159,NULL,NULL,'UNUSED',1687786159"
+              sqlite3 "$U" "insert or replace into access values ($row)" 2> /dev/null || true
+              sudo sqlite3 "$SY" "insert or replace into access values ($row)" 2> /dev/null || true
+            done
+            for target in com.apple.VoiceOver com.apple.systemevents; do
+              row="'kTCCServiceAppleEvents','$client',1,2,4,1,NULL,NULL,0,'$target',NULL,0,1687786159,NULL,NULL,'UNUSED',1687786159"
+              sqlite3 "$U" "insert or replace into access values ($row)" 2> /dev/null || true
+              sudo sqlite3 "$SY" "insert or replace into access values ($row)" 2> /dev/null || true
+            done
+          done
+          sudo killall tccd 2> /dev/null; killall tccd 2> /dev/null; sleep 2
+          "$S/cl/cdax" trusted || true
+      - name: Run
+        run: |
+          set +e
+          python3 -m pip install -q --break-system-packages pillow || python3 -m pip install -q pillow
+          bash "$S/cl/cl6.sh" mac "$RUNNER_TEMP/out" "$S/bin/cap-gpui-base" "$S/bin/cap-gpui-head" "p fo t x v fn"
+          echo "=========== pixels"; python3 -W ignore "$S/cl/c1pix.py" "$RUNNER_TEMP/out" mac
+          cat "$RUNNER_TEMP/out/result.txt"
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cl-c6-mac
+          path: ${{ runner.temp }}/out
+          retention-days: 4
