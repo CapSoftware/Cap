@@ -4292,6 +4292,7 @@ calendar_settings = "Ajustes del calendario"
 empty_title = "Tus notas aparecerán aquí"
 empty_body = "Pulsa Empezar notas cuando empiece una reunión. Cap escucha y la resume cuando paras."
 just_you = "Solo tú"
+people = { one = "{count} persona", other = "{count} personas" }
 note = "Nota"
 start_notes = "Empezar notas"
 

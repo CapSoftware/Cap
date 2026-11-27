@@ -4292,6 +4292,7 @@ calendar_settings = "कैलेंडर सेटिंग्स"
 empty_title = "आपके नोट्स यहाँ दिखेंगे"
 empty_body = "मीटिंग शुरू होते ही नोट्स शुरू करें दबाएँ। Cap सुनता है और रोकने पर सब लिख देता है।"
 just_you = "सिर्फ़ आप"
+people = { one = "{count} व्यक्ति", other = "{count} लोग" }
 note = "नोट"
 start_notes = "नोट्स शुरू करें"
 

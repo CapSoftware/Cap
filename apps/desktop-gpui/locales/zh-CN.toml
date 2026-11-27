@@ -4292,6 +4292,7 @@ calendar_settings = "日历设置"
 empty_title = "你的笔记会显示在这里"
 empty_body = "会议开始时点按开始记录。Cap 会聆听，并在你停止时整理成笔记。"
 just_you = "仅你自己"
+people = { other = "{count} 人" }
 note = "笔记"
 start_notes = "开始记录"
 

@@ -1278,3 +1278,41 @@ fn merging_names_keeps_a_left_out_choice() {
     t.rename_speaker("Alice", "Carol");
     assert_eq!(t.voice_choice(&Voice::Named("Carol".into())), Some(false));
 }
+
+#[test]
+fn speaker_count_is_the_voices_heard() {
+    use cap_diarize::Track;
+    let mut t = Transcript::new();
+    assert_eq!(t.speaker_count(), 0);
+    t.upsert(utt("m1", Source::Mic, 0, 900, "Just me here.", true));
+    t.upsert(utt("m2", Source::Mic, 1_000, 1_900, "Still me.", true));
+    assert_eq!(t.speaker_count(), 1);
+    // the computer's audio, voices not told apart: everyone there counts once
+    t.upsert(utt("s1", Source::System, 2_000, 2_900, "Hi.", true));
+    assert_eq!(t.speaker_count(), 2);
+
+    let mut t = Transcript::new();
+    t.upsert(voiced("m1", Source::Mic, 0, "Morning.", 1));
+    t.upsert(voiced("s1", Source::System, 1_200, "Hi, Dana here.", 2));
+    t.upsert(voiced("s2", Source::System, 2_400, "And Sam.", 3));
+    t.upsert(voiced("s3", Source::System, 3_600, "Back to Dana.", 2));
+    t.set_names(names_for(&[
+        info(1, Track::Mic, 0, true),
+        info(2, Track::System, 1_200, false),
+        info(3, Track::System, 2_400, false),
+    ]));
+    assert_eq!(t.speaker_count(), 3);
+
+    // two voices in the room on one microphone, one of them named
+    let mut t = Transcript::new();
+    t.upsert(voiced("m1", Source::Mic, 0, "Let's start.", 1));
+    t.upsert(voiced("m2", Source::Mic, 1_200, "Sure, go ahead.", 2));
+    t.set_names(names_for(&[
+        info(1, Track::Mic, 0, false),
+        info(2, Track::Mic, 1_200, false),
+    ]));
+    let mut names = t.names().cloned().unwrap();
+    names.rename(SpeakerId(2), "Alex");
+    t.apply(LogLine::SpeakerNames { names });
+    assert_eq!(t.speaker_count(), 2);
+}
