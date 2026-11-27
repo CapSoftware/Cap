@@ -481,6 +481,9 @@ pub struct RecordingSession {
     storage_monitor: Option<Task<()>>,
     limit_monitor: Option<Task<()>>,
     limit_owner: LimitOwner,
+    /// The server said, for the live recording, that its limit no longer
+    /// applies (an upgrade of its owner or organization).
+    limit_lifted: bool,
     failure_monitor: Option<Task<()>>,
     recording_generation: u64,
     countdown_remaining: Option<u32>,
@@ -548,6 +551,7 @@ impl RecordingSession {
             storage_monitor: None,
             limit_monitor: None,
             limit_owner: LimitOwner::default(),
+            limit_lifted: false,
             failure_monitor: None,
             recording_generation: 0,
             countdown_remaining: None,
@@ -1109,6 +1113,7 @@ impl RecordingSession {
             .is_some()
         {
             let auth = crate::store::auth_snapshot();
+            self.limit_lifted = false;
             self.limit_owner = LimitOwner {
                 started_at: chrono::Utc::now().timestamp(),
                 server_url: auth.server_url,
@@ -1197,7 +1202,9 @@ impl RecordingSession {
     /// `None` when it has no limit or a plan fetched since it started is Pro.
     pub fn recording_time_left(&self) -> Option<Duration> {
         let limit = self.active.as_ref()?.recording_limit()?;
-        if upgrade_lifts_limit(&crate::store::auth_snapshot(), &self.limit_owner) {
+        if self.limit_lifted
+            || upgrade_lifts_limit(&crate::store::auth_snapshot(), &self.limit_owner)
+        {
             return None;
         }
         Some(limit.saturating_sub(self.elapsed()))
@@ -1270,7 +1277,31 @@ impl RecordingSession {
                     // app through a plan fetch, so one runs shortly before the
                     // limit; the stop itself never waits on the network.
                     plan_checked = true;
-                    gpui_tokio::Tokio::spawn(cx, crate::auth::update_plan_only()).detach();
+                    let video_id = this
+                        .update(cx, |this, _| {
+                            this.active
+                                .as_ref()
+                                .and_then(|active| active.instant_video_id().map(str::to_string))
+                        })
+                        .ok()
+                        .flatten();
+                    let check =
+                        gpui_tokio::Tokio::spawn(cx, crate::auth::update_plan_only(video_id));
+                    let session = this.clone();
+                    cx.spawn(async move |cx| {
+                        if let Ok(Ok(Some(false))) = check.await {
+                            session
+                                .update(cx, |this, cx| {
+                                    if this.recording_generation == generation {
+                                        tracing::info!("the server lifted this recording's limit");
+                                        this.limit_lifted = true;
+                                        cx.notify();
+                                    }
+                                })
+                                .ok();
+                        }
+                    })
+                    .detach();
                 }
                 wait = if plan_checked {
                     left
