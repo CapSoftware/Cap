@@ -2412,3 +2412,66 @@ fn a_finished_meetings_voice_count_follows_line_edits() {
         .and_then(|m| m.speaker_count());
     assert_eq!(count, Some(1));
 }
+
+/// Through the app: deleting the only line of a finished meeting's second
+/// voice is written on the documents writer first, and the count of voices
+/// that follows reads it there (same writer, after the edit), then the notes
+/// list is told.
+#[gpui::test]
+fn deleting_a_voices_lines_updates_the_notes_lists_count(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let meetings = cx.update(|cx| {
+        super::Meetings::install_for_tests(
+            cap_meetings::settings::MeetingSettings::default(),
+            dir.path().join("calendar"),
+            cx,
+        )
+    });
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let mut meta = library.create(DocKind::Meeting, Utc::now(), 8).unwrap();
+    let mut meeting = MeetingDetails {
+        started_at: Some(Utc::now()),
+        ended_at: Some(Utc::now()),
+        ..MeetingDetails::default()
+    };
+    meeting.set_speaker_count(2);
+    meta.meeting = Some(meeting);
+    library.save(&meta).unwrap();
+    append_jsonl(
+        &library.transcript_path(&meta.id).unwrap(),
+        &[
+            LogLine::Upsert {
+                utterance: utterance("m1", Source::Mic, 0, "Morning."),
+            },
+            LogLine::Upsert {
+                utterance: utterance("s1", Source::System, 2_000, "Hi there."),
+            },
+        ],
+    )
+    .unwrap();
+    let doc = meta.id.clone();
+    meetings.update(cx, |m, _| m.library = Some(library.clone()));
+    let told = std::rc::Rc::new(std::cell::Cell::new(false));
+    let _subscription = cx.update(|cx| {
+        let told = told.clone();
+        cx.subscribe(&meetings, move |_, event: &super::MeetingEvent, _| {
+            if matches!(event, super::MeetingEvent::LibraryChanged) {
+                told.set(true);
+            }
+        })
+    });
+
+    meetings.update(cx, |m, cx| m.delete_utterances(&doc, vec!["s1".into()], cx));
+    assert!(crate::meetings_ui::documents::flush_writer(
+        Duration::from_secs(5)
+    ));
+    cx.run_until_parked();
+
+    let count = library
+        .load(&doc)
+        .unwrap()
+        .meeting
+        .and_then(|m| m.speaker_count());
+    assert_eq!(count, Some(1));
+    assert!(told.get(), "the notes list hears the count changed");
+}
