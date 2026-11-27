@@ -2323,6 +2323,36 @@ mod tests {
     }
 
     #[test]
+    fn opening_without_rate_analysis_keeps_duration_and_stream_parameters() {
+        let dir = tempfile::tempdir().unwrap();
+        let timestamps: Vec<Duration> = (0..240u64)
+            .map(|i| {
+                let gap = if i % 37 == 3 { 0.012 } else { 0.0 };
+                Duration::from_secs_f64(i as f64 / 60.0 + gap + jitter(i, 0.003).abs())
+            })
+            .collect();
+        let path = encode_test_mp4(dir.path(), &timestamps);
+
+        let default = ffmpeg::format::input(&path).unwrap();
+        let fast = super::open_input_without_rate_analysis(&path).unwrap();
+        assert_eq!(fast.duration(), default.duration());
+        assert_eq!(fast.nb_streams(), default.nb_streams());
+        let (a, b) = (
+            default.streams().best(ffmpeg::media::Type::Video).unwrap(),
+            fast.streams().best(ffmpeg::media::Type::Video).unwrap(),
+        );
+        assert_eq!(b.duration(), a.duration());
+        assert_eq!(b.frames(), a.frames());
+        assert_eq!(b.avg_frame_rate(), a.avg_frame_rate());
+        let (pa, pb) = (a.parameters(), b.parameters());
+        assert_eq!(pb.id(), pa.id());
+        assert_eq!(
+            super::get_media_duration(&path),
+            Some(Duration::from_micros(default.duration() as u64))
+        );
+    }
+
+    #[test]
     fn capture_fps_reads_an_encoded_variable_rate_track() {
         let dir = tempfile::tempdir().unwrap();
         let path = encode_test_mp4(dir.path(), &bursty_timestamps(20, 6, 30));
