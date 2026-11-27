@@ -14,6 +14,18 @@ pub fn use_bt709_for_rgb_input(
     input: format::Pixel,
     output: format::Pixel,
 ) -> Result<(), ffmpeg::Error> {
+    unsafe { use_bt709_for_rgb_input_raw(converter.as_mut_ptr(), input, output) }
+}
+
+/// [`use_bt709_for_rgb_input`] for a context built through the C API.
+///
+/// # Safety
+/// `converter` must be a valid, initialised swscale context.
+pub(crate) unsafe fn use_bt709_for_rgb_input_raw(
+    converter: *mut ffmpeg::ffi::SwsContext,
+    input: format::Pixel,
+    output: format::Pixel,
+) -> Result<(), ffmpeg::Error> {
     if !is_rgb(input) || is_rgb(output) {
         return Ok(());
     }
@@ -21,7 +33,7 @@ pub fn use_bt709_for_rgb_input(
     let result = unsafe {
         let coefficients = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
         ffmpeg::ffi::sws_setColorspaceDetails(
-            converter.as_mut_ptr(),
+            converter,
             coefficients,
             1,
             coefficients,
