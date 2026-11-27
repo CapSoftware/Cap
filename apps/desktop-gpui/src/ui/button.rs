@@ -463,7 +463,9 @@ impl RenderOnce for Button {
             // Screen readers see a button named by its label, which they can
             // press (the click listener below answers their press).
             .when_some(a11y_label.or_else(|| label.clone()), |this, name| {
-                this.role(gpui::Role::Button).aria_label(name)
+                this.role(gpui::Role::Button)
+                    .aria_label(name)
+                    .aria_disabled(disabled)
             })
             .tab_index(0)
             .tab_stop(!disabled)
@@ -717,6 +719,7 @@ impl RenderOnce for IconButton {
             .when_some(label, |this, label| {
                 this.role(gpui::Role::Button)
                     .aria_label(label)
+                    .aria_disabled(disabled)
                     .when(toggle, |this| {
                         this.aria_toggled(if active {
                             gpui::Toggled::True

@@ -164,6 +164,8 @@ test("dependency verification handles overlapping patches without changing the c
 	patch("zed-warp-atlas.patch");
 	writeFileSync(path.join(upstream, "press.rs"), "visible presses\n");
 	patch("zed-a11y-press.patch");
+	writeFileSync(path.join(upstream, "disabled.rs"), "unavailable controls\n");
+	patch("zed-a11y-disabled.patch");
 	const script = path.join(cap, "scripts/prepare-gpui-dependency.sh");
 	writeFileSync(
 		script,

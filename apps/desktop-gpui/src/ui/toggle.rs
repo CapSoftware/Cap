@@ -174,6 +174,7 @@ impl RenderOnce for Toggle {
             )
             .when(!presentational, |this| {
                 this.role(gpui::Role::Switch)
+                    .aria_disabled(disabled)
                     .aria_toggled(if checked {
                         gpui::Toggled::True
                     } else {

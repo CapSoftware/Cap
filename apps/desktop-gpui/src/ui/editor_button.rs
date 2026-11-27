@@ -263,6 +263,7 @@ impl RenderOnce for EditorButton {
             .when_some(name, |this, name| {
                 this.role(gpui::Role::Button)
                     .aria_label(name)
+                    .aria_disabled(disabled)
                     .when_some(a11y_description, |this, description| {
                         this.aria_description(description)
                     })

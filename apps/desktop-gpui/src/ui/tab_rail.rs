@@ -163,6 +163,7 @@ impl RenderOnce for TabRail {
                     .role(gpui::Role::Tab)
                     .aria_label(item.label.clone())
                     .aria_selected(selected)
+                    .aria_disabled(disabled)
                     .flex()
                     .flex_none()
                     .items_center()

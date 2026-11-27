@@ -1864,6 +1864,7 @@ impl OnboardingWindow {
                                     .id("onboarding-continue")
                                     .role(gpui::Role::Button)
                                     .aria_label(label)
+                                    .aria_disabled(disabled)
                                     .tab_index(0)
                                     .h(px(46.))
                                     .px(px(26.))

@@ -1,0 +1,56 @@
+diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
+index 44e26fc..450e3ef 100644
+--- a/crates/gpui/src/elements/div.rs
++++ b/crates/gpui/src/elements/div.rs
+@@ -1301,6 +1301,13 @@ pub trait StatefulInteractiveElement: InteractiveElement {
+         self
+     }
+ 
++    /// Mark this element as unavailable. Assistive technology reads it as
++    /// dimmed or unavailable rather than as a control it can use.
++    fn aria_disabled(mut self, disabled: bool) -> Self {
++        self.interactivity().aria.disabled = disabled;
++        self
++    }
++
+     /// Set the expanded state for this element.
+     fn aria_expanded(mut self, expanded: bool) -> Self {
+         self.interactivity().aria.expanded = Some(expanded);
+@@ -1950,6 +1957,7 @@ pub(crate) struct AriaProperties {
+     pub(crate) row_count: Option<usize>,
+     pub(crate) column_count: Option<usize>,
+     pub(crate) live: Option<accesskit::Live>,
++    pub(crate) disabled: bool,
+ }
+ 
+ /// The interactivity struct. Powers all of the general-purpose
+@@ -3341,6 +3349,9 @@ impl Interactivity {
+         if let Some(count) = self.aria.column_count {
+             node.set_column_count(count);
+         }
++        if self.aria.disabled {
++            node.set_disabled();
++        }
+         if !self.click_listeners.is_empty() {
+             node.add_action(accesskit::Action::Click);
+         }
+@@ -4641,6 +4652,19 @@ mod tests {
+         assert_eq!(node.numeric_value_step(), Some(1.0));
+     }
+ 
++    #[test]
++    fn test_write_a11y_info_disabled() {
++        let mut interactivity = Interactivity::default();
++        let mut node = accesskit::Node::new(accesskit::Role::Button);
++        interactivity.write_a11y_info(&mut node);
++        assert!(!node.is_disabled());
++
++        interactivity.aria.disabled = true;
++        let mut node = accesskit::Node::new(accesskit::Role::Button);
++        interactivity.write_a11y_info(&mut node);
++        assert!(node.is_disabled());
++    }
++
+     /// Two focusable, clickable elements ("a" and "b") used to exercise the
+     /// Enter/Space -> synthesized click press/release pairing.
+     struct KeyboardActivationTest {

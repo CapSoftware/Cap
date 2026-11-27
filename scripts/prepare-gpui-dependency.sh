@@ -18,6 +18,7 @@ patch_paths=(
 	"apps/desktop-gpui/patches/zed-quiet-show.patch"
 	"apps/desktop-gpui/patches/zed-warp-atlas.patch"
 	"apps/desktop-gpui/patches/zed-a11y-press.patch"
+	"apps/desktop-gpui/patches/zed-a11y-disabled.patch"
 )
 patch_files=("${patch_paths[@]/#/$repo_root/}")
 base_revision="5d1f83d9f27a19bec1fb241dc33b42238af9cf8d"
