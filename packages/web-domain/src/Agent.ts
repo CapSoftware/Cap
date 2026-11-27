@@ -1383,12 +1383,16 @@ export const AgentFolderCreateInput = Schema.Struct({
 	public: Schema.optional(Schema.Boolean),
 });
 
+export const AgentFolderSettingsInput = Schema.Struct({
+	publicPage: Schema.optional(PublicPageSettingsUpdate),
+});
+
 export const AgentFolderUpdateInput = Schema.Struct({
 	name: Schema.optional(Schema.String),
 	color: Schema.optional(Schema.Literal("normal", "blue", "red", "yellow")),
 	parentId: Schema.optional(Schema.NullOr(FolderId)),
 	public: Schema.optional(Schema.Boolean),
-	settings: Schema.optional(Schema.Unknown),
+	settings: Schema.optional(AgentFolderSettingsInput),
 });
 
 export const AgentSpaceCreateInput = Schema.Struct({

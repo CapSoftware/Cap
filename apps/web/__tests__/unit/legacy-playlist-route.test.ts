@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
 	sign: vi.fn(),
 	viewerId: null as string | null,
 	overShareLimit: vi.fn(async () => false),
+	customBucket: false,
+	recordOverLength: vi.fn(async () => false),
 	dispose: async () => {},
 }));
 
@@ -42,7 +44,11 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 					} as Context.Tag.Service<typeof CurrentUser>)
 				: effect,
 		Storage: Object.assign(Context.GenericTag("LegacyPlaylistTestStorage"), {
-			getAccessForVideo: () => Effect.succeed([bucket, Option.none()] as const),
+			getAccessForVideo: () =>
+				Effect.succeed([
+					bucket,
+					mocks.customBucket ? Option.some(bucket) : Option.none(),
+				] as const),
 		}),
 		Videos: Object.assign(Context.GenericTag("LegacyPlaylistTestVideos"), {
 			testService: {
@@ -89,6 +95,11 @@ vi.mock("@/lib/server", async () => {
 
 vi.mock("@/lib/shareable-link-quota", () => ({
 	isVideoLockedByShareableLinkLimit: mocks.overShareLimit,
+}));
+
+vi.mock("@/lib/free-plan-measure", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/free-plan-measure")>()),
+	recordFreePlanOverLength: mocks.recordOverLength,
 }));
 
 import { GET } from "@/app/api/playlist/route";
@@ -217,5 +228,46 @@ describe("HLS playlists on default storage", () => {
 	it("keeps serving the video when the quota check fails", async () => {
 		mocks.overShareLimit.mockRejectedValue(new Error("db down"));
 		expect((await request("mp4")).status).toBe(302);
+	});
+});
+
+describe("HLS playlists on custom storage", () => {
+	const playlistKey = "owner/recording/combined-source/stream.m3u8";
+	const segments = (count: number) =>
+		`#EXTM3U\n${Array.from({ length: count }, (_, i) => `#EXTINF:4,\nsegment_${i}.ts`).join("\n")}\n`;
+
+	beforeEach(() => {
+		mocks.customBucket = true;
+		mocks.source = { type: "local" };
+		mocks.viewerId = null;
+		mocks.overShareLimit.mockReset().mockResolvedValue(false);
+		mocks.recordOverLength.mockReset().mockResolvedValue(false);
+		mocks.sign.mockClear();
+	});
+	afterAll(() => {
+		mocks.customBucket = false;
+	});
+
+	it("holds a combined-source playlist over the free limit before signing it", async () => {
+		mocks.objects = { [playlistKey]: segments(100) };
+		mocks.recordOverLength.mockResolvedValue(true);
+		expect((await request("video")).status).toBe(403);
+		expect(mocks.sign).not.toHaveBeenCalled();
+		expect(mocks.recordOverLength).toHaveBeenCalledWith(
+			"recording",
+			playlistKey,
+			400,
+		);
+	});
+
+	it("serves a playlist the limit does not hold", async () => {
+		mocks.objects = { [playlistKey]: segments(100) };
+		expect((await request("video")).status).toBe(200);
+		expect(mocks.sign).toHaveBeenCalledTimes(100);
+
+		mocks.objects = { [playlistKey]: segments(2) };
+		mocks.recordOverLength.mockClear();
+		expect((await request("video")).status).toBe(200);
+		expect(mocks.recordOverLength).not.toHaveBeenCalled();
 	});
 });

@@ -18,7 +18,7 @@ import { userIsPro } from "@cap/utils";
 import { ImageUploads } from "@cap/web-backend";
 import {
 	type Folder,
-	type ImageUpload,
+	ImageUpload,
 	type Organisation,
 	PublicCollection as PublicCollectionDomain,
 	type Space,
@@ -226,10 +226,17 @@ async function resolveIconUrls(keys: {
 	}).pipe(runPromise);
 }
 
-function collectionLogoKey(
+/**
+ * Only keys written by the collection logo upload (which always lives under
+ * this collection's own prefix) are signed for the public page.
+ */
+export function collectionLogoKey(
 	publicPage: Required<PublicCollectionDomain.PublicPageSettings>,
+	collection: { id: string; organizationId: string },
 ): ImageUpload.ImageUrlOrKey | null {
-	return publicPage.logoUrl
+	const prefix = `organizations/${collection.organizationId}/collections/${collection.id}/logo`;
+	return publicPage.logoUrl &&
+		ImageUpload.isKeyUnderPrefix(publicPage.logoUrl, prefix)
 		? (publicPage.logoUrl as ImageUpload.ImageUrlOrKey)
 		: null;
 }
@@ -239,12 +246,15 @@ function publicPageIconKeys(
 	keys: {
 		organizationIconUrl: ImageUpload.ImageUrlOrKey | null;
 	},
+	collection: { id: string; organizationId: string },
 ) {
 	return {
 		organizationIconUrl:
 			publicPage.logoMode === "organization" ? keys.organizationIconUrl : null,
 		collectionLogoUrl:
-			publicPage.logoMode === "custom" ? collectionLogoKey(publicPage) : null,
+			publicPage.logoMode === "custom"
+				? collectionLogoKey(publicPage, collection)
+				: null,
 	};
 }
 
@@ -333,9 +343,11 @@ const resolvePublicCollection = cache(
 			candidate.settings?.publicPage,
 		);
 		const icons = await resolveIconUrls(
-			publicPageIconKeys(publicPage, {
-				organizationIconUrl: candidate.organizationIconUrl,
-			}),
+			publicPageIconKeys(
+				publicPage,
+				{ organizationIconUrl: candidate.organizationIconUrl },
+				candidate,
+			),
 		);
 
 		const shared = {

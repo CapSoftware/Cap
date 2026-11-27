@@ -4,6 +4,14 @@ import { z } from "zod";
 
 const PRINTABLE_ASCII_EMAIL = /^[!-~]+$/;
 
+export function isEmailShape(value: string): boolean {
+	if (/\s/.test(value)) return false;
+	const at = value.indexOf("@");
+	if (at < 1 || at !== value.lastIndexOf("@")) return false;
+	const dot = value.indexOf(".", at + 2);
+	return dot !== -1 && dot < value.length - 1;
+}
+
 export function normalizeEmailAddress(email: string): string {
 	return email.normalize("NFKC").trim().toLowerCase();
 }
