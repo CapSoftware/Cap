@@ -1301,6 +1301,69 @@ describe("media routes real-world integration tests", () => {
 		}
 	}, 90000);
 
+	test("refuses a source longer than the requested length before encoding it", async () => {
+		const response = await app.fetch(
+			mediaPostRequest("/video/process", {
+				videoId: "length-limited-video",
+				userId: "real-process-user",
+				videoUrl: fixtureUrl(),
+				outputPresignedUrl: uploadUrl("length-limited-output.mp4"),
+				inputExtension: ".mp4",
+				maxWidth: 160,
+				maxHeight: 120,
+				crf: 30,
+				preset: "ultrafast",
+				maxOutputSeconds: 0.5,
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		const job = await waitForTerminalJob(jobId);
+		try {
+			expect(job.phase).toBe("error");
+			expect(job.error).toStartWith("media-length-limit-exceeded: ");
+			expect(job.metadata?.duration).toBeGreaterThan(0.5);
+			expect(uploadedArtifacts.has("/uploads/length-limited-output.mp4")).toBe(
+				false,
+			);
+		} finally {
+			deleteJob(jobId);
+		}
+	});
+
+	test("processes a source within the requested length in full", async () => {
+		const response = await app.fetch(
+			mediaPostRequest("/video/process", {
+				videoId: "length-allowed-video",
+				userId: "real-process-user",
+				videoUrl: fixtureUrl(),
+				outputPresignedUrl: uploadUrl("length-allowed-output.mp4"),
+				inputExtension: ".mp4",
+				maxWidth: 160,
+				maxHeight: 120,
+				crf: 30,
+				preset: "ultrafast",
+				maxOutputSeconds: 330,
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		const job = await waitForTerminalJob(jobId);
+		try {
+			expect(job.phase).toBe("complete");
+			const bytes = uploadedBytes("/uploads/length-allowed-output.mp4");
+			const metadata = await probeBytesAsMp4(
+				bytes,
+				"length-allowed-output.mp4",
+			);
+			expect(metadata.duration).toBeGreaterThan(0.9);
+		} finally {
+			deleteJob(jobId);
+		}
+	});
+
 	test("keeps a finished job answerable while its completion webhook is undelivered", async () => {
 		const response = await app.fetch(
 			mediaPostRequest("/video/process", {

@@ -149,8 +149,7 @@ export async function createVideoAndGetUploadUrl({
 		throw new Error("Invalid video id");
 
 	try {
-		if (!userIsPro(user) && duration && duration > 300)
-			throw new Error("upgrade_required");
+		if (!userIsPro(user)) throw new Error("upgrade_required");
 
 		await requireOrganizationAccess(user.id, orgId);
 
