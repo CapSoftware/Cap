@@ -30,6 +30,11 @@ import {
 	type SeededThumbnails,
 	SeededThumbnailsProvider,
 } from "@/components/VideoThumbnail";
+import {
+	CAP_KIND_LABEL,
+	type CapKindCounts,
+	groupCapsByKind,
+} from "@/lib/cap-kind";
 import { DEFAULT_DASHBOARD_PAGE_SIZE } from "@/lib/dashboard-page-size";
 import { CAP_DRAG_TYPE, parseCapDrag } from "@/lib/move-items";
 import { parsePageParam } from "@/lib/page-param";
@@ -85,6 +90,8 @@ type SharedVideoData = {
 	ownerName: string | null;
 	metadata?: VideoMetadata;
 	isScreenshot: boolean;
+	isNote?: boolean;
+	noteExcerpt?: string | null;
 	hasPassword?: boolean;
 	hasInheritedPassword?: boolean;
 	inheritedPasswordSources?: SpaceRuleSource[];
@@ -120,6 +127,7 @@ type SpaceData = {
 export const SharedCaps = ({
 	data,
 	count,
+	kindCounts,
 	spaceData,
 	spaceId,
 	spaceMembers,
@@ -134,6 +142,7 @@ export const SharedCaps = ({
 }: {
 	data: SharedVideoData;
 	count: number;
+	kindCounts?: CapKindCounts;
 	analyticsEnabled: boolean;
 	spaceData?: SpaceData;
 	spaceId: Space.SpaceIdOrOrganisationId;
@@ -599,114 +608,140 @@ export const SharedCaps = ({
 
 			{orderedData.length > 0 && (
 				<>
-					<CapListHeader
-						title="Videos and screenshots"
-						count={count}
-						selectionState={
-							canManageCurrentSharedCollection ? selection.pageState : undefined
-						}
-						onToggleSelectAll={selection.togglePage}
-						actions={
-							<>
-								{spaceData && canManageCurrentSpace && (
-									<SpaceOrderSelect spaceId={spaceId} order={videoOrder} />
-								)}
-								<PageSizeSelect pageSize={pageSize} />
-							</>
-						}
-					/>
 					<SeededThumbnailsProvider value={thumbnails}>
-						<div className="grid grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-							{orderedData.map((cap, index) => {
-								const card = (
-									<SharedCapCard
-										key={cap.id}
-										cap={cap}
-										hideSharedStatus
-										isLoadingAnalytics={analyticsQuery.isLoading}
-										analytics={analytics[cap.id] || 0}
-										organizationName={
-											activeOrganization?.organization.name || ""
-										}
-										spaceName={spaceData?.name || ""}
-										userId={currentUserId}
-										canMove={canManageCurrentSharedCollection}
-										moveLocation={moveLocation}
-										moveRootLabel={moveRootLabel}
-										isSelected={
-											canManageCurrentSharedCollection &&
-											selectedCaps.includes(cap.id)
-										}
-										anyCapSelected={
-											canManageCurrentSharedCollection &&
-											selectedCaps.length > 0
-										}
-										onSelectToggle={
-											canManageCurrentSharedCollection
-												? (options) => selection.toggle(cap.id, options)
-												: undefined
-										}
-										selectedIds={selectedCaps}
-										href={
-											spaceData
-												? `/s/${cap.id}?space=${encodeURIComponent(spaceId)}`
-												: undefined
-										}
-										reorder={
-											canReorder
-												? {
-														onMoveToStart:
-															page === 1 && index === 0
-																? undefined
-																: () =>
-																		void reorderTo([cap.id], { type: "start" }),
-														onMoveEarlier:
-															page === 1 && index === 0
-																? undefined
-																: () =>
-																		void reorderTo([cap.id], {
-																			type: "earlier",
-																		}),
-														onMoveLater:
-															page >= totalPages &&
-															index === orderedData.length - 1
-																? undefined
-																: () =>
-																		void reorderTo([cap.id], { type: "later" }),
-													}
-												: undefined
-										}
-									/>
-								);
-								if (!canReorder) return card;
-								const indicator =
-									dropTarget?.id === cap.id ? dropTarget.side : null;
-								return (
-									<motion.fieldset
-										key={cap.id}
-										layout={reduceMotion ? false : "position"}
-										layoutDependency={orderedData}
-										transition={{ type: "spring", stiffness: 520, damping: 42 }}
-										className="relative min-w-0"
-										onDragOver={(event) => handleReorderDragOver(event, cap.id)}
-										onDrop={(event) => handleReorderDrop(event, cap.id)}
-										onKeyDown={(event) =>
-											handleReorderKeyDown(event, cap.id, index)
-										}
-									>
-										{card}
-										<span
-											aria-hidden
-											className={clsx(
-												"absolute -inset-y-1 w-[3px] rounded-full bg-blue-9 transition-opacity duration-150 pointer-events-none",
-												indicator === "before" ? "-left-3" : "-right-3",
-												indicator ? "opacity-100" : "opacity-0",
-											)}
-										/>
-									</motion.fieldset>
-								);
-							})}
-						</div>
+						{groupCapsByKind(orderedData).map((group, groupIndex) => (
+							<section
+								key={group.kind}
+								aria-label={CAP_KIND_LABEL[group.kind]}
+								className={groupIndex > 0 ? "mt-10" : undefined}
+							>
+								<CapListHeader
+									title={CAP_KIND_LABEL[group.kind]}
+									count={kindCounts ? kindCounts[group.kind] : undefined}
+									selectionState={
+										groupIndex === 0 && canManageCurrentSharedCollection
+											? selection.pageState
+											: undefined
+									}
+									onToggleSelectAll={selection.togglePage}
+									actions={
+										groupIndex === 0 ? (
+											<>
+												{spaceData && canManageCurrentSpace && (
+													<SpaceOrderSelect
+														spaceId={spaceId}
+														order={videoOrder}
+													/>
+												)}
+												<PageSizeSelect pageSize={pageSize} />
+											</>
+										) : undefined
+									}
+								/>
+								<div className="grid grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+									{group.caps.map((cap) => {
+										const index = orderedData.indexOf(cap);
+										const card = (
+											<SharedCapCard
+												key={cap.id}
+												cap={cap}
+												hideSharedStatus
+												isLoadingAnalytics={analyticsQuery.isLoading}
+												analytics={analytics[cap.id] || 0}
+												organizationName={
+													activeOrganization?.organization.name || ""
+												}
+												spaceName={spaceData?.name || ""}
+												userId={currentUserId}
+												canMove={canManageCurrentSharedCollection}
+												moveLocation={moveLocation}
+												moveRootLabel={moveRootLabel}
+												isSelected={
+													canManageCurrentSharedCollection &&
+													selectedCaps.includes(cap.id)
+												}
+												anyCapSelected={
+													canManageCurrentSharedCollection &&
+													selectedCaps.length > 0
+												}
+												onSelectToggle={
+													canManageCurrentSharedCollection
+														? (options) => selection.toggle(cap.id, options)
+														: undefined
+												}
+												selectedIds={selectedCaps}
+												href={
+													spaceData
+														? `/s/${cap.id}?space=${encodeURIComponent(spaceId)}`
+														: undefined
+												}
+												reorder={
+													canReorder
+														? {
+																onMoveToStart:
+																	page === 1 && index === 0
+																		? undefined
+																		: () =>
+																				void reorderTo([cap.id], {
+																					type: "start",
+																				}),
+																onMoveEarlier:
+																	page === 1 && index === 0
+																		? undefined
+																		: () =>
+																				void reorderTo([cap.id], {
+																					type: "earlier",
+																				}),
+																onMoveLater:
+																	page >= totalPages &&
+																	index === orderedData.length - 1
+																		? undefined
+																		: () =>
+																				void reorderTo([cap.id], {
+																					type: "later",
+																				}),
+															}
+														: undefined
+												}
+											/>
+										);
+										if (!canReorder) return card;
+										const indicator =
+											dropTarget?.id === cap.id ? dropTarget.side : null;
+										return (
+											<motion.fieldset
+												key={cap.id}
+												layout={reduceMotion ? false : "position"}
+												layoutDependency={orderedData}
+												transition={{
+													type: "spring",
+													stiffness: 520,
+													damping: 42,
+												}}
+												className="relative min-w-0"
+												onDragOver={(event) =>
+													handleReorderDragOver(event, cap.id)
+												}
+												onDrop={(event) => handleReorderDrop(event, cap.id)}
+												onKeyDown={(event) =>
+													handleReorderKeyDown(event, cap.id, index)
+												}
+											>
+												{card}
+												<span
+													aria-hidden
+													className={clsx(
+														"absolute -inset-y-1 w-[3px] rounded-full bg-blue-9 transition-opacity duration-150 pointer-events-none",
+														indicator === "before" ? "-left-3" : "-right-3",
+														indicator ? "opacity-100" : "opacity-0",
+													)}
+												/>
+											</motion.fieldset>
+										);
+									})}
+								</div>
+							</section>
+						))}
 					</SeededThumbnailsProvider>
 					{canReorder && (
 						<p aria-live="polite" className="sr-only">

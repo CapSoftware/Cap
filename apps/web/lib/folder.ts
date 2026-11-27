@@ -8,6 +8,7 @@ import {
 	spaces,
 	spaceVideos,
 	users,
+	videoNotes,
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
@@ -268,6 +269,8 @@ export const getVideosByFolderId = Effect.fn(function* (
 					sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
 						Boolean,
 					),
+				isNote: videos.isNote,
+				noteExcerpt: videoNotes.excerpt,
 			})
 			.from(videos)
 			.innerJoin(folderVideosPage, eq(videos.id, folderVideosPage.id))
@@ -279,6 +282,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 			)
 			.leftJoin(users, eq(videos.ownerId, users.id))
 			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+			.leftJoin(videoNotes, eq(videos.id, videoNotes.videoId))
 			.groupBy(
 				videos.id,
 				videos.ownerId,
@@ -288,6 +292,8 @@ export const getVideosByFolderId = Effect.fn(function* (
 				videos.metadata,
 				videos.source,
 				videos.isScreenshot,
+				videos.isNote,
+				videoNotes.excerpt,
 				videos.duration,
 				videos.settings,
 				videos.orgId,
@@ -379,6 +385,8 @@ export const getVideosByFolderId = Effect.fn(function* (
 					source: video.source,
 					duration: video.duration ?? undefined,
 					isScreenshot: video.isScreenshot,
+					isNote: video.isNote,
+					noteExcerpt: video.noteExcerpt,
 					hasPassword: video.hasPassword,
 					hasInheritedPassword: rules.hasInheritedPassword,
 					inheritedPasswordSources: rules.inheritedPasswordSources,

@@ -65,6 +65,8 @@ describe.each([
 						"2026-10-23 12:00:00",
 						false,
 						false,
+						false,
+						null,
 					],
 				],
 			});

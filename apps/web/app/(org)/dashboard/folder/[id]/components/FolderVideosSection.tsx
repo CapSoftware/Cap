@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 import { useMemo } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { CAP_KIND_LABEL, groupCapsByKind } from "@/lib/cap-kind";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import type { MoveLocation } from "@/lib/move-items";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
@@ -156,97 +157,111 @@ export default function FolderVideosSection({
 
 	const analytics = analyticsQuery.data || {};
 
+	const kindGroups = groupCapsByKind(visibleVideos);
+	const sections =
+		kindGroups.length > 0
+			? kindGroups
+			: [{ kind: "videos" as const, caps: visibleVideos }];
+
 	return (
 		<>
-			<CapListHeader
-				title="Videos and screenshots"
-				count={visibleVideos.length > 0 ? visibleVideos.length : undefined}
-				selectionState={
-					canSelect && visibleVideos.length > 0
-						? selection.pageState
-						: undefined
-				}
-				onToggleSelectAll={selection.togglePage}
-			/>
-			<div className="grid relative grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-				{visibleVideos.length === 0 && !isUploading ? (
-					<div
-						className={clsx(
-							libraryDoodleHost,
-							"flex flex-col col-span-full gap-3 items-center px-6 py-12 text-center rounded-2xl border border-dashed border-gray-5 bg-gray-1",
-						)}
-					>
-						<EmptyFolderDoodle />
-						<div className="flex flex-col gap-1 items-center">
-							<p className="text-base font-medium text-gray-12">
-								This folder is empty
-							</p>
-							<p className="max-w-sm text-sm text-gray-10 text-pretty">
-								{canMove
-									? "Drag Caps onto this folder from My Caps, use Move on any Cap, or upload one here."
-									: "Caps added to this folder will show up here."}
-							</p>
-						</div>
-					</div>
-				) : (
-					<>
-						{isUploading && (
-							<UploadPlaceholderCard key={"upload-placeholder"} />
-						)}
-						<AnimatePresence
-							initial={false}
-							mode="popLayout"
-							custom={leavingCaps.leaving}
-						>
-							{visibleVideos.map((video) => (
-								<CapGridItem
-									key={video.id}
-									id={video.id}
-									layoutDependency={visibleVideos}
-									returning={leavingCaps.returning.has(video.id)}
+			{sections.map((section, sectionIndex) => (
+				<section
+					key={section.kind}
+					aria-label={CAP_KIND_LABEL[section.kind]}
+					className={sectionIndex > 0 ? "mt-10" : undefined}
+				>
+					<CapListHeader
+						title={CAP_KIND_LABEL[section.kind]}
+						count={section.caps.length > 0 ? section.caps.length : undefined}
+						selectionState={
+							sectionIndex === 0 && canSelect && visibleVideos.length > 0
+								? selection.pageState
+								: undefined
+						}
+						onToggleSelectAll={selection.togglePage}
+					/>
+					<div className="grid relative grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+						{visibleVideos.length === 0 && !isUploading ? (
+							<div
+								className={clsx(
+									libraryDoodleHost,
+									"flex flex-col col-span-full gap-3 items-center px-6 py-12 text-center rounded-2xl border border-dashed border-gray-5 bg-gray-1",
+								)}
+							>
+								<EmptyFolderDoodle />
+								<div className="flex flex-col gap-1 items-center">
+									<p className="text-base font-medium text-gray-12">
+										This folder is empty
+									</p>
+									<p className="max-w-sm text-sm text-gray-10 text-pretty">
+										{canMove
+											? "Drag Caps onto this folder from My Caps, use Move on any Cap, or upload one here."
+											: "Caps added to this folder will show up here."}
+									</p>
+								</div>
+							</div>
+						) : (
+							<>
+								{isUploading && sectionIndex === 0 && (
+									<UploadPlaceholderCard key={"upload-placeholder"} />
+								)}
+								<AnimatePresence
+									initial={false}
+									mode="popLayout"
+									custom={leavingCaps.leaving}
 								>
-									<CapCard
-										key={video.id}
-										cap={video}
-										analytics={analytics[video.id] || 0}
-										userId={user?.id}
-										isLoadingAnalytics={analyticsQuery.isLoading}
-										isSelected={selectedCaps.includes(video.id)}
-										anyCapSelected={selectedCaps.length > 0}
-										isDeleting={isDeletingCaps || isDeletingCap}
-										onSelectToggle={
-											canSelect
-												? (options) => selection.toggle(video.id, options)
-												: undefined
-										}
-										onArchiveToggle={
-											canArchive
-												? () =>
-														void archiveCaps.mutate({
-															ids: [video.id],
-															archived: true,
-														})
-												: undefined
-										}
-										selectedIds={selectedCaps}
-										canMove={canMove}
-										moveLocation={location}
-										moveRootLabel={rootLabel}
-										currentFolderId={currentFolderId}
-										onDelete={() => {
-											if (selectedCaps.length > 0) {
-												deleteCaps(selectedCaps);
-											} else {
-												deleteCap(video.id);
-											}
-										}}
-									/>
-								</CapGridItem>
-							))}
-						</AnimatePresence>
-					</>
-				)}
-			</div>
+									{section.caps.map((video) => (
+										<CapGridItem
+											key={video.id}
+											id={video.id}
+											layoutDependency={visibleVideos}
+											returning={leavingCaps.returning.has(video.id)}
+										>
+											<CapCard
+												key={video.id}
+												cap={video}
+												analytics={analytics[video.id] || 0}
+												userId={user?.id}
+												isLoadingAnalytics={analyticsQuery.isLoading}
+												isSelected={selectedCaps.includes(video.id)}
+												anyCapSelected={selectedCaps.length > 0}
+												isDeleting={isDeletingCaps || isDeletingCap}
+												onSelectToggle={
+													canSelect
+														? (options) => selection.toggle(video.id, options)
+														: undefined
+												}
+												onArchiveToggle={
+													canArchive
+														? () =>
+																void archiveCaps.mutate({
+																	ids: [video.id],
+																	archived: true,
+																})
+														: undefined
+												}
+												selectedIds={selectedCaps}
+												canMove={canMove}
+												moveLocation={location}
+												moveRootLabel={rootLabel}
+												currentFolderId={currentFolderId}
+												onDelete={() => {
+													if (selectedCaps.length > 0) {
+														deleteCaps(selectedCaps);
+													} else {
+														deleteCap(video.id);
+													}
+												}}
+											/>
+										</CapGridItem>
+									))}
+								</AnimatePresence>
+							</>
+						)}
+					</div>
+				</section>
+			))}
 			{canMove && (
 				<DragHint caps="Drop on a folder or the path above to move" />
 			)}

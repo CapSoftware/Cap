@@ -16,6 +16,7 @@ import {
 	Bell,
 	Building2,
 	CreditCard,
+	FileText,
 	FileVideo,
 	FolderSearch,
 	Image,
@@ -31,7 +32,15 @@ import {
 	UsersRound,
 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+	Fragment,
+	type ReactNode,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
+import { CAP_KIND_LABEL, groupCapsByKind } from "@/lib/cap-kind";
 import {
 	loomImportDestinationFromPathname,
 	loomImportPageHref,
@@ -99,7 +108,7 @@ const formatDuration = (duration: number | null) => {
 
 const formatVideoSubtitle = (video: DashboardVideoSearchResult) => {
 	const parts = [
-		video.isScreenshot ? "Screenshot" : "Video",
+		video.isNote ? "Note" : video.isScreenshot ? "Screenshot" : "Video",
 		video.ownerName ? `by ${video.ownerName}` : null,
 		videoDateFormatter.format(new Date(video.createdAt)),
 		formatDuration(video.duration),
@@ -403,26 +412,41 @@ export function DashboardSearch({
 						<CommandList className="overflow-y-auto px-2 pt-1 pb-2 h-[min(60vh,440px)] max-h-[min(60vh,440px)]">
 							{canSearchVideos && (
 								<>
-									<SectionHeader>Videos and screenshots</SectionHeader>
+									{!hasVideoResults || videoLoading ? (
+										<SectionHeader>Videos, images and notes</SectionHeader>
+									) : null}
 									{videoLoading ? (
 										<div className="flex gap-3 items-center px-2.5 py-2 text-[13px] text-gray-10">
 											<Loader2 className="flex-shrink-0 animate-spin size-4" />
-											Searching videos…
+											Searching your caps…
 										</div>
 									) : hasVideoResults ? (
-										videoResults.map((video) => (
-											<ResultRow
-												key={video.id}
-												icon={video.isScreenshot ? Image : FileVideo}
-												title={video.name}
-												subtitle={formatVideoSubtitle(video)}
-												value={`video-${video.id}`}
-												onSelect={() => navigateTo(`/s/${video.id}`)}
-											/>
+										groupCapsByKind(videoResults).map((group) => (
+											<Fragment key={group.kind}>
+												<SectionHeader>
+													{CAP_KIND_LABEL[group.kind]}
+												</SectionHeader>
+												{group.caps.map((video) => (
+													<ResultRow
+														key={video.id}
+														icon={
+															video.isNote
+																? FileText
+																: video.isScreenshot
+																	? Image
+																	: FileVideo
+														}
+														title={video.name}
+														subtitle={formatVideoSubtitle(video)}
+														value={`video-${video.id}`}
+														onSelect={() => navigateTo(`/s/${video.id}`)}
+													/>
+												))}
+											</Fragment>
 										))
 									) : (
 										<p className="px-3 py-6 text-[13px] text-center text-gray-10">
-											No videos or screenshots match{" "}
+											No videos, images or notes match{" "}
 											<span className="font-medium text-gray-12">
 												“{query.trim()}”
 											</span>

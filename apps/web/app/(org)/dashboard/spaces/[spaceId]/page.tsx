@@ -10,6 +10,7 @@ import {
 	spaces,
 	spaceVideos,
 	users,
+	videoNotes,
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
@@ -32,6 +33,7 @@ import { and, desc, eq, inArray, isNull, or, type SQL, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { capKindCountsFromTotals } from "@/lib/cap-kind";
 import { resolveDashboardPageSize } from "@/lib/dashboard-page-size";
 import { parsePageParam } from "@/lib/page-param";
 import { seedThumbnailUrls } from "@/lib/seeded-thumbnails";
@@ -405,13 +407,18 @@ export default async function SharedCapsPage(props: {
 							sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
 								Boolean,
 							),
+						isNote: videos.isNote,
+						noteExcerpt: videoNotes.excerpt,
 					})
 					.from(videos)
 					.innerJoin(spaceVideosPage, eq(videos.id, spaceVideosPage.id))
 					.leftJoin(comments, eq(videos.id, comments.videoId))
 					.leftJoin(users, eq(videos.ownerId, users.id))
 					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+					.leftJoin(videoNotes, eq(videos.id, videoNotes.videoId))
 					.groupBy(
+						videos.isNote,
+						videoNotes.excerpt,
 						videos.id,
 						videos.ownerId,
 						videos.name,
@@ -429,6 +436,14 @@ export default async function SharedCapsPage(props: {
 				db()
 					.select({
 						count: sql<number>`COUNT(DISTINCT ${videos.id})`.mapWith(Number),
+						images:
+							sql<number>`COUNT(DISTINCT CASE WHEN ${videos.isNote} = false AND ${videos.isScreenshot} = true THEN ${videos.id} END)`.mapWith(
+								Number,
+							),
+						notes:
+							sql<number>`COUNT(DISTINCT CASE WHEN ${videos.isNote} = true THEN ${videos.id} END)`.mapWith(
+								Number,
+							),
 					})
 					.from(spaceVideos)
 					.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
@@ -444,6 +459,7 @@ export default async function SharedCapsPage(props: {
 			return {
 				videos: videoRows,
 				totalCount: totalCountResult[0]?.count || 0,
+				kindCounts: capKindCountsFromTotals(totalCountResult[0]),
 			};
 		}
 
@@ -451,7 +467,7 @@ export default async function SharedCapsPage(props: {
 			spaceMembersData,
 			organizationMembersData,
 			foldersData,
-			{ videos: spaceVideoData, totalCount },
+			{ videos: spaceVideoData, totalCount, kindCounts },
 			organizationSettings,
 		] = await Promise.all([
 			fetchSpaceMembers(space.id).pipe(runPromise),
@@ -463,7 +479,7 @@ export default async function SharedCapsPage(props: {
 		const thumbnails = seedThumbnailUrls(
 			user,
 			spaceVideoData
-				.filter((video) => !video.hasActiveUpload)
+				.filter((video) => !video.hasActiveUpload && !video.isNote)
 				.map((video) => Video.VideoId.make(video.id)),
 		);
 		const resolvedSpace = await Effect.gen(function* () {
@@ -508,6 +524,7 @@ export default async function SharedCapsPage(props: {
 			<SharedCaps
 				data={processedVideoData}
 				count={totalCount}
+				kindCounts={kindCounts}
 				spaceData={resolvedSpace}
 				spaceId={params.spaceId as Space.SpaceIdOrOrganisationId}
 				analyticsEnabled={Boolean(
@@ -572,13 +589,18 @@ export default async function SharedCapsPage(props: {
 							sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
 								Boolean,
 							),
+						isNote: videos.isNote,
+						noteExcerpt: videoNotes.excerpt,
 					})
 					.from(videos)
 					.innerJoin(orgVideosPage, eq(videos.id, orgVideosPage.id))
 					.leftJoin(comments, eq(videos.id, comments.videoId))
 					.leftJoin(users, eq(videos.ownerId, users.id))
 					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+					.leftJoin(videoNotes, eq(videos.id, videoNotes.videoId))
 					.groupBy(
+						videos.isNote,
+						videoNotes.excerpt,
 						videos.id,
 						videos.ownerId,
 						videos.name,
@@ -595,6 +617,14 @@ export default async function SharedCapsPage(props: {
 				db()
 					.select({
 						count: sql<number>`COUNT(DISTINCT ${videos.id})`.mapWith(Number),
+						images:
+							sql<number>`COUNT(DISTINCT CASE WHEN ${videos.isNote} = false AND ${videos.isScreenshot} = true THEN ${videos.id} END)`.mapWith(
+								Number,
+							),
+						notes:
+							sql<number>`COUNT(DISTINCT CASE WHEN ${videos.isNote} = true THEN ${videos.id} END)`.mapWith(
+								Number,
+							),
 					})
 					.from(sharedVideos)
 					.innerJoin(videos, eq(sharedVideos.videoId, videos.id))
@@ -608,11 +638,12 @@ export default async function SharedCapsPage(props: {
 			return {
 				videos: videoRows,
 				totalCount: totalCountResult[0]?.count || 0,
+				kindCounts: capKindCountsFromTotals(totalCountResult[0]),
 			};
 		}
 
 		const [
-			{ videos: orgVideoData, totalCount },
+			{ videos: orgVideoData, totalCount, kindCounts },
 			organizationMembersData,
 			foldersData,
 			organizationSettings,
@@ -625,7 +656,7 @@ export default async function SharedCapsPage(props: {
 		const thumbnails = seedThumbnailUrls(
 			user,
 			orgVideoData
-				.filter((video) => !video.hasActiveUpload)
+				.filter((video) => !video.hasActiveUpload && !video.isNote)
 				.map((video) => Video.VideoId.make(video.id)),
 		);
 		const sharedSpacesMap = await fetchSharedSpacesForVideos(
@@ -661,6 +692,7 @@ export default async function SharedCapsPage(props: {
 			<SharedCaps
 				data={processedVideoData}
 				count={totalCount}
+				kindCounts={kindCounts}
 				hideSharedWith
 				organizationData={organization}
 				spaceId={params.spaceId as Space.SpaceIdOrOrganisationId}

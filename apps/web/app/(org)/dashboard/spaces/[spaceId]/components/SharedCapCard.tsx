@@ -27,6 +27,8 @@ interface SharedCapCardProps {
 		ownerName: string | null;
 		metadata?: VideoMetadata;
 		isScreenshot: boolean;
+		isNote?: boolean;
+		noteExcerpt?: string | null;
 		hasPassword?: boolean;
 		hasInheritedPassword?: boolean;
 		inheritedPasswordSources?: SpaceRuleSource[];
