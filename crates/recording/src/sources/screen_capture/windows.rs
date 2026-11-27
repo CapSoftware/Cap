@@ -597,7 +597,9 @@ fn create_d3d_capturer(
             let video_frame_counter = params.video_frame_counter.clone();
             let video_drop_counter = params.video_drop_counter.clone();
             let video_decimated_counter = params.video_decimated_counter.clone();
-            let mut cadence_gate = params.cadence_interval_hns.map(FrameCadenceGate::new);
+            let mut cadence_gate = params
+                .cadence_interval_hns
+                .map(FrameCadenceGate::nearest_deadline);
             let mut tx = params.video_tx.clone();
             let expected_width = params.expected_width;
             let expected_height = params.expected_height;
