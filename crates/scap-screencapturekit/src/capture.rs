@@ -144,6 +144,18 @@ impl Capturer {
         self.stream.stop().await
     }
 
+    /// Starts replacing what the running stream captures; resolves once
+    /// ScreenCaptureKit has applied the new filter.
+    pub fn update_content_filter(
+        &self,
+        filter: &sc::ContentFilter,
+    ) -> blocks::Completion<Result<(), arc::R<ns::Error>>> {
+        let (future, mut block) = blocks::ok();
+        self.stream
+            .update_content_filter_ch_block(filter, Some(&mut block));
+        future
+    }
+
     /// Sends `config` to the running stream. The returned future holds no
     /// reference to `config`, which is not `Sync`, so a `Send` task can await
     /// it after letting `config` go.

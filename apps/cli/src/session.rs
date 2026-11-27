@@ -33,6 +33,16 @@ pub struct Session {
     pub recording_meta_exists: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<StopReason>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub storage_low: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum StopReason {
+    LowStorage,
 }
 
 pub fn now_unix() -> Option<u64> {

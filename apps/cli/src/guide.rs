@@ -152,6 +152,10 @@ fn build() -> Guide {
                 code: 2,
                 meaning: "Usage / argument parse error (from clap).",
             },
+            ExitCode {
+                code: 3,
+                meaning: "Recording refused or stopped early because its drive is almost full. A `stopped` event with reason `lowStorage` before the error means everything captured was saved and the project is complete.",
+            },
         ],
         commands: vec![
             cmd(
@@ -169,18 +173,18 @@ fn build() -> Guide {
             CommandDoc {
                 requires_duration: false,
                 notes: Some(
-                    "The `started` then `stopped` sequence applies to the foreground run. With `--detach` the stream emits only `started` (or `error`) and returns immediately with recordingId+pid; the `stopped` event is delivered by `cap record stop`.",
+                    "The `started` then `stopped` sequence applies to the foreground run. With `--detach` the stream emits only `started` (or `error`) and returns immediately with recordingId+pid; the `stopped` event is delivered by `cap record stop`. Low disk space: start is refused (exit 3) at 512 MB free or less; `storage` (status low/ok, availableBytes, recordingBytes, reservedBytes) reports when free space runs low; before saving would no longer fit the recording stops by itself, saves, emits `stopped` with reason `lowStorage`, then `error` with code `lowStorage`, and exits 3. Detached sessions show `storageLow` and `stopReason` in `record status`.",
                 ),
                 ..cmd(
                     "record start",
-                    "Start a recording. Foreground emits `started` then `stopped` (success requires recordingMetaExists:true); see notes for `--detach`.",
+                    "Start a recording. Foreground emits `started` then `stopped` (success requires recordingMetaExists:true); see notes for `--detach` and low disk space.",
                     OutputMode::Ndjson,
-                    &["started", "stopped", "error"],
+                    &["started", "storage", "stopped", "error"],
                 )
             },
             cmd(
                 "record stop",
-                "Finalize a detached recording by recordingId (or --path).",
+                "Finalize a detached recording by recordingId (or --path). Exits 3 after `stopped` with reason `lowStorage` when the recording stopped itself for low disk space.",
                 OutputMode::Ndjson,
                 &["stopped", "error"],
             ),
