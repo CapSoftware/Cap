@@ -2277,14 +2277,14 @@ fn sleep_action(
     }
 }
 
-/// On macOS a pipeline only finishes cleanly before Stop when ScreenCaptureKit
-/// lost what it was capturing: the display slept or went away, the window
-/// closed, or sharing was stopped from the menu bar. Everything captured so far
-/// is intact, so the recording is stopped and saved instead of failed.
+/// A pipeline that finishes with Ok before Stop lost its capture source:
+/// macOS ScreenCaptureKit (display asleep, window closed, sharing stopped) or
+/// a Linux Audio Only output monitor. Everything captured so far is intact,
+/// so the recording is stopped and saved instead of failed.
 fn capture_ended_cleanly<E>(
     outcome: &Result<Result<(), cap_recording::PipelineDoneError>, E>,
 ) -> bool {
-    cfg!(target_os = "macos") && matches!(outcome, Ok(Ok(())))
+    cfg!(any(target_os = "macos", target_os = "linux")) && matches!(outcome, Ok(Ok(())))
 }
 
 fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> bool {
@@ -2890,7 +2890,10 @@ mod recording_failure_tests {
     #[test]
     fn a_capture_that_ends_cleanly_before_stop_is_saved_not_failed() {
         let ended: Result<Result<(), cap_recording::PipelineDoneError>, ()> = Ok(Ok(()));
-        assert_eq!(capture_ended_cleanly(&ended), cfg!(target_os = "macos"));
+        assert_eq!(
+            capture_ended_cleanly(&ended),
+            cfg!(any(target_os = "macos", target_os = "linux"))
+        );
         let task_died: Result<Result<(), cap_recording::PipelineDoneError>, ()> = Err(());
         assert!(!capture_ended_cleanly(&task_died));
     }
