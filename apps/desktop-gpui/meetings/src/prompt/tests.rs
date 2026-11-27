@@ -465,6 +465,32 @@ fn unrecognised_browser_records_on_its_own_during_a_calendar_meeting() {
 }
 
 #[test]
+fn unrecognised_browser_waits_for_an_upcoming_meeting_to_start() {
+    // The meeting starts in 60 s, inside the match window: the page using the
+    // microphone is offered and linked, but never records on its own.
+    for auto_record in [
+        AutoRecord::Detected,
+        AutoRecord::Scheduled,
+        AutoRecord::Both,
+    ] {
+        let mut s = Sim::with(PromptConfig {
+            auto_record,
+            scheduled_enabled: false,
+            ..PromptConfig::default()
+        });
+        s.events(vec![ev("e", "Standup", 61_000, 30 * MIN as i64, false)]);
+        s.take();
+        s.at(1_000).started("chrome");
+        s.at(20_000);
+        let log = s.take();
+        assert!(
+            log.iter().all(|(_, a)| !a.starts_with("record")),
+            "{auto_record:?} {log:?}"
+        );
+    }
+}
+
+#[test]
 fn recognised_meeting_tab_records_on_its_own_as_before() {
     let mut s = Sim::with(PromptConfig {
         auto_record: AutoRecord::Detected,

@@ -673,8 +673,15 @@ impl PromptPlanner {
         // or a voice note: it can be offered, but it only records on its own
         // when the calendar has a meeting now.
         let recognised = call.kind != AppKind::Browser || call.web.is_some();
-        let auto = (self.config.auto_record.for_detected() && (recognised || event.is_some()))
-            || (self.config.auto_record.for_scheduled() && event.is_some());
+        // An upcoming meeting is linked, but only one already on lets such a
+        // page record on its own.
+        let ongoing = event
+            .as_ref()
+            .is_some_and(|e| e.start <= now.wall && now.wall < e.end);
+        let auto = (self.config.auto_record.for_detected() && (recognised || ongoing))
+            || (self.config.auto_record.for_scheduled()
+                && event.is_some()
+                && (recognised || ongoing));
         if !self.config.detected_enabled && !auto {
             return;
         }
