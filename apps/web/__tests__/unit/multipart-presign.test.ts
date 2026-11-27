@@ -140,6 +140,42 @@ describe("multipart presign ownership failures", () => {
 	});
 });
 
+describe("multipart routes refuse bad file keys", () => {
+	const routeBodies = {
+		"/initiate": { contentType: "video/mp4" },
+		"/presign-part": { uploadId: "upload", partNumber: 1 },
+		"/complete": { uploadId: "upload", parts: [] },
+		"/abort": { uploadId: "upload" },
+	};
+	const badKeys = [
+		[{ videoId: "video", subpath: "../other/result.mp4" }, 400],
+		[{ videoId: "video", subpath: "./result.mp4" }, 400],
+		[{ fileKey: "owner/video/../../other/video/result.mp4" }, 400],
+		[{ fileKey: "owner" }, 400],
+		[{ videoId: "", subpath: "result.mp4" }, 400],
+		[{ videoId: "video", subpath: ".recording/outputs/generation/a.mp4" }, 403],
+	] as const;
+
+	for (const [route, routeBody] of Object.entries(routeBodies)) {
+		it.each(badKeys)(
+			`${route} answers %j with %i before touching storage`,
+			async (key, status) => {
+				vi.clearAllMocks();
+				const response = await app.request(route, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ ...routeBody, ...key }),
+				});
+				expect(response.status).toBe(status);
+				expect(await response.json()).toHaveProperty("error");
+				expect(mocks.getOwnedById).not.toHaveBeenCalled();
+				expect(mocks.storage).not.toHaveBeenCalled();
+				expect(mocks.database).not.toHaveBeenCalled();
+			},
+		);
+	}
+});
+
 describe("multipart initiation source types", () => {
 	it.each(["raw-upload.m3u8", "result.mpd", "source/original.xml"])(
 		"refuses a %s source upload before touching storage",
