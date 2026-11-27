@@ -467,27 +467,109 @@ fn unrecognised_browser_records_on_its_own_during_a_calendar_meeting() {
 #[test]
 fn unrecognised_browser_waits_for_an_upcoming_meeting_to_start() {
     // The meeting starts in 60 s, inside the match window: the page using the
-    // microphone is offered and linked, but never records on its own.
-    for auto_record in [
-        AutoRecord::Detected,
-        AutoRecord::Scheduled,
-        AutoRecord::Both,
-    ] {
-        let mut s = Sim::with(PromptConfig {
-            auto_record,
-            scheduled_enabled: false,
-            ..PromptConfig::default()
-        });
-        s.events(vec![ev("e", "Standup", 61_000, 30 * MIN as i64, false)]);
-        s.take();
-        s.at(1_000).started("chrome");
-        s.at(20_000);
-        let log = s.take();
-        assert!(
-            log.iter().all(|(_, a)| !a.starts_with("record")),
-            "{auto_record:?} {log:?}"
-        );
+    // microphone is offered but never records on its own, and the meeting is
+    // not tied to it: with scheduled automatic recording the meeting starts
+    // itself when it begins, whether the page is still on or stopped before.
+    for page_stops in [false, true] {
+        for auto_record in [
+            AutoRecord::Detected,
+            AutoRecord::Scheduled,
+            AutoRecord::Both,
+        ] {
+            let mut s = Sim::with(PromptConfig {
+                auto_record,
+                scheduled_enabled: false,
+                ..PromptConfig::default()
+            });
+            s.events(vec![ev("e", "Standup", 61_000, 30 * MIN as i64, false)]);
+            s.take();
+            s.at(1_000).started("chrome");
+            if page_stops {
+                s.at(30_000).ended("chrome");
+            }
+            s.at(60_000);
+            let early = s.take();
+            assert!(
+                early.iter().all(|(_, a)| !a.starts_with("record")),
+                "{page_stops} {auto_record:?} {early:?}"
+            );
+            s.at(61_000 + 5_000);
+            let log = s.take();
+            assert_eq!(
+                log.iter()
+                    .any(|(t, a)| *t == 66_000 && a == "record event e"),
+                auto_record.for_scheduled(),
+                "{page_stops} {auto_record:?} {log:?}"
+            );
+        }
     }
+}
+
+#[test]
+fn the_reminder_of_a_meeting_an_unrecognised_page_preceded_still_shows() {
+    // Reminders on, no automatic recording: the page's prompt does not take
+    // the meeting's reminder, which shows at its usual lead time.
+    let mut s = Sim::with(PromptConfig {
+        scheduled_enabled: true,
+        ..PromptConfig::default()
+    });
+    s.events(vec![ev("e", "Standup", 90_000, 30 * MIN as i64, false)]);
+    s.take();
+    s.at(1_000).started("chrome");
+    s.at(30_000).ended("chrome");
+    s.at(31_000);
+    let log = s.take();
+    assert!(
+        log.iter().any(|(_, a)| a.starts_with("show") && a.contains("Scheduled Standup")),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn a_cancelled_start_of_that_meeting_records_nothing() {
+    let mut s = Sim::with(PromptConfig {
+        auto_record: AutoRecord::Scheduled,
+        scheduled_enabled: false,
+        ..PromptConfig::default()
+    });
+    s.events(vec![ev("e", "Standup", 61_000, 30 * MIN as i64, false)]);
+    s.take();
+    s.at(1_000).started("chrome");
+    s.at(61_000);
+    let shown = s.take();
+    let id = shown
+        .iter()
+        .find_map(|(_, a)| {
+            a.strip_prefix("update #")
+                .or_else(|| a.strip_prefix("show #"))
+                .filter(|rest| rest.contains("Scheduled Standup") && rest.contains("countdown"))
+                .and_then(|rest| rest.split_whitespace().next()?.parse::<u64>().ok())
+        })
+        .unwrap_or_else(|| panic!("no countdown for the meeting: {shown:?}"));
+    s.cancel(id);
+    s.at(30 * MIN);
+    let log = s.take();
+    assert!(log.iter().all(|(_, a)| !a.starts_with("record")), "{log:?}");
+}
+
+#[test]
+fn a_recognised_call_app_before_a_meeting_is_unchanged() {
+    // Zoom 60 s before a meeting, scheduled automatic recording: linked to the
+    // meeting and counted down at once, as before.
+    let mut s = Sim::with(PromptConfig {
+        auto_record: AutoRecord::Scheduled,
+        scheduled_enabled: false,
+        ..PromptConfig::default()
+    });
+    s.events(vec![ev("e", "Standup", 61_000, 30 * MIN as i64, false)]);
+    s.take();
+    s.at(1_000).started("zoom");
+    s.at(10_000);
+    let log = s.take();
+    assert!(
+        log.iter().any(|(_, a)| a == "record call zoom Some(\"e\")"),
+        "{log:?}"
+    );
 }
 
 #[test]
