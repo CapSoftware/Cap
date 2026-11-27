@@ -1446,7 +1446,7 @@ fn download_videotoolbox_frame(frame: &frame::Video) -> Result<frame::Video, ffm
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-const VIDEOTOOLBOX_4K_MAX_FPS: f64 = 55.0;
+const VIDEOTOOLBOX_4K_MAX_FPS: f64 = 120.0;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const VIDEOTOOLBOX_1080P_MAX_FPS: f64 = 190.0;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
