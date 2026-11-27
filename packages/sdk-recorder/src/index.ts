@@ -110,6 +110,11 @@ export class CapRecorder {
 	}
 
 	async start(options?: Pick<RecorderOptions, "maxDurationMs">): Promise<void> {
+		if (this._phase === "error" || this._phase === "complete") {
+			this._videoId = null;
+			this._durationMs = 0;
+			this.setPhase("idle");
+		}
 		if (this._phase !== "idle") {
 			throw new Error(`Cannot start from phase "${this._phase}"`);
 		}
@@ -283,17 +288,17 @@ export class CapRecorder {
 				embedUrl,
 			};
 
+			if (this.recorder === recorder) this.cleanup();
 			this.setPhase("complete");
 			this.emit("complete", result);
-			if (this.recorder === recorder) this.cleanup();
 
 			return result;
 		} catch (error) {
 			this.assertCurrentRecording(recorder);
+			if (this.recorder === recorder) this.cleanup();
 			this.setPhase("error");
 			const err = error instanceof Error ? error : new Error(String(error));
 			this.emit("error", { error: err });
-			if (this.recorder === recorder) this.cleanup();
 			throw err;
 		}
 	}
