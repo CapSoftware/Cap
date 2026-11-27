@@ -67,12 +67,6 @@ pub fn shows_transcript(note: NoteState) -> bool {
     note.finished_with_transcript() && !note.has_notes && !note.generating
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Footer {
-    Left(u32),
-    Last,
-}
-
 pub fn card_kind(
     access: AiAccess,
     trial_remaining: Option<u32>,
@@ -134,25 +128,6 @@ pub fn chip(access: AiAccess, note: NoteState) -> Option<AskChip> {
     }
     match access {
         AiAccess::Ready | AiAccess::Trial { .. } if note.dismissed => Some(AskChip::WriteNotes),
-        _ => None,
-    }
-}
-
-pub fn footer(
-    access: AiAccess,
-    trial_remaining: Option<u32>,
-    written_on_trial: bool,
-    has_notes: bool,
-    generating: bool,
-) -> Option<Footer> {
-    if !has_notes || generating {
-        return None;
-    }
-    match access {
-        AiAccess::Trial { remaining } => Some(Footer::Left(remaining)),
-        AiAccess::NeedsUpgrade if written_on_trial && trial_remaining == Some(0) => {
-            Some(Footer::Last)
-        }
         _ => None,
     }
 }
@@ -543,13 +518,6 @@ pub fn live_line_text(line: LiveLine) -> (&'static str, Option<&'static str>) {
     }
 }
 
-pub fn footer_text(footer: Footer) -> String {
-    match footer {
-        Footer::Left(n) => tr::cap_ai::footer::left(n as usize),
-        Footer::Last => tr::cap_ai::footer::last().into(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -887,36 +855,6 @@ mod tests {
         assert!(is_dismissed(&back));
     }
 
-    #[test]
-    fn the_trial_footer_counts_down_then_says_last() {
-        assert_eq!(
-            footer(AiAccess::Trial { remaining: 2 }, Some(2), true, true, false),
-            Some(Footer::Left(2))
-        );
-        assert_eq!(
-            footer(AiAccess::NeedsUpgrade, Some(0), true, true, false),
-            Some(Footer::Last)
-        );
-        assert_eq!(
-            footer(AiAccess::NeedsUpgrade, Some(0), false, true, false),
-            None
-        );
-        assert_eq!(footer(AiAccess::Ready, None, false, true, false), None);
-        assert_eq!(
-            footer(
-                AiAccess::Trial { remaining: 2 },
-                Some(2),
-                true,
-                false,
-                false
-            ),
-            None
-        );
-        assert_eq!(
-            footer(AiAccess::Trial { remaining: 2 }, Some(2), true, true, true),
-            None
-        );
-    }
     #[test]
     fn the_pro_row_shows_for_everyone_not_on_pro_where_cap_ai_is_sold() {
         let sold = |access, trial| pro_row(access, trial, true);

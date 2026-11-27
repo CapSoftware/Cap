@@ -4324,10 +4324,6 @@ too_short = "この通話は短すぎてまとめられません。"
 unavailable_title = "このサーバーではCap AIのメモを利用できません"
 free_left = { other = "無料であと{count}件" }
 
-[cap_ai.footer]
-last = "Cap AIが作成。無料で使えるのはこれが最後でした"
-left = { other = "Cap AIが作成。無料であと{count}件" }
-
 [cap_ai.live]
 sign_in = "サインインすると、会議の終了時にCap AIがまとめます"
 unavailable = "このサーバーではAIメモを利用できません。文字起こしはすべて残ります。"

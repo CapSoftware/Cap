@@ -4326,10 +4326,6 @@ too_short = "This call was too short to write up."
 unavailable_title = "Cap AI notes aren't available on this server"
 free_left = { one = "{count} free note left", other = "{count} free notes left" }
 
-[cap_ai.footer]
-last = "Written by Cap AI. That was your last free note"
-left = { one = "Written by Cap AI. {count} free note left", other = "Written by Cap AI. {count} free notes left" }
-
 [cap_ai.live]
 sign_in = "Sign in and Cap AI writes this up when the meeting ends"
 unavailable = "AI notes aren't available on this server. Cap keeps the full transcript."

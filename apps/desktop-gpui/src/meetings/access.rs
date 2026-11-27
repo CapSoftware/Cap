@@ -288,10 +288,6 @@ impl Meetings {
         self.capabilities().and_then(|c| c.notes_trial_remaining)
     }
 
-    pub fn written_on_trial(&self, doc_id: &str) -> bool {
-        self.ai.on_trial(doc_id)
-    }
-
     pub fn ensure_access(&mut self, cx: &mut Context<Self>) {
         if !crate::store::auth_snapshot().signed_in() {
             return;

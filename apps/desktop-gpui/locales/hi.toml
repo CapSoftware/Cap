@@ -4324,10 +4324,6 @@ too_short = "यह कॉल लिखने के लिए बहुत छ�
 unavailable_title = "इस सर्वर पर Cap AI नोट्स उपलब्ध नहीं हैं"
 free_left = { one = "{count} मुफ़्त नोट बाकी", other = "{count} मुफ़्त नोट्स बाकी" }
 
-[cap_ai.footer]
-last = "Cap AI ने लिखा। यह आपका आखिरी मुफ़्त नोट था"
-left = { one = "Cap AI ने लिखा। {count} मुफ़्त नोट बाकी", other = "Cap AI ने लिखा। {count} मुफ़्त नोट्स बाकी" }
-
 [cap_ai.live]
 sign_in = "साइन इन करें और मीटिंग खत्म होने पर Cap AI इसे लिख देगा"
 unavailable = "इस सर्वर पर AI नोट्स उपलब्ध नहीं हैं। Cap पूरा ट्रांसक्रिप्ट रखता है।"

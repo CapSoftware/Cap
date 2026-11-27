@@ -4324,10 +4324,6 @@ too_short = "Cet appel était trop court pour un compte rendu."
 unavailable_title = "Les notes Cap AI ne sont pas disponibles sur ce serveur"
 free_left = { one = "Encore {count} note gratuite", other = "Encore {count} notes gratuites" }
 
-[cap_ai.footer]
-last = "Rédigé par Cap AI. C'était votre dernière note gratuite"
-left = { one = "Rédigé par Cap AI. Encore {count} note gratuite", other = "Rédigé par Cap AI. Encore {count} notes gratuites" }
-
 [cap_ai.live]
 sign_in = "Connectez-vous et Cap AI rédigera le compte rendu à la fin de la réunion"
 unavailable = "Les notes IA ne sont pas disponibles sur ce serveur. Cap garde la transcription complète."

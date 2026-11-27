@@ -4324,10 +4324,6 @@ too_short = "这次通话太短，无法写纪要。"
 unavailable_title = "此服务器不提供 Cap AI 笔记"
 free_left = { other = "还剩 {count} 次免费" }
 
-[cap_ai.footer]
-last = "由 Cap AI 撰写。这是你最后一次免费使用"
-left = { other = "由 Cap AI 撰写。还剩 {count} 次免费" }
-
 [cap_ai.live]
 sign_in = "登录后，会议结束时 Cap AI 会写好纪要"
 unavailable = "此服务器不提供 AI 笔记。Cap 会保留完整转写。"

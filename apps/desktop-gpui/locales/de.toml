@@ -4324,10 +4324,6 @@ too_short = "Dieses Gespräch war zu kurz für Notizen."
 unavailable_title = "Cap AI-Notizen sind auf diesem Server nicht verfügbar"
 free_left = { one = "Noch {count} kostenlose Notiz", other = "Noch {count} kostenlose Notizen" }
 
-[cap_ai.footer]
-last = "Geschrieben von Cap AI. Das war Ihre letzte kostenlose Notiz"
-left = { one = "Geschrieben von Cap AI. Noch {count} kostenlose Notiz", other = "Geschrieben von Cap AI. Noch {count} kostenlose Notizen" }
-
 [cap_ai.live]
 sign_in = "Melden Sie sich an, und Cap AI fasst das Meeting am Ende zusammen"
 unavailable = "KI-Notizen sind auf diesem Server nicht verfügbar. Cap behält das ganze Transkript."
