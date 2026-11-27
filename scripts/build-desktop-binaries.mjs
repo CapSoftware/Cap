@@ -4,7 +4,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+	recordSidecarBuild,
 	releaseBinaryMatchesDebugBinary,
+	sidecarSourceSnapshot,
 	stagedBinariesAreCurrent,
 } from "./build-desktop-binaries-cache.mjs";
 
@@ -117,6 +119,7 @@ async function buildSidecar(sidecar, target, ext) {
 	console.log(
 		`Building ${sidecar.destBinaries.join(", ")} desktop binaries for ${target}...`,
 	);
+	const snapshot = await sidecarSourceSnapshot(sidecar.watchPaths);
 	const cargo = spawnSync(
 		"cargo",
 		["build", "--release", "-p", sidecar.packageName, "--target", target],
@@ -135,6 +138,7 @@ async function buildSidecar(sidecar, target, ext) {
 		await fs.copyFile(src, dest);
 		console.log(`Copied ${src} -> ${dest}`);
 	}
+	await recordSidecarBuild(src, snapshot);
 }
 
 main().catch((err) => {
