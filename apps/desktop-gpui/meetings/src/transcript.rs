@@ -565,6 +565,21 @@ impl Transcript {
         }
     }
 
+    /// The label the user's own lines carry, as a prompt writes them: their
+    /// voice's rename, else the microphone track's name, else `self_name`.
+    /// None when those lines just say "You".
+    pub fn user_label(&self, self_name: Option<&str>) -> Option<String> {
+        let voice = self.names.as_ref().and_then(|n| n.user()).map(|id| id.0);
+        match self.speaker(Source::Mic, None, voice) {
+            SpeakerLabel::Named(name) => Some(name),
+            SpeakerLabel::User => self_name
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            SpeakerLabel::Person(_) | SpeakerLabel::Others => None,
+        }
+    }
+
     pub fn turn_speaker(&self, turn: &Turn) -> SpeakerLabel {
         self.speaker(turn.source, turn.speaker.as_deref(), turn.speaker_id)
     }
@@ -583,17 +598,17 @@ impl Transcript {
     /// participant list of a prompt. Numbered voices are left out.
     pub fn named_speakers(&self, self_name: Option<&str>) -> Vec<(String, bool)> {
         let mut out: Vec<(String, bool)> = Vec::new();
+        let mine = self.user_label(self_name);
         for turn in self.turns() {
             if self.turn_left_out(&turn) {
                 continue;
             }
             let label = self.turn_speaker(&turn);
             let entry = match &label {
-                SpeakerLabel::User => self_name
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(|name| (name.to_string(), true)),
-                SpeakerLabel::Named(name) => Some((name.clone(), false)),
+                SpeakerLabel::User => mine.clone().map(|name| (name, true)),
+                SpeakerLabel::Named(name) => {
+                    Some((name.clone(), mine.as_deref() == Some(name.as_str())))
+                }
                 SpeakerLabel::Person(_) | SpeakerLabel::Others => None,
             };
             if let Some(entry) = entry
@@ -751,12 +766,19 @@ impl Transcript {
         max_chars: usize,
         self_name: Option<&str>,
     ) -> PromptTranscript {
+        // Every line of the user's carries one label, so a line the voices
+        // never placed reads the same as their renamed voice.
+        let mine = self.user_label(self_name);
         let lines: Vec<String> = self
             .turns()
             .iter()
             .filter(|t| !self.turn_left_out(t))
             .map(|t| {
-                format!("{}: {}", self.turn_speaker(t).english(self_name), t.text)
+                let label = match self.turn_speaker(t) {
+                    SpeakerLabel::User => mine.clone().unwrap_or_else(|| "You".to_string()),
+                    other => other.english(self_name),
+                };
+                format!("{label}: {}", t.text)
             })
             .collect();
         let mut kept: Vec<String> = Vec::new();
