@@ -1,0 +1,50 @@
+name: Scratch macOS CLI build (encoder fallback)
+
+on:
+  push:
+    branches: [ci/encfb-mac-cli]
+
+jobs:
+  build:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Native deps
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp crates/recording/examples/encoder-fallback-probe.rs crates/recording/examples/encoder-fallback-pause-probe.rs "$RUNNER_TEMP/"
+          head=$(git rev-parse HEAD~1)
+          git checkout -q -f --detach "$head"
+          cp "$RUNNER_TEMP"/encoder-fallback-*.rs crates/recording/examples/
+          cargo build --release --locked -p cap --bin cap
+          cp target/release/cap out/cap-head
+          echo "$head" > out/cap-head.commit
+          cargo build --release --locked -p cap-recording --example encoder-fallback-probe --example encoder-fallback-pause-probe
+          cp target/release/examples/encoder-fallback-probe target/release/examples/encoder-fallback-pause-probe out/
+          rm crates/recording/examples/encoder-fallback-*.rs
+          git checkout -q -f --detach 2bffa46a4de88647354bc162e730e2bce0a12792
+          cargo build --release --locked -p cap --bin cap
+          cp target/release/cap out/cap-base
+          git rev-parse HEAD > out/cap-base.commit
+          rustc --version > out/toolchain.txt
+          otool -L out/cap-head > out/otool.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: encfb-mac
+          path: out
+          retention-days: 3
