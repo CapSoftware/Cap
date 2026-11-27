@@ -604,6 +604,9 @@ pub struct Meetings {
     notify_due: Option<Millis>,
     dirty_active: bool,
     dirty_transcripts: BTreeSet<String>,
+    /// Finished meetings whose count of voices is recounted once the action
+    /// editing their lines has queued all its edits.
+    speaker_recounts: HashSet<String>,
     capabilities: Option<(String, Capabilities)>,
     capabilities_task: Option<Task<()>>,
     capabilities_error: Option<(String, cloud::CloudError)>,
@@ -861,6 +864,7 @@ impl Meetings {
             notify_due: None,
             dirty_active: false,
             dirty_transcripts: BTreeSet::new(),
+            speaker_recounts: HashSet::new(),
             capabilities: None,
             capabilities_task: None,
             capabilities_error: None,
@@ -3443,12 +3447,30 @@ impl Meetings {
             }
             None => {
                 self.append_direct(doc_id, vec![line]);
-                self.speakers_follow_edits(doc_id, cx);
+                self.recount_speakers_soon(doc_id, cx);
             }
         }
         cx.emit(MeetingEvent::TranscriptChanged {
             doc_id: doc_id.to_string(),
         });
+    }
+
+    /// One recount per meeting however many lines one action edits (a bulk
+    /// spelling fix, moving a voice's lines): it is queued after the action
+    /// returns, so behind all of its edits.
+    fn recount_speakers_soon(&mut self, doc_id: &str, cx: &mut Context<Self>) {
+        if !self.speaker_recounts.insert(doc_id.to_string()) {
+            return;
+        }
+        let doc = doc_id.to_string();
+        cx.spawn(async move |this, cx| {
+            this.update(cx, |this, cx| {
+                this.speaker_recounts.remove(&doc);
+                this.speakers_follow_edits(&doc, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// A finished meeting's lines changed: once the edit is on disk, its

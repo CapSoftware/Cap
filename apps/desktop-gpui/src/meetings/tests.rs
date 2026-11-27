@@ -2461,7 +2461,13 @@ fn deleting_a_voices_lines_updates_the_notes_lists_count(cx: &mut gpui::TestAppC
         })
     });
 
-    meetings.update(cx, |m, cx| m.delete_utterances(&doc, vec!["s1".into()], cx));
+    // one action editing several lines queues one recount, behind its edits
+    meetings.update(cx, |m, cx| {
+        m.delete_utterances(&doc, vec!["s1".into()], cx);
+        m.delete_utterances(&doc, vec!["s1".into()], cx);
+        assert_eq!(m.speaker_recounts.len(), 1);
+    });
+    cx.run_until_parked();
     assert!(crate::meetings_ui::documents::flush_writer(
         Duration::from_secs(5)
     ));
