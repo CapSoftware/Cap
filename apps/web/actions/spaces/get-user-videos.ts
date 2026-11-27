@@ -10,6 +10,7 @@ import {
 	spaces,
 	spaceVideos,
 	users,
+	videoNotes,
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
@@ -34,6 +35,8 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 			createdAt: videos.createdAt,
 			metadata: videos.metadata,
 			isScreenshot: videos.isScreenshot,
+			isNote: videos.isNote,
+			noteExcerpt: videoNotes.excerpt,
 			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 			totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 			ownerName: users.name,
@@ -53,6 +56,7 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 					.leftJoin(comments, eq(videos.id, comments.videoId))
 					.leftJoin(users, eq(videos.ownerId, users.id))
 					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+					.leftJoin(videoNotes, eq(videos.id, videoNotes.videoId))
 					.leftJoin(
 						sharedVideos,
 						and(
@@ -73,6 +77,8 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 						videos.createdAt,
 						videos.metadata,
 						videos.isScreenshot,
+						videos.isNote,
+						videoNotes.excerpt,
 						users.name,
 						folders.name,
 						folders.color,
@@ -86,6 +92,7 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 					.leftJoin(comments, eq(videos.id, comments.videoId))
 					.leftJoin(users, eq(videos.ownerId, users.id))
 					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+					.leftJoin(videoNotes, eq(videos.id, videoNotes.videoId))
 					.leftJoin(
 						spaceVideos,
 						and(
@@ -106,6 +113,8 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 						videos.createdAt,
 						videos.metadata,
 						videos.isScreenshot,
+						videos.isNote,
+						videoNotes.excerpt,
 						users.name,
 						folders.name,
 						folders.color,

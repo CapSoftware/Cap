@@ -17,9 +17,20 @@ import {
 import { userIsPro } from "@cap/utils";
 import { Database, ImageUploads } from "@cap/web-backend";
 import type { ImageUpload } from "@cap/web-domain";
-import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import {
+	and,
+	count,
+	eq,
+	inArray,
+	isNull,
+	or,
+	type SQL,
+	sql,
+} from "drizzle-orm";
 import { Effect } from "effect";
 import { cache } from "react";
+import type { CapKind } from "@/lib/cap-kind";
+import { capKindCondition } from "@/lib/cap-kind-query";
 import {
 	canManageOrganizationMembers,
 	canManageOrganizationProSeats,
@@ -31,6 +42,11 @@ import {
 } from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
 import { selectProSeatProvider } from "@/utils/organization";
+
+const listedKindCount = (kind: CapKind) =>
+	sql<number>`COUNT(CASE WHEN ${videos.folderId} IS NULL AND ${videos.archivedAt} IS NULL AND ${capKindCondition(kind) as SQL} THEN 1 END)`.mapWith(
+		Number,
+	);
 
 export type Organization = {
 	organization: Omit<
@@ -372,6 +388,9 @@ async function loadActiveOrganizationData(
 				? db()
 						.select({
 							value: sql<number>`COUNT(DISTINCT ${videos.id})`,
+							videos: listedKindCount("videos"),
+							images: listedKindCount("images"),
+							notes: listedKindCount("notes"),
 						})
 						.from(videos)
 						.where(
@@ -380,7 +399,9 @@ async function loadActiveOrganizationData(
 								eq(videos.ownerId, user.id),
 							),
 						)
-				: Promise.resolve<{ value: number }[]>([]),
+				: Promise.resolve<
+						{ value: number; videos: number; images: number; notes: number }[]
+					>([]),
 			currentOrganizationRole,
 		]);
 
@@ -389,6 +410,11 @@ async function loadActiveOrganizationData(
 		organizationSettings: activeOrgInfo?.settings || null,
 		spacesData: allSpacesEntry ? [allSpacesEntry, ...spacesRows] : spacesRows,
 		userCapsCount: userCapsCountResult[0]?.value || 0,
+		userCapKindCounts: {
+			videos: userCapsCountResult[0]?.videos || 0,
+			images: userCapsCountResult[0]?.images || 0,
+			notes: userCapsCountResult[0]?.notes || 0,
+		},
 	};
 }
 
@@ -627,6 +653,7 @@ export async function getDashboardData(
 			activeData?.organizationSettings ?? null;
 		const anyNewNotifications = activeData?.anyNewNotifications ?? false;
 		const userCapsCount = activeData?.userCapsCount ?? 0;
+		const userCapKindCounts = activeData?.userCapKindCounts ?? null;
 		const userPreferences = { preferences: user.preferences };
 
 		return {
@@ -637,6 +664,7 @@ export async function getDashboardData(
 			anyNewNotifications,
 			userPreferences,
 			userCapsCount,
+			userCapKindCounts,
 		};
 	} catch (error) {
 		console.error("Failed to fetch dashboard data", error);
@@ -645,6 +673,7 @@ export async function getDashboardData(
 			organizationSelect: [],
 			spacesData: [],
 			userCapsCount: null,
+			userCapKindCounts: null,
 			anyNewNotifications: false,
 			userPreferences: null,
 			organizationSettings: null,

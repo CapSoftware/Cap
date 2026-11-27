@@ -159,6 +159,82 @@ export const meetingAskRequestSchema = z
 
 export type MeetingAskRequest = z.infer<typeof meetingAskRequestSchema>;
 
+export const MEETING_SHARE_TITLE_MAX_CHARS = 300;
+export const MEETING_SHARE_SUMMARY_MAX_CHARS = 100_000;
+export const MEETING_SHARE_NOTES_MAX_CHARS = 50_000;
+export const MEETING_SHARE_TRANSCRIPT_MAX_TURNS = 20_000;
+export const MEETING_SHARE_TURN_MAX_CHARS = 20_000;
+export const MEETING_SHARE_MAX_DURATION_SECONDS = 48 * 60 * 60;
+
+export const meetingShareDocumentIdSchema = z
+	.string()
+	.min(1)
+	.max(64)
+	.regex(/^[A-Za-z0-9_-]+$/);
+
+const shareText = (max: number) =>
+	text(max).refine(
+		(value) => !value.includes("\u0000"),
+		"must not contain null characters",
+	);
+
+export const meetingShareRequestSchema = z
+	.object({
+		documentId: meetingShareDocumentIdSchema,
+		orgId: z
+			.string()
+			.min(1)
+			.max(64)
+			.regex(/^[A-Za-z0-9_-]+$/)
+			.optional(),
+		title: shareText(MEETING_SHARE_TITLE_MAX_CHARS).default(""),
+		summaryMarkdown: shareText(MEETING_SHARE_SUMMARY_MAX_CHARS).default(""),
+		notesMarkdown: shareText(MEETING_SHARE_NOTES_MAX_CHARS).default(""),
+		transcript: z
+			.array(
+				z.object({
+					speaker: shareText(200),
+					startMs: z
+						.number()
+						.int()
+						.min(0)
+						.max(MEETING_SHARE_MAX_DURATION_SECONDS * 1000),
+					text: shareText(MEETING_SHARE_TURN_MAX_CHARS),
+				}),
+			)
+			.max(MEETING_SHARE_TRANSCRIPT_MAX_TURNS)
+			.optional(),
+		participants: z.array(shareText(200)).max(100).default([]),
+		startedAt: z.iso.datetime({ offset: true }).optional(),
+		durationSeconds: z
+			.number()
+			.min(0)
+			.max(MEETING_SHARE_MAX_DURATION_SECONDS)
+			.optional(),
+	})
+	.refine(
+		(value) =>
+			value.summaryMarkdown.trim().length > 0 ||
+			value.notesMarkdown.trim().length > 0,
+		{ message: "summaryMarkdown or notesMarkdown is required" },
+	)
+	.refine(
+		(value) => {
+			let total = 0;
+			for (const turn of value.transcript ?? []) {
+				total += turn.text.length;
+				if (total > MEETING_NOTES_TRANSCRIPT_MAX_CHARS) return false;
+			}
+			return true;
+		},
+		{
+			path: ["transcript"],
+			message: `must be at most ${MEETING_NOTES_TRANSCRIPT_MAX_CHARS} characters in total`,
+		},
+	);
+
+export type MeetingShareRequest = z.infer<typeof meetingShareRequestSchema>;
+
 export type ParseResult<T> =
 	| { ok: true; data: T }
 	| { ok: false; detail: string };

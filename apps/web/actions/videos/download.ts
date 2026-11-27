@@ -41,7 +41,7 @@ export async function downloadVideo(videoId: Video.VideoId) {
 	}
 
 	const video = query[0];
-	if (!video) {
+	if (!video || video.isNote) {
 		throw new Error("Video not found");
 	}
 
@@ -87,7 +87,7 @@ export async function getVideoDownloadInfo(
 		.from(videos)
 		.where(eq(videos.id, videoId));
 
-	if (!video) {
+	if (!video || video.isNote) {
 		throw new Error(
 			user ? "Video not found" : "Missing required data for downloading video",
 		);

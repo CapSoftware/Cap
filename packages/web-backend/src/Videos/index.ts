@@ -297,6 +297,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 		const getThumbnailURLForVideo = Effect.fn("Videos.getThumbnailURLForVideo")(
 			function* (video: Video.Video) {
+				if (video.isNote) return Option.none<string>();
 				const [bucket] = yield* storage.getAccessForVideo(video);
 				const customThumbnail = getCustomThumbnailKey({
 					id: video.id,
@@ -464,6 +465,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				if (Option.isNone(maybeVideo))
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video, password] = maybeVideo.value;
+				if (video.isNote) return yield* Effect.fail(new Video.NotFoundError());
 
 				const [row] = yield* db.use((db) =>
 					db
@@ -893,6 +895,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				if (Option.isNone(maybeVideo))
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
+				if (video.isNote) return Option.none();
 
 				const [bucket] = yield* storage.getAccessForVideo(video);
 				const [videoRow] = yield* db.use((db) =>

@@ -68,6 +68,40 @@ export function reorderIds(
 	return [...rest.slice(0, insertAt), ...block, ...rest.slice(insertAt)];
 }
 
+export function reorderIdsWithinGroups(
+	ordered: ReadonlyArray<{ id: string; group: string }>,
+	movedIds: readonly string[],
+	placement: ReorderPlacement,
+): string[] {
+	const groupOf = new Map(ordered.map((row) => [row.id, row.group]));
+	const targetGroup =
+		placement.type === "before" || placement.type === "after"
+			? groupOf.get(placement.targetId)
+			: undefined;
+	const reordered = new Map<string, string[]>();
+	for (const id of movedIds) {
+		const group = groupOf.get(id);
+		if (group === undefined || reordered.has(group)) continue;
+		if (targetGroup !== undefined && targetGroup !== group) continue;
+		reordered.set(
+			group,
+			reorderIds(
+				ordered.filter((row) => row.group === group).map((row) => row.id),
+				movedIds,
+				placement,
+			),
+		);
+	}
+	const taken = new Map<string, number>();
+	return ordered.map((row) => {
+		const next = reordered.get(row.group);
+		if (!next) return row.id;
+		const index = taken.get(row.group) ?? 0;
+		taken.set(row.group, index + 1);
+		return next[index] ?? row.id;
+	});
+}
+
 // Positions are dense (0..n-1) in the new order. Only rows whose stored value
 // differs are returned, so a move near the top of a large space rewrites a
 // short range instead of the whole list.

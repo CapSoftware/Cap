@@ -156,6 +156,8 @@ app.get(
 				if (video) {
 					if (video.ownerId !== user.id)
 						return c.json({ error: "forbidden" }, { status: 403 });
+					if (video.isNote)
+						return c.json({ error: "invalid_video_id" }, { status: 400 });
 
 					if (isScreenshot || video.isScreenshot) {
 						await db().transaction(async (tx) => {

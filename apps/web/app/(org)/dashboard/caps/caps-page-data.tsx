@@ -8,6 +8,7 @@ import {
 	spaces,
 	spaceVideos,
 	users,
+	videoNotes,
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
@@ -26,10 +27,14 @@ import {
 	isNotNull,
 	isNull,
 	or,
+	type SQL,
 	sql,
 } from "drizzle-orm";
+import { unionAll } from "drizzle-orm/mysql-core";
 import { type Array, Effect } from "effect";
 import { redirect } from "next/navigation";
+import { CAP_KINDS, type CapKind } from "@/lib/cap-kind";
+import { capKindCondition } from "@/lib/cap-kind-query";
 import { resolveDashboardPageSize } from "@/lib/dashboard-page-size";
 import { parsePageParam } from "@/lib/page-param";
 import { seedThumbnailUrls } from "@/lib/seeded-thumbnails";
@@ -131,12 +136,20 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 	return sharedSpacesMap;
 });
 
+const OVERVIEW_SECTION_SIZE: Record<CapKind, number> = {
+	videos: 10,
+	images: 5,
+	notes: 5,
+};
+
 export async function CapsPageView({
 	searchParams,
 	view,
+	kind,
 }: {
 	searchParams: Record<string, string | string[] | undefined>;
 	view: "library" | "archived";
+	kind?: CapKind;
 }) {
 	const user = await getCurrentUser();
 
@@ -150,6 +163,7 @@ export async function CapsPageView({
 		preferences: user.preferences,
 	});
 	const isArchivedView = view === "archived";
+	const isOverview = !isArchivedView && kind === undefined;
 
 	const userId = user.id;
 	const offset = (page - 1) * limit;
@@ -157,12 +171,15 @@ export async function CapsPageView({
 	// One pass gives both the library count and the archived count, so the
 	// Archived entry costs no extra round trip. The OR keeps the library rows
 	// (root, not archived) and every archived row, wherever it is filed.
+	const libraryKindCount = (kind: CapKind) =>
+		sql<number>`count(case when ${videos.archivedAt} is null and ${capKindCondition(kind) as SQL} then 1 end)`.mapWith(
+			Number,
+		);
 	const totalCountPromise = db()
 		.select({
-			count:
-				sql<number>`count(case when ${videos.archivedAt} is null then 1 end)`.mapWith(
-					Number,
-				),
+			videos: libraryKindCount("videos"),
+			images: libraryKindCount("images"),
+			notes: libraryKindCount("notes"),
 			archivedCount:
 				sql<number>`count(case when ${videos.archivedAt} is not null then 1 end)`.mapWith(
 					Number,
@@ -180,28 +197,37 @@ export async function CapsPageView({
 			),
 		);
 
-	const capsPage = db()
-		.select({ id: videos.id })
-		.from(videos)
-		.leftJoin(organizations, eq(videos.orgId, organizations.id))
-		.where(
-			and(
-				eq(videos.ownerId, userId),
-				eq(videos.orgId, user.activeOrganizationId),
-				isArchivedView
-					? isNotNull(videos.archivedAt)
-					: and(isNull(videos.folderId), isNull(videos.archivedAt)),
-				isNull(organizations.tombstoneAt),
-			),
-		)
-		.orderBy(
-			...(isArchivedView
-				? [desc(videos.archivedAt), desc(videos.id)]
-				: [desc(videos.effectiveCreatedAt), desc(videos.id)]),
-		)
-		.limit(limit)
-		.offset(offset)
-		.as("caps_page");
+	const pageIds = (pageKind: CapKind | undefined, take: number, skip: number) =>
+		db()
+			.select({ id: videos.id })
+			.from(videos)
+			.leftJoin(organizations, eq(videos.orgId, organizations.id))
+			.where(
+				and(
+					eq(videos.ownerId, userId),
+					eq(videos.orgId, user.activeOrganizationId),
+					isArchivedView
+						? isNotNull(videos.archivedAt)
+						: and(isNull(videos.folderId), isNull(videos.archivedAt)),
+					pageKind ? capKindCondition(pageKind) : undefined,
+					isNull(organizations.tombstoneAt),
+				),
+			)
+			.orderBy(
+				...(isArchivedView
+					? [desc(videos.archivedAt), desc(videos.id)]
+					: [desc(videos.effectiveCreatedAt), desc(videos.id)]),
+			)
+			.limit(take)
+			.offset(skip);
+
+	const capsPage = isOverview
+		? unionAll(
+				pageIds("videos", OVERVIEW_SECTION_SIZE.videos, 0),
+				pageIds("images", OVERVIEW_SECTION_SIZE.images, 0),
+				pageIds("notes", OVERVIEW_SECTION_SIZE.notes, 0),
+			).as("caps_page")
+		: pageIds(kind, limit, offset).as("caps_page");
 
 	const videoDataPromise = db()
 		.select({
@@ -243,6 +269,8 @@ export async function CapsPageView({
 				),
 			settings: videos.settings,
 			archivedAt: videos.archivedAt,
+			isNote: videos.isNote,
+			noteExcerpt: videoNotes.excerpt,
 		})
 		.from(videos)
 		.innerJoin(capsPage, eq(videos.id, capsPage.id))
@@ -251,6 +279,7 @@ export async function CapsPageView({
 		.leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
 		.leftJoin(users, eq(videos.ownerId, users.id))
 		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+		.leftJoin(videoNotes, eq(videos.id, videoNotes.videoId))
 		.groupBy(
 			videos.id,
 			videos.ownerId,
@@ -259,6 +288,8 @@ export async function CapsPageView({
 			videos.metadata,
 			videos.source,
 			videos.isScreenshot,
+			videos.isNote,
+			videoNotes.excerpt,
 			videos.duration,
 			videos.public,
 			videos.password,
@@ -312,17 +343,24 @@ export async function CapsPageView({
 			foldersDataPromise,
 			organizationSettingsPromise,
 		]);
-	const totalCount = isArchivedView
-		? (totalCountResult[0]?.archivedCount ?? 0)
-		: (totalCountResult[0]?.count ?? 0);
+	const counts = {
+		videos: totalCountResult[0]?.videos ?? 0,
+		images: totalCountResult[0]?.images ?? 0,
+		notes: totalCountResult[0]?.notes ?? 0,
+	};
 	const archivedCount = totalCountResult[0]?.archivedCount ?? 0;
+	const totalCount = isArchivedView
+		? archivedCount
+		: kind
+			? counts[kind]
+			: CAP_KINDS.reduce((total, each) => total + counts[each], 0);
 	const organizationSettings = organizationSettingsRow?.settings ?? null;
 
 	const videoIds = videoData.map((video) => video.id);
 	const thumbnails = seedThumbnailUrls(
 		user,
 		videoData
-			.filter((video) => !video.hasActiveUpload)
+			.filter((video) => !video.hasActiveUpload && !video.isNote)
 			.map((video) => Video.VideoId.make(video.id)),
 	);
 	const sharedSpacesMap =
@@ -393,6 +431,8 @@ export async function CapsPageView({
 			data={processedVideoData}
 			folders={foldersData}
 			count={totalCount}
+			counts={counts}
+			kind={kind}
 			thumbnails={thumbnails}
 			pageSize={limit}
 			archivedCount={archivedCount}

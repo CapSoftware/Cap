@@ -6,6 +6,18 @@ const exact: Record<string, DashboardCrumb[]> = {
 		{ label: "My Caps", href: "/dashboard/caps" },
 		{ label: "Archived" },
 	],
+	"/dashboard/caps/videos": [
+		{ label: "My Caps", href: "/dashboard/caps" },
+		{ label: "Videos" },
+	],
+	"/dashboard/caps/images": [
+		{ label: "My Caps", href: "/dashboard/caps" },
+		{ label: "Images" },
+	],
+	"/dashboard/caps/notes": [
+		{ label: "My Caps", href: "/dashboard/caps" },
+		{ label: "Notes" },
+	],
 	"/dashboard/caps/record": [{ label: "Record a Cap" }],
 	"/dashboard/analytics": [{ label: "Analytics" }],
 	"/dashboard/import": [{ label: "Import Media" }],

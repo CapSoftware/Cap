@@ -63,6 +63,8 @@ interface SidebarProps {
 	} | null;
 	aiGenerationEnabled?: boolean;
 	isScreenshot?: boolean;
+	isNote?: boolean;
+	noteTranscript?: React.ReactNode;
 	/** The owner just stopped this recording and landed here from the desktop
 	 * app — surface the transcript, which is the thing appearing live. */
 	recordingStopped?: boolean;
@@ -113,6 +115,8 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			aiData,
 			aiGenerationEnabled = false,
 			isScreenshot = false,
+			isNote = false,
+			noteTranscript = null,
 			recordingStopped = false,
 			canRecordMedia = false,
 			onCollapse,
@@ -129,10 +133,16 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 		const transcriptDisabled =
 			videoSettings?.disableTranscript ?? data.orgSettings?.disableTranscript;
 
-		const defaultTab =
-			// Landing right after stopping a recording: the transcript is what's
-			// appearing within seconds — show it instead of empty comments.
-			recordingStopped && !isScreenshot && !transcriptDisabled
+		const commentsDisabled =
+			videoSettings?.disableComments ?? data.orgSettings?.disableComments;
+
+		const defaultTab = isNote
+			? commentsDisabled && noteTranscript && !transcriptDisabled
+				? "transcript"
+				: "activity"
+			: // Landing right after stopping a recording: the transcript is what's
+				// appearing within seconds — show it instead of empty comments.
+				recordingStopped && !isScreenshot && !transcriptDisabled
 				? "transcript"
 				: isScreenshot ||
 						!(
@@ -165,22 +175,32 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			},
 			...(isScreenshot
 				? []
-				: [
-						{
-							id: "summary",
-							label: "Summary",
-							disabled:
-								videoSettings?.disableSummary ??
-								data.orgSettings?.disableSummary,
-						},
-						{
-							id: "transcript",
-							label: "Transcript",
-							disabled:
-								videoSettings?.disableTranscript ??
-								data.orgSettings?.disableTranscript,
-						},
-					]),
+				: isNote
+					? noteTranscript
+						? [
+								{
+									id: "transcript",
+									label: "Transcript",
+									disabled: transcriptDisabled,
+								},
+							]
+						: []
+					: [
+							{
+								id: "summary",
+								label: "Summary",
+								disabled:
+									videoSettings?.disableSummary ??
+									data.orgSettings?.disableSummary,
+							},
+							{
+								id: "transcript",
+								label: "Transcript",
+								disabled:
+									videoSettings?.disableTranscript ??
+									data.orgSettings?.disableTranscript,
+							},
+						]),
 		];
 
 		const paginate = (tabId: TabType) => {
@@ -216,6 +236,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 								isOwnerOrMember={isOwnerOrMember}
 								isOwner={isOwner}
 								onSeek={onSeek}
+								hideTimestamps={isNote}
 								videoId={data.id}
 								ownerName={data.owner.name}
 								canRecordMedia={canRecordMedia && !isScreenshot}
@@ -242,7 +263,11 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 						/>
 					);
 				case "transcript":
-					return <Transcript data={data} onSeek={onSeek} />;
+					return isNote ? (
+						noteTranscript
+					) : (
+						<Transcript data={data} onSeek={onSeek} />
+					);
 				case "settings":
 					return <Settings />;
 				default:

@@ -395,6 +395,7 @@ export async function recoverStalledVideoPipeline({
 			and(
 				isNull(videoUploads.videoId),
 				eq(videos.isScreenshot, false),
+				eq(videos.isNote, false),
 				gte(videos.createdAt, recentBefore),
 				lte(videos.updatedAt, staleBefore),
 				or(
@@ -426,6 +427,7 @@ export async function recoverStalledVideoPipeline({
 				and(
 					isNull(videoUploads.videoId),
 					eq(videos.isScreenshot, false),
+					eq(videos.isNote, false),
 					eq(videos.transcriptionStatus, "COMPLETE"),
 					gte(videos.createdAt, recentBefore),
 					lte(videos.updatedAt, staleBefore),

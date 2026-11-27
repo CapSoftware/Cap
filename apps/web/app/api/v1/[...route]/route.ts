@@ -2238,6 +2238,8 @@ const queueAgentCapOperation = Effect.fn("Agent.queueCapOperation")(
 					.limit(1)
 					.for("update");
 				if (!video) return { state: "not_found" };
+				if (input.kind === "duplicate_cap" && video.isNote)
+					return { state: "not_found" };
 				await tx.insert(Db.agentApiOperations).values({
 					id: operationId,
 					userId: principal.id,
@@ -7982,6 +7984,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										and(
 											eq(Db.videos.id, path.id),
 											eq(Db.videos.ownerId, principal.id),
+											eq(Db.videos.isNote, false),
 										),
 									)
 									.limit(1)

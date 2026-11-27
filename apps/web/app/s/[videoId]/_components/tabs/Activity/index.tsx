@@ -15,6 +15,7 @@ interface ActivityProps {
 	comments: CommentType[];
 	setComments: React.Dispatch<React.SetStateAction<CommentType[]>>;
 	onSeek?: (time: number) => void;
+	hideTimestamps?: boolean;
 	handleCommentSuccess: (comment: CommentType) => void;
 	videoId: Video.VideoId;
 	optimisticComments: CommentType[];
@@ -72,6 +73,7 @@ export const Activity = Object.assign(
 							videoId={videoId}
 							setShowAuthOverlay={setShowAuthOverlay}
 							onSeek={props.onSeek}
+							hideTimestamps={props.hideTimestamps}
 							commentsDisabled={commentsDisabled}
 							ownerName={ownerName}
 							canRecordMedia={canRecordMedia}

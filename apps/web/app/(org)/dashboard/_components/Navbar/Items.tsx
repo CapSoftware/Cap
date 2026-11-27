@@ -29,6 +29,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
 	cloneElement,
+	Fragment,
 	type RefObject,
 	useCallback,
 	useEffect,
@@ -41,6 +42,7 @@ import { NewOrganization } from "@/components/forms/NewOrganization";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
+import { CAP_KIND_LABEL, CAP_KINDS, capKindHref } from "@/lib/cap-kind";
 import { canUseInfra } from "@/lib/infra-access";
 import { INFRA_BASE_PATH } from "@/lib/infra-routes";
 import {
@@ -73,7 +75,8 @@ interface Props {
 const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const pathname = usePathname();
 	const [open, setOpen] = useState(false);
-	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
+	const { user, sidebarCollapsed, userCapsCount, userCapKindCounts } =
+		useDashboardContext();
 
 	const showDeveloperDashboard =
 		buildEnv.NEXT_PUBLIC_IS_CAP === "true" && canUseInfra(user.email);
@@ -81,33 +84,38 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 		buildEnv.NEXT_PUBLIC_IS_CAP &&
 		user.email.toLowerCase() === MESSENGER_ADMIN_EMAIL;
 
+	const noSubNav: { name: string; href: string; count?: number }[] = [];
 	const manageNavigation = [
 		{
 			name: "My Caps",
 			href: `/dashboard/caps`,
 			extraText: userCapsCount,
 			icon: <CapIcon />,
-			subNav: [],
+			subNav: CAP_KINDS.map((kind) => ({
+				name: CAP_KIND_LABEL[kind],
+				href: capKindHref(kind),
+				count: userCapKindCounts?.[kind],
+			})),
 		},
 		{
 			name: "Analytics",
 			href: `/dashboard/analytics`,
 			matchChildren: true,
 			icon: <ChartLineIcon />,
-			subNav: [],
+			subNav: noSubNav,
 		},
 		{
 			name: "Record a Cap",
 			href: `/dashboard/caps/record`,
 			icon: <RecordIcon />,
-			subNav: [],
+			subNav: noSubNav,
 		},
 		{
 			name: "Import Media",
 			href: loomImportPageHref(loomImportDestinationFromPathname(pathname)),
 			matchChildren: true,
 			icon: <ImportIcon />,
-			subNav: [],
+			subNav: noSubNav,
 		},
 		{
 			name: "Organization Settings",
@@ -115,7 +123,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			adminOnly: true,
 			matchChildren: true,
 			icon: <CogIcon />,
-			subNav: [],
+			subNav: noSubNav,
 		},
 		...(showDeveloperDashboard
 			? [
@@ -125,7 +133,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 						ownerOnly: true,
 						matchChildren: true,
 						icon: <CodeIcon />,
-						subNav: [] as { name: string; href: string }[],
+						subNav: noSubNav,
 					},
 				]
 			: []),
@@ -135,7 +143,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 						name: "Migration Queue",
 						href: "/dashboard/admin/loom-migrations",
 						icon: <ImportIcon />,
-						subNav: [],
+						subNav: noSubNav,
 					},
 				]
 			: []),
@@ -432,41 +440,78 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								.filter((item) => !item.ownerOnly || isOwner)
 								.filter((item) => !item.adminOnly || canViewSettings)
 								.map((item) => (
-									<div
-										key={item.name}
-										className="flex relative justify-center items-center mb-0.5 w-full"
-									>
-										{isPathActive(item.href, item.matchChildren ?? false) && (
-											<motion.div
-												animate={{
-													width: sidebarCollapsed ? 36 : "100%",
-												}}
-												transition={{
-													layout: {
-														type: "tween",
-														duration: 0.15,
-													},
-													width: {
-														type: "tween",
-														duration: 0.05,
-													},
-												}}
-												layoutId="navlinks"
-												className="absolute w-full h-9 rounded-lg pointer-events-none dashboard-nav-active"
-											/>
-										)}
+									<Fragment key={item.name}>
+										<div className="flex relative justify-center items-center mb-0.5 w-full">
+											{isPathActive(item.href, item.matchChildren ?? false) && (
+												<motion.div
+													animate={{
+														width: sidebarCollapsed ? 36 : "100%",
+													}}
+													transition={{
+														layout: {
+															type: "tween",
+															duration: 0.15,
+														},
+														width: {
+															type: "tween",
+															duration: 0.05,
+														},
+													}}
+													layoutId="navlinks"
+													className="absolute w-full h-9 rounded-lg pointer-events-none dashboard-nav-active"
+												/>
+											)}
 
-										<NavItem
-											name={item.name}
-											href={item.href}
-											icon={item.icon}
-											sidebarCollapsed={sidebarCollapsed}
-											toggleMobileNav={toggleMobileNav}
-											isPathActive={isPathActive}
-											extraText={item.extraText}
-											matchChildren={item.matchChildren ?? false}
-										/>
-									</div>
+											<NavItem
+												name={item.name}
+												href={item.href}
+												icon={item.icon}
+												sidebarCollapsed={sidebarCollapsed}
+												toggleMobileNav={toggleMobileNav}
+												isPathActive={isPathActive}
+												extraText={item.extraText}
+												matchChildren={item.matchChildren ?? false}
+											/>
+										</div>
+										{!sidebarCollapsed &&
+											item.subNav.map((subItem) => {
+												const active = isPathActive(subItem.href);
+												return (
+													<div
+														key={subItem.href}
+														className="flex relative items-center mb-0.5 w-full"
+													>
+														{active && (
+															<motion.div
+																transition={{
+																	layout: { type: "tween", duration: 0.15 },
+																}}
+																layoutId="navlinks"
+																className="absolute w-full h-8 rounded-lg pointer-events-none dashboard-nav-active"
+															/>
+														)}
+														<Link
+															href={subItem.href}
+															onClick={() => toggleMobileNav?.()}
+															aria-current={active ? "page" : undefined}
+															className={clsx(
+																"flex relative items-center pr-3 w-full h-8 text-[13px] rounded-lg border border-transparent outline-none transition pl-[38px] z-3 focus-visible:ring-2 focus-visible:ring-gray-6",
+																active
+																	? "font-medium pointer-events-none text-gray-12"
+																	: "text-gray-11 dashboard-nav-hover",
+															)}
+														>
+															<span className="truncate">{subItem.name}</span>
+															{subItem.count ? (
+																<span className="ml-auto text-xs font-normal tabular-nums text-gray-10">
+																	{subItem.count}
+																</span>
+															) : null}
+														</Link>
+													</div>
+												);
+											})}
+									</Fragment>
 								))}
 
 							<SpacesList toggleMobileNav={() => toggleMobileNav?.()} />

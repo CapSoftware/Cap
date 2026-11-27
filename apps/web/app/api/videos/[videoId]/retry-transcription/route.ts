@@ -42,6 +42,9 @@ export async function POST(
 		if (!video || video.ownerId !== user.id) {
 			return Response.json({ error: "Unauthorized" }, { status: 403 });
 		}
+		if (video.isNote) {
+			return Response.json({ error: "Video not found" }, { status: 404 });
+		}
 
 		if (await processingRetryLimited(user.id, request.headers)) {
 			return Response.json(

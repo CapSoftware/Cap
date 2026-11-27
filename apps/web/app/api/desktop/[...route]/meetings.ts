@@ -16,6 +16,7 @@ import {
 	createAssemblyAIClient,
 	getAssemblyAITranscriptionOptions,
 } from "@/lib/assemblyai";
+import { getDesktopShareUrl } from "@/lib/desktop-share-url";
 import { isNoSpokenAudioError } from "@/lib/live-transcribe-core";
 import {
 	gatewayAvailable,
@@ -66,11 +67,18 @@ import {
 	type MeetingNotesRequest,
 	meetingAskRequestSchema,
 	meetingNotesRequestSchema,
+	meetingShareDocumentIdSchema,
+	meetingShareRequestSchema,
 	type ParseResult,
 	parseMeetingBody,
 	parseTranscribeQuery,
 	type TranscribeQuery,
 } from "@/lib/meetings/schemas";
+import {
+	deleteSharedNote,
+	type ShareNoteResult,
+	upsertSharedNote,
+} from "@/lib/meetings/share";
 import { isCapSpeechService } from "@/lib/meetings/speech";
 import {
 	claimTrialMeeting,
@@ -1006,4 +1014,114 @@ app.post("/ask", async (c) => {
 		(send, signal) =>
 			answerQuestion(input, config, send, signal, transcriptBytes),
 	);
+});
+
+app.post("/share", async (c) => {
+	const user = c.get("user");
+	const log = requestLogger(user.id, "share");
+
+	if (!isJsonContentType(c.req.header("content-type"))) {
+		log({ outcome: "invalid_request", status: 400 });
+		return invalidRequest("content-type: must be application/json");
+	}
+
+	const budget = await consumeMeetingRequestBudget(
+		"share",
+		user.id,
+		c.req.raw.headers,
+	);
+	if (budget.limited) {
+		log({ outcome: "rate_limited", status: 429 });
+		return rateLimited(budget.retryAfterSeconds);
+	}
+
+	const body = await readJsonBody(c.req.raw, (json) =>
+		parseMeetingBody(meetingShareRequestSchema, json),
+	);
+	if (!body.ok) {
+		log({ outcome: body.outcome, status: body.response.status });
+		return body.response;
+	}
+
+	const bodyBudget = await consumeMeetingBodyBudget(
+		"share",
+		user.id,
+		body.inputBytes,
+		c.req.raw.headers,
+	);
+	if (bodyBudget.limited) {
+		log({ outcome: "rate_limited", status: 429, inputBytes: body.inputBytes });
+		return rateLimited(bodyBudget.retryAfterSeconds);
+	}
+
+	let note: ShareNoteResult;
+	try {
+		note = await upsertSharedNote(user, body.data);
+	} catch (error) {
+		log({
+			outcome: "failed",
+			status: 500,
+			inputBytes: body.inputBytes,
+			error: providerErrorSummary(error),
+		});
+		return errorResponse(500, { error: "share_failed" });
+	}
+	if (note === "no_organization") {
+		log({ outcome: "no_valid_org", status: 403 });
+		return errorResponse(403, { error: "no_valid_org" });
+	}
+	if (note === "conflict") {
+		log({ outcome: "conflict", status: 409 });
+		return errorResponse(409, { error: "conflict" });
+	}
+
+	const shareUrl =
+		(await getDesktopShareUrl(note.orgId, note.id)) ??
+		`${serverEnv().WEB_URL}/s/${note.id}`;
+	log({
+		outcome: note.created ? "created" : "updated",
+		status: 200,
+		inputBytes: body.inputBytes,
+	});
+	return c.json({ id: note.id, shareUrl, created: note.created }, 200, {
+		"Cache-Control": "no-store",
+	});
+});
+
+app.delete("/share/:documentId", async (c) => {
+	const user = c.get("user");
+	const log = requestLogger(user.id, "share");
+
+	const documentId = meetingShareDocumentIdSchema.safeParse(
+		c.req.param("documentId"),
+	);
+	if (!documentId.success) {
+		log({ outcome: "invalid_request", status: 400 });
+		return invalidRequest("documentId: invalid");
+	}
+
+	const budget = await consumeMeetingRequestBudget(
+		"share",
+		user.id,
+		c.req.raw.headers,
+	);
+	if (budget.limited) {
+		log({ outcome: "rate_limited", status: 429 });
+		return rateLimited(budget.retryAfterSeconds);
+	}
+
+	let deleted: boolean;
+	try {
+		deleted = await deleteSharedNote(user, documentId.data);
+	} catch (error) {
+		log({
+			outcome: "failed",
+			status: 500,
+			error: providerErrorSummary(error),
+		});
+		return errorResponse(500, { error: "share_failed" });
+	}
+
+	log({ outcome: deleted ? "deleted" : "not_shared", status: 200 });
+	return c.json({ deleted }, 200, { "Cache-Control": "no-store" });
 });

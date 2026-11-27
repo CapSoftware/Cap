@@ -16,6 +16,7 @@ const candidate = (
 	allowedEmailDomain: null,
 	linkOpenToAnyone: false,
 	isScreenshot: false,
+	isNote: false,
 	hasActiveUpload: false,
 	sourceType: "desktopMP4",
 	jobStatus: "COMPLETE",
@@ -37,6 +38,7 @@ describe("public share video eligibility", () => {
 		{ hasInheritedPassword: true },
 		{ allowedEmailDomain: "@cap.so" },
 		{ isScreenshot: true },
+		{ isNote: true },
 		{ hasActiveUpload: true },
 	])("rejects restricted or non-video candidates", (override) => {
 		expect(isPublicShareVideoCandidateEligible(candidate(override))).toBe(

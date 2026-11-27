@@ -53,6 +53,7 @@ const video = (id: string, name: string, ownerName = "Sam") =>
 		createdAt: "2026-01-01T00:00:00.000Z",
 		duration: 65,
 		isScreenshot: false,
+		isNote: false,
 	}) as DashboardVideoSearchResult;
 
 const space = (id: string, name: string) => ({

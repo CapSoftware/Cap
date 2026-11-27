@@ -260,6 +260,12 @@ describe("space and folder page round trips", () => {
 				}).pipe(
 					Effect.provide(Database.Default),
 					Effect.provide(ImageUploads.Default),
+					Effect.provideService(CurrentUser, {
+						id: User.UserId.make("user-1"),
+						email: "user@example.com",
+						activeOrganizationId: Organisation.OrganisationId.make("org-1"),
+						iconUrlOrKey: Option.none(),
+					}),
 					Effect.runPromise,
 				),
 			LIST_COLUMNS.folder,

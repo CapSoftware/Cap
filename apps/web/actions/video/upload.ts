@@ -166,6 +166,7 @@ export async function createVideoAndGetUploadUrl({
 
 			if (existingVideo) {
 				if (existingVideo.ownerId !== user.id) throw new Error("Forbidden");
+				if (existingVideo.isNote) throw new Error("Video not found");
 
 				const existingVideoDomain = Video.Video.decodeSync({
 					...existingVideo,

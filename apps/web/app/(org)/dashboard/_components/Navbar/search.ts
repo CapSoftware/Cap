@@ -27,6 +27,7 @@ export type DashboardVideoSearchResult = {
 	createdAt: string;
 	duration: number | null;
 	isScreenshot: boolean;
+	isNote: boolean;
 };
 
 const normalizeSearchQuery = (query: string) =>
@@ -90,6 +91,7 @@ export async function searchDashboardVideos(
 			createdAt: videos.createdAt,
 			duration: videos.duration,
 			isScreenshot: videos.isScreenshot,
+			isNote: videos.isNote,
 		})
 		.from(videos)
 		.innerJoin(organizations, eq(videos.orgId, organizations.id))

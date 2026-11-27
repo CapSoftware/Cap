@@ -9,6 +9,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AuthContextProvider } from "@/app/Layout/AuthContext";
 import { resolveCurrentUser } from "@/app/Layout/current-user";
+import type { CapKindCounts } from "@/lib/cap-kind";
 import { shouldOfferPasskey } from "@/lib/passkey-prompt";
 import { runPromise } from "@/lib/server";
 import { getShareableLinkUsage } from "@/lib/shareable-link-quota";
@@ -69,6 +70,7 @@ export default async function DashboardLayout({
 	let organizationSelect: Organization[] = [];
 	let activeOrganizationId: string | null = null;
 	let userCapsCount: number | null = 0;
+	let userCapKindCounts: CapKindCounts | null = null;
 	let organizationSettings: OrganizationSettings | null = null;
 	let spacesData: Spaces[] = [];
 	let anyNewNotifications = false;
@@ -78,6 +80,7 @@ export default async function DashboardLayout({
 		organizationSelect = dashboardData.organizationSelect;
 		activeOrganizationId = dashboardData.activeOrganizationId;
 		userCapsCount = dashboardData.userCapsCount;
+		userCapKindCounts = dashboardData.userCapKindCounts;
 		organizationSettings = dashboardData.organizationSettings;
 		userPreferences = dashboardData.userPreferences?.preferences || null;
 		spacesData = dashboardData.spacesData;
@@ -126,6 +129,7 @@ export default async function DashboardLayout({
 				<DashboardContexts
 					organizationSettings={organizationSettings}
 					userCapsCount={userCapsCount}
+					userCapKindCounts={userCapKindCounts}
 					organizationData={organizationSelect}
 					activeOrganization={activeOrganization || null}
 					spacesData={spacesData}

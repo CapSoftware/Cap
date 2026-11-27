@@ -63,6 +63,7 @@ const video = {
 	xStreamInfo: null,
 	firstViewEmailSentAt: null,
 	isScreenshot: true,
+	isNote: false,
 	awsRegion: null,
 	awsBucket: null,
 	videoStartTime: null,

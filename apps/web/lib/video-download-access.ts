@@ -89,7 +89,8 @@ export async function resolveVideoDownloadAccess({
 		return "member";
 	}
 
-	if (variant !== "current" || video.isScreenshot) return "denied";
+	if (variant !== "current" || video.isScreenshot || video.isNote)
+		return "denied";
 	if (await isRateLimited(RATE_LIMIT_IDS.VIEWER_DOWNLOAD)) {
 		return "rate_limited";
 	}

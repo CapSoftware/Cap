@@ -3,6 +3,7 @@ import {
 	nextInOrder,
 	positionChanges,
 	reorderIds,
+	reorderIdsWithinGroups,
 	spaceVideoOrderFromSettings,
 } from "@/lib/space-video-order";
 
@@ -124,5 +125,75 @@ describe("space order helpers", () => {
 		expect(nextInOrder(ids, "b")).toBe("c");
 		expect(nextInOrder(ids, "e")).toBeNull();
 		expect(nextInOrder(ids, "zz")).toBeNull();
+	});
+});
+
+describe("reorderIdsWithinGroups", () => {
+	const mixed = [
+		{ id: "v1", group: "videos" },
+		{ id: "n1", group: "notes" },
+		{ id: "v2", group: "videos" },
+		{ id: "i1", group: "images" },
+		{ id: "v3", group: "videos" },
+		{ id: "n2", group: "notes" },
+	];
+
+	it("steps past caps of other kinds so every move shows in its section", () => {
+		expect(reorderIdsWithinGroups(mixed, ["v3"], { type: "earlier" })).toEqual([
+			"v1",
+			"n1",
+			"v3",
+			"i1",
+			"v2",
+			"n2",
+		]);
+		expect(reorderIdsWithinGroups(mixed, ["n1"], { type: "later" })).toEqual([
+			"v1",
+			"n2",
+			"v2",
+			"i1",
+			"v3",
+			"n1",
+		]);
+	});
+
+	it("moves to the start of its own kind and leaves the others in place", () => {
+		expect(reorderIdsWithinGroups(mixed, ["n2"], { type: "start" })).toEqual([
+			"v1",
+			"n2",
+			"v2",
+			"i1",
+			"v3",
+			"n1",
+		]);
+	});
+
+	it("ignores a drop on a cap of another kind", () => {
+		expect(
+			reorderIdsWithinGroups(mixed, ["v1"], { type: "after", targetId: "n2" }),
+		).toEqual(mixed.map((row) => row.id));
+	});
+
+	it("moves only the caps that share the target's kind", () => {
+		expect(
+			reorderIdsWithinGroups(mixed, ["v1", "n1"], {
+				type: "after",
+				targetId: "v3",
+			}),
+		).toEqual(["v2", "n1", "v3", "i1", "v1", "n2"]);
+	});
+
+	it("matches reorderIds when every cap is the same kind", () => {
+		const videos = ids.map((id) => ({ id, group: "videos" }));
+		for (const placement of [
+			{ type: "earlier" },
+			{ type: "later" },
+			{ type: "start" },
+			{ type: "end" },
+			{ type: "before", targetId: "a" },
+		] as const)
+			expect(reorderIdsWithinGroups(videos, ["c"], placement)).toEqual(
+				reorderIds(ids, ["c"], placement),
+			);
 	});
 });

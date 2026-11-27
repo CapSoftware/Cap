@@ -490,6 +490,7 @@ async function getPublicSpaceVideos(
 		eq(spaceVideos.spaceId, collection.id as Space.SpaceIdOrOrganisationId),
 		isNull(spaceVideos.folderId),
 		eq(videos.public, true),
+		eq(videos.isNote, false),
 		isNull(organizations.tombstoneAt),
 		videoPasswordPredicate(
 			sql`${videos.id}`,
@@ -535,6 +536,7 @@ async function getPublicSpaceFolderVideos(
 	const where = and(
 		eq(spaceVideos.folderId, collection.id as Folder.FolderId),
 		eq(videos.public, true),
+		eq(videos.isNote, false),
 		isNull(organizations.tombstoneAt),
 		videoPasswordPredicate(
 			sql`${videos.id}`,
@@ -580,6 +582,7 @@ async function getPublicOrgFolderVideos(
 	const where = and(
 		eq(sharedVideos.folderId, collection.id as Folder.FolderId),
 		eq(videos.public, true),
+		eq(videos.isNote, false),
 		isNull(organizations.tombstoneAt),
 		videoPasswordPredicate(
 			sql`${videos.id}`,
@@ -625,6 +628,7 @@ async function getPublicUserFolderVideos(
 	const where = and(
 		eq(videos.folderId, collection.id as Folder.FolderId),
 		eq(videos.public, true),
+		eq(videos.isNote, false),
 		isNull(organizations.tombstoneAt),
 		videoPasswordPredicate(
 			sql`${videos.id}`,
@@ -727,6 +731,7 @@ async function getPublicSpaceFolderVideoCounts(
 			and(
 				inArray(spaceVideos.folderId, folderIds),
 				eq(videos.public, true),
+				eq(videos.isNote, false),
 				isNull(organizations.tombstoneAt),
 				videoPasswordPredicate(
 					sql`${videos.id}`,
@@ -754,6 +759,7 @@ async function getPublicOrgFolderVideoCounts(
 			and(
 				inArray(sharedVideos.folderId, folderIds),
 				eq(videos.public, true),
+				eq(videos.isNote, false),
 				isNull(organizations.tombstoneAt),
 				videoPasswordPredicate(
 					sql`${videos.id}`,
@@ -780,6 +786,7 @@ async function getPublicUserFolderVideoCounts(
 			and(
 				inArray(videos.folderId, folderIds),
 				eq(videos.public, true),
+				eq(videos.isNote, false),
 				isNull(organizations.tombstoneAt),
 				videoPasswordPredicate(
 					sql`${videos.id}`,

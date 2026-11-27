@@ -32,7 +32,7 @@ async function getVideoOrThrow(videoId: string) {
 		.from(videos)
 		.where(eq(videos.id, Video.VideoId.make(videoId)));
 
-	if (!video) {
+	if (!video || video.isNote) {
 		throw new Error("Video not found");
 	}
 	return video;

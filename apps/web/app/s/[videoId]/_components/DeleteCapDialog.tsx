@@ -31,7 +31,7 @@ export default function DeleteCapDialog({
 		mutationFn: () => rpc.VideoDelete(videoId),
 		onSuccess: () => {
 			toast.success("Cap deleted successfully");
-			push("/dashboard/caps?page=1");
+			push("/dashboard/caps");
 		},
 		onError: () => {
 			toast.error("Failed to delete Cap");

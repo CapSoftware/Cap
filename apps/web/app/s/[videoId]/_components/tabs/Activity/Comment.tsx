@@ -34,6 +34,7 @@ const CommentComponent: React.FC<{
 	) => void;
 	level?: number;
 	onSeek?: (time: number) => void;
+	hideTimestamps?: boolean;
 }> = ({
 	comment,
 	replies,
@@ -44,6 +45,7 @@ const CommentComponent: React.FC<{
 	onDelete,
 	level = 0,
 	onSeek,
+	hideTimestamps = false,
 }) => {
 	const user = useCurrentUser();
 	const isReplying = replyingToId === comment.id;
@@ -115,7 +117,7 @@ const CommentComponent: React.FC<{
 									<RelativeTime date={commentDate} format={formatTimeAgo} />
 								</p>
 							</Tooltip>
-							{comment.timestamp !== null && (
+							{comment.timestamp !== null && !hideTimestamps && (
 								<button
 									type="button"
 									onClick={() => {
@@ -201,6 +203,7 @@ const CommentComponent: React.FC<{
 							onDelete={onDelete}
 							level={1}
 							onSeek={onSeek}
+							hideTimestamps={hideTimestamps}
 						/>
 					))}
 				</div>

@@ -136,6 +136,7 @@ vi.mock("@/app/s/[videoId]/_components/ShareHeader", () => ({
 	ShareHeader: () => null,
 }));
 vi.mock("@/app/s/[videoId]/Share", () => ({ Share: () => null }));
+vi.mock("@/app/s/[videoId]/NoteShare", () => ({ NoteShare: () => null }));
 
 import { PasswordGate } from "@/app/s/[videoId]/_components/PasswordGate";
 import ShareVideoPage from "@/app/s/[videoId]/page";

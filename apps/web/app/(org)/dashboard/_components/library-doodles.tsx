@@ -387,3 +387,61 @@ export function ArchiveDoodle({ size = 88 }: { size?: number }) {
 		</Frame>
 	);
 }
+
+export function NotesDoodle({ size = 88 }: { size?: number }) {
+	return (
+		<Frame size={size} viewBox="0 0 96 80">
+			<path
+				className={cx(styles.ink, styles.draw)}
+				style={timing(0.05, 0.8)}
+				strokeWidth={3.4}
+				pathLength={1}
+				d="M 27 13 Q 27 8 32 8 L 56 8 L 70 22 L 70 67 Q 70 72 65 72 L 32 72 Q 27 72 27 67 Z"
+			/>
+			<path
+				className={cx(styles.soft, styles.draw)}
+				style={timing(0.6, 0.3)}
+				strokeWidth={3.4}
+				pathLength={1}
+				d="M 56 9 L 56 18 Q 56 22 60 22 L 69 22"
+			/>
+			<path
+				className={cx(styles.soft, styles.draw)}
+				style={timing(0.85, 0.3)}
+				strokeWidth={3.4}
+				pathLength={1}
+				d="M 37 37 L 60 37"
+			/>
+			<path
+				className={cx(styles.soft, styles.draw)}
+				style={timing(1, 0.3)}
+				strokeWidth={3.4}
+				pathLength={1}
+				d="M 37 48 L 60 48"
+			/>
+			<path
+				className={cx(styles.soft, styles.draw)}
+				style={timing(1.15, 0.25)}
+				strokeWidth={3.4}
+				pathLength={1}
+				d="M 37 59 L 50 59"
+			/>
+			<g className={styles.float}>
+				<path
+					className={cx(styles.accent, styles.draw)}
+					style={timing(1.3, 0.3)}
+					strokeWidth={3.4}
+					pathLength={1}
+					d="M 80 31 Q 86 40 80 49"
+				/>
+				<path
+					className={cx(styles.accent, styles.draw)}
+					style={timing(1.45, 0.3)}
+					strokeWidth={3.4}
+					pathLength={1}
+					d="M 87 25 Q 97 40 87 55"
+				/>
+			</g>
+		</Frame>
+	);
+}

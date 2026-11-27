@@ -9,12 +9,13 @@ import {
 import { consumeDailyAudioUnits } from "./audio-usage";
 import { MEETING_CLIP_SAMPLE_RATE } from "./wav";
 
-export type MeetingEndpoint = "transcribe" | "notes" | "ask";
+export type MeetingEndpoint = "transcribe" | "notes" | "ask" | "share";
 
 export const MEETING_REQUEST_RULE_IDS = {
 	transcribe: RATE_LIMIT_IDS.MEETINGS_TRANSCRIBE,
 	notes: RATE_LIMIT_IDS.MEETINGS_NOTES,
 	ask: RATE_LIMIT_IDS.MEETINGS_ASK,
+	share: RATE_LIMIT_IDS.MEETINGS_SHARE,
 } as const satisfies Record<MeetingEndpoint, string>;
 
 export const MEETING_AUDIO_UNIT_SECONDS = 10;
@@ -69,7 +70,7 @@ export async function consumeMeetingRequestBudget(
 	return { limited: false };
 }
 
-// Notes and Ask send the meeting with every request. On top of the unit paid
+// Notes, Ask and Share send the meeting with every request. On top of the unit paid
 // on arrival, a request is charged one more unit per started
 // MEETING_BODY_UNIT_BYTES of body past the first, against the same rule. A
 // model never reads more tokens than the UTF-8 bytes it is sent.
@@ -80,7 +81,7 @@ export function meetingBodyUnits(bytes: number): number {
 }
 
 export async function consumeMeetingBodyBudget(
-	endpoint: "notes" | "ask",
+	endpoint: "notes" | "ask" | "share",
 	userId: string,
 	bodyBytes: number,
 	headers: Headers,

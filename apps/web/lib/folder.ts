@@ -8,6 +8,7 @@ import {
 	spaces,
 	spaceVideos,
 	users,
+	videoNotes,
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
@@ -21,6 +22,7 @@ import { CurrentUser, Folder } from "@cap/web-domain";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
 import { Effect } from "effect";
+import { visibleNoteExcerpt } from "./cap-kind";
 
 export const getFolderById = Effect.fn(function* (folderId: string) {
 	if (!folderId) throw new Error("Folder ID is required");
@@ -178,6 +180,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 	if (!folderId) throw new Error("Folder ID is required");
 	const db = yield* Database;
 	const imageUploads = yield* ImageUploads;
+	const viewer = yield* CurrentUser;
 
 	const videoData = yield* db.use((db) => {
 		const folderVideosPage =
@@ -268,6 +271,8 @@ export const getVideosByFolderId = Effect.fn(function* (
 					sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
 						Boolean,
 					),
+				isNote: videos.isNote,
+				noteExcerpt: videoNotes.excerpt,
 			})
 			.from(videos)
 			.innerJoin(folderVideosPage, eq(videos.id, folderVideosPage.id))
@@ -279,6 +284,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 			)
 			.leftJoin(users, eq(videos.ownerId, users.id))
 			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+			.leftJoin(videoNotes, eq(videos.id, videoNotes.videoId))
 			.groupBy(
 				videos.id,
 				videos.ownerId,
@@ -288,6 +294,8 @@ export const getVideosByFolderId = Effect.fn(function* (
 				videos.metadata,
 				videos.source,
 				videos.isScreenshot,
+				videos.isNote,
+				videoNotes.excerpt,
 				videos.duration,
 				videos.settings,
 				videos.orgId,
@@ -379,6 +387,12 @@ export const getVideosByFolderId = Effect.fn(function* (
 					source: video.source,
 					duration: video.duration ?? undefined,
 					isScreenshot: video.isScreenshot,
+					isNote: video.isNote,
+					noteExcerpt: visibleNoteExcerpt(
+						video,
+						viewer.id,
+						rules.hasInheritedPassword,
+					),
 					hasPassword: video.hasPassword,
 					hasInheritedPassword: rules.hasInheritedPassword,
 					inheritedPasswordSources: rules.inheritedPasswordSources,

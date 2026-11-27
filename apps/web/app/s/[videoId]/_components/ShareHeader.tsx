@@ -489,11 +489,13 @@ export const ShareHeader = ({
 	};
 
 	const copyShareLink = (url: string) =>
-		copyRichVideoLink({
-			url,
-			title: displayTitle || "Cap Recording",
-			previewImageUrl: videoPreviewImageUrl(webUrl, data.id),
-		});
+		data.isNote
+			? navigator.clipboard.writeText(url)
+			: copyRichVideoLink({
+					url,
+					title: displayTitle || "Cap Recording",
+					previewImageUrl: videoPreviewImageUrl(webUrl, data.id),
+				});
 
 	const handleCopyClick = () => {
 		const video = document.querySelector("video");
@@ -684,6 +686,7 @@ export const ShareHeader = ({
 	const canEditVideo =
 		isOwner &&
 		!data.isScreenshot &&
+		!data.isNote &&
 		!data.hasActiveUpload &&
 		(data.source.type === "desktopMP4" || data.source.type === "webMP4");
 	const customThumbnail = getCustomThumbnailMetadata(data.metadata);
@@ -885,6 +888,7 @@ export const ShareHeader = ({
 					user={user}
 					onUpgradeRequest={setUpgradeModalOpen}
 					shareUrl={getVideoLink()}
+					isNote={data.isNote}
 				/>
 			)}
 			{shareLinkDialogMounted && (
@@ -901,6 +905,7 @@ export const ShareHeader = ({
 						setIsSharingDialogOpen(true);
 					}}
 					ownerIsPro={data.owner.isPro}
+					isNote={data.isNote}
 				/>
 			)}
 			{isOwner && (
@@ -929,6 +934,7 @@ export const ShareHeader = ({
 							user={user}
 							organizationSettings={data.orgSettings}
 							onSaved={refresh}
+							isNote={data.isNote}
 						/>
 					)}
 					{passwordDialogMounted && (
@@ -1134,7 +1140,7 @@ export const ShareHeader = ({
 							<div className="flex min-w-0 items-center gap-2">
 								{data.name && (
 									<SignedImageUrl
-										name={data.name}
+										name={data.owner.name ?? "Someone"}
 										image={data.owner.image}
 										className="size-8 shrink-0"
 										letterClass="text-base"
@@ -1296,7 +1302,7 @@ export const ShareHeader = ({
 													>
 														<FontAwesomeIcon className="size-3" icon={faGear} />
 														<p className="text-sm text-gray-12">
-															Video settings
+															{data.isNote ? "Note settings" : "Video settings"}
 														</p>
 													</DropdownMenuItem>
 													<DropdownMenuItem
@@ -1304,7 +1310,10 @@ export const ShareHeader = ({
 															if (!data.owner.isPro) setUpgradeModalOpen(true);
 															else setIsCtaDialogOpen(true);
 														}}
-														className="flex items-center gap-2 rounded-lg"
+														className={clsx(
+															"flex items-center gap-2 rounded-lg",
+															data.isNote && "hidden",
+														)}
 													>
 														<MousePointer2 className="size-3.5" />
 														<p className="text-sm text-gray-12">
@@ -1331,7 +1340,7 @@ export const ShareHeader = ({
 															</span>
 														) : null}
 													</DropdownMenuItem>
-													{!data.isScreenshot && (
+													{!data.isScreenshot && !data.isNote && (
 														<DropdownMenuItem
 															onClick={() => setIsThumbnailDialogOpen(true)}
 															className="flex items-center gap-2 rounded-lg"
@@ -1364,10 +1373,12 @@ export const ShareHeader = ({
 																: "Add password"}
 														</p>
 													</DropdownMenuItem>
-													<DuplicateCapMenuItem
-														videoId={data.id}
-														disabled={data.hasActiveUpload}
-													/>
+													{!data.isNote && (
+														<DuplicateCapMenuItem
+															videoId={data.id}
+															disabled={data.hasActiveUpload}
+														/>
+													)}
 													{/* Downloads used to live behind a second dots button next to
 												    the link. There is one "everything else about this Cap"
 												    menu, and this is it. */}

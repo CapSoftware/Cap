@@ -2,6 +2,7 @@
 
 import { createContext, useContext } from "react";
 import type { CurrentUser } from "@/app/Layout/AuthContext";
+import type { CapKindCounts } from "@/lib/cap-kind";
 import type {
 	Organization,
 	OrganizationSettings,
@@ -26,6 +27,7 @@ export type SharedContext = {
 	activeSpace: Spaces | null;
 	user: CurrentUser;
 	userCapsCount: number | null;
+	userCapKindCounts: CapKindCounts | null;
 	toggleSidebarCollapsed: () => void;
 	anyNewNotifications: boolean;
 	userPreferences: UserPreferences;

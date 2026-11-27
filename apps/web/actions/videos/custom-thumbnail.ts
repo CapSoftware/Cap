@@ -50,6 +50,9 @@ async function loadOwnedVideo(
 	if (video.isScreenshot) {
 		return "Screenshots already use the image as their thumbnail";
 	}
+	if (video.isNote) {
+		return "Notes do not have a thumbnail";
+	}
 	return video;
 }
 

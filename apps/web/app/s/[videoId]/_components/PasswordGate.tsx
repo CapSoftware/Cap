@@ -13,7 +13,13 @@ import {
 } from "@/components/paper-state/PaperState";
 import { TOO_MANY_PASSWORD_ATTEMPTS } from "@/lib/password-attempts";
 
-export function PasswordGate({ videoId }: { videoId: Video.VideoId }) {
+export function PasswordGate({
+	videoId,
+	isNote = false,
+}: {
+	videoId: Video.VideoId;
+	isNote?: boolean;
+}) {
 	const [password, setPassword] = useState("");
 	const router = useRouter();
 
@@ -33,8 +39,16 @@ export function PasswordGate({ videoId }: { videoId: Video.VideoId }) {
 		<PaperState
 			homeHref={buildEnv.NEXT_PUBLIC_WEB_URL}
 			doodle={<PasswordDoodle />}
-			title="This video is password protected"
-			lede="Enter the password the owner gave you to start watching."
+			title={
+				isNote
+					? "This note is password protected"
+					: "This video is password protected"
+			}
+			lede={
+				isNote
+					? "Enter the password the owner gave you to read it."
+					: "Enter the password the owner gave you to start watching."
+			}
 		>
 			<form
 				className={styles.form}
@@ -63,7 +77,7 @@ export function PasswordGate({ videoId }: { videoId: Video.VideoId }) {
 					className={styles.cta}
 					disabled={busy || !password.trim()}
 				>
-					{busy ? "Checking…" : "Watch video"}
+					{busy ? "Checking…" : isNote ? "Open note" : "Watch video"}
 				</button>
 				{failed && (
 					<p className={styles.error} role="alert">

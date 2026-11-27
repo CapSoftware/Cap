@@ -25,8 +25,14 @@ export type VideoOgData = {
 	screenshotUrl?: string;
 };
 
+export type NoteOgData = {
+	title: string;
+	ownerName?: string;
+};
+
 export type VideoOgVariant =
 	| { kind: "video"; video: VideoOgData }
+	| { kind: "note"; note: NoteOgData }
 	| { kind: "locked" }
 	| { kind: "password" }
 	| { kind: "not-found" };
@@ -298,6 +304,60 @@ const videoLayout = (
 	);
 };
 
+const noteLayout = (
+	note: NoteOgData,
+	assets: Awaited<ReturnType<typeof loadOgAssets>>,
+) => (
+	<OgCanvas background={assets.skyCenter}>
+		<div
+			style={{
+				display: "flex",
+				position: "absolute",
+				top: 0,
+				left: 0,
+				width: "100%",
+				height: "100%",
+				padding: "58px 120px 54px",
+				flexDirection: "column",
+				alignItems: "center",
+				justifyContent: "space-between",
+			}}
+		>
+			<CapWordmark />
+			<div
+				style={{
+					display: "flex",
+					flexDirection: "column",
+					alignItems: "center",
+					gap: 28,
+					textAlign: "center",
+				}}
+			>
+				<Headline size={videoTitleSize(note.title)} lines={3}>
+					{note.title}
+				</Headline>
+				{note.ownerName && (
+					<div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+						<InitialAvatar name={note.ownerName} />
+						<span
+							style={{
+								display: "block",
+								fontSize: 22,
+								fontWeight: 500,
+								color: "rgba(17,17,17,0.72)",
+								lineClamp: 1,
+							}}
+						>
+							{note.ownerName}
+						</span>
+					</div>
+				)}
+			</div>
+			<div style={{ display: "flex", height: 52 }} />
+		</div>
+	</OgCanvas>
+);
+
 const statusLayout = (
 	{
 		heading,
@@ -374,6 +434,8 @@ export async function renderVideoOg(variant: VideoOgVariant) {
 		switch (variant.kind) {
 			case "video":
 				return videoLayout(variant.video, thumbnail, assets);
+			case "note":
+				return noteLayout(variant.note, assets);
 			case "locked":
 				return statusLayout(
 					{
@@ -413,7 +475,7 @@ export async function renderVideoOg(variant: VideoOgVariant) {
 	});
 }
 
-export type VideoOgStatus = Exclude<VideoOgVariant["kind"], "video">;
+export type VideoOgStatus = Exclude<VideoOgVariant["kind"], "video" | "note">;
 
 const statusImages = new Map<VideoOgStatus, Promise<ArrayBuffer>>();
 

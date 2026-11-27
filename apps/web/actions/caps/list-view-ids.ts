@@ -12,6 +12,8 @@ import type { Organisation, Space, Video } from "@cap/web-domain";
 import { and, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { getOrganizationAccess } from "@/actions/organization/authorization";
 import { getSpaceAccess } from "@/actions/organization/space-authorization";
+import { CAP_KINDS } from "@/lib/cap-kind";
+import { capKindCondition } from "@/lib/cap-kind-query";
 import { canManageOrganizationMembers } from "@/lib/permissions/roles";
 import {
 	MAX_SELECT_ALL_ITEMS,
@@ -33,6 +35,12 @@ export async function listCapIdsInView(
 
 	if (view.type === "personal" || view.type === "archived") {
 		if (!user.activeOrganizationId) return { ids: [], truncated: false };
+		if (
+			view.type === "personal" &&
+			view.kind !== undefined &&
+			!CAP_KINDS.includes(view.kind)
+		)
+			throw new Error("Invalid view");
 		const isArchivedView = view.type === "archived";
 		const rows = await db()
 			.select({ id: videos.id })
@@ -46,6 +54,9 @@ export async function listCapIdsInView(
 					isArchivedView
 						? isNotNull(videos.archivedAt)
 						: and(isNull(videos.folderId), isNull(videos.archivedAt)),
+					view.type === "personal" && view.kind
+						? capKindCondition(view.kind)
+						: undefined,
 				),
 			)
 			.orderBy(
