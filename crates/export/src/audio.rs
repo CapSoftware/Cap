@@ -92,6 +92,7 @@ pub fn has_audio(
     crate::tracks::available_tracks(recordings, project)
         .iter()
         .any(|kind| !kind.is_video())
+        || !cap_editor::music_track_ranges(project).is_empty()
 }
 
 /// Writes the project's edited sound to `output_path` in `format`. The file
@@ -528,6 +529,33 @@ fn pcm16(sample: f32) -> [u8; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeline_music_counts_as_audio_only_when_the_mixer_uses_it() {
+        let recordings = cap_rendering::ProjectRecordingsMeta {
+            segments: Vec::new(),
+        };
+        for (enabled, end, volume_db, expected) in [
+            (true, 1.0, 0.0, true),
+            (false, 1.0, 0.0, false),
+            (true, 0.0, 0.0, false),
+            (true, 1.0, -60.0, false),
+        ] {
+            let project = serde_json::from_value(serde_json::json!({
+                "timeline": {
+                    "segments": [{ "start": 0.0, "end": 1.0, "timescale": 1.0 }],
+                    "zoomSegments": [],
+                    "audioSegments": [{
+                        "path": "music.wav", "start": 0.0, "end": end,
+                        "enabled": enabled, "volumeDb": volume_db
+                    }]
+                }
+            }))
+            .unwrap();
+            assert_eq!(has_audio(&recordings, &project), expected);
+        }
+        assert!(!has_audio(&recordings, &ProjectConfiguration::default()));
+    }
 
     #[test]
     fn formats_round_trip_their_extensions() {

@@ -355,6 +355,61 @@ mod tests {
         assert_eq!(std::fs::read_dir(&project).unwrap().count(), 1);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_screen_recording_without_captured_audio_exports_added_music() {
+        let dir = tempfile::tempdir().unwrap();
+        let tone = dir.path().join("music.wav");
+        write_tone(&tone, 1.0);
+        let project = dir.path().join("Silent.cap");
+        let mut meta = create_audio_only_project(
+            &project,
+            "Silent",
+            &AudioProjectSources {
+                microphone: Some(tone),
+                system_audio: None,
+            },
+        )
+        .unwrap();
+        let RecordingMetaInner::Studio(studio) = &mut meta.inner else {
+            panic!("Studio recording expected");
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+            panic!("multiple segments expected");
+        };
+        let music_path = inner.segments[0].mic.take().unwrap().path;
+        inner.audio_only = false;
+        meta.save_for_project().unwrap();
+        let mut config = crate::tracks::prepare_timeline(&project, None)
+            .unwrap()
+            .project;
+        config.timeline.as_mut().unwrap().audio_segments =
+            serde_json::from_value(serde_json::json!([{
+                "path": music_path.as_str(), "start": 0.0, "end": 1.0
+            }]))
+            .unwrap();
+        let output = dir.path().join("Music.wav");
+        crate::audio::export_audio(
+            project,
+            Some(config),
+            crate::audio::AudioExportFormat::Wav,
+            output.clone(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        let bytes = std::fs::read(&output).unwrap();
+        assert_eq!(bytes.len(), 44 + 48_000 * 4);
+        let peak = bytes[44..]
+            .chunks_exact(2)
+            .map(|sample| i16::from_le_bytes(sample.try_into().unwrap()).unsigned_abs())
+            .max()
+            .unwrap();
+        assert!(peak > 10_000, "music was lost: peak {peak}");
+        assert!((media_seconds(&output) - 1.0).abs() < 0.001);
+    }
+
     #[test]
     fn an_unreadable_file_leaves_nothing_behind() {
         let dir = tempfile::tempdir().unwrap();
