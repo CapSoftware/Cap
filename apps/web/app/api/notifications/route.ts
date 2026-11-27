@@ -3,7 +3,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { notifications, users } from "@cap/database/schema";
 import { Notification as APINotification } from "@cap/web-api-contract";
 import { ImageUploads } from "@cap/web-backend";
-import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, ne } from "drizzle-orm";
 import { Effect } from "effect";
 import { NextResponse } from "next/server";
 import type { NotificationType } from "@/lib/Notification";
@@ -55,20 +55,6 @@ export async function GET() {
 				desc(notifications.createdAt),
 			);
 
-		const countResults = await db()
-			.select({
-				type: notifications.type,
-				count: sql`COUNT(*)`.as("count"),
-			})
-			.from(notifications)
-			.where(
-				and(
-					eq(notifications.recipientId, currentUser.id),
-					eq(notifications.orgId, currentUser.activeOrganizationId),
-				),
-			)
-			.groupBy(notifications.type);
-
 		type NotificationCountKey = Exclude<NotificationType, "anon_view">;
 		const formattedCountResults: Record<NotificationCountKey, number> = {
 			view: 0,
@@ -77,12 +63,10 @@ export async function GET() {
 			reaction: 0,
 		};
 
-		for (const { type, count } of countResults) {
-			if (type === "anon_view") {
-				formattedCountResults.view += Number(count);
-			} else if (type in formattedCountResults) {
-				formattedCountResults[type as NotificationCountKey] += Number(count);
-			}
+		for (const { notification } of notificationsWithAuthors) {
+			const type =
+				notification.type === "anon_view" ? "view" : notification.type;
+			if (type in formattedCountResults) formattedCountResults[type]++;
 		}
 
 		const formattedNotifications = await Effect.gen(function* () {
