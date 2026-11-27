@@ -1667,6 +1667,71 @@ def flow_idle60():
             log("idle60", side, rnd, entry.get("cpu_s_60"), entry.get("ctx_switches_60"), entry.get("threads_end"), entry.get("remote_sockets"))
 
 
+AXDUMP = r'''
+import ApplicationServices
+import Foundation
+let pid = pid_t(CommandLine.arguments[1])!
+let app = AXUIElementCreateApplication(pid)
+func attr(_ e: AXUIElement, _ a: String) -> AnyObject? {
+    var v: AnyObject?
+    return AXUIElementCopyAttributeValue(e, a as CFString, &v) == .success ? v : nil
+}
+var total = 0, unnamed = 0
+var lines: [String] = []
+func walk(_ e: AXUIElement, _ depth: Int) {
+    if depth > 40 { return }
+    let role = attr(e, kAXRoleAttribute) as? String ?? ""
+    if ["AXButton", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton", "AXSlider", "AXTextField"].contains(role) {
+        total += 1
+        let name = [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, kAXValueDescriptionAttribute]
+            .compactMap { attr(e, $0) as? String }.first { !$0.isEmpty } ?? ""
+        if name.isEmpty { unnamed += 1 }
+        lines.append("\(role)\t\(name.isEmpty ? "<UNNAMED>" : name)")
+    }
+    for c in (attr(e, kAXChildrenAttribute) as? [AXUIElement]) ?? [] { walk(c, depth + 1) }
+}
+print("trusted \(AXIsProcessTrusted())")
+for w in (attr(app, kAXWindowsAttribute) as? [AXUIElement]) ?? [] {
+    lines.append("WINDOW \(attr(w, kAXTitleAttribute) as? String ?? "")")
+    walk(w, 0)
+}
+print("controls \(total) unnamed \(unnamed)")
+for l in lines { print(l) }
+'''
+
+
+def flow_ax():
+    if OS != "Darwin":
+        return
+    src = WORK / "axdump.swift"
+    src.write_text(AXDUMP)
+    subprocess.run(["swiftc", "-O", "-o", str(WORK / "axdump"), str(src)], check=True)
+    sides = [s for s in SIDES if s in ("base", "head")]
+    project = None
+    for side in sides:
+        for label, env in (("main", {}), ("settings", {"CAP_GPUI_AUTO_SETTINGS": "general"}), ("library", {"CAP_GPUI_AUTO_LIBRARY": "home"} if side == "head" else None), ("editor", "editor")):
+            if env is None:
+                continue
+            sb = Sandbox(f"ax-{label}-{side}")
+            if env == "editor":
+                if project is None:
+                    _, ent = studio_record(SIDES[0], "ax-src", secs=6)
+                    project = Path(ent["project"]) if ent.get("project") else None
+                if project is None:
+                    continue
+                dest = sb.root / "recordings" / project.name
+                shutil.copytree(project, dest)
+                env = {"CAP_GPUI_AUTO_EDITOR": str(dest)}
+            proc = sb.launch(side, f"ax-{label}", env)
+            wait_window(proc, 60)
+            time.sleep(5)
+            out = subprocess.run([str(WORK / "axdump"), str(proc.pid)], capture_output=True, text=True, timeout=60).stdout
+            head = out.splitlines()[:2]
+            record("ax", side, {"what": label, "summary": head, "unnamed": [l for l in out.splitlines() if "<UNNAMED>" in l][:40], "dump": out[-6000:]})
+            log("ax", side, label, head)
+            kill(proc)
+
+
 def flow_perf():
     """Same-machine A/B, sides rotated every round."""
     rounds = int(os.environ.get("GATE_PERF_ROUNDS", "3"))
@@ -1827,6 +1892,7 @@ def main():
         "memmap": flow_memmap,
         "exportab": flow_exportab,
         "idle60": flow_idle60,
+        "ax": flow_ax,
     }
     for name, fn in flows.items():
         if "all" not in FLOWS and name not in FLOWS:
