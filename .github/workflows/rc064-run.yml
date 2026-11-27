@@ -60,6 +60,12 @@ jobs:
           for name in app-${{ matrix.os.slug }}-base app-${{ matrix.os.slug }}-head harness-${{ matrix.os.slug }}; do
             gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n "$name" -D "$RUNNER_TEMP/dl2/$name"
           done
+          if [ -f rc064/build-run-id-v062 ]; then
+            gh run download "$(cat rc064/build-run-id-v062)" -R "$GITHUB_REPOSITORY" -n app-${{ matrix.os.slug }}-v062 -D "$RUNNER_TEMP/dl2/app-${{ matrix.os.slug }}-v062"
+            mkdir -p "$RUNNER_TEMP/apps/v062"
+            (cd "$RUNNER_TEMP/apps/v062" && tar $TARFLAGS -xzf "$RUNNER_TEMP/dl2/app-${{ matrix.os.slug }}-v062/app-${{ matrix.os.slug }}-v062.tgz")
+            cat "$RUNNER_TEMP/apps/v062/commit.txt"
+          fi
           mkdir -p "$RUNNER_TEMP/apps/base" "$RUNNER_TEMP/apps/head" "$RUNNER_TEMP/harness"
           (cd "$RUNNER_TEMP/apps/base" && tar $TARFLAGS -xzf "$RUNNER_TEMP/dl2/app-${{ matrix.os.slug }}-base/app-${{ matrix.os.slug }}-base.tgz")
           (cd "$RUNNER_TEMP/apps/head" && tar $TARFLAGS -xzf "$RUNNER_TEMP/dl2/app-${{ matrix.os.slug }}-head/app-${{ matrix.os.slug }}-head.tgz")
@@ -86,6 +92,7 @@ jobs:
           {
             echo "$RUNNER_TEMP/apps/base/bin/cap-gpui"
             echo "$RUNNER_TEMP/apps/head/bin/cap-gpui"
+            echo "$RUNNER_TEMP/apps/v062/bin/cap-gpui"
             echo "$RUNNER_TEMP/harness/deps/harness"
             command -v python3
             python3 -c 'import sys; print(sys.executable)'

@@ -30,6 +30,8 @@ jobs:
             ref: cap-v0.6.3
           - name: head
             ref: 2bffa46a4de88647354bc162e730e2bce0a12792
+          - name: v062
+            ref: cap-v0.6.2
     runs-on: ${{ matrix.os.runner }}
     timeout-minutes: 120
     env:
@@ -49,8 +51,11 @@ jobs:
       - name: Gate
         id: gate
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if grep -qw "${{ matrix.os.slug }}" "$RUNNER_TEMP/build-os.txt"; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "go=false" >> "$GITHUB_OUTPUT"; fi
+          sides=$(gh api "repos/${{ github.repository }}/contents/rc064/build-sides?ref=${{ github.sha }}" -H "Accept: application/vnd.github.raw" 2>/dev/null || echo "base head")
+          if grep -qw "${{ matrix.os.slug }}" "$RUNNER_TEMP/build-os.txt" && echo "$sides" | grep -qw "${{ matrix.side.name }}"; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "go=false" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@v4
         if: steps.gate.outputs.go == 'true'
         with:
@@ -74,6 +79,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if [ "${{ matrix.side.ref }}" = cap-v0.6.2 ]; then
+            gh api "repos/${{ github.repository }}/contents/rc064/setup-v062.js?ref=${{ github.sha }}" -H "Accept: application/vnd.github.raw" > scripts/setup.js
+          fi
           if [ "${{ matrix.side.ref }}" = cap-v0.6.3 ]; then
             # The GitHub onnxruntime archives the tag downloads are gone; same builds from NuGet (setup only).
             gh api "repos/${{ github.repository }}/contents/rc064/setup-base.js?ref=${{ github.sha }}" -H "Accept: application/vnd.github.raw" > scripts/setup.js
@@ -167,8 +175,11 @@ jobs:
       - name: Gate
         id: gate
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if grep -qw "${{ matrix.os.slug }}" "$RUNNER_TEMP/build-os.txt"; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "go=false" >> "$GITHUB_OUTPUT"; fi
+          sides=$(gh api "repos/${{ github.repository }}/contents/rc064/build-sides?ref=${{ github.sha }}" -H "Accept: application/vnd.github.raw" 2>/dev/null || echo "harness")
+          if grep -qw "${{ matrix.os.slug }}" "$RUNNER_TEMP/build-os.txt" && echo "$sides" | grep -qw harness; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "go=false" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@v4
         if: steps.gate.outputs.go == 'true'
         with:
