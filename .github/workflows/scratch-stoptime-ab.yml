@@ -43,7 +43,8 @@ jobs:
       - name: Stimulus deps
         run: python3 -m pip install --break-system-packages pygame psutil av || python3 -m pip install pygame psutil av
       - name: Screens
-        run: "$RUNNER_TEMP/bins/base/cap" targets screens --format json
+        run: |
+          "$RUNNER_TEMP/bins/base/cap" targets screens --format json
       - name: A/B 20 s
         run: |
           S=$("$RUNNER_TEMP/bins/base/cap" targets screens --format json | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
