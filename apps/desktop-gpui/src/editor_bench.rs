@@ -31,6 +31,7 @@ enum Scenario {
     Hover,
     Follow,
     Clean,
+    WheelAtEdge,
     CaptionDownload,
     TickFields,
 }
@@ -43,6 +44,7 @@ impl Scenario {
             Self::Hover => "hover",
             Self::Follow => "follow",
             Self::Clean => "clean",
+            Self::WheelAtEdge => "wheel-at-edge",
             Self::CaptionDownload => "caption-download",
             Self::TickFields => "tick-fields",
         }
@@ -80,6 +82,13 @@ impl Scenario {
                 if view.playing {
                     view.stop_for_measurement(cx);
                 }
+                view.bench_zoom_to(view.total_duration(), cx);
+            }
+            Self::WheelAtEdge => {
+                if view.playing {
+                    view.stop_for_measurement(cx);
+                }
+                view.seek_to_time(0., cx);
                 view.bench_zoom_to(view.total_duration(), cx);
             }
             Self::CaptionDownload => {
@@ -120,6 +129,14 @@ impl Scenario {
                 view.timeline_hover(x, window, cx);
             }
             Self::Clean => {}
+            Self::WheelAtEdge => view.timeline_wheel(
+                &gpui::ScrollWheelEvent {
+                    delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(8.), gpui::px(0.))),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            ),
             Self::CaptionDownload if self.control(iteration) => cx.notify(),
             Self::CaptionDownload => view.repaint_caption_download(cx),
         }
@@ -223,6 +240,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         Scenario::Hover,
         Scenario::Follow,
         Scenario::Clean,
+        Scenario::WheelAtEdge,
         Scenario::CaptionDownload,
         Scenario::TickFields,
     ] {
