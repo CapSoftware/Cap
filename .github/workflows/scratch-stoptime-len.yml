@@ -2,10 +2,10 @@ name: Scratch stop-time vs length
 
 on:
   push:
-    branches: ["ci/stoptime-len"]
+    branches: ["ci/stoptime-len", "ci/stoptime-len-mac"]
 
 concurrency:
-  group: scratch-stoptime-len
+  group: scratch-stoptime-len-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
           for ref in $(cat "$RUNNER_TEMP/rig/refs.txt"); do
             name=${ref%%=*}; rev=${ref#*=}
             git checkout -q -f "$rev"
-            node scripts/setup.js > "$RUNNER_TEMP/setup-$name.log" 2>&1 || { tail -20 "$RUNNER_TEMP/setup-$name.log"; exit 1; }
+            if [ "$name" = main ]; then node scripts/setup.js > "$RUNNER_TEMP/setup-$name.log" 2>&1 || { tail -20 "$RUNNER_TEMP/setup-$name.log"; exit 1; }; fi
             cargo build --release -p cap --bin cap
             mkdir -p "$RUNNER_TEMP/bins/$name/bin"
             cp target/release/cap "$RUNNER_TEMP/bins/$name/bin/cap"
@@ -65,6 +65,7 @@ jobs:
             ${{ runner.temp }}/setup-*.log
 
   windows:
+    if: github.ref_name == 'ci/stoptime-len'
     runs-on: windows-2022
     timeout-minutes: 300
     steps:
