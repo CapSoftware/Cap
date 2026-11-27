@@ -10,13 +10,18 @@ You can upload videos to it from the dashboard or from Cap Desktop.
 
 <CapEmbed src="https://cap.so/embed/k310v2vf41d6ffp" />
 
-## Quick Start (One Command)
+## Quick Start
 
-The fastest way to self-host Cap is with Docker Compose. This single command will start everything you need:
+The fastest way to self-host Cap is with Docker Compose. First clone the repository:
 
 ```bash
 git clone https://github.com/CapSoftware/Cap.git
 cd Cap
+```
+
+Set `RUSTFS_SECRET_KEY` to a strong password in `.env`, then start Cap:
+
+```bash
 docker compose up -d
 ```
 
@@ -41,12 +46,13 @@ Best for VPS, home servers, or any Docker-capable host.
 - Cap Web application
 - Media server (FFmpeg processing)
 - MySQL database
-- MinIO (S3-compatible storage)
+- RustFS (S3-compatible storage)
 
 **Steps:**
 1. Clone the repository
-2. Run `docker compose up -d`
-3. Access Cap at `http://localhost:3000`
+2. Set `RUSTFS_SECRET_KEY` to a strong password in `.env`
+3. Run `docker compose up -d`
+4. Access Cap at `http://localhost:3000`
 
 > **Note:** The main `docker-compose.yml` builds the media server from source, so a full clone of the repository is required. The Coolify compose file uses a pre-built image from `ghcr.io` instead.
 
@@ -63,14 +69,24 @@ S3_PUBLIC_URL=https://s3.yourdomain.com
 
 # Optional: Custom ports
 CAP_PORT=3000
-MINIO_PORT=9000
+RUSTFS_PORT=9000
+RUSTFS_CONSOLE_PORT=9001
 
-# Optional: Custom passwords (auto-generated if not set)
+# Required for new deployments
+RUSTFS_SECRET_KEY=your-rustfs-password
+
+# Replace the other built-in credentials before deploying publicly
 MYSQL_PASSWORD=your-secure-password
-MINIO_ROOT_PASSWORD=your-minio-password
+RUSTFS_ACCESS_KEY=cap-admin
 ```
 
-Browsers upload recordings straight to the storage bucket. If you point Cap at your own S3-compatible bucket instead of the bundled MinIO, configure the bucket's CORS for your Cap URL and expose the `ETag` response header (see the CORS sections for [AWS S3](/docs/s3-config/aws-s3#configure-cors) and [Cloudflare R2](/docs/s3-config/cloudflare-r2#prepare-r2)). Without `ETag`, recordings from the web recorder and the Chrome extension fail to upload.
+RustFS serves the S3 API on port `9000` and its console on port `9001`. Point `S3_PUBLIC_URL` at the S3 API; browsers and desktop clients must be able to reach it. Cap uses `http://rustfs:9000` inside Docker and path-style S3 URLs. The `cap` bucket is created before Cap Web starts. If you change the public ports, update `CAP_URL` and `S3_PUBLIC_URL` as well.
+
+The default `RUSTFS_CORS_ALLOWED_ORIGINS=*` supports presigned uploads and playback from Cap Web, desktop apps, and embedded SDKs. To restrict browser origins, set a comma-separated list containing every client origin (scheme, hostname, and port, without a trailing slash). See the [RustFS CORS documentation](https://docs.rustfs.com/en/administration/cors).
+
+Browsers upload recordings straight to the storage bucket. If you point Cap at your own S3-compatible bucket instead of the bundled RustFS, configure the bucket's CORS for your Cap URL and expose the `ETag` response header (see the CORS sections for [AWS S3](/docs/s3-config/aws-s3#configure-cors) and [Cloudflare R2](/docs/s3-config/cloudflare-r2#prepare-r2)). Without `ETag`, recordings from the web recorder and the Chrome extension fail to upload.
+
+The Compose files set `AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED` for Cap Web. This prevents the AWS SDK from adding an empty-body CRC32 checksum when signing a multipart upload before the part's bytes are available; RustFS correctly rejects that checksum for a nonempty part with `BadDigest`. Explicitly supplied checksums are still validated.
 
 ### Option 2: Railway (One-Click)
 
@@ -89,7 +105,17 @@ For Coolify users, use `docker-compose.coolify.yml` which includes environment v
 4. Configure environment variables in Coolify's UI
 5. Deploy
 
-> **Note:** The Coolify compose file uses slightly different environment variable names: `WEB_URL` instead of `CAP_URL`, and `S3_PUBLIC_ENDPOINT` instead of `S3_PUBLIC_URL`.
+> **Note:** Coolify supplies `SERVICE_URL_CAP_WEB` for Cap and `SERVICE_URL_RUSTFS` for the RustFS S3 API on port `9000`. Its `SERVICE_PASSWORD_RUSTFS` value is shared by Cap, RustFS, and the bucket setup service. `RUSTFS_CORS_ALLOWED_ORIGINS` works the same way as in the main Compose file.
+
+## Existing MinIO Deployments
+
+The RustFS defaults use new data volumes (`cap-rustfs-data` for self-hosting and `rustfs-data` for local development). Existing MinIO volumes and the development directory `~/minio/data` are not reused or migrated automatically. Do not mount an old MinIO data directory directly into RustFS.
+
+Before switching an existing deployment, back up the data, pause uploads, and copy the objects through the S3 API into RustFS, preserving bucket names and object keys. Verify uploads and playback before retiring MinIO. The existing `mc` setup client is retained because its bucket operations use the S3 API.
+
+For the main Compose file, replace `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` with `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY`, and `MINIO_PORT` / `MINIO_CONSOLE_PORT` with `RUSTFS_PORT` / `RUSTFS_CONSOLE_PORT`. For Coolify, update `SERVICE_URL_MINIO` and `SERVICE_PASSWORD_MINIO` to their `RUSTFS` equivalents. Update reverse-proxy targets from the `minio` service to `rustfs`.
+
+The main Compose file accepts `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` as fallbacks when their corresponding RustFS variables are unset or empty. Nonempty RustFS values take precedence. If both password variables are unset or empty, the RustFS container exits before starting the server and logs `Set RUSTFS_SECRET_KEY`. This preserves credentials only; objects still need to be migrated as described above.
 
 ## Connecting Cap Desktop
 
@@ -262,16 +288,16 @@ Run this command three times to generate values for:
 
 **Full production checklist:**
 
-- [ ] Set secure passwords: `MYSQL_PASSWORD`, `MINIO_ROOT_PASSWORD`
+- [ ] Set secure credentials: `MYSQL_PASSWORD`, `RUSTFS_ACCESS_KEY`, `RUSTFS_SECRET_KEY`
 - [ ] Set secure secrets: `DATABASE_ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `MEDIA_SERVER_WEBHOOK_SECRET`
 - [ ] Media server status endpoints (`/video/status`, `/audio/status`, `/live-transcribe/status`, `/video/process/:jobId/status`) require `MEDIA_SERVER_WEBHOOK_SECRET` by default. Set `MEDIA_SERVER_PUBLIC_STATUS=true` only if an external monitor needs them without the secret; anonymous callers then see counts and job phase/progress, never video ids or errors.
 - [ ] HLS/DASH sources are only accepted from `MEDIA_SERVER_STREAMING_HOSTS` (default `loom.com`).
 - [ ] The media server reads storage on a private or loopback address only from hosts named in `MEDIA_SERVER_INTERNAL_MEDIA_HOSTS`. The self-hosting image sets it to `*` (any private host) so the bundled MinIO works. Set it to your storage host, for example `minio`, to narrow it. Link-local addresses are never read.
 - [ ] Set `CAP_URL` to your public URL
-- [ ] Set `S3_PUBLIC_URL` to your MinIO/S3 public URL
+- [ ] Set `S3_PUBLIC_URL` to your RustFS/S3 public URL
 - [ ] Configure a reverse proxy (nginx, Caddy, Traefik) with SSL
 - [ ] Set up email with Resend
-- [ ] Configure backups for MySQL and MinIO volumes
+- [ ] Configure backups for MySQL and RustFS volumes
 
 ## Architecture
 
@@ -284,7 +310,7 @@ Run this command three times to generate values for:
                     ┌────────────┼────────────┐
                     ▼            ▼            ▼
              ┌──────────┐ ┌──────────┐ ┌──────────┐
-             │  MySQL   │ │  MinIO   │ │  Media   │
+             │  MySQL   │ │  RustFS  │ │  Media   │
              │ (3306)   │ │ (9000)   │ │  Server  │
              └──────────┘ └──────────┘ └──────────┘
 ```
@@ -302,14 +328,14 @@ docker compose logs cap-web
 
 **Database migration issues:**
 
-Don't delete volumes to fix a migration error: `docker compose down -v` deletes your MySQL and MinIO volumes, so every account and video is gone.
+Don't delete volumes to fix a migration error: `docker compose down -v` deletes your MySQL and RustFS volumes, so every account and video is gone.
 
 1. Read the error: `docker compose logs cap-web`.
 2. Back up before changing anything:
    ```bash
    docker compose exec mysql sh -c 'mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" --single-transaction cap' > cap-backup.sql
    ```
-   Also keep a copy of your MinIO data (or bucket) and of `DATABASE_ENCRYPTION_KEY`: encrypted fields in the backup can't be read without the same key.
+   Also keep a copy of your RustFS data (or bucket) and of `DATABASE_ENCRYPTION_KEY`: encrypted fields in the backup can't be read without the same key.
 3. [Open a GitHub issue](https://github.com/CapSoftware/Cap/issues/new) with the log.
 
 **Reset everything (deletes all data):**
