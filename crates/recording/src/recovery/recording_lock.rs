@@ -51,12 +51,15 @@ impl RecordingLock {
         let directory = path.parent().unwrap_or(&project);
         let mut attempts = 0;
         let file = loop {
-            create_lock_dir(directory)?;
-            match LockFile::exclusive(&path) {
-                Err(error) if error.kind() == io::ErrorKind::NotFound && attempts < 2 => {
-                    attempts += 1;
-                }
+            match create_lock_dir(directory).and_then(|()| LockFile::exclusive(&path)) {
                 Ok(file) => break file,
+                Err(error)
+                    if attempts < 5
+                        && (error.kind() == io::ErrorKind::NotFound || is_busy(&error)) =>
+                {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
                 Err(error) => {
                     let _ = std::fs::remove_dir(directory);
                     return Err(error);
@@ -189,9 +192,16 @@ pub(super) fn probe(project: &Path) -> Result<RecordingProbe, RecoveryError> {
 }
 
 /// Nobody holds a lock this probe could take, so its recorder ended without
-/// dropping it (a crash on unix, where the file is not removed on close).
+/// dropping it (a crash on unix, where the file is not removed on close). It
+/// is removed only while this probe holds it exclusively and it is still the
+/// file at `path`, so a live recorder's lock is never removed.
 #[cfg(unix)]
 fn remove_stale(path: &Path, locked: &File) {
+    use std::os::fd::AsRawFd;
+    if unsafe { libc::flock(locked.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        unsafe { libc::flock(locked.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
+        return;
+    }
     if !same_file(locked, path) {
         return;
     }
