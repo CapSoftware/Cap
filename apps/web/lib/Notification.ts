@@ -463,7 +463,12 @@ export async function sendFirstViewEmail(
 
 		const [result] = await database
 			.update(videos)
-			.set({ firstViewEmailSentAt: new Date() })
+			// Views are not counted for two minutes after a Cap changes, so
+			// claiming the first view must not count as a change.
+			.set({
+				firstViewEmailSentAt: new Date(),
+				updatedAt: sql`${videos.updatedAt}`,
+			})
 			.where(
 				and(
 					eq(videos.id, Video.VideoId.make(params.videoId)),
