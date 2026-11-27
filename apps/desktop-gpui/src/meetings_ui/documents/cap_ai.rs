@@ -933,13 +933,14 @@ mod tests {
     fn the_row_signs_in_when_signed_out_and_opens_cap_pro_otherwise() {
         assert_eq!(
             pro_row_copy(ProRow::SignedOut),
-            ("Try Cap AI notes free".into(), "Sign in", true)
+            ("Try Cap\u{a0}AI notes free".into(), "Sign in", true)
         );
         for (row, line) in [
-            (ProRow::Left(3), "3 free Cap AI notes left"),
-            (ProRow::Left(1), "1 free Cap AI note left"),
-            (ProRow::Spent, "Cap AI notes are part of Cap Pro"),
-            (ProRow::Upgrade, "Cap AI notes are part of Cap Pro"),
+            // The product names never split across the row's two lines.
+            (ProRow::Left(3), "3 free Cap\u{a0}AI notes left"),
+            (ProRow::Left(1), "1 free Cap\u{a0}AI note left"),
+            (ProRow::Spent, "Cap\u{a0}AI notes are part of Cap\u{a0}Pro"),
+            (ProRow::Upgrade, "Cap\u{a0}AI notes are part of Cap\u{a0}Pro"),
         ] {
             assert_eq!(pro_row_copy(row), (line.into(), "Get Cap Pro", false));
         }

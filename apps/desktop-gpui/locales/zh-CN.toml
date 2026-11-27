@@ -4334,9 +4334,9 @@ three = "{a}、{b} 和 {c}"
 two = "{a} 和 {b}"
 
 [cap_ai.row]
-left = { other = "还剩 {count} 次免费 Cap AI 笔记" }
-pro = "Cap AI 笔记是 Cap Pro 的功能"
-signed_out = "免费试用 Cap AI 笔记"
+left = { other = "还剩 {count} 次免费 Cap\u00A0AI 笔记" }
+pro = "Cap\u00A0AI 笔记是 Cap\u00A0Pro 的功能"
+signed_out = "免费试用 Cap\u00A0AI 笔记"
 
 [cap_ai.settings]
 get_pro = "获取 Cap Pro"

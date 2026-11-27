@@ -1082,6 +1082,9 @@ fn the_notes_pro_row_never_needs_more_than_its_two_lines() {
             locale.code()
         );
         for (key, text) in found {
+            // `\u00A0` keeps Cap AI and Cap Pro together, as GPUI wraps
+            // only at plain spaces.
+            let text = text.replace("\\u00A0", "\u{a0}");
             for count in ["1", "2", "3", "10"] {
                 let text = text.replace("{count}", count);
                 let lines = lines_of(&text);

@@ -4334,9 +4334,9 @@ three = "{a}, {b} und {c}"
 two = "{a} und {b}"
 
 [cap_ai.row]
-left = { one = "Noch {count} kostenlose Cap AI-Notiz", other = "Noch {count} kostenlose Cap AI-Notizen" }
-pro = "Cap AI-Notizen gehören zu Cap Pro"
-signed_out = "Cap AI-Notizen gratis testen"
+left = { one = "Noch {count} kostenlose Cap\u00A0AI-Notiz", other = "Noch {count} kostenlose Cap\u00A0AI-Notizen" }
+pro = "Cap\u00A0AI-Notizen gehören zu Cap\u00A0Pro"
+signed_out = "Cap\u00A0AI-Notizen gratis testen"
 
 [cap_ai.settings]
 get_pro = "Cap Pro holen"

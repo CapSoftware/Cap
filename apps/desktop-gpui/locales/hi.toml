@@ -4334,9 +4334,9 @@ three = "{a}, {b} और {c}"
 two = "{a} और {b}"
 
 [cap_ai.row]
-left = { one = "{count} मुफ़्त Cap AI नोट बाकी", other = "{count} मुफ़्त Cap AI नोट्स बाकी" }
-pro = "Cap AI नोट्स Cap Pro का हिस्सा हैं"
-signed_out = "Cap AI नोट्स मुफ़्त आज़माएं"
+left = { one = "{count} मुफ़्त Cap\u00A0AI नोट बाकी", other = "{count} मुफ़्त Cap\u00A0AI नोट्स बाकी" }
+pro = "Cap\u00A0AI नोट्स Cap\u00A0Pro का हिस्सा हैं"
+signed_out = "Cap\u00A0AI नोट्स मुफ़्त आज़माएं"
 
 [cap_ai.settings]
 get_pro = "Cap Pro लें"
