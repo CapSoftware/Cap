@@ -13,6 +13,9 @@ on:
       - "crates/media-info/**"
       - "crates/export/tests/windows_odd_size_export.rs"
       - "crates/recording/src/output_pipeline/win_fragmented_m4s.rs"
+      - "crates/recording/src/output_pipeline/core.rs"
+      - "crates/recording/src/studio_recording.rs"
+      - "crates/recording/src/recovery.rs"
       - "Cargo.lock"
       - ".github/workflows/windows-recording-encoder.yml"
   push:
@@ -23,6 +26,9 @@ on:
       - "crates/media-info/**"
       - "crates/export/tests/windows_odd_size_export.rs"
       - "crates/recording/src/output_pipeline/win_fragmented_m4s.rs"
+      - "crates/recording/src/output_pipeline/core.rs"
+      - "crates/recording/src/studio_recording.rs"
+      - "crates/recording/src/recovery.rs"
       - "Cargo.lock"
       - ".github/workflows/windows-recording-encoder.yml"
   workflow_dispatch:
@@ -91,6 +97,13 @@ jobs:
 
       - name: Segmented encoder tests
         run: cargo test --locked -p cap-enc-ffmpeg --lib mux::segmented_stream -- --nocapture
+
+      # The variable lets the input recorder tests send real input into this
+      # runner's session, and makes a hidden cursor a failure, not a skip.
+      - name: Studio stop keeps recordings whose tracks finish late
+        env:
+          CAP_REQUIRE_INPUT_INJECTION: "1"
+        run: cargo test --locked -p cap-recording --lib late_stop_ -- --nocapture
 
       - name: Encoder selection and isolated self-test tests
         run: cargo test --locked -p cap-media-info --lib intel_h264_mft && cargo test --locked -p cap-enc-ffmpeg --lib self_test -- --nocapture

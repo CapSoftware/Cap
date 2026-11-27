@@ -247,7 +247,8 @@ export async function CapsPageView({
 		.from(videos)
 		.innerJoin(capsPage, eq(videos.id, capsPage.id))
 		.leftJoin(comments, eq(videos.id, comments.videoId))
-		.leftJoin(organizations, eq(videos.orgId, organizations.id))
+		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+		.leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
 		.leftJoin(users, eq(videos.ownerId, users.id))
 		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 		.groupBy(

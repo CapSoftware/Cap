@@ -20,6 +20,11 @@ const mocks = vi.hoisted(() => ({
 	signal: vi.fn(),
 	strike: vi.fn(),
 	developerVideo: vi.fn(),
+	deleteObjects: vi.fn(),
+	freePlanLimit: vi.fn(),
+	recordMeasure: vi.fn(),
+	measureObject: vi.fn(),
+	noUploadRow: false,
 	tables: {
 		videos: {
 			id: "videos.id",
@@ -27,7 +32,11 @@ const mocks = vi.hoisted(() => ({
 			metadata: "videos.metadata",
 		},
 		jobs: { videoId: "jobs.videoId" },
-		uploads: { videoId: "uploads.videoId", rawFileKey: "uploads.rawFileKey" },
+		uploads: {
+			videoId: "uploads.videoId",
+			rawFileKey: "uploads.rawFileKey",
+			startedAt: "uploads.startedAt",
+		},
 	},
 }));
 
@@ -83,6 +92,18 @@ vi.mock("@/lib/queue-video-transcription", () => ({
 
 vi.mock("@/lib/loom-import-signal", () => ({
 	signalLoomImportFinished: mocks.signal,
+}));
+vi.mock("@/lib/free-plan-measure", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/free-plan-measure")>()),
+	recordFreePlanMeasure: mocks.recordMeasure,
+}));
+vi.mock("@/lib/free-plan-measure-probe", () => ({
+	measureFreePlanObject: mocks.measureObject,
+	runAfterResponse: (task: () => Promise<unknown>) => void task(),
+}));
+vi.mock("@/lib/free-plan-duration", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/free-plan-duration")>()),
+	getFreePlanDurationLimit: mocks.freePlanLimit,
 }));
 vi.mock("@/lib/media-input-policy-strikes", () => ({
 	recordMediaInputPolicyStrike: mocks.strike,
@@ -185,6 +206,8 @@ type Mutation = {
 	values?: Record<string, unknown>;
 };
 
+const uploadStartedAt = new Date("2026-11-27T09:00:00Z");
+
 function databaseFixture(initial: DesktopRecordingJob | null = fixture().job) {
 	let current = initial;
 	let rawFileKey: string | null = null;
@@ -201,7 +224,10 @@ function databaseFixture(initial: DesktopRecordingJob | null = fixture().job) {
 		if (table === mocks.tables.videos) return [{ ...video }];
 		if (table === mocks.tables.jobs)
 			return current ? [structuredClone(current)] : [];
-		if (table === mocks.tables.uploads) return [{ rawFileKey }];
+		if (table === mocks.tables.uploads)
+			return mocks.noUploadRow
+				? []
+				: [{ rawFileKey, startedAt: uploadStartedAt }];
 		throw new Error("Unexpected table");
 	};
 	const writes = (pending: Mutation[]) => ({
@@ -1112,6 +1138,315 @@ describe("Loom importer completions", () => {
 		expect(
 			metadataWrites(database.mutations).some(({ sql }) =>
 				sql.includes("transcribeOnView"),
+			),
+		).toBe(false);
+	});
+});
+
+describe("free plan duration limit at processing", () => {
+	const freePlanSearch = `?retryable=true&freePlanLimit=${uploadStartedAt.getTime()}`;
+	const earlierUploadSearch = `?retryable=true&freePlanLimit=${uploadStartedAt.getTime() - 60_000}`;
+	const rawFileKey = `${ownerId}/${videoId}/raw-upload.mp4`;
+	const complete = (measured: Record<string, unknown>) => ({
+		jobId: "media-job-1",
+		videoId,
+		phase: "complete",
+		progress: 100,
+		metadata: { ...metadata, ...measured },
+	});
+	const uploadWrites = (mutations: Mutation[]) =>
+		mutations.filter(({ table }) => table === mocks.tables.uploads);
+
+	function freeUpload() {
+		const database = databaseFixture(null);
+		database.video.source = { type: "webMP4" };
+		database.setRawFileKey(rawFileKey);
+		return database;
+	}
+
+	beforeEach(() => {
+		mocks.transcribe.mockReset().mockResolvedValue({ success: true });
+		mocks.queue.mockReset();
+		mocks.invalidateQuota.mockResolvedValue(undefined);
+		mocks.deleteObjects.mockReset().mockReturnValue(Effect.void);
+		mocks.freePlanLimit.mockReset().mockResolvedValue(330);
+		mocks.recordMeasure.mockReset().mockResolvedValue(undefined);
+		mocks.measureObject.mockReset().mockResolvedValue(undefined);
+		mocks.noUploadRow = false;
+		mocks.storage.mockReturnValue(
+			Effect.succeed([{ deleteObjects: mocks.deleteObjects }]),
+		);
+		vi.spyOn(console, "log").mockImplementation(() => undefined);
+	});
+
+	function expectRejected(
+		database: ReturnType<typeof freeUpload>,
+		measuredSeconds?: number,
+	) {
+		expect(mocks.deleteObjects).not.toHaveBeenCalled();
+		if (measuredSeconds === undefined) {
+			expect(mocks.measureObject).toHaveBeenCalledExactlyOnceWith(
+				videoId,
+				rawFileKey,
+				{ anyAge: true, fresh: true },
+			);
+			expect(mocks.recordMeasure).not.toHaveBeenCalled();
+		} else {
+			expect(mocks.recordMeasure).toHaveBeenCalledExactlyOnceWith(
+				videoId,
+				rawFileKey,
+				measuredSeconds,
+			);
+		}
+		expect(uploadWrites(database.mutations)).toEqual([
+			{
+				operation: "update",
+				table: mocks.tables.uploads,
+				values: expect.objectContaining({
+					phase: "error",
+					processingError: expect.stringMatching(
+						/^free-plan-duration-exceeded: /,
+					),
+				}),
+			},
+		]);
+		expect(uploadWrites(database.mutations)[0]?.values).not.toHaveProperty(
+			"rawFileKey",
+		);
+		expect(
+			database.mutations.some(
+				({ table, values }) =>
+					table === mocks.tables.videos && values?.duration !== undefined,
+			),
+		).toBe(false);
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+	}
+
+	it.each([
+		["a header that matches the file", { duration: 360 }, 360],
+		[
+			"a header that understates the file",
+			{ duration: 200, timestampSpan: 360 },
+			360,
+		],
+		["a header with no length", { duration: 0, timestampSpan: 360 }, 360],
+		["just past the grace", { duration: 330.001 }, 330.001],
+	])(
+		"holds a free plan upload measured over the limit with %s",
+		async (_, measured, seconds) => {
+			const database = freeUpload();
+			const response = await request(
+				complete(measured),
+				"media-secret",
+				freePlanSearch,
+			);
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({
+				success: true,
+				status: "rejected",
+			});
+			expectRejected(database, seconds);
+		},
+	);
+
+	it.each([
+		["an honest five minute recording", { duration: 300 }],
+		["one that ends inside the grace", { duration: 330, timestampSpan: 329.5 }],
+		["a short recording", { duration: 299, timestampSpan: 299 }],
+	])("publishes %s", async (_, measured) => {
+		const database = freeUpload();
+		const response = await request(
+			complete(measured),
+			"media-secret",
+			freePlanSearch,
+		);
+		expect(await response.json()).toEqual({ success: true });
+		expect(mocks.deleteObjects).not.toHaveBeenCalled();
+		expect(database.mutations).toContainEqual({
+			operation: "delete",
+			table: mocks.tables.uploads,
+		});
+		expect(mocks.transcribe).toHaveBeenCalledWith(videoId);
+	});
+
+	it("never limits uploads processed without the free plan marker", async () => {
+		const database = freeUpload();
+		const response = await request(
+			complete({ duration: 3_600, timestampSpan: 3_600 }),
+			"media-secret",
+			"?retryable=true",
+		);
+		expect(await response.json()).toEqual({ success: true });
+		expect(mocks.deleteObjects).not.toHaveBeenCalled();
+		expect(database.mutations).toContainEqual({
+			operation: "update",
+			table: mocks.tables.videos,
+			values: expect.objectContaining({ duration: 3_600 }),
+		});
+	});
+
+	it("holds a source the media server refused for running past the limit", async () => {
+		const database = freeUpload();
+		const response = await request(
+			{
+				jobId: "media-job-1",
+				videoId,
+				phase: "error",
+				progress: 5,
+				error:
+					"media-length-limit-exceeded: the source runs longer than 330 seconds",
+			},
+			"media-secret",
+			freePlanSearch,
+		);
+		expect(await response.json()).toEqual({
+			success: true,
+			status: "rejected",
+		});
+		expectRejected(database);
+	});
+
+	it("ignores a late refusal once a newer upload has been published", async () => {
+		const database = freeUpload();
+		mocks.noUploadRow = true;
+		const response = await request(
+			{
+				jobId: "media-job-old",
+				videoId,
+				phase: "error",
+				progress: 5,
+				error:
+					"media-length-limit-exceeded: the source runs longer than 330 seconds",
+			},
+			"media-secret",
+			freePlanSearch,
+		);
+		expect(await response.json()).toEqual({
+			success: true,
+			status: "no-upload",
+		});
+		expect(mocks.deleteObjects).not.toHaveBeenCalled();
+		expect(database.mutations).toEqual([]);
+	});
+
+	it("treats a refusal for an earlier upload like any other worker error", async () => {
+		const database = freeUpload();
+		const error =
+			"media-length-limit-exceeded: the source runs longer than 330 seconds";
+		const response = await request(
+			{ jobId: "media-job-old", videoId, phase: "error", progress: 5, error },
+			"media-secret",
+			earlierUploadSearch,
+		);
+		expect(await response.json()).toEqual({ success: true });
+		expect(mocks.measureObject).not.toHaveBeenCalled();
+		expect(uploadWrites(database.mutations)).toEqual([
+			{
+				operation: "update",
+				table: mocks.tables.uploads,
+				values: expect.objectContaining({
+					phase: "processing",
+					processingError: error,
+				}),
+			},
+		]);
+	});
+
+	it("never fails the current upload for an earlier upload's over-limit completion", async () => {
+		const database = freeUpload();
+		await request(
+			complete({ duration: 900 }),
+			"media-secret",
+			earlierUploadSearch,
+		);
+		expect(
+			uploadWrites(database.mutations).some(({ values }) =>
+				String(values?.processingError ?? "").startsWith(
+					"free-plan-duration-exceeded",
+				),
+			),
+		).toBe(false);
+	});
+
+	it("retries a refusal without the limit after the owner upgrades", async () => {
+		const database = freeUpload();
+		mocks.freePlanLimit.mockResolvedValue(null);
+		const error =
+			"media-length-limit-exceeded: the source runs longer than 330 seconds";
+		const response = await request(
+			{ jobId: "media-job-old", videoId, phase: "error", progress: 5, error },
+			"media-secret",
+			freePlanSearch,
+		);
+		expect(await response.json()).toEqual({ success: true });
+		expect(mocks.deleteObjects).not.toHaveBeenCalled();
+		expect(uploadWrites(database.mutations)).toEqual([
+			{
+				operation: "update",
+				table: mocks.tables.uploads,
+				values: expect.objectContaining({
+					phase: "processing",
+					processingError: error,
+				}),
+			},
+		]);
+	});
+
+	it("publishes a late over-limit completion after the owner upgrades", async () => {
+		const database = freeUpload();
+		mocks.freePlanLimit.mockResolvedValue(null);
+		const response = await request(
+			complete({ duration: 900 }),
+			"media-secret",
+			freePlanSearch,
+		);
+		expect(await response.json()).toEqual({ success: true });
+		expect(mocks.deleteObjects).not.toHaveBeenCalled();
+		expect(database.mutations).toContainEqual({
+			operation: "update",
+			table: mocks.tables.videos,
+			values: expect.objectContaining({ duration: 900 }),
+		});
+	});
+
+	it("leaves ordinary worker errors retryable for free plan uploads", async () => {
+		const database = freeUpload();
+		await request(
+			{
+				jobId: "media-job-1",
+				videoId,
+				phase: "error",
+				progress: 10,
+				error: "Server busy",
+			},
+			"media-secret",
+			freePlanSearch,
+		);
+		expect(mocks.deleteObjects).not.toHaveBeenCalled();
+		expect(uploadWrites(database.mutations)).toEqual([
+			{
+				operation: "update",
+				table: mocks.tables.uploads,
+				values: expect.objectContaining({
+					phase: "processing",
+					processingError: "Server busy",
+				}),
+			},
+		]);
+	});
+
+	it("keeps the source and its key so an upgrade can retry processing", async () => {
+		const database = freeUpload();
+		const response = await request(
+			complete({ duration: 900 }),
+			"media-secret",
+			freePlanSearch,
+		);
+		expect(response.status).toBe(200);
+		expect(mocks.deleteObjects).not.toHaveBeenCalled();
+		expect(
+			uploadWrites(database.mutations).some(
+				({ values }) => values && "rawFileKey" in values,
 			),
 		).toBe(false);
 	});

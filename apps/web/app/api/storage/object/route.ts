@@ -14,6 +14,12 @@ import { CurrentUser, Storage as StorageDomain, Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import { isPrivateEditTranscriptObjectKey } from "@/lib/edit-transcript";
+import { readDeclaredLength } from "@/lib/free-plan-declared-length";
+import {
+	isVideoOverFreePlanDuration,
+	recordFreePlanOverLength,
+} from "@/lib/free-plan-measure";
+import { firstViewDecision } from "@/lib/free-plan-measure-probe";
 import { runPromise } from "@/lib/server";
 import { isVideoLockedByShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { playbackUrlValidity } from "@/lib/signed-url-validity";
@@ -168,6 +174,45 @@ const getPolicyVideo = (videoId: Video.VideoId) =>
 		return maybeVideo[0];
 	});
 
+const isPlayableMediaKey = (key: string) =>
+	/\.(mp4|m4v|mov|webm|mkv|m4s|ts|m3u8|aac|m4a|mp3|opus|ogg|wav)$/i.test(key);
+
+const isWholeVideoKey = (key: string) => /\.(mp4|m4v|mov|webm|mkv)$/i.test(key);
+
+const DECLARED_LENGTH_CACHE_MS = 30_000;
+const MAX_DECLARED_LENGTH_ENTRIES = 5_000;
+const declaredLengths = new Map<
+	string,
+	{ declared: { key: string; seconds: number } | null; until: number }
+>();
+
+// Segments and playlists are read many times per view, so the playlist is
+// read at most every 30 s per video. The plan is checked on every read, so an
+// upgrade lifts the hold at once.
+const isHeldByDeclaredLength = <E, R>(
+	video: { id: Video.VideoId; ownerId: string; source: { type: string } },
+	getObject: (key: string) => Effect.Effect<string | null, E, R>,
+) =>
+	Effect.gen(function* () {
+		const cached = declaredLengths.get(video.id);
+		const declared =
+			cached && cached.until > Date.now()
+				? cached.declared
+				: yield* readDeclaredLength(video, getObject);
+		if (!cached || cached.until <= Date.now()) {
+			if (declaredLengths.size >= MAX_DECLARED_LENGTH_ENTRIES)
+				declaredLengths.clear();
+			declaredLengths.set(video.id, {
+				declared,
+				until: Date.now() + DECLARED_LENGTH_CACHE_MS,
+			});
+		}
+		if (!declared) return false;
+		return yield* Effect.tryPromise(() =>
+			recordFreePlanOverLength(video.id, declared.key, declared.seconds),
+		);
+	});
+
 export async function GET(request: NextRequest) {
 	const internalDownload =
 		request.headers.get("x-cap-internal-download") === "1";
@@ -246,6 +291,40 @@ export async function GET(request: NextRequest) {
 		}
 
 		const [storage] = yield* Storage.getAccessForVideo(video);
+		const internalRead =
+			internalDownload || (hasKeyToken && tokenPayload?.internal === true);
+		if (!internalRead && isPlayableMediaKey(key)) {
+			const viewer = yield* Effect.serviceOption(CurrentUser);
+			if (!Option.exists(viewer, (user) => user.id === video.ownerId)) {
+				const decision = yield* Effect.gen(function* () {
+					const freePlanVideo = yield* Effect.try(() => ({
+						id: video.id,
+						createdAt: video.createdAt,
+						metadata: Option.getOrNull(video.metadata),
+					}));
+					const held = yield* Effect.tryPromise(() =>
+						isVideoOverFreePlanDuration({
+							...freePlanVideo,
+							ownerId: video.ownerId,
+							orgId: video.orgId,
+						}),
+					);
+					if (held) return "held" as const;
+					if (isWholeVideoKey(key))
+						return yield* Effect.tryPromise(() =>
+							firstViewDecision(freePlanVideo, key),
+						);
+					return (yield* isHeldByDeclaredLength(video, (objectKey) =>
+						storage.getObject(objectKey).pipe(Effect.map(Option.getOrNull)),
+					))
+						? ("held" as const)
+						: ("play" as const);
+				}).pipe(Effect.orElseSucceed(() => "play" as const));
+				if (decision !== "play")
+					return yield* Effect.fail("not-found" as const);
+			}
+		}
+
 		if (!("getObjectResponse" in storage)) {
 			const url = downloadName
 				? yield* storage.getSignedDownloadUrl(key, downloadName)

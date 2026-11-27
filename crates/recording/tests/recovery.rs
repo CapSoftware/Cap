@@ -1345,6 +1345,61 @@ fn recover_after_simulated_crash_produces_playable_mp4_with_preserved_duration()
 }
 
 #[test]
+fn recover_after_crash_recovers_segments_the_in_progress_manifest_never_listed() {
+    test_utils::init_tracing();
+
+    let listed = TestRecording::new().unwrap();
+    let display_dir = listed.create_display_dir(0).unwrap();
+    let mut encoder = SegmentedVideoEncoder::init(
+        display_dir.clone(),
+        synthetic_video_info(30),
+        SegmentedVideoEncoderConfig::default(),
+    )
+    .unwrap();
+    let initial_manifest = fs::read(display_dir.join("manifest.json")).unwrap();
+    for i in 0..180u64 {
+        encoder
+            .queue_frame(
+                make_synthetic_video_frame(320, 240),
+                Duration::from_nanos(i * 1_000_000_000 / 30),
+            )
+            .unwrap();
+    }
+    drop(encoder);
+    assert_ne!(
+        fs::read(display_dir.join("manifest.json")).unwrap(),
+        initial_manifest
+    );
+
+    let unlisted = TestRecording::new().unwrap();
+    copy_dir_recursive(listed.path(), unlisted.path()).unwrap();
+    let unlisted_display = unlisted.path().join("content/segments/segment-0/display");
+    fs::write(unlisted_display.join("manifest.json"), &initial_manifest).unwrap();
+
+    let mut recovered = Vec::new();
+    for recording in [&listed, &unlisted] {
+        recording
+            .write_recording_meta(StudioRecordingStatus::InProgress)
+            .unwrap();
+        let incomplete = RecoveryManager::inspect_recording(recording.path())
+            .expect("inspect should find recoverable fragments");
+        RecoveryManager::recover(&incomplete).expect("recovery should succeed");
+        let display_mp4 = recording
+            .path()
+            .join("content/segments/segment-0/display.mp4");
+        assert!(probe_video_can_decode(&display_mp4).unwrap());
+        recovered.push((
+            cap_enc_ffmpeg::remux::get_media_duration(&display_mp4).unwrap(),
+            fs::read(&display_mp4).unwrap(),
+        ));
+    }
+
+    assert!(recovered[0].0 >= Duration::from_secs(4));
+    assert_eq!(recovered[0].0, recovered[1].0);
+    assert!(recovered[0].1 == recovered[1].1);
+}
+
+#[test]
 fn recover_preserves_fragments_when_progressive_mp4_validation_fails() {
     test_utils::init_tracing();
 

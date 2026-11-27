@@ -77,6 +77,8 @@ impl std::fmt::Display for AuthApiError {
 pub struct SignInSession {
     pub url: String,
     id: u64,
+    state: String,
+    custom_server: Option<String>,
     local: Option<flume::Receiver<AuthParams>>,
     deep: flume::Receiver<String>,
     callback: Arc<CallbackControl>,
@@ -86,6 +88,7 @@ pub struct SignInSession {
 struct CallbackControl {
     stop: AtomicBool,
     completed: AtomicBool,
+    state_optional: AtomicBool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,16 +99,18 @@ pub enum SignInWaitError {
 /// Start one sign-in attempt: a loopback callback server, a deep-link slot,
 /// and the browser URL that leads back to either. Dropping the session tears
 /// both down.
-pub fn begin_sign_in() -> SignInSession {
+pub fn begin_sign_in() -> Result<SignInSession, String> {
     let server = server_url();
     let local_only = should_use_local_server_session(&server);
     let id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
     let callback = Arc::new(CallbackControl::default());
+    let state = new_sign_in_state()?;
 
     // Without a port the server redirects straight to the `cap-desktop://`
     // deep link, so a failed bind degrades to the deep-link path instead of
     // failing sign-in outright.
-    let local = match start_local_callback(callback.clone()) {
+    let custom_server = (!has_same_origin(&server, DEFAULT_SERVER_URL)).then(|| server.clone());
+    let local = match start_local_callback(callback.clone(), state.clone()) {
         Ok(local) => Some(local),
         Err(error) => {
             tracing::warn!(
@@ -123,16 +128,30 @@ pub fn begin_sign_in() -> SignInSession {
         tx: deep_tx,
     });
 
-    SignInSession {
-        url: sign_in_request_url(&server, local.as_ref().map(|local| local.port), local_only),
+    Ok(SignInSession {
+        url: sign_in_request_url(
+            &server,
+            local.as_ref().map(|local| local.port),
+            local_only,
+            &state,
+        ),
         id,
+        state,
+        custom_server,
         local: local.map(|local| local.complete),
         deep: deep_rx,
         callback,
-    }
+    })
 }
 
-fn sign_in_request_url(server: &str, port: Option<u16>, local_only: bool) -> String {
+fn new_sign_in_state() -> Result<String, String> {
+    use base64::Engine;
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes).map_err(|error| error.to_string())?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn sign_in_request_url(server: &str, port: Option<u16>, local_only: bool, state: &str) -> String {
     let mut url = format!("{server}/api/desktop/session/request?type=api_key");
     if let Some(port) = port {
         url.push_str(&format!("&port={port}"));
@@ -142,6 +161,7 @@ fn sign_in_request_url(server: &str, port: Option<u16>, local_only: bool) -> Str
     } else {
         "&platform=desktop"
     });
+    url.push_str(&format!("&state={state}"));
     url
 }
 
@@ -165,7 +185,11 @@ impl SignInSession {
             loop {
                 match self.deep.recv_async().await {
                     Ok(url) => {
-                        if let Some(params) = parse_auth_params(&url) {
+                        if let Some(params) = parse_auth_callback(
+                            &url,
+                            &self.state,
+                            self.callback.state_optional.load(Ordering::Acquire),
+                        ) {
                             break params;
                         }
                     }
@@ -179,6 +203,19 @@ impl SignInSession {
         match select(select(local, deep), timeout).await {
             Either::Left((Either::Left((params, _)) | Either::Right((params, _)), _)) => Ok(params),
             Either::Right(_) => Err(SignInWaitError::TimedOut),
+        }
+    }
+
+    /// The server this attempt signs in to, when it is not the official one.
+    pub fn custom_server(&self) -> Option<&str> {
+        self.custom_server.as_deref()
+    }
+
+    /// Accepts callbacks without `state` for this attempt, for a server that
+    /// does not return it. Never applies to the official server.
+    pub fn accept_callbacks_without_state(&self) {
+        if self.custom_server.is_some() {
+            self.callback.state_optional.store(true, Ordering::Release);
         }
     }
 
@@ -429,24 +466,11 @@ pub async fn update_auth_plan() -> Result<(), AuthApiError> {
     }
     let account = auth_identity(&store::store_section("auth"));
 
-    let mut plan = None;
-    if !snapshot.plan_manual {
-        match authed_request(reqwest::Method::GET, "/api/desktop/plan", None).await {
-            Ok(response) if response.status().is_success() => {
-                if let Ok(body) = response.json::<Value>().await
-                    && let Some(upgraded) = body.get("upgraded").and_then(Value::as_bool)
-                {
-                    plan = Some(json!({
-                        "upgraded": upgraded,
-                        "manual": false,
-                        "last_checked": chrono::Utc::now().timestamp() as i32,
-                    }));
-                }
-            }
-            Ok(response) => tracing::warn!("Plan fetch returned {}", response.status()),
-            Err(error) => tracing::warn!("Failed to fetch plan: {error}"),
-        }
-    }
+    let plan = if snapshot.plan_manual {
+        None
+    } else {
+        fetch_plan(None).await
+    };
 
     let mut organizations = None;
     let mut organizations_failed = false;
@@ -473,7 +497,7 @@ pub async fn update_auth_plan() -> Result<(), AuthApiError> {
             return false;
         }
         if let Some(plan) = plan {
-            auth.insert("plan".into(), plan);
+            save_plan(auth, plan);
         }
         let now = json!(chrono::Utc::now().timestamp() as i32);
         if let Some(orgs) = organizations {
@@ -498,6 +522,116 @@ pub async fn update_auth_plan() -> Result<(), AuthApiError> {
     Ok(())
 }
 
+/// Plan fetches can finish out of order: `update_auth_plan` saves only after
+/// the organizations request, so its plan can be older than one saved since.
+/// `last_checked` is in seconds, so fetches made by this run are also ordered
+/// by when they returned.
+fn save_plan(auth: &mut serde_json::Map<String, Value>, fetched: FetchedPlan) {
+    if superseded(auth.get("plan"), &fetched.plan)
+        || SAVED_PLAN_FETCH.fetch_max(fetched.order, Ordering::SeqCst) > fetched.order
+    {
+        return;
+    }
+    auth.insert("plan".into(), fetched.plan);
+}
+
+static PLAN_FETCHES: AtomicU64 = AtomicU64::new(0);
+static SAVED_PLAN_FETCH: AtomicU64 = AtomicU64::new(0);
+
+struct FetchedPlan {
+    plan: Value,
+    order: u64,
+    recording_limit_applies: Option<bool>,
+}
+
+fn fetched_plan(plan: Value) -> FetchedPlan {
+    FetchedPlan {
+        plan,
+        order: PLAN_FETCHES.fetch_add(1, Ordering::SeqCst) + 1,
+        recording_limit_applies: None,
+    }
+}
+
+fn parse_plan(body: &Value) -> Option<(bool, Option<bool>)> {
+    let upgraded = body.get("upgraded").and_then(Value::as_bool)?;
+    let recording_limit_applies = body.get("recording_limit_applies").and_then(Value::as_bool);
+    Some((upgraded, recording_limit_applies))
+}
+
+fn superseded(saved: Option<&Value>, fetched: &Value) -> bool {
+    let checked_at = |plan: &Value| plan.get("last_checked").and_then(Value::as_i64);
+    match (saved.and_then(checked_at), checked_at(fetched)) {
+        (Some(saved), Some(fetched)) => saved > fetched,
+        _ => false,
+    }
+}
+
+/// With a recording's video id, servers that know it also answer whether
+/// that recording's limit still applies, which counts its organization too.
+async fn fetch_plan(video_id: Option<&str>) -> Option<FetchedPlan> {
+    let path = match video_id {
+        Some(id) if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric()) => {
+            format!("/api/desktop/plan?videoId={id}")
+        }
+        _ => "/api/desktop/plan".to_string(),
+    };
+    match authed_request(reqwest::Method::GET, &path, None).await {
+        Ok(response) if response.status().is_success() => {
+            let body = response.json::<Value>().await.ok()?;
+            let (upgraded, recording_limit_applies) = parse_plan(&body)?;
+            let mut fetched = fetched_plan(json!({
+                "upgraded": upgraded,
+                "manual": false,
+                "last_checked": chrono::Utc::now().timestamp() as i32,
+            }));
+            fetched.recording_limit_applies = recording_limit_applies;
+            Some(fetched)
+        }
+        Ok(response) => {
+            tracing::warn!("Plan fetch returned {}", response.status());
+            None
+        }
+        Err(error) => {
+            tracing::warn!("Failed to fetch plan: {error}");
+            None
+        }
+    }
+}
+
+/// Fetches and saves the plan alone, for checks that cannot wait on the
+/// organizations request `update_auth_plan` also makes. Returns whether the
+/// given recording's limit still applies, when the server says.
+pub async fn update_plan_only(video_id: Option<String>) -> Result<Option<bool>, AuthApiError> {
+    let snapshot = store::auth_snapshot();
+    if !snapshot.signed_in() {
+        return Err(AuthApiError::InvalidAuthentication);
+    }
+    if snapshot.plan_manual {
+        return Ok(None);
+    }
+    let account = auth_identity(&store::store_section("auth"));
+    let plan = fetch_plan(video_id.as_deref())
+        .await
+        .ok_or_else(|| AuthApiError::Other("Failed to fetch plan".into()))?;
+    let recording_limit_applies = plan.recording_limit_applies;
+    let mut stale = false;
+    let persisted = store::update_store_section("auth", |auth| {
+        if account.is_none() || auth_identity(auth) != account {
+            stale = true;
+            return false;
+        }
+        save_plan(auth, plan);
+        true
+    });
+    if stale {
+        return Err(AuthApiError::InvalidAuthentication);
+    }
+    if !persisted {
+        return Err(AuthApiError::Other("Failed to persist auth plan".into()));
+    }
+    Ok(recording_limit_applies)
+}
+
 fn auth_identity(auth: &serde_json::Map<String, Value>) -> Option<(Value, Value)> {
     Some((auth.get("user_id")?.clone(), auth.get("secret")?.clone()))
 }
@@ -510,21 +644,25 @@ struct LocalCallback {
 const MAX_CALLBACK_CONNECTIONS: usize = 8;
 const CALLBACK_REQUEST_DEADLINE: Duration = Duration::from_secs(30);
 
-fn start_local_callback(control: Arc<CallbackControl>) -> std::io::Result<LocalCallback> {
+fn start_local_callback(
+    control: Arc<CallbackControl>,
+    state: String,
+) -> std::io::Result<LocalCallback> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
     let (tx, rx) = flume::bounded(1);
     std::thread::Builder::new()
         .name("cap-sign-in-callback".into())
-        .spawn(move || serve_local_callback(listener, port, &control, &tx))?;
+        .spawn(move || serve_local_callback(listener, port, &state, &control, &tx))?;
     Ok(LocalCallback { port, complete: rx })
 }
 
 fn serve_local_callback(
     listener: TcpListener,
     port: u16,
-    control: &CallbackControl,
+    state: &str,
+    control: &Arc<CallbackControl>,
     tx: &flume::Sender<AuthParams>,
 ) {
     let started = Instant::now();
@@ -552,11 +690,13 @@ fn serve_local_callback(
                 }
                 active.fetch_add(1, Ordering::AcqRel);
                 let tx = tx.clone();
+                let state = state.to_string();
+                let connection_control = control.clone();
                 let connection_active = active.clone();
                 let spawned = std::thread::Builder::new()
                     .name("cap-sign-in-request".into())
                     .spawn(move || {
-                        handle_callback_connection(stream, port, &tx);
+                        handle_callback_connection(stream, port, &state, &connection_control, &tx);
                         connection_active.fetch_sub(1, Ordering::AcqRel);
                     });
                 if let Err(error) = spawned {
@@ -575,7 +715,13 @@ fn serve_local_callback(
     }
 }
 
-fn handle_callback_connection(mut stream: TcpStream, port: u16, tx: &flume::Sender<AuthParams>) {
+fn handle_callback_connection(
+    mut stream: TcpStream,
+    port: u16,
+    state: &str,
+    control: &CallbackControl,
+    tx: &flume::Sender<AuthParams>,
+) {
     // BSD sockets inherit O_NONBLOCK from the listener, so on macOS a stream
     // accepted from the non-blocking listener reads WouldBlock until the
     // browser's request bytes land. Treating that as a failed read dropped the
@@ -594,7 +740,11 @@ fn handle_callback_connection(mut stream: TcpStream, port: u16, tx: &flume::Send
     let Some(target) = read_request_target(&mut stream, deadline) else {
         return;
     };
-    let params = parse_auth_params(&format!("http://127.0.0.1:{port}{target}"));
+    let params = parse_auth_callback(
+        &format!("http://127.0.0.1:{port}{target}"),
+        state,
+        control.state_optional.load(Ordering::Acquire),
+    );
     let (status, body) = if params.is_some() {
         ("200 OK", crate::local_page::signed_in())
     } else {
@@ -660,7 +810,115 @@ fn origin_of(value: &str) -> Option<String> {
     Some(url.origin().ascii_serialization())
 }
 
-pub fn parse_auth_params(url: &str) -> Option<AuthParams> {
+fn parse_auth_callback(
+    url: &str,
+    expected_state: &str,
+    state_optional: bool,
+) -> Option<AuthParams> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let states = parsed
+        .query_pairs()
+        .filter(|(key, _)| key == "state")
+        .map(|(_, value)| value)
+        .collect::<Vec<_>>();
+    match states.as_slice() {
+        [] if state_optional => {}
+        [state] if constant_time_eq(state.as_bytes(), expected_state.as_bytes()) => {}
+        _ => return None,
+    }
+    parse_auth_params(url)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignInStateSupport {
+    Supported,
+    Unsupported,
+    Unknown,
+}
+
+const SIGN_IN_STATE_SERVERS: &str = "signInStateServers";
+
+/// Asks a server other than the official one whether it returns `state` on
+/// its sign-in callbacks: a current server rejects a malformed `state` with
+/// 400 and accepts a well-formed one. Sent by the app before the browser
+/// opens.
+pub async fn probe_sign_in_state(server: &str) -> SignInStateSupport {
+    let Ok(client) = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(5))
+        .build()
+    else {
+        return SignInStateSupport::Unknown;
+    };
+    let status = |state: &'static str| {
+        let request = apply_desktop_headers(client.get(format!(
+            "{server}/api/desktop/session/request?type=api_key&state={state}"
+        )));
+        async move { request.send().await.ok().map(|response| response.status()) }
+    };
+    let malformed = status("x").await;
+    let well_formed = status("abcdefghijklmnopqrstuvwxyz012345").await;
+    sign_in_state_support(malformed, well_formed)
+}
+
+fn sign_in_state_support(
+    malformed: Option<reqwest::StatusCode>,
+    well_formed: Option<reqwest::StatusCode>,
+) -> SignInStateSupport {
+    let bad_request = reqwest::StatusCode::BAD_REQUEST;
+    match (malformed, well_formed) {
+        (Some(malformed), Some(well_formed))
+            if malformed.is_server_error() || well_formed.is_server_error() =>
+        {
+            SignInStateSupport::Unknown
+        }
+        (Some(malformed), Some(well_formed))
+            if malformed == bad_request && well_formed != bad_request =>
+        {
+            SignInStateSupport::Supported
+        }
+        (Some(malformed), Some(_)) if malformed != bad_request => SignInStateSupport::Unsupported,
+        _ => SignInStateSupport::Unknown,
+    }
+}
+
+/// Whether sign-in to this server must return `state`. A server that has
+/// confirmed support once stays required when a later check fails.
+pub fn sign_in_state_required(server: &str, support: SignInStateSupport) -> bool {
+    let Some(origin) = origin_of(server) else {
+        return false;
+    };
+    if support == SignInStateSupport::Supported
+        && !store::set_store_setting(SIGN_IN_STATE_SERVERS, &origin, Value::Bool(true))
+    {
+        tracing::warn!("saving sign-in state support failed");
+    }
+    let confirmed_before = store::store_section(SIGN_IN_STATE_SERVERS)
+        .get(&origin)
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    state_required(support, confirmed_before)
+}
+
+fn state_required(support: SignInStateSupport, confirmed_before: bool) -> bool {
+    match support {
+        SignInStateSupport::Supported => true,
+        SignInStateSupport::Unsupported => false,
+        SignInStateSupport::Unknown => confirmed_before,
+    }
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .fold(0u8, |diff, (left, right)| diff | (left ^ right))
+            == 0
+}
+
+fn parse_auth_params(url: &str) -> Option<AuthParams> {
     let parsed = reqwest::Url::parse(url).ok()?;
     let query = query_map(&parsed);
     if let Some(api_key) = query.get("api_key")
@@ -699,6 +957,48 @@ mod server_change_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_whether_a_recording_limit_still_applies() {
+        assert_eq!(parse_plan(&json!({"upgraded": false})), Some((false, None)));
+        assert_eq!(
+            parse_plan(&json!({"upgraded": false, "recording_limit_applies": false})),
+            Some((false, Some(false)))
+        );
+        assert_eq!(
+            parse_plan(&json!({"upgraded": true, "recording_limit_applies": true})),
+            Some((true, Some(true)))
+        );
+        assert_eq!(parse_plan(&json!({"recording_limit_applies": false})), None);
+    }
+
+    #[test]
+    fn a_plan_fetched_earlier_in_the_same_second_never_replaces_a_later_one() {
+        let plan =
+            |upgraded: bool| json!({"upgraded": upgraded, "manual": false, "last_checked": 10});
+        let free = fetched_plan(plan(false));
+        let pro = fetched_plan(plan(true));
+        let mut auth = serde_json::Map::new();
+        save_plan(&mut auth, pro);
+        save_plan(&mut auth, free);
+        assert_eq!(auth["plan"]["upgraded"], json!(true));
+        save_plan(&mut auth, fetched_plan(plan(false)));
+        assert_eq!(auth["plan"]["upgraded"], json!(false));
+    }
+
+    #[test]
+    fn an_older_plan_never_replaces_a_newer_one() {
+        let plan = |at: i64| json!({"upgraded": true, "manual": false, "last_checked": at});
+        assert!(superseded(Some(&plan(20)), &plan(10)));
+        assert!(!superseded(Some(&plan(10)), &plan(20)));
+        assert!(!superseded(Some(&plan(10)), &plan(10)));
+        assert!(!superseded(None, &plan(10)));
+        assert!(!superseded(Some(&Value::Null), &plan(10)));
+        assert!(!superseded(
+            Some(&json!({"upgraded": true, "manual": true})),
+            &plan(10)
+        ));
+    }
 
     #[test]
     fn parses_api_key_callback() {
@@ -746,7 +1046,7 @@ mod tests {
     #[test]
     fn loopback_callback_survives_a_slow_browser_and_keeps_serving() {
         let control = Arc::new(CallbackControl::default());
-        let local = start_local_callback(control.clone()).unwrap();
+        let local = start_local_callback(control.clone(), "expected-state".into()).unwrap();
 
         let unrelated = request(
             local.port,
@@ -756,10 +1056,19 @@ mod tests {
         assert!(unrelated.starts_with("HTTP/1.1 404"), "{unrelated}");
         assert!(local.complete.try_recv().is_err());
 
+        for forged in [
+            "GET /?type=api_key&api_key=other&user_id=other HTTP/1.1\r\n\r\n",
+            "GET /?type=api_key&api_key=other&user_id=other&state=wrong-state HTTP/1.1\r\n\r\n",
+        ] {
+            let response = request(local.port, Duration::ZERO, forged);
+            assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+        }
+        assert!(local.complete.try_recv().is_err());
+
         let callback = request(
             local.port,
             Duration::from_millis(300),
-            "GET /?type=api_key&api_key=key-1&user_id=user-1 HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/html\r\n\r\n",
+            "GET /?type=api_key&api_key=key-1&user_id=user-1&state=expected-state HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/html\r\n\r\n",
         );
         assert!(callback.starts_with("HTTP/1.1 200"), "{callback}");
         assert!(callback.contains("signed in"));
@@ -791,7 +1100,7 @@ mod tests {
         let fallback = request(
             local.port,
             Duration::ZERO,
-            "GET /?type=api_key&api_key=key-1&user_id=user-1 HTTP/1.1\r\n\r\n",
+            "GET /?type=api_key&api_key=key-1&user_id=user-1&state=expected-state HTTP/1.1\r\n\r\n",
         );
         assert!(fallback.starts_with("HTTP/1.1 200"), "{fallback}");
         control.stop.store(true, Ordering::Release);
@@ -823,13 +1132,178 @@ mod tests {
     #[test]
     fn sign_in_url_omits_a_missing_port() {
         assert_eq!(
-            sign_in_request_url("https://cap.so", Some(4280), false),
-            "https://cap.so/api/desktop/session/request?type=api_key&port=4280&platform=desktop"
+            sign_in_request_url("https://cap.so", Some(4280), false, "s1"),
+            "https://cap.so/api/desktop/session/request?type=api_key&port=4280&platform=desktop&state=s1"
         );
         assert_eq!(
-            sign_in_request_url("http://localhost:3000", None, true),
-            "http://localhost:3000/api/desktop/session/request?type=api_key&platform=web"
+            sign_in_request_url("http://localhost:3000", None, true, "s2"),
+            "http://localhost:3000/api/desktop/session/request?type=api_key&platform=web&state=s2"
         );
+    }
+
+    #[test]
+    fn sign_in_state_is_random_and_url_safe() {
+        let first = new_sign_in_state().unwrap();
+        let second = new_sign_in_state().unwrap();
+        assert_ne!(first, second);
+        assert_eq!(first.len(), 43);
+        assert!(
+            first
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        );
+    }
+
+    #[test]
+    fn callbacks_need_the_session_state() {
+        let expected = AuthParams::ApiKey {
+            api_key: "k".into(),
+            user_id: "u".into(),
+        };
+        for url in [
+            "cap-desktop://signin?type=api_key&api_key=k&user_id=u&state=abc123",
+            "http://127.0.0.1:4280/?type=api_key&api_key=k&user_id=u&state=abc123",
+            "cap-desktop://signin?state=abc123&api_key=k&user_id=u",
+        ] {
+            assert_eq!(
+                parse_auth_callback(url, "abc123", false),
+                Some(expected.clone()),
+                "{url}"
+            );
+        }
+        for url in [
+            "cap-desktop://signin?type=api_key&api_key=k&user_id=u",
+            "cap-desktop://signin?api_key=k&user_id=u&state=",
+            "cap-desktop://signin?api_key=k&user_id=u&state=abc12",
+            "cap-desktop://signin?api_key=k&user_id=u&state=abc1234",
+            "cap-desktop://signin?api_key=k&user_id=u&state=ABC123",
+            "cap-desktop://signin?api_key=k&user_id=u&state=abc123&state=other",
+            "cap-desktop://signin?api_key=k&user_id=u&state=other&state=abc123",
+            "cap-desktop://auth?token=t&user_id=u&expires=9&state=wrong",
+            "cap-desktop://signin?state=abc123",
+        ] {
+            assert_eq!(parse_auth_callback(url, "abc123", false), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_server_without_state_support_accepts_only_stateless_or_matching_callbacks() {
+        let expected = Some(AuthParams::ApiKey {
+            api_key: "k".into(),
+            user_id: "u".into(),
+        });
+        assert_eq!(
+            parse_auth_callback("cap-desktop://signin?api_key=k&user_id=u", "abc123", true),
+            expected
+        );
+        assert_eq!(
+            parse_auth_callback(
+                "http://127.0.0.1:1/?api_key=k&user_id=u&state=abc123",
+                "abc123",
+                true
+            ),
+            expected
+        );
+        for url in [
+            "cap-desktop://signin?api_key=k&user_id=u&state=wrong",
+            "cap-desktop://signin?api_key=k&user_id=u&state=abc123&state=abc123",
+            "cap-desktop://signin?api_key=k&user_id=u&state=",
+        ] {
+            assert_eq!(parse_auth_callback(url, "abc123", true), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn state_support_needs_a_400_for_malformed_and_not_for_well_formed_state() {
+        use SignInStateSupport::*;
+        use reqwest::StatusCode;
+        let found = Some(StatusCode::FOUND);
+        let bad = Some(StatusCode::BAD_REQUEST);
+        assert_eq!(sign_in_state_support(bad, found), Supported);
+        assert_eq!(sign_in_state_support(bad, Some(StatusCode::OK)), Supported);
+        assert_eq!(sign_in_state_support(found, found), Unsupported);
+        assert_eq!(
+            sign_in_state_support(Some(StatusCode::MOVED_PERMANENTLY), found),
+            Unsupported
+        );
+        assert_eq!(
+            sign_in_state_support(Some(StatusCode::NOT_FOUND), Some(StatusCode::NOT_FOUND)),
+            Unsupported
+        );
+        assert_eq!(sign_in_state_support(bad, bad), Unknown);
+        assert_eq!(sign_in_state_support(None, found), Unknown);
+        assert_eq!(sign_in_state_support(bad, None), Unknown);
+        assert_eq!(sign_in_state_support(None, None), Unknown);
+        assert_eq!(
+            sign_in_state_support(bad, Some(StatusCode::BAD_GATEWAY)),
+            Unknown
+        );
+        assert_eq!(
+            sign_in_state_support(Some(StatusCode::SERVICE_UNAVAILABLE), found),
+            Unknown
+        );
+    }
+
+    #[test]
+    fn a_server_that_confirmed_state_stays_required_when_a_check_fails() {
+        use SignInStateSupport::*;
+        assert!(state_required(Supported, false));
+        assert!(state_required(Supported, true));
+        assert!(state_required(Unknown, true));
+        assert!(!state_required(Unknown, false));
+        assert!(!state_required(Unsupported, true));
+        assert!(!state_required(Unsupported, false));
+    }
+
+    #[tokio::test]
+    async fn state_support_probe_reads_real_responses() {
+        use SignInStateSupport::*;
+        let serve = |respond: fn(&str) -> &'static str| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            std::thread::spawn(move || {
+                for mut stream in listener.incoming().flatten().take(2) {
+                    let target = read_request_target(&mut stream, far_future()).unwrap_or_default();
+                    let status = respond(&target);
+                    let _ = stream.write_all(
+                        format!("HTTP/1.1 {status}\r\nLocation: /login\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
+                    );
+                }
+            });
+            format!("http://127.0.0.1:{port}")
+        };
+        let current = serve(|target| {
+            if target.contains("state=x") {
+                "400 Bad Request"
+            } else {
+                "302 Found"
+            }
+        });
+        assert_eq!(probe_sign_in_state(&current).await, Supported);
+        let older = serve(|_| "302 Found");
+        assert_eq!(probe_sign_in_state(&older).await, Unsupported);
+        let failing = serve(|_| "503 Service Unavailable");
+        assert_eq!(probe_sign_in_state(&failing).await, Unknown);
+        assert_eq!(probe_sign_in_state("http://127.0.0.1:9").await, Unknown);
+    }
+
+    #[test]
+    fn only_a_custom_server_can_accept_callbacks_without_state() {
+        let session = |custom_server: Option<String>| SignInSession {
+            url: String::new(),
+            id: u64::MAX - 2,
+            state: "abc123".into(),
+            custom_server,
+            local: None,
+            deep: flume::bounded(1).1,
+            callback: Arc::new(CallbackControl::default()),
+        };
+        let official = session(None);
+        official.accept_callbacks_without_state();
+        assert!(!official.callback.state_optional.load(Ordering::Acquire));
+        let custom = session(Some("http://localhost:3000".into()));
+        custom.accept_callbacks_without_state();
+        assert!(custom.callback.state_optional.load(Ordering::Acquire));
     }
 
     #[test]
@@ -838,6 +1312,8 @@ mod tests {
         let old = SignInSession {
             url: String::new(),
             id: u64::MAX - 1,
+            state: String::new(),
+            custom_server: None,
             local: None,
             deep: old_rx,
             callback: Arc::new(CallbackControl::default()),

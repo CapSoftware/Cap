@@ -511,6 +511,25 @@ function prefixWithin(
 		: text.slice(0, low);
 }
 
+const SELF_LABEL_LINE = /^You: /m;
+
+// Who the person asking is in the transcript, and how to write as them. With
+// no name and no "You" lines nothing says which speaker they are, so the
+// prompt stays as it was rather than pointing at the wrong person.
+function askerRules(
+	selfName: string | undefined,
+	transcript: string,
+): string | null {
+	const name = singleLine(selfName ?? "").replace(/"/g, "");
+	if (!name && !SELF_LABEL_LINE.test(transcript)) return null;
+	const label = name || "You";
+	const signOff = name
+		? `Sign it with their name, ${name}, when a sign-off fits.`
+		: "Their name is not given: never guess one, and end with a sign-off that needs no name.";
+	return `- The person you are helping recorded the meeting and took part in it. The transcript labels their lines "${label}", so "${label}" is them and every other label is someone else.
+- When they ask you to write something for them to send or say, such as an email, message, reply or update, write it as them: in their voice, from them, to the other people in the meeting. Never address it to them, and never sign it as anyone else. ${signOff}`;
+}
+
 export function buildAskPrompt(
 	input: MeetingAskRequest & {
 		boundary: string;
@@ -546,10 +565,11 @@ export function buildAskPrompt(
 					(text) => Buffer.byteLength(text),
 				);
 
+	const asker = askerRules(input.selfName, input.transcript);
 	const system = [
 		"You answer questions about one meeting for the person who recorded it, using only that meeting's material.",
 		`Rules
-${untrustedDataRules(b, "The question after the tags, and the earlier questions in this conversation, come from the person you are helping.")}
+${untrustedDataRules(b, "The question after the tags, and the earlier questions in this conversation, come from the person you are helping.")}${asker ? `\n${asker}` : ""}
 - Answer only from the meeting material. If it does not contain the answer, say plainly that the meeting didn't cover it, and mention anything closely related that it did cover. Never guess and never fill gaps with outside knowledge.
 - The transcript comes from speech recognition and is labelled by speaker. It can contain misheard words. Use the vocabulary, when given, to spell names and terms correctly.${
 			transcript.excerpted

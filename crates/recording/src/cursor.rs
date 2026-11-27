@@ -52,26 +52,38 @@ pub struct CursorCaptureTarget {
     pub crop_bounds: CursorCropBounds,
     pub display: scap_targets::Display,
     pub window: Option<scap_targets::WindowId>,
+    /// The size of the frames the screen capture writes. A window-only
+    /// capture keeps it when the window is resized, so the cursor is placed
+    /// against it rather than against the window alone.
+    pub frame_size: Option<(u32, u32)>,
 }
 
+/// `frame_aspect` is the shape of the recording's frame, width over height.
 #[cfg(target_os = "macos")]
 fn macos_window_crop(
     window: &scap_targets::WindowId,
     display: &scap_targets::Display,
+    frame_aspect: Option<f64>,
 ) -> Option<CursorCropBounds> {
+    use crate::sources::screen_capture::window_frame_bounds;
     use scap_targets::bounds::{LogicalBounds, LogicalPosition};
 
     let window_bounds = scap_targets::Window::from_id_direct(window)?
         .raw_handle()
         .logical_bounds()?;
     let display_position = display.raw_handle().logical_position();
-    Some(CursorCropBounds::new_macos(LogicalBounds::new(
+    let bounds = LogicalBounds::new(
         LogicalPosition::new(
             window_bounds.position().x() - display_position.x(),
             window_bounds.position().y() - display_position.y(),
         ),
         window_bounds.size(),
-    )))
+    );
+    let frame = match frame_aspect {
+        Some(aspect) => window_frame_bounds(bounds, aspect),
+        None => bounds,
+    };
+    Some(CursorCropBounds::new_macos(frame))
 }
 
 #[cfg(windows)]
@@ -221,6 +233,22 @@ impl CursorActor {
 }
 
 const CURSOR_FLUSH_INTERVAL_SECS: u64 = 5;
+/// Input is polled every 16 ms, so the recorder sees a stop request within
+/// one poll of it.
+#[cfg(windows)]
+const STOP_CUT_INPUT_TOLERANCE: std::time::Duration = std::time::Duration::from_millis(16);
+
+/// The stop time the closing still-shape move is stamped with: never past
+/// the stop request plus one poll, however late the recorder stopped.
+#[cfg(windows)]
+fn input_stop_instant(
+    stop_cut: Option<&crate::output_pipeline::StopCut>,
+    stopped_at: Instant,
+) -> Instant {
+    stop_cut.map_or(stopped_at, |cut| {
+        cut.limit(stopped_at, STOP_CUT_INPUT_TOLERANCE)
+    })
+}
 /// How often the cursor image is checked while the pointer is still. Apps
 /// change the cursor under a resting pointer (a link under it, a loading
 /// state, a text field gaining focus); without a check the recording keeps
@@ -706,6 +734,8 @@ pub fn spawn_cursor_recorder(
     }
     let completion = scope.map(|scope| scope.task_completion());
     let stop_token_child = stop_token.child_token();
+    #[cfg(windows)]
+    let stop_cut = crate::output_pipeline::StopCut::current();
     let thread = std::thread::spawn(move || {
         let _completion = completion;
         let crop_bounds = target.crop_bounds;
@@ -720,6 +750,11 @@ pub fn spawn_cursor_recorder(
         let mut last_window_position = None;
         #[cfg(any(windows, target_os = "macos"))]
         let mut last_window_crop: Option<CursorCropBounds> = None;
+        #[cfg(target_os = "macos")]
+        let window_frame_aspect = target
+            .frame_size
+            .filter(|(width, height)| *width > 0 && *height > 0)
+            .map(|(width, height)| f64::from(width) / f64::from(height));
         // device_query's `DeviceState::new` asserts Accessibility trust on
         // macOS (and prompts for it). From macOS 27.3 Cap no longer needs that
         // grant: cursor position and mouse buttons read fine without it, and
@@ -782,6 +817,19 @@ pub fn spawn_cursor_recorder(
                 break;
             }
 
+            // Input after the stop request is not recorded, however late the
+            // stop reaches the recorder. This poll's events are stamped with
+            // the instant checked here, so none lands past the cut.
+            #[cfg(windows)]
+            let tick = Instant::now();
+            #[cfg(windows)]
+            if stop_cut
+                .as_ref()
+                .is_some_and(|cut| cut.excludes(tick, STOP_CUT_INPUT_TOLERANCE))
+            {
+                break;
+            }
+
             let Some(epoch) = input_epoch(start_gate.as_ref(), start_time) else {
                 last_mouse_state = device_state.get_mouse();
                 last_position =
@@ -789,6 +837,9 @@ pub fn spawn_cursor_recorder(
                 last_keys = held_keys();
                 continue;
             };
+            #[cfg(windows)]
+            let elapsed = tick.saturating_duration_since(epoch).as_secs_f64() * 1000.0;
+            #[cfg(not(windows))]
             let elapsed = epoch.elapsed().as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
 
@@ -820,7 +871,7 @@ pub fn spawn_cursor_recorder(
             let window_crop = target
                 .window
                 .as_ref()
-                .and_then(|window| macos_window_crop(window, &display));
+                .and_then(|window| macos_window_crop(window, &display, window_frame_aspect));
             #[cfg(any(windows, target_os = "macos"))]
             let position_changed =
                 position_changed || (window_crop.is_some() && window_crop != last_window_crop);
@@ -968,9 +1019,14 @@ pub fn spawn_cursor_recorder(
 
         info!("cursor recorder done");
 
+        let stopped_at = Instant::now();
+        #[cfg(windows)]
+        let stopped_at = input_stop_instant(stop_cut.as_ref(), stopped_at);
         if let Some(epoch) = input_epoch(start_gate.as_ref(), start_time)
-            && let Some(confirmation) =
-                still_shape_confirmation(&response.moves, epoch.elapsed().as_secs_f64() * 1000.0)
+            && let Some(confirmation) = still_shape_confirmation(
+                &response.moves,
+                stopped_at.saturating_duration_since(epoch).as_secs_f64() * 1000.0,
+            )
         {
             response.moves.push(confirmation);
         }
@@ -2611,5 +2667,479 @@ mod cursor_image_tests {
         );
         assert_eq!(response.cursors.len(), 1);
         assert!(cursor_path.is_file());
+    }
+}
+
+/// Real input for the input recorder's stop cut tests. It goes into the
+/// session that runs the tests, so it is only sent when
+/// `CAP_REQUIRE_INPUT_INJECTION` is set (CI sets it); without it the tests
+/// send nothing and check only what needs no injected input.
+#[cfg(all(test, windows))]
+pub(crate) mod test_input {
+    use super::CursorActorResponse;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    use std::time::Duration;
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
+        KEYEVENTF_KEYUP, MOUSE_EVENT_FLAGS, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
+        MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput, VK_F20,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CURSORINFO, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+        GetCursorInfo, GetCursorPos, MSG, PM_REMOVE, PeekMessageW, RegisterClassW,
+        SW_SHOWNOACTIVATE, ShowWindow, TranslateMessage, WNDCLASSW, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    };
+    use windows::core::{PCWSTR, w};
+
+    pub(crate) const REQUIRE_VAR: &str = "CAP_REQUIRE_INPUT_INJECTION";
+
+    pub(crate) fn injection_required() -> bool {
+        std::env::var_os(REQUIRE_VAR).is_some()
+    }
+
+    fn mouse(dx: i32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx,
+                    dy: 0,
+                    mouseData: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    fn key(flags: KEYBD_EVENT_FLAGS) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_F20,
+                    wScan: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    fn send(inputs: &[INPUT]) -> usize {
+        unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) as usize }
+    }
+
+    unsafe extern "system" fn target_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+
+    /// A small topmost window of the test's own under the pointer, shown
+    /// without activation, so the injected clicks land on it and nothing
+    /// else.
+    fn click_target() -> Option<HWND> {
+        unsafe {
+            let instance: HINSTANCE = GetModuleHandleW(PCWSTR::null()).ok()?.into();
+            let class = WNDCLASSW {
+                lpfnWndProc: Some(target_proc),
+                hInstance: instance,
+                lpszClassName: w!("CapInputRecorderTestTarget"),
+                ..Default::default()
+            };
+            // Registered once per process; a second registration fails and
+            // the class is reused.
+            RegisterClassW(&class);
+            let mut at = POINT::default();
+            GetCursorPos(&mut at).ok()?;
+            let hwnd = CreateWindowExW(
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                w!("CapInputRecorderTestTarget"),
+                w!(""),
+                WS_POPUP,
+                at.x - 100,
+                at.y - 100,
+                200,
+                200,
+                None,
+                None,
+                Some(instance),
+                None,
+            )
+            .ok()?;
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            Some(hwnd)
+        }
+    }
+
+    fn pump() {
+        let mut msg = MSG::default();
+        unsafe {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+
+    /// Every 20 ms: moves the pointer 6 px back and forth, presses the
+    /// middle button over the test's own window, and taps F20 (no app or
+    /// accessibility shortcut uses it). Only started when injection is
+    /// required.
+    pub(crate) struct Injector {
+        stop: Arc<AtomicBool>,
+        sent: Arc<AtomicUsize>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Injector {
+        pub(crate) fn start_if_required() -> Option<Self> {
+            if !injection_required() {
+                eprintln!(
+                    "{REQUIRE_VAR} not set: no input is injected; checking only what needs none"
+                );
+                return None;
+            }
+            let stop = Arc::new(AtomicBool::new(false));
+            let sent = Arc::new(AtomicUsize::new(0));
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+            let thread = std::thread::spawn({
+                let stop = stop.clone();
+                let sent = sent.clone();
+                move || {
+                    let target = click_target();
+                    ready_tx.send(target.is_some()).ok();
+                    let Some(target) = target else {
+                        return;
+                    };
+                    let mut step = 0_i32;
+                    while !stop.load(Ordering::Relaxed) {
+                        let dx = if step % 2 == 0 { 6 } else { -6 };
+                        let down = [
+                            mouse(dx, MOUSEEVENTF_MOVE),
+                            mouse(0, MOUSEEVENTF_MIDDLEDOWN),
+                            key(KEYBD_EVENT_FLAGS(0)),
+                        ];
+                        sent.fetch_add(send(&down), Ordering::Relaxed);
+                        pump();
+                        std::thread::sleep(Duration::from_millis(10));
+                        let up = [mouse(0, MOUSEEVENTF_MIDDLEUP), key(KEYEVENTF_KEYUP)];
+                        sent.fetch_add(send(&up), Ordering::Relaxed);
+                        pump();
+                        std::thread::sleep(Duration::from_millis(10));
+                        step += 1;
+                    }
+                    unsafe { DestroyWindow(target).ok() };
+                }
+            });
+            assert!(
+                ready_rx.recv().unwrap_or(false),
+                "{REQUIRE_VAR} is set but the test's click target window could not be created"
+            );
+            Some(Self {
+                stop,
+                sent,
+                thread: Some(thread),
+            })
+        }
+
+        /// Stops sending and returns how many inputs the system accepted.
+        pub(crate) fn stop(mut self) -> usize {
+            self.halt();
+            self.sent.load(Ordering::Relaxed)
+        }
+
+        fn halt(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            if let Some(thread) = self.thread.take() {
+                thread.join().ok();
+            }
+        }
+    }
+
+    impl Drop for Injector {
+        fn drop(&mut self) {
+            self.halt();
+        }
+    }
+
+    /// The recorder only records input while the session shows a cursor; a
+    /// session with no mouse attached hides it until mouse input arrives.
+    pub(crate) fn cursor_shown() -> bool {
+        let mut info = CURSORINFO {
+            cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+            ..Default::default()
+        };
+        unsafe { GetCursorInfo(&mut info) }.is_ok() && !info.hCursor.is_invalid()
+    }
+
+    /// With injection required, the cursor must be shown and every kind of
+    /// injected input must have been recorded before the request.
+    pub(crate) fn assert_injected_input_recorded(
+        response: &CursorActorResponse,
+        shown: bool,
+        sent: usize,
+    ) {
+        assert!(
+            shown,
+            "{REQUIRE_VAR} is set but the session shows no cursor, so the recorder records nothing"
+        );
+        assert!(
+            !response.moves.is_empty()
+                && !response.clicks.is_empty()
+                && !response.keyboard_presses.is_empty(),
+            "input injected before the request must be recorded ({sent} inputs sent): {}",
+            summary(response)
+        );
+    }
+
+    fn late(times: impl Iterator<Item = f64>, limit_ms: f64) -> Vec<f64> {
+        times.filter(|time| *time > limit_ms).collect()
+    }
+
+    /// Every move, click and key press is stamped at or before `limit_ms`.
+    pub(crate) fn assert_recorded_by(
+        moves: &[cap_project::CursorMoveEvent],
+        clicks: &[cap_project::CursorClickEvent],
+        presses: &[cap_project::KeyPressEvent],
+        limit_ms: f64,
+    ) {
+        let late_moves = late(moves.iter().map(|event| event.time_ms), limit_ms);
+        let late_clicks = late(clicks.iter().map(|event| event.time_ms), limit_ms);
+        let late_presses = late(presses.iter().map(|event| event.time_ms), limit_ms);
+        assert!(
+            late_moves.is_empty() && late_clicks.is_empty() && late_presses.is_empty(),
+            "input past the request plus one poll ({limit_ms:.1} ms): moves {late_moves:?}, \
+             clicks {late_clicks:?}, keys {late_presses:?}"
+        );
+    }
+
+    pub(crate) fn assert_response_recorded_by(response: &CursorActorResponse, limit_ms: f64) {
+        assert_recorded_by(
+            &response.moves,
+            &response.clicks,
+            &response.keyboard_presses,
+            limit_ms,
+        );
+    }
+
+    pub(crate) fn last_event_ms(response: &CursorActorResponse) -> Option<f64> {
+        response
+            .moves
+            .iter()
+            .map(|event| event.time_ms)
+            .chain(response.clicks.iter().map(|event| event.time_ms))
+            .chain(response.keyboard_presses.iter().map(|event| event.time_ms))
+            .reduce(f64::max)
+    }
+
+    pub(crate) fn summary(response: &CursorActorResponse) -> String {
+        format!(
+            "{} moves, {} clicks, {} keys, last event {:?} ms",
+            response.moves.len(),
+            response.clicks.len(),
+            response.keyboard_presses.len(),
+            last_event_ms(response)
+        )
+    }
+}
+
+#[cfg(all(test, windows))]
+mod stop_cut_input_tests {
+    use super::test_input::{
+        Injector, assert_injected_input_recorded, assert_recorded_by, assert_response_recorded_by,
+        cursor_shown, last_event_ms, summary,
+    };
+    use super::*;
+    use crate::output_pipeline::StopCut;
+    use crate::sources::screen_capture::ScreenCaptureTarget;
+    use cap_project::CursorEvents;
+    use std::time::Duration;
+
+    fn spawn(dir: &Path, start_time: Timestamps) -> CursorActor {
+        let display = scap_targets::Display::primary();
+        let crop_bounds = ScreenCaptureTarget::Display { id: display.id() }
+            .cursor_crop()
+            .expect("the primary display has bounds");
+        spawn_cursor_recorder(
+            CursorCaptureTarget {
+                crop_bounds,
+                display,
+                window: None,
+                frame_size: None,
+            },
+            dir.join("cursors"),
+            Cursors::default(),
+            0,
+            start_time,
+            None,
+            IncrementalCaptureOutputs {
+                cursor: Some(dir.join("cursor.json")),
+                keyboard: Some(dir.join(cap_project::KEYBOARD_EVENTS_FILE_NAME)),
+            },
+            true,
+        )
+    }
+
+    fn ms_since(epoch: Instant, at: Instant) -> f64 {
+        at.saturating_duration_since(epoch).as_secs_f64() * 1000.0
+    }
+
+    /// The user asks to stop while the Stop itself is held up: the input
+    /// recorder ends on its own, without its stop token, and keeps no move,
+    /// click or key press past the request plus one poll, in its response
+    /// or in the files it wrote.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn late_stop_cut_ends_input_recording_at_the_stop_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = Injector::start_if_required();
+        let start_time = Timestamps::now();
+        let cut = StopCut::default();
+        let actor = cut
+            .clone()
+            .scope(async { spawn(dir.path(), start_time) })
+            .await;
+
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let shown = cursor_shown();
+        assert!(cut.mark());
+        let request = cut.instant().unwrap();
+        // Neither the stop token nor `CursorActor::stop` is used: the
+        // recorder has to see the request itself, while input keeps coming.
+        let response = tokio::time::timeout(Duration::from_secs(5), actor.rx.clone())
+            .await
+            .expect("the input recorder kept running after the stop request")
+            .unwrap();
+        let ended = request.elapsed();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let sent = input.map(Injector::stop);
+
+        let limit = request.checked_add(STOP_CUT_INPUT_TOLERANCE).unwrap();
+        let limit_ms = ms_since(start_time.instant(), limit);
+        assert_response_recorded_by(&response, limit_ms);
+
+        let cursor_file = dir.path().join("cursor.json");
+        let keyboard_file = dir.path().join(cap_project::KEYBOARD_EVENTS_FILE_NAME);
+        let on_disk = if cursor_file.is_file() {
+            CursorEvents::load_from_file(&cursor_file).unwrap()
+        } else {
+            CursorEvents::default()
+        };
+        let presses = if keyboard_file.is_file() {
+            KeyboardEvents::load_from_file(&keyboard_file)
+                .unwrap()
+                .presses
+        } else {
+            Vec::new()
+        };
+        assert_recorded_by(&on_disk.moves, &on_disk.clicks, &presses, limit_ms);
+        assert_eq!(on_disk.moves.len(), response.moves.len());
+        assert_eq!(presses.len(), response.keyboard_presses.len());
+
+        eprintln!(
+            "input recorder: ended {ended:?} after the request at {:.1} ms; {}; injected {sent:?}; \
+             cursor shown {shown}",
+            ms_since(start_time.instant(), request),
+            summary(&response),
+        );
+        assert!(
+            ended < Duration::from_secs(1),
+            "the recorder ended {ended:?} after the request"
+        );
+        if let Some(sent) = sent {
+            assert_injected_input_recorded(&response, shown, sent);
+        }
+    }
+
+    /// The mirror: with the cut never marked the recorder keeps recording
+    /// until it is stopped.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn late_stop_cut_unmarked_keeps_input_recording_until_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = Injector::start_if_required();
+        let start_time = Timestamps::now();
+        let cut = StopCut::default();
+        let mut actor = cut
+            .clone()
+            .scope(async { spawn(dir.path(), start_time) })
+            .await;
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(800), actor.rx.clone())
+                .await
+                .is_err(),
+            "the recorder ended with no stop request"
+        );
+        let shown = cursor_shown();
+        let stopped_ms = ms_since(start_time.instant(), Instant::now());
+        tokio::task::block_in_place(|| actor.stop());
+        let response = actor.rx.clone().await.unwrap();
+        let sent = input.map(Injector::stop);
+
+        assert!(cut.instant().is_none());
+        eprintln!(
+            "input recorder, no request: stopped at {stopped_ms:.1} ms; {}; injected {sent:?}; \
+             cursor shown {shown}",
+            summary(&response),
+        );
+        if let Some(sent) = sent {
+            assert_injected_input_recorded(&response, shown, sent);
+            let last = last_event_ms(&response).expect("input was recorded");
+            assert!(
+                last >= stopped_ms - 100.0,
+                "input is recorded until the recorder is stopped: last event {last:.1} ms, \
+                 stopped at {stopped_ms:.1} ms"
+            );
+        }
+    }
+
+    /// The closing still-shape move of a recording that ends on a shape
+    /// change under a still pointer is stamped no later than the request
+    /// plus one poll, however late the recorder stopped.
+    #[test]
+    fn late_stop_cut_stamps_the_closing_still_shape_at_the_stop_request() {
+        let epoch = Instant::now();
+        let cut = StopCut::default();
+        let unmarked = epoch.checked_add(Duration::from_secs(5)).unwrap();
+        assert_eq!(input_stop_instant(Some(&cut), unmarked), unmarked);
+        assert_eq!(input_stop_instant(None, unmarked), unmarked);
+
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(cut.mark());
+        let request = cut.instant().unwrap();
+        let stopped_at = request.checked_add(Duration::from_secs(90)).unwrap();
+        let closing = input_stop_instant(Some(&cut), stopped_at);
+        let limit = request.checked_add(STOP_CUT_INPUT_TOLERANCE).unwrap();
+        assert_eq!(closing, limit);
+
+        let at = |time_ms: f64, cursor_id: &str| CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: cursor_id.to_string(),
+            time_ms,
+            x: 0.5,
+            y: 0.5,
+        };
+        let request_ms = ms_since(epoch, request);
+        let moves = [at(request_ms - 200.0, "0"), at(request_ms - 100.0, "1")];
+        let confirmation = still_shape_confirmation(&moves, ms_since(epoch, closing))
+            .expect("a shape change under a still pointer is confirmed at the stop");
+        assert!(confirmation.time_ms <= ms_since(epoch, limit));
+        assert!(
+            still_shape_confirmation(&moves, ms_since(epoch, stopped_at))
+                .is_some_and(|late| late.time_ms > ms_since(epoch, limit)),
+            "without the cut the closing move would land at the late stop"
+        );
     }
 }

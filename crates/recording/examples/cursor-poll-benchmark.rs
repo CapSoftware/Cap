@@ -53,6 +53,7 @@ fn main() -> anyhow::Result<()> {
             crop_bounds,
             display,
             window: None,
+            frame_size: None,
         },
         dir.path().join("cursors"),
         Default::default(),

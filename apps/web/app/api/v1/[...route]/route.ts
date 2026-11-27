@@ -1,5 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
+import { isEmailShape } from "@cap/database/auth/domain-utils";
 import { revokeAllCredentials } from "@cap/database/auth/revoke-credentials";
 import {
 	decrypt,
@@ -2465,11 +2466,7 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 			return yield* badRequest(input.requestId, "Loom URL is invalid");
 		}
 		const ownerEmail = input.payload.ownerEmail?.trim().toLowerCase();
-		if (
-			ownerEmail &&
-			(ownerEmail.length > 255 ||
-				!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail))
-		) {
+		if (ownerEmail && (ownerEmail.length > 255 || !isEmailShape(ownerEmail))) {
 			return yield* badRequest(input.requestId, "Owner email is invalid");
 		}
 		const spaceName = input.payload.spaceName?.trim().replace(/\s+/g, " ");
@@ -5507,10 +5504,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const email = payload.email.trim().toLowerCase();
 						const role = payload.role ?? "member";
 						const shouldSendEmail = payload.sendEmail ?? true;
-						if (
-							email.length > 255 ||
-							!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-						) {
+						if (email.length > 255 || !isEmailShape(email)) {
 							return yield* badRequest(requestId, "Invite email is invalid");
 						}
 						const idempotencyKey = yield* requestIdempotencyKey;
@@ -8997,17 +8991,6 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						if (name !== undefined && (!name || name.length > 255)) {
 							return yield* badRequest(requestId, "Folder name is invalid");
 						}
-						if (
-							payload.settings !== undefined &&
-							(!payload.settings ||
-								typeof payload.settings !== "object" ||
-								Array.isArray(payload.settings))
-						) {
-							return yield* badRequest(
-								requestId,
-								"Folder settings must be an object",
-							);
-						}
 						const management = yield* AgentManagement;
 						const access = yield* management.getFolderAccess(
 							principal.id,
@@ -9072,6 +9055,11 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								}
 								if (parentId) return { state: "conflict" };
 								const now = new Date();
+								const publicPage = payload.settings?.publicPage;
+								const settingsPatch =
+									publicPage && Object.keys(publicPage).length > 0
+										? JSON.stringify({ publicPage })
+										: null;
 								await tx
 									.update(Db.folders)
 									.set({
@@ -9079,8 +9067,9 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										color: payload.color,
 										parentId: payload.parentId,
 										public: payload.public,
-										settings:
-											payload.settings as typeof Db.folders.$inferInsert.settings,
+										settings: settingsPatch
+											? sql`JSON_MERGE_PATCH(COALESCE(${Db.folders.settings}, '{}'), CAST(${settingsPatch} AS JSON))`
+											: undefined,
 										updatedAt: now,
 									})
 									.where(eq(Db.folders.id, path.folderId));
