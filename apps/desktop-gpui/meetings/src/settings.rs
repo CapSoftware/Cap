@@ -156,7 +156,8 @@ pub struct TranscriptionSettings {
     /// microphone, so their lines carry their name in rooms with others.
     pub learn_voice: bool,
     /// While recording, read who the meeting app shows as speaking (local
-    /// only) and name the voices to match.
+    /// only) and name the voices to match. Off by default: no call app is
+    /// known to say who is talking in a way Cap can read yet.
     pub name_speakers_from_apps: bool,
 }
 
@@ -282,7 +283,7 @@ impl Default for TranscriptionSettings {
             live: true,
             live_on_slow_cloud: None,
             learn_voice: true,
-            name_speakers_from_apps: true,
+            name_speakers_from_apps: false,
         }
     }
 }
