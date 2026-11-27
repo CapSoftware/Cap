@@ -95,6 +95,53 @@ pub(super) fn any_shown_or_closed(window_ids: &[u32]) -> bool {
         .any(|id| on_screen.contains(id) || !all.contains(id))
 }
 
+/// What the watcher does on a tick while an excluded window is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Step {
+    Wait,
+    /// Move the exclusion to another off-screen window.
+    Refresh,
+    /// Apply the filter without hidden-sink exclusions: the app's audio comes
+    /// back, but no window is missing from the video.
+    Fallback,
+}
+
+const REFRESH_ATTEMPTS: u32 = 3;
+const MAX_WAIT_TICKS: u32 = 7;
+
+/// Paces attempts after failures: retries back off, and after a few failed
+/// refreshes the watcher falls back instead of leaving a shown window excluded.
+#[derive(Debug, Default)]
+pub(super) struct Retry {
+    failures: u32,
+    wait: u32,
+}
+
+impl Retry {
+    pub(super) fn step(&mut self) -> Step {
+        if self.wait > 0 {
+            self.wait -= 1;
+            return Step::Wait;
+        }
+        if self.failures >= REFRESH_ATTEMPTS {
+            Step::Fallback
+        } else {
+            Step::Refresh
+        }
+    }
+
+    /// Records a failed attempt; true for the first one, the one to log.
+    pub(super) fn failed(&mut self) -> bool {
+        self.failures += 1;
+        self.wait = ((1u32 << (self.failures - 1).min(3)) - 1).min(MAX_WAIT_TICKS);
+        self.failures == 1
+    }
+
+    pub(super) fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 fn window_list(option: CGWindowListOption) -> Option<Vec<u32>> {
     let list = create_window_list(option, kCGNullWindowID)?;
     // The list holds window numbers, not CF objects.
@@ -230,6 +277,57 @@ mod tests {
             bundle_id: bundle_id.to_string(),
             outputs: outputs.to_vec(),
         }
+    }
+
+    fn steps(retry: &mut Retry, failures: &[bool]) -> Vec<Step> {
+        let mut out = Vec::new();
+        let mut results = failures.iter();
+        for _ in 0..40 {
+            let step = retry.step();
+            out.push(step);
+            if step == Step::Wait {
+                continue;
+            }
+            match results.next() {
+                Some(true) => {
+                    retry.failed();
+                }
+                _ => break,
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn retry_backs_off_then_falls_back() {
+        use Step::*;
+        let mut retry = Retry::default();
+        assert_eq!(
+            steps(&mut retry, &[true, true, true, false]),
+            vec![Refresh, Refresh, Wait, Refresh, Wait, Wait, Wait, Fallback]
+        );
+    }
+
+    #[test]
+    fn failed_fallback_keeps_retrying_at_the_capped_pace() {
+        use Step::*;
+        let mut retry = Retry::default();
+        let all = steps(&mut retry, &[true, true, true, true, true, false]);
+        assert_eq!(all.iter().filter(|step| **step == Fallback).count(), 3);
+        assert_eq!(
+            all[all.len() - 8..],
+            [Wait, Wait, Wait, Wait, Wait, Wait, Wait, Fallback]
+        );
+    }
+
+    #[test]
+    fn only_the_first_failure_is_logged_and_reset_starts_over() {
+        let mut retry = Retry::default();
+        assert!(retry.failed());
+        assert!(!retry.failed());
+        retry.reset();
+        assert_eq!(retry.step(), Step::Refresh);
+        assert!(retry.failed());
     }
 
     #[test]
