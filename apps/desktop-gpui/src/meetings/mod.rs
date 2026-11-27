@@ -865,6 +865,16 @@ impl Meetings {
                 })
                 .detach();
             this.resume_unwritten(cx);
+            // Notes another account left unwritten wait for that account's
+            // sign-in, not for the next launch.
+            if let Some(sign_in) = crate::sign_in::SignIn::try_global(cx) {
+                cx.subscribe(&sign_in, |this, _, event, cx| {
+                    if *event == crate::sign_in::SignInEvent::AccountRefreshed {
+                        this.resume_unwritten(cx);
+                    }
+                })
+                .detach();
+            }
             this.apply_lifecycle(cx);
             this
         });
