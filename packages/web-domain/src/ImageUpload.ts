@@ -35,6 +35,23 @@ export const extractFileKey = (
 	}
 };
 
+/**
+ * Whether `key` is an object directly owned by an upload slot, i.e. sits below
+ * `prefix` with no relative path segments. Stored image keys are only ever
+ * trusted for deletion or signing when they pass this check.
+ */
+export const isKeyUnderPrefix = (key: string, prefix: string) => {
+	const normalizedPrefix = prefix.endsWith("/") ? prefix : `${prefix}/`;
+	if (!key.startsWith(normalizedPrefix)) return false;
+	const rest = key.slice(normalizedPrefix.length);
+	return (
+		rest.length > 0 &&
+		!rest
+			.split("/")
+			.some((segment) => segment === "" || segment === "." || segment === "..")
+	);
+};
+
 export const ImageUpdatePayload = Schema.Option(
 	Schema.Struct({
 		data: Schema.Uint8ArrayFromBase64,
