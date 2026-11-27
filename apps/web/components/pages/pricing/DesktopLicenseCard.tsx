@@ -152,7 +152,10 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 						incrementLabel="Increase license count"
 					/>
 					{enteringCode && !offerEnded ? (
-						<form onSubmit={applyCode} className="flex items-center gap-1.5">
+						<form
+							onSubmit={applyCode}
+							className="-my-1 flex items-center gap-1.5"
+						>
 							<input
 								ref={codeInput}
 								value={codeDraft}
@@ -176,7 +179,7 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 							</button>
 						</form>
 					) : (
-						<div className="flex flex-wrap items-center justify-between gap-x-2 text-[14px] text-[rgba(17,17,17,0.6)]">
+						<div className="flex h-6 items-center justify-between gap-x-2 whitespace-nowrap text-[14px] text-[rgba(17,17,17,0.6)]">
 							<span className="flex items-center gap-2">
 								Total
 								{offer ? (
