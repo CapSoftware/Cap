@@ -4295,6 +4295,7 @@ calendar_settings = "Calendar settings"
 empty_title = "Your notes will appear here"
 empty_body = "Press Start notes when a meeting begins. Cap listens and writes it up when you stop."
 just_you = "Just you"
+people = { one = "{count} person", other = "{count} people", context = "Notes list, a meeting note with no call app and no names: how many people the transcript heard (two or more)." }
 note = "Note"
 start_notes = { text = "Start notes", context = "Primary button on the notes home: starts recording a new meeting note right away." }
 

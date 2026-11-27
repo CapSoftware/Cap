@@ -4293,6 +4293,7 @@ calendar_settings = "Réglages du calendrier"
 empty_title = "Vos notes apparaîtront ici"
 empty_body = "Appuyez sur Lancer les notes au début d'une réunion. Cap écoute et la rédige quand vous arrêtez."
 just_you = "Vous seul"
+people = { one = "{count} personne", other = "{count} personnes" }
 note = "Note"
 start_notes = "Lancer les notes"
 

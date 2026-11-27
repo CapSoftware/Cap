@@ -4293,6 +4293,7 @@ calendar_settings = "Kalendereinstellungen"
 empty_title = "Hier erscheinen Ihre Notizen"
 empty_body = "Drücken Sie zu Beginn eines Meetings auf Notizen starten. Cap hört zu und schreibt alles zusammen, sobald Sie stoppen."
 just_you = "Nur Sie"
+people = { one = "{count} Person", other = "{count} Personen" }
 note = "Notiz"
 start_notes = "Notizen starten"
 
