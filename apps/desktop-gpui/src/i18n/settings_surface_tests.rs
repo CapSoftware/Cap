@@ -29,6 +29,9 @@ pub(super) fn is_settings_surface_key(key: &str) -> bool {
 }
 
 const FORMATTED: &[&str] = &[
+    "settings.quality.studio.bitrate_value",
+    "settings.quality.studio.frame_rate.description_match",
+    "settings.quality.studio.resolution_up_to",
     "settings.sidebar.downloading",
     "settings.sidebar.downloading_progress",
     "settings.sidebar.installing",
@@ -155,10 +158,23 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             tr::settings::quality::save_failed(),
             "Couldn't save your recording settings. Please try again.",
         ),
-        (tr::settings::quality::studio::title(), "Studio recordings"),
+        (tr::settings::quality::studio::title(), "Studio Mode"),
         (
             tr::settings::quality::studio::description(),
-            "Saved to your computer for editing. You choose the export size later, in the editor.",
+            "Records your screen at full resolution, up to 4K, in the highest quality, and saves it to your computer for editing. You choose the export size later, in the editor.",
+        ),
+        (tr::settings::quality::studio::resolution(), "Resolution"),
+        (
+            tr::settings::quality::studio::resolution_description(),
+            "Your screen's full resolution, up to 4K. Windows and areas record at their own size.",
+        ),
+        (
+            tr::settings::quality::studio::resolution_description_several(),
+            "Each screen records at its own full resolution, up to 4K. Windows and areas record at their own size.",
+        ),
+        (
+            tr::settings::quality::studio::resolution_description_compatibility(),
+            "Each screen records at its full resolution, up to 4K. With a camera on, the Smaller files setting records at up to 1600 × 1000.",
         ),
         (tr::settings::quality::studio::recommended(), "Recommended"),
         (tr::settings::quality::studio::balanced(), "Balanced"),
@@ -180,12 +196,67 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Keeps the most detail for heavy editing. Uses the most disk space.",
         ),
         (
-            tr::settings::quality::instant::title(),
-            "Instant recordings",
+            tr::settings::quality::studio::frame_rate::label(),
+            "Frame rate",
         ),
         (
+            tr::settings::quality::studio::frame_rate::description(),
+            "Studio Mode records up to this rate and never faster than your display refreshes. With a camera on, it records at 30 FPS or less.",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::description_high(),
+            "Recording above 60 FPS uses more CPU and disk space, and some computers encode it in software. Studio Mode never records faster than your display refreshes. With a camera on, it records at 30 FPS or less.",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_24(),
+            "24 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_25(),
+            "25 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_30(),
+            "30 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_60(),
+            "60 FPS (Recommended)",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_120(),
+            "120 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_144(),
+            "144 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_165(),
+            "165 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_240(),
+            "240 FPS",
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::match_display(),
+            "Match display",
+        ),
+        (tr::settings::quality::studio::custom(), "Custom"),
+        (
+            tr::settings::quality::studio::custom_description(),
+            "Set the screen recording bitrate yourself.",
+        ),
+        (tr::settings::quality::studio::bitrate(), "Bitrate"),
+        (
+            tr::settings::quality::studio::bitrate_description(),
+            "Higher keeps more detail and makes larger files. Very high values can be more than your computer's encoder delivers.",
+        ),
+        (tr::settings::quality::instant::title(), "Instant Mode"),
+        (
             tr::settings::quality::instant::description(),
-            "Uploaded while you record, so the link is ready the moment you stop. For the best quality, use Studio mode: it records at the highest quality your screen allows, and you can export up to 4K.",
+            "Uploaded while you record, so the link is ready the moment you stop. For the best quality, use Studio Mode: it records at the highest quality your screen allows, and you can export up to 4K.",
         ),
         (
             tr::settings::quality::instant::max_resolution(),
@@ -1520,6 +1591,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         plain_keys,
         "every plain key has a literal above"
     );
+    assert_eq!(tr::settings::quality::studio::bitrate_value(45), "45 Mbps");
     for key in FORMATTED {
         assert!(KEYS.contains(key), "{key}");
     }
@@ -1527,6 +1599,18 @@ fn settings_surfaces_match_the_literals_they_replaced() {
 
 #[test]
 fn settings_surface_messages_format_like_the_code_they_replaced() {
+    assert_eq!(
+        tr::settings::quality::studio::resolution_up_to("4K"),
+        "Up to 4K"
+    );
+    for fps in [240, 120] {
+        assert_eq!(
+            tr::settings::quality::studio::frame_rate::description_match(fps),
+            format!(
+                "Records at your display's refresh rate, up to {fps} FPS. Recording above 60 FPS uses more CPU and disk space. With a camera on, Studio Mode records at 30 FPS or less."
+            )
+        );
+    }
     let version = "0.6.2";
     assert_eq!(
         tr::settings::sidebar::downloading(version),
