@@ -165,6 +165,8 @@ describe("meeting ask request schema", () => {
 			ok: true,
 			data: { notesMarkdown: "", history: [] },
 		});
+		expect(ask({ selfName: text(200) }).ok).toBe(true);
+		expect(ask({ selfName: text(201) }).ok).toBe(false);
 	});
 
 	it("rejects values over the limits", () => {

@@ -361,6 +361,12 @@ impl ControlsWindow {
         crate::editor_timeline::format_time(elapsed.as_secs_f64())
     }
 
+    /// Rounds up, so a countdown starts on the full limit and reads 0:00 only
+    /// once the recording stops.
+    fn format_remaining(left: Duration) -> String {
+        crate::editor_timeline::format_time(left.as_secs_f64().ceil())
+    }
+
     fn action_button(
         &self,
         id: &'static str,
@@ -691,7 +697,11 @@ impl ControlsWindow {
         } else if session.error.is_some() {
             tr::controls::stop::error().into()
         } else {
-            Self::format_elapsed(session.elapsed()).into()
+            match session.recording_time_left() {
+                Some(left) => Self::format_remaining(left),
+                None => Self::format_elapsed(session.elapsed()),
+            }
+            .into()
         };
 
         div()
@@ -1579,6 +1589,29 @@ mod repaint_tests {
         assert_eq!(
             tick_delay(false, Duration::from_millis(3_900)),
             Duration::from_secs(1)
+        );
+    }
+}
+
+#[cfg(test)]
+mod countdown_tests {
+    use super::ControlsWindow;
+    use std::time::Duration;
+
+    #[test]
+    fn countdown_rounds_up_and_elapsed_rounds_down() {
+        assert_eq!(
+            ControlsWindow::format_remaining(Duration::from_millis(299_950)),
+            "5:00"
+        );
+        assert_eq!(
+            ControlsWindow::format_remaining(Duration::from_millis(400)),
+            "0:01"
+        );
+        assert_eq!(ControlsWindow::format_remaining(Duration::ZERO), "0:00");
+        assert_eq!(
+            ControlsWindow::format_elapsed(Duration::from_millis(299_950)),
+            "4:59"
         );
     }
 }
