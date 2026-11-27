@@ -466,9 +466,10 @@ impl Session {
     }
 
     /// The linked event's own call app takes over a meeting whose call a
-    /// browser holds.
+    /// browser holds, inside the join window like any first call.
     fn hands_over_to(&self, app_id: &str) -> bool {
         matches!(self.state, SessionState::Starting | SessionState::Recording)
+            && self.recorded_ms() < self.config.join_window_ms
             && self.own_call.link_app.as_deref() == Some(app_id)
             && self
                 .app_id

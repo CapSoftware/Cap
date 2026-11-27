@@ -558,6 +558,9 @@ fn only_the_links_own_app_takes_the_call_over_from_a_browser() {
     s.at(10_000).call_started("chrome").take();
     s.at(30_000).call_started("slack").quiet();
     assert_eq!(s.session.attached_app(), Some("chrome"));
+    // past the join window the link's app starting is another call
+    s.at(6 * MIN).call_started("zoom").quiet();
+    assert_eq!(s.session.attached_app(), Some("chrome"));
 
     // a native call app holds the call: a browser never takes it over
     let mut s = Sim::with(SessionConfig {
