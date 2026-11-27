@@ -87,9 +87,15 @@ if os.path.exists(os.path.join(R, "run.txt")) and "asked " in open(os.path.join(
     want = os.environ.get("CAP_EXPECT_QUESTION")
     asked = [e.get("question") for e in ask]
     check("Ask sent the typed question", (want in asked) if want else any(asked), str(asked))
-if os.environ.get("CAP_EXPECT_APP_NAMES") and ENGINE == "local":
-    # The call page labels its tiles; the app should name the call's voices after them.
+app_names = os.environ.get("CAP_EXPECT_APP_NAMES")
+if app_names and ENGINE == "local":
+    # The call page labels its tiles ("Ana Ruiz is speaking").
     renamed = sorted(name for _, name in (names.get("renames") or []))
-    check("call voices named from the meeting app", renamed == ["Ana Ruiz", "Ben Okafor"], str(renamed))
+    if app_names == "1":
+        check("call voices named from the meeting app", renamed == ["Ana Ruiz", "Ben Okafor"], str(renamed))
+    else:
+        from_app = [int(n) for n in re.findall(r"from_app=(\d+)", clean)]
+        named = {"Ana Ruiz", "Ben Okafor"} & set(renamed)
+        check("no voice named from the meeting app", not named and not any(from_app), f"{renamed} from_app={from_app}")
 check("no panics", "panicked" not in clean, str(clean.count("panicked")))
 print("ALL_PASS" if ok_all else "SOME_FAILED")
