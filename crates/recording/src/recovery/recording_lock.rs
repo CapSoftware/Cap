@@ -171,7 +171,11 @@ pub(super) fn probe(project: &Path) -> Result<RecordingProbe, RecoveryError> {
         }
     }
     match LockFile::shared(&path) {
-        Ok(file) => Ok(RecordingProbe { _file: Some(file) }),
+        Ok(file) => {
+            #[cfg(unix)]
+            remove_stale(&path);
+            Ok(RecordingProbe { _file: Some(file) })
+        }
         Err(error) if is_busy(&error) => Err(RecoveryError::RecordingInProgress),
         Err(error) => {
             if error.kind() != io::ErrorKind::NotFound {
@@ -179,6 +183,21 @@ pub(super) fn probe(project: &Path) -> Result<RecordingProbe, RecoveryError> {
             }
             Ok(free)
         }
+    }
+}
+
+/// Nobody holds a lock this probe could take, so its recorder ended without
+/// dropping it (a crash on unix, where the file is not removed on close).
+#[cfg(unix)]
+fn remove_stale(path: &Path) {
+    if let Err(error) = std::fs::remove_file(path) {
+        tracing::debug!(path = %path.display(), %error, "Stale recording lock kept");
+        return;
+    }
+    if let Some(directory) = path.parent()
+        && let Err(error) = std::fs::remove_dir(directory)
+    {
+        tracing::debug!(path = %directory.display(), %error, "Recording lock directory kept");
     }
 }
 
@@ -562,6 +581,10 @@ mod tests {
 
         drop(child);
         assert!(!is_recording_elsewhere(&studio));
+        assert!(!is_recording_elsewhere(&swept));
+        assert!(!is_recording_elsewhere(&instant));
+        #[cfg(unix)]
+        assert!(!recordings.path().join(super::LOCK_DIR).exists());
         assert!(RecoveryManager::remux_if_needed(&studio).unwrap());
         assert!(matches!(
             studio_status(&studio),
@@ -658,6 +681,9 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            assert!(!recordings.path().join(super::LOCK_DIR).exists());
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"").unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0)).unwrap();
             assert!(!is_recording_elsewhere(&project));
         }
