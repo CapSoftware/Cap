@@ -112,6 +112,20 @@ function checked<T>(operation: () => T): Effect.Effect<T, Error> {
 	});
 }
 
+// Real S3 answers both a failed CopySourceIfMatch and an existing If-None-Match destination this way.
+function preconditionFailed() {
+	return Object.assign(
+		new Error("At least one of the pre-conditions you specified did not hold"),
+		{ name: "PreconditionFailed", $metadata: { httpStatusCode: 412 } },
+	);
+}
+
+function copiedObjectKeys(objects: Map<string, StoredObject>) {
+	return [...objects.keys()].filter((key) =>
+		/\/copies\/\d+\/[^/]+\/(?:video|audio|mp4)\/\d+\.(?:mp4|m4s)$/.test(key),
+	);
+}
+
 function deferred() {
 	let resolve: () => void = () => undefined;
 	const promise = new Promise<void>((done) => {
@@ -128,7 +142,10 @@ function storageFixture(
 	provider = "s3",
 	customBucket = false,
 	// Mirrors Cap's S3 bucket: listings carry sizes and content ETags, and a copy keeps its source's ETag.
-	fixture = { listing: false, copiesKeepIdentity: false },
+	fixture = {
+		listing: false,
+		copiesKeepIdentity: provider === "s3" && !customBucket,
+	},
 ) {
 	const objects = new Map<string, StoredObject>();
 	const uploads = new Map<
@@ -153,7 +170,7 @@ function storageFixture(
 			options.CopySourceIfMatch !== undefined &&
 			options.CopySourceIfMatch !== value.identity
 		) {
-			throw new Error("Copy source precondition failed");
+			throw preconditionFailed();
 		}
 		return { key, value };
 	};
@@ -220,7 +237,7 @@ function storageFixture(
 					options.IfNoneMatch === "*" &&
 					objects.has(target)
 				) {
-					throw new Error("Copy destination already exists");
+					throw preconditionFailed();
 				}
 				const copied = {
 					...value,
@@ -599,12 +616,14 @@ describe("recording source preparation during upload", () => {
 				),
 			).toEqual(requested);
 			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(3);
-			await prepareDesktopRecordingSegments(
-				recording(),
-				[...requested, { track: "video", index: 1 }],
-				async () => true,
-			);
-			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(3);
+			expect(
+				await prepareDesktopRecordingSegments(
+					recording(),
+					[...requested, { track: "video", index: 1 }],
+					async () => true,
+				),
+			).toEqual(requested);
+			expect(copiedObjectKeys(storage.objects)).toHaveLength(3);
 			storage.seed(
 				manifestKey,
 				JSON.stringify({
@@ -615,7 +634,7 @@ describe("recording source preparation during upload", () => {
 				recording(),
 				generation,
 			);
-			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(5);
+			expect(copiedObjectKeys(storage.objects)).toHaveLength(5);
 			const inventory = readInventory(storage, source.inventoryKey);
 			expect(
 				inventory.objects.filter((entry) => entry.key.includes("/prepared/")),
@@ -734,9 +753,8 @@ describe("recording source preparation during upload", () => {
 			const objects = readInventory(storage, source.inventoryKey).objects;
 			const fragment = objects.find((entry) => entry.index === 1);
 			if (!fragment) throw new Error("Missing copied video fragment");
-			expect(objects.every((entry) => !entry.key.includes("/prepared/"))).toBe(
-				true,
-			);
+			// An S3 copy is proven by its own source metadata, so a stray receipt beside it changes nothing.
+			expect(fragment.key.includes("/prepared/")).toBe(mutation === "receipt");
 			expect(storage.object(fragment.key).body).toBe("video-fragment-1");
 		});
 	}
@@ -1059,7 +1077,10 @@ describe("durable desktop recording source commit", () => {
 	])(
 		"commits every intended fragment from $name manifests",
 		async ({ entries }) => {
-			const storage = storageFixture();
+			const storage = storageFixture("s3", false, {
+				listing: false,
+				copiesKeepIdentity: false,
+			});
 			const fixture = seedSegments(storage, entries);
 			const source = await commitDesktopRecordingSource(
 				recording(),
@@ -1672,17 +1693,17 @@ describe("large desktop recording snapshots", () => {
 				checkpoint,
 			);
 			if (!("checkpoint" in replay)) throw new Error("Unexpected completion");
-			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(page);
+			expect(copiedObjectKeys(storage.objects)).toHaveLength(page);
 			expect(replay.checkpoint.snapshotId).toBe(checkpoint.snapshotId);
 			const source = await finishSnapshot(video, replay.checkpoint);
 			const urls = await buildDesktopRecordingSourceUrls(video, source);
 			expect(urls.sourceObjects).toHaveLength(300);
-			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(300);
+			expect(copiedObjectKeys(storage.objects)).toHaveLength(300);
 			expect(JSON.stringify(replay.checkpoint).length).toBeLessThan(5_000);
 		},
 	);
 
-	it("reuses a metadata-verified S3 copy even when its receipt write was interrupted", async () => {
+	it("reuses a metadata-verified S3 copy when the step that made it was interrupted", async () => {
 		const storage = storageFixture();
 		storage.seed(`${prefix}/result.mp4`, "uploaded-mp4");
 		const video = recording({ type: "desktopMP4" });
@@ -1694,13 +1715,18 @@ describe("large desktop recording snapshots", () => {
 		const put = storage.bucket.putObject.getMockImplementation();
 		if (!put) throw new Error("Missing fixture operation");
 		storage.bucket.putObject.mockImplementationOnce(() =>
-			Effect.fail(new Error("Receipt storage unavailable")),
+			Effect.fail(new Error("Page storage unavailable")),
 		);
 		await expect(
 			advanceDesktopRecordingSourceCommit(video, checkpoint),
-		).rejects.toThrow("Receipt storage unavailable");
+		).rejects.toThrow("Page storage unavailable");
 		const source = await finishSnapshot(video, checkpoint);
-		expect(storage.bucket.copyObject).toHaveBeenCalledOnce();
+		expect(copiedObjectKeys(storage.objects)).toHaveLength(1);
+		expect(
+			storage.bucket.putObject.mock.calls.some(([key]) =>
+				key.endsWith("/receipt.json"),
+			),
+		).toBe(false);
 		expect(source.inventoryKey.replace(/inventory\.json$/, "mp4/0.mp4")).toBe(
 			(await buildDesktopRecordingSourceUrls(video, source)).outputKey,
 		);
@@ -1975,11 +2001,12 @@ describe("source commit page size", () => {
 					/\/(video|audio)\/\d+\.(mp4|m4s)$/,
 					"/receipt.json",
 				);
-				expect(JSON.parse(storage.object(receiptKey).body ?? "")).toEqual(
-					object,
-				);
+				expect(storage.objects.has(receiptKey)).toBe(false);
 				return {
-					key: object.key.replace(/\/copies\/(\d+)\/[0-9a-f-]{36}\//, "/$1/"),
+					key: object.key.replace(
+						/\/copies\/(\d+)\/[0-9a-f-]{32,36}\//,
+						"/$1/",
+					),
 					originalKey: object.originalKey,
 					originalIdentity: object.originalIdentity,
 					size: object.size,
@@ -2792,7 +2819,7 @@ describe("listed source commit on Cap's bucket", () => {
 			storage.bucket.putObject.mock.calls.filter(([key]) =>
 				key.endsWith("/receipt.json"),
 			),
-		).toHaveLength(7);
+		).toHaveLength(0);
 	});
 
 	it("lets the per-object path verify and reuse copies made without receipts", async () => {
@@ -3048,5 +3075,279 @@ describe("decoding prepared fragments during the recording", () => {
 		]);
 		storageFixture("s3", true, { listing: true, copiesKeepIdentity: true });
 		expect(await buildPreverifiedRunUrls(recording())).toEqual([]);
+	});
+});
+
+describe("stable S3 copy keys", () => {
+	function requestCounts(storage: ReturnType<typeof storageFixture>) {
+		const writes = [
+			...storage.bucket.putObject.mock.calls,
+			...(storage.bucket.putObjectWithETag?.mock.calls ?? []),
+		].map(([key]) => key);
+		return {
+			copy: storage.bucket.copyObject.mock.calls.length,
+			list: storage.bucket.listObjects.mock.calls.length,
+			receipts: writes.filter((key) => key.endsWith("/receipt.json")).length,
+		};
+	}
+
+	const segments = (count: number) =>
+		Array.from({ length: count }, (_, index) => ({
+			track: "video" as const,
+			index: index + 1,
+		}));
+
+	it("prepares each S3 fragment with one conditional copy, no listing and no receipt", async () => {
+		const storage = listedStorage();
+		seedRecording(storage, 8, 0);
+		expect(
+			await prepareDesktopRecordingSegments(
+				recording(),
+				segments(8),
+				async () => true,
+			),
+		).toEqual(segments(8));
+		expect(requestCounts(storage)).toEqual({ copy: 8, list: 0, receipts: 0 });
+		for (const [, key, args] of storage.bucket.copyObject.mock
+			.calls as unknown as Array<[string, string, CopyOptions]>) {
+			expect(key).toMatch(
+				/\/prepared\/[0-9a-f]{64}\/copies\/\d+\/[0-9a-f]{32}\/video\/\d+\.m4s$/,
+			);
+			expect(args).toMatchObject({ IfNoneMatch: "*" });
+		}
+	});
+
+	it("reuses an S3 copy whose conditional copy is refused because it already exists", async () => {
+		const storage = listedStorage();
+		seedRecording(storage, 4, 0);
+		await prepareDesktopRecordingSegments(
+			recording(),
+			segments(4),
+			async () => true,
+		);
+		const before = new Map(
+			copiedObjectKeys(storage.objects).map((key) => [
+				key,
+				storage.object(key).identity,
+			]),
+		);
+		vi.clearAllMocks();
+		expect(
+			await prepareDesktopRecordingSegments(
+				recording(),
+				segments(4),
+				async () => true,
+			),
+		).toEqual(segments(4));
+		expect(requestCounts(storage)).toEqual({ copy: 4, list: 0, receipts: 0 });
+		expect(
+			new Map(
+				copiedObjectKeys(storage.objects).map((key) => [
+					key,
+					storage.object(key).identity,
+				]),
+			),
+		).toEqual(before);
+	});
+
+	it("reports an original that changed before its copy as changed, not as an existing copy", async () => {
+		const storage = listedStorage();
+		seedRecording(storage, 1, 0);
+		const segmentKey = `${prefix}/segments/video/segment_001.m4s`;
+		const head = storage.bucket.headObject.getMockImplementation();
+		if (!head) throw new Error("Missing fixture operation");
+		storage.bucket.headObject.mockImplementationOnce((key: string) =>
+			head(key).pipe(
+				Effect.tap(() =>
+					Effect.sync(() => storage.seed(segmentKey, "replacement-fragment")),
+				),
+			),
+		);
+		expect(
+			await prepareDesktopRecordingSegments(
+				recording(),
+				segments(1),
+				async () => true,
+			),
+		).toEqual([]);
+		expect(copiedObjectKeys(storage.objects)).toEqual([]);
+		const source = await commitDesktopRecordingSource(recording(), generation);
+		const fragment = readInventory(storage, source.inventoryKey).objects.find(
+			(entry) => entry.index === 1,
+		);
+		if (!fragment) throw new Error("Missing copied video fragment");
+		expect(storage.object(fragment.key).body).toBe("replacement-fragment");
+	});
+
+	it("falls back to a fresh key when the stable key holds an object it cannot prove", async () => {
+		const storage = listedStorage();
+		seedRecording(storage, 1, 0);
+		await prepareDesktopRecordingSegments(
+			recording(),
+			segments(1),
+			async () => true,
+		);
+		const [stable] = copiedObjectKeys(storage.objects);
+		if (!stable) throw new Error("Missing prepared copy");
+		storage.seed(stable, "unproven-bytes");
+		vi.clearAllMocks();
+		expect(
+			await prepareDesktopRecordingSegments(
+				recording(),
+				segments(1),
+				async () => true,
+			),
+		).toEqual(segments(1));
+		const copies = copiedObjectKeys(storage.objects);
+		expect(copies).toHaveLength(2);
+		const fresh = copies.find((key) => key !== stable);
+		if (!fresh) throw new Error("Missing fallback copy");
+		expect(fresh).toMatch(/\/copies\/1\/[0-9a-f-]{36}\/video\/1\.m4s$/);
+		expect(storage.object(fresh).body).toBe("video-fragment-1");
+		expect(storage.object(stable).body).toBe("unproven-bytes");
+	});
+
+	for (const copiesKeepIdentity of [true, false])
+		it(`keeps committed copies stable when the bucket ignores If-None-Match (content ETags: ${copiesKeepIdentity})`, async () => {
+			const storage = storageFixture("s3", false, {
+				listing: false,
+				copiesKeepIdentity,
+			});
+			const copy = storage.bucket.copyObject.getMockImplementation();
+			if (!copy) throw new Error("Missing fixture operation");
+			storage.bucket.copyObject.mockImplementation((source, key, options) =>
+				copy(source, key, { ...options, IfNoneMatch: undefined }),
+			);
+			const { manifest } = seedSegments(storage, [1, 2], false);
+			storage.seed(
+				manifestKey,
+				JSON.stringify({ ...manifest, is_complete: false }),
+			);
+			const requested = segments(2);
+			expect(
+				await prepareDesktopRecordingSegments(
+					recording(),
+					requested,
+					async () => true,
+				),
+			).toEqual(requested);
+			storage.seed(manifestKey, JSON.stringify(manifest));
+			const source = await commitDesktopRecordingSource(
+				recording(),
+				generation,
+			);
+			const objects = readInventory(storage, source.inventoryKey).objects;
+			const identities = objects.map(
+				(entry) => storage.object(entry.key).identity,
+			);
+			expect(identities).toEqual(objects.map((entry) => entry.objectIdentity));
+			await prepareDesktopRecordingSegments(
+				recording(),
+				requested,
+				async () => true,
+			);
+			expect(
+				objects.map((entry) => storage.object(entry.key).identity),
+			).toEqual(identities);
+			for (const entry of objects)
+				expect(storage.object(entry.key).body).toBe(
+					storage.object(entry.originalKey).body,
+				);
+			expect(
+				objects.some((entry) =>
+					/\/copies\/\d+\/[0-9a-f]{32}\//.test(entry.key),
+				),
+			).toBe(copiesKeepIdentity);
+		});
+
+	it("leaves custom S3 buckets on listed copies with fresh keys", async () => {
+		const storage = storageFixture("s3", true);
+		seedSegments(storage, [1], false);
+		await prepareDesktopRecordingSegments(
+			recording(),
+			segments(1),
+			async () => true,
+		);
+		expect(requestCounts(storage).list).toBeGreaterThan(0);
+		expect(copiedObjectKeys(storage.objects)[0]).toMatch(
+			/\/copies\/1\/[0-9a-f-]{36}\/video\/1\.m4s$/,
+		);
+	});
+
+	it("still reuses fragments prepared under random keys before stable keys existed", async () => {
+		const storage = storageFixture();
+		const { manifest } = seedSegments(storage, [1, 2], false);
+		storage.seed(
+			manifestKey,
+			JSON.stringify({ ...manifest, is_complete: false }),
+		);
+		await prepareDesktopRecordingSegments(
+			recording(),
+			segments(2),
+			async () => true,
+		);
+		for (const key of copiedObjectKeys(storage.objects)) {
+			const legacy = key.replace(
+				/\/[0-9a-f]{32}\/video\//,
+				"/7b0d6f2e-38a4-4c39-8f21-6f0e5d6c9a10/video/",
+			);
+			storage.objects.set(legacy, storage.object(key));
+			storage.objects.delete(key);
+		}
+		vi.clearAllMocks();
+		storage.seed(manifestKey, JSON.stringify(manifest));
+		const source = await commitDesktopRecordingSource(recording(), generation);
+		const prepared = readInventory(storage, source.inventoryKey).objects.filter(
+			(entry) => entry.key.includes("/prepared/"),
+		);
+		expect(prepared.map((entry) => entry.key)).toEqual([
+			expect.stringContaining("/7b0d6f2e-38a4-4c39-8f21-6f0e5d6c9a10/"),
+			expect.stringContaining("/7b0d6f2e-38a4-4c39-8f21-6f0e5d6c9a10/"),
+		]);
+		expect(storage.bucket.copyObject).toHaveBeenCalledOnce();
+	});
+
+	it("writes the preparation marker once and repairs an unreadable one", async () => {
+		const storage = listedStorage();
+		seedRecording(storage, 3, 0);
+		const marker = `${prefix}/.recording/sources/preparation.json`;
+		const markerWrites = () =>
+			[
+				...storage.bucket.putObject.mock.calls,
+				...(storage.bucket.putObjectWithETag?.mock.calls ?? []),
+			].filter(([key]) => key === marker).length;
+		for (const index of [1, 2])
+			await prepareDesktopRecordingSegments(
+				recording(),
+				[{ track: "video", index }],
+				async () => true,
+			);
+		expect(markerWrites()).toBe(1);
+		storage.seed(marker, "invalid");
+		await prepareDesktopRecordingSegments(
+			recording(),
+			[{ track: "video", index: 3 }],
+			async () => true,
+		);
+		expect(markerWrites()).toBe(2);
+		expect(JSON.parse(storage.object(marker).body ?? "")).toEqual({
+			version: 1,
+		});
+	});
+
+	it("keeps Drive on listed reuse with receipts", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage, [1], false);
+		await prepareDesktopRecordingSegments(
+			recording(),
+			segments(1),
+			async () => true,
+		);
+		const counts = requestCounts(storage);
+		expect(counts.list).toBeGreaterThan(0);
+		expect(counts.receipts).toBe(1);
+		expect(copiedObjectKeys(storage.objects)[0]).toMatch(
+			/\/copies\/1\/[0-9a-f-]{36}\/video\/1\.m4s$/,
+		);
 	});
 });
