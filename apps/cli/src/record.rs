@@ -26,7 +26,7 @@ use std::{
     process::Stdio,
     sync::{
         Arc,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -155,6 +155,16 @@ const CAPTURE_FAILED_CODE: &str = "captureFailed";
 const STORAGE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 static EARLY_STOP: AtomicU8 = AtomicU8::new(0);
+static STUDIO_CAPTURE_UNCONFIRMED: AtomicBool = AtomicBool::new(false);
+
+/// A failed stop whose capture shutdown was not confirmed may still have
+/// encoder tasks writing, so its media is left for recovery once this
+/// process has exited.
+fn note_studio_stop(outcome: &studio_recording::StudioStopOutcome) {
+    if outcome.result.is_err() && !outcome.capture_stopped {
+        STUDIO_CAPTURE_UNCONFIRMED.store(true, Ordering::SeqCst);
+    }
+}
 
 fn note_early_stop(reason: StopReason) {
     EARLY_STOP.store(
@@ -865,7 +875,7 @@ async fn salvage_after_capture_failure(
     path: PathBuf,
     error: String,
 ) -> Result<PathBuf, String> {
-    if mode != RecordMode::Studio {
+    if mode != RecordMode::Studio || STUDIO_CAPTURE_UNCONFIRMED.load(Ordering::SeqCst) {
         return Err(error);
     }
     let project = path.clone();
@@ -1070,15 +1080,15 @@ impl ActorHandle {
                     Some(finishing) => wait_for_studio_finish(finishing).await,
                     None => outcome,
                 };
+                note_studio_stop(&outcome);
                 outcome.result.map(Box::new).map(CompletedRecording::Studio)
             }
             #[cfg(not(windows))]
-            Self::Studio(actor) => actor
-                .stop()
-                .await
-                .map(Box::new)
-                .map(CompletedRecording::Studio)
-                .map_err(|e| format!("{e:#}")),
+            Self::Studio(actor) => {
+                let outcome = actor.stop_with_outcome().await;
+                note_studio_stop(&outcome);
+                outcome.result.map(Box::new).map(CompletedRecording::Studio)
+            }
             Self::Instant { actor, .. } => actor
                 .stop()
                 .await
@@ -2324,6 +2334,231 @@ mod tests {
             row.error.as_deref(),
             Some("recording process is not running")
         );
+    }
+
+    fn studio_fixture(dir: &Path, status: StudioRecordingStatus) -> PathBuf {
+        studio_fixture_with(dir, status, true)
+    }
+
+    fn studio_fixture_with(dir: &Path, status: StudioRecordingStatus, listed: bool) -> PathBuf {
+        use cap_enc_ffmpeg::segmented_stream::{
+            SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
+        };
+        use cap_project::{
+            Cursors, MultipleSegment, MultipleSegments, StudioRecordingMeta, VideoMeta,
+        };
+
+        ffmpeg::init().unwrap();
+        let project = dir.join("failed.cap");
+        let display = project.join("content/segments/segment-0/display");
+        std::fs::create_dir_all(&display).unwrap();
+        let mut encoder = SegmentedVideoEncoder::init(
+            display,
+            cap_media_info::VideoInfo {
+                pixel_format: cap_media_info::Pixel::NV12,
+                width: 320,
+                height: 240,
+                time_base: ffmpeg::Rational(1, 1_000_000),
+                frame_rate: ffmpeg::Rational(30, 1),
+            },
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_secs(2),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for index in 0..180u64 {
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
+            for plane in 0..frame.planes() {
+                frame.data_mut(plane).fill(128);
+            }
+            encoder
+                .queue_frame(frame, Duration::from_nanos(index * 1_000_000_000 / 30))
+                .unwrap();
+        }
+        drop(encoder);
+        let meta = RecordingMeta {
+            platform: None,
+            project_path: project.clone(),
+            pretty_name: "Failed".to_string(),
+            sharing: None,
+            upload: None,
+            inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
+                inner: MultipleSegments {
+                    segments: listed
+                        .then(|| MultipleSegment {
+                            display: VideoMeta {
+                                path: relative_path::RelativePathBuf::from(
+                                    "content/segments/segment-0/display.mp4",
+                                ),
+                                fps: 30,
+                                start_time: None,
+                                device_id: None,
+                            },
+                            camera: None,
+                            mic: None,
+                            system_audio: None,
+                            cursor: None,
+                            keyboard: None,
+                            display_notch: None,
+                            cursor_shape_version: None,
+                        })
+                        .into_iter()
+                        .collect(),
+                    cursors: Cursors::default(),
+                    status: Some(status),
+                    cursor_shape_version: 0,
+                    audio_only: false,
+                },
+            })),
+        };
+        std::fs::write(
+            project.join("recording-meta.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+        project
+    }
+
+    fn studio_status(project: &Path) -> StudioRecordingStatus {
+        RecordingMeta::load_for_project(project)
+            .unwrap()
+            .studio_meta()
+            .unwrap()
+            .status()
+    }
+
+    fn fragments(project: &Path) -> Vec<PathBuf> {
+        let mut found: Vec<_> =
+            std::fs::read_dir(project.join("content/segments/segment-0/display"))
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|extension| extension == "m4s"))
+                .collect();
+        found.sort();
+        found
+    }
+
+    fn failed() -> StudioRecordingStatus {
+        StudioRecordingStatus::Failed {
+            error: "display: Task mux-video failed: Windows M4S encoder channel disconnected"
+                .to_string(),
+        }
+    }
+
+    #[test]
+    fn a_failed_studio_project_is_recovered_before_export() {
+        for listed in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let project = studio_fixture_with(directory.path(), failed(), listed);
+
+            assert_eq!(salvage_failed_studio(&project), Ok(true), "listed {listed}");
+            assert!(matches!(
+                studio_status(&project),
+                StudioRecordingStatus::Complete
+            ));
+            assert!(
+                project
+                    .join("content/segments/segment-0/display.mp4")
+                    .is_file()
+            );
+            assert_eq!(salvage_failed_studio(&project), Ok(false));
+        }
+    }
+
+    #[test]
+    fn damaged_media_is_refused_and_the_original_files_are_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = studio_fixture(directory.path(), failed());
+        let fragments = fragments(&project);
+        assert!(fragments.len() >= 2);
+        for fragment in &fragments {
+            let mut bytes = std::fs::read(fragment).unwrap();
+            let start = bytes.len() / 4;
+            let end = bytes.len() - 64;
+            bytes[start..end].fill(0);
+            std::fs::write(fragment, bytes).unwrap();
+        }
+        let before: Vec<_> = fragments
+            .iter()
+            .map(|fragment| std::fs::read(fragment).unwrap())
+            .collect();
+
+        let error = salvage_failed_studio(&project).unwrap_err();
+        assert!(error.contains("Its files are kept"), "{error}");
+        assert!(matches!(
+            studio_status(&project),
+            StudioRecordingStatus::Failed { .. }
+        ));
+        let after: Vec<_> = fragments
+            .iter()
+            .map(|fragment| std::fs::read(fragment).unwrap())
+            .collect();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn only_failed_studio_projects_are_recovered() {
+        for status in [
+            StudioRecordingStatus::InProgress,
+            StudioRecordingStatus::NeedsRemux,
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let project = studio_fixture(directory.path(), status.clone());
+            let before = std::fs::read(project.join("recording-meta.json")).unwrap();
+            assert_eq!(salvage_failed_studio(&project), Ok(false));
+            assert_eq!(
+                std::fs::read(project.join("recording-meta.json")).unwrap(),
+                before
+            );
+            assert!(
+                !project
+                    .join("content/segments/segment-0/display.mp4")
+                    .exists()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_capture_stop_is_left_for_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = studio_fixture(directory.path(), failed());
+        STUDIO_CAPTURE_UNCONFIRMED.store(true, Ordering::SeqCst);
+        let result =
+            salvage_after_capture_failure(RecordMode::Studio, project.clone(), "boom".into()).await;
+        STUDIO_CAPTURE_UNCONFIRMED.store(false, Ordering::SeqCst);
+
+        assert_eq!(result, Err("boom".to_string()));
+        assert!(matches!(
+            studio_status(&project),
+            StudioRecordingStatus::Failed { .. }
+        ));
+        assert_eq!(
+            salvage_after_capture_failure(RecordMode::Instant, project.clone(), "boom".into())
+                .await,
+            Err("boom".to_string())
+        );
+    }
+
+    #[test]
+    fn a_detached_recording_that_recovered_a_failed_capture_reports_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = Session {
+            recording_id: "detached-capture-failed".to_string(),
+            pid: 1,
+            path: directory.path().join("recording.cap"),
+            status: SessionStatus::Stopped,
+            started_at: Some(1),
+            recording_meta_exists: Some(true),
+            error: None,
+            stop_reason: Some(StopReason::CaptureFailed),
+            storage_low: false,
+        };
+        let error = finish_stopped_session(OutputFormat::Json, &session).unwrap_err();
+        assert!(error.contains("capture failed"), "{error}");
+        assert_eq!(failure_exit_code(), CAPTURE_FAILED_EXIT_CODE);
+        assert_eq!(low_storage_error_code(), Some(CAPTURE_FAILED_CODE));
     }
 
     #[test]
