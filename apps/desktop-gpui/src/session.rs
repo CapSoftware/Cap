@@ -1198,8 +1198,6 @@ impl RecordingSession {
         }));
     }
 
-    /// Time left before the plan's recording limit stops this recording, or
-    /// `None` when it has no limit or a plan fetched since it started is Pro.
     pub fn recording_time_left(&self) -> Option<Duration> {
         let limit = self.active.as_ref()?.recording_limit()?;
         if self.limit_lifted
