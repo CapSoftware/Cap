@@ -1,33 +1,6 @@
-const MAX_LEVEL_4_2_WIDTH = 2048;
-const MAX_LEVEL_4_2_HEIGHT = 1088;
-const MAX_LEVEL_5_1_WIDTH = 4096;
-const MAX_LEVEL_5_1_HEIGHT = 2304;
+import { pickMobileSafeAvcCodec } from "@cap/recorder-core/recorder-encoding";
 
-const LEVEL_4_2_CODEC = "avc1.64002A";
-const LEVEL_5_1_CODEC = "avc1.640033";
-const LEVEL_5_2_CODEC = "avc1.640034";
-
-export function pickMobileSafeAvcCodec(
-	width: number | undefined,
-	height: number | undefined,
-): string {
-	const w = typeof width === "number" && width > 0 ? width : 0;
-	const h = typeof height === "number" && height > 0 ? height : 0;
-
-	if (w === 0 || h === 0) {
-		return LEVEL_4_2_CODEC;
-	}
-
-	if (w <= MAX_LEVEL_4_2_WIDTH && h <= MAX_LEVEL_4_2_HEIGHT) {
-		return LEVEL_4_2_CODEC;
-	}
-
-	if (w <= MAX_LEVEL_5_1_WIDTH && h <= MAX_LEVEL_5_1_HEIGHT) {
-		return LEVEL_5_1_CODEC;
-	}
-
-	return LEVEL_5_2_CODEC;
-}
+export { pickMobileSafeAvcCodec };
 
 export function rewriteAvcCodecString(
 	codec: string,

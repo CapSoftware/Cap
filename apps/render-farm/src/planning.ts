@@ -1,3 +1,4 @@
+import type { FileSpec } from "./materialize";
 import { PART_RANGES } from "./recovery";
 
 export type ChunkPlanInput = {
@@ -97,4 +98,22 @@ export function planChunkBoundaries(input: ChunkPlanInput) {
 		boundaries.splice(1, 0, leadIn);
 	}
 	return boundaries;
+}
+
+/** Where a chunk's worker finds the export's waveform levels (see levels.rs). */
+export const WAVEFORM_LEVELS_FILE = "waveform-levels.bin";
+
+/**
+ * The probe's project holds only the ends of audio files and the indexed
+ * parts of videos. Waveform levels are read from whole files, so the files
+ * the engine lists for them are fetched again, entire.
+ */
+export function waveformInputSpecs(
+	inputs: string[],
+	specs: FileSpec[],
+): FileSpec[] {
+	const wanted = new Set(inputs);
+	return specs
+		.filter((spec) => wanted.has(spec.path))
+		.map((spec) => ({ ...spec, ranges: "all" as const }));
 }

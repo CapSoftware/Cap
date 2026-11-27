@@ -28,6 +28,7 @@ jobs:
       gpui: ${{ steps.filter.outputs.rust-without-cli == 'true' || steps.filter.outputs.gpui == 'true' }}
       gpui-patches: ${{ steps.filter.outputs.gpui-patches }}
       ios: ${{ steps.filter.outputs.ios }}
+      render-farm: ${{ steps.filter.outputs.render-farm }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -85,6 +86,8 @@ jobs:
               - 'scripts/prepare-gpui-dependency.sh'
             ios:
               - 'apps/mobile-ios/**'
+            render-farm:
+              - 'apps/render-farm/**'
 
   typecheck:
     name: Typecheck
@@ -122,6 +125,12 @@ jobs:
         run: |
           bun test apps/render-farm
           bun run --cwd apps/render-farm typecheck
+
+      - name: Test web editor
+        run: bun run --cwd packages/web-editor test
+
+      - name: Test recorder core
+        run: bun run --cwd packages/recorder-core test
 
       - name: Typecheck
         run: bun run typecheck
@@ -309,6 +318,50 @@ jobs:
           cargo test --locked -p cap-recording --test x11_shm_capture -- --test-threads=1
           cargo test --locked -p scap-targets --lib --test linux_targets
           cargo test --locked -p cap-enc-ffmpeg -p cap-camera-ffmpeg
+
+  # Prepares recordings through the farm's TypeScript and the real engine,
+  # built like the farm image (apps/render-farm/Dockerfile): Debian's FFmpeg
+  # reads the presigned display URL, which the native-deps FFmpeg, built
+  # without network protocols, cannot.
+  render-farm-engine:
+    name: Render farm engine (Linux)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.render-farm == 'true'
+    timeout-minutes: 45
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    container: rust:1.90-trixie@sha256:e227f20ec42af3ea9a3c9c1dd1b2012aa15f12279b5e9d5fb890ca1c2bb5726c
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install the farm image's build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            clang libclang-dev libssl-dev libasound2-dev libx11-dev libvulkan-dev \
+            pkg-config ffmpeg libavcodec-dev libavformat-dev libavfilter-dev \
+            libavdevice-dev libavutil-dev libswscale-dev libswresample-dev \
+            libpostproc-dev unzip
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-render-farm
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build the engine
+        run: cargo build --locked -p cap-render-farm
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.4
+
+      - name: Prepare recordings with the engine
+        run: RF_ENGINE_BIN="$GITHUB_WORKSPACE/target/debug/cap-render-farm" bun test apps/render-farm/src/prepare.test.ts
+
+      - name: Transcode recordings with FFmpeg
+        run: bun test apps/render-farm/src/worker.test.ts
 
   build-gpui:
     name: Build GPUI Desktop

@@ -10,7 +10,7 @@ import {
 	VideosPolicy,
 } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
 import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
@@ -21,10 +21,15 @@ import {
 } from "@/lib/desktop-reupload";
 import {
 	assertDesktopReuploadTarget,
+	browserSaveIdSchema,
+	browserSaveIsCurrent,
 	createDesktopReuploadKey,
 	createDesktopReuploadToken,
 	decodeDesktopReuploadToken,
+	SupersededBrowserSaveError,
 } from "@/lib/desktop-reupload-token";
+import { parseRecorderCamera } from "@/lib/editor-default-style";
+import { editorRequestOrigin } from "@/lib/editor-request-origin";
 import { startFaststartRemux } from "@/lib/faststart-remux";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import {
@@ -42,15 +47,21 @@ import {
 	hasCompleteRecordingParts,
 	matchesCompletedRecordingParts,
 } from "@/lib/recording-multipart-integrity";
+import { onStudioSourcesComplete } from "@/lib/render-recording";
 import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
+import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { zValidator } from "@/utils/zod-validator";
 import { hasDotSegment } from "../utils";
 import {
+	getAudioRecorderUploadKind,
 	getMultipartFileKey,
 	getSubpath,
+	isCameraRecorderUpload,
+	isDisplayRecorderUpload,
 	isRawRecorderUpload,
+	isStudioSourceUpload,
 } from "./multipart-utils";
 
 export const app = new Hono().use(withAuth);
@@ -64,6 +75,18 @@ const FREE_PLAN_DURATION_GRACE_SECONDS = 30;
 const runPromiseAnyEnv = runPromise as <A, E>(
 	effect: Effect.Effect<A, E, unknown>,
 ) => Promise<A>;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+// A screen upload becomes the Studio display source unless the video already
+// has sources from another screen file.
+const canRetainDisplaySource = (metadata: unknown, fileKey: string) => {
+	const editorSources = isRecord(metadata) ? metadata.editorSources : null;
+	if (!isRecord(editorSources)) return true;
+	const display = editorSources.display;
+	return isRecord(display) && display.key === fileKey;
+};
 
 const abortRequestSchema = z
 	.object({
@@ -97,6 +120,7 @@ app.post(
 			.object({
 				contentType: z.string(),
 				replaceExisting: z.boolean().optional(),
+				browserSaveId: browserSaveIdSchema.optional(),
 			})
 			.and(
 				z.union([
@@ -107,7 +131,8 @@ app.post(
 			),
 	),
 	async (c) => {
-		const { contentType, replaceExisting, ...body } = c.req.valid("json");
+		const { contentType, replaceExisting, browserSaveId, ...body } =
+			c.req.valid("json");
 		const user = c.get("user");
 
 		const fileKey = getMultipartFileKey(user.id, body);
@@ -137,6 +162,18 @@ app.post(
 				if (Option.isNone(owned))
 					return c.json({ error: "Video not found" }, 404);
 				const [video] = owned.value;
+				if (
+					browserSaveId !== undefined &&
+					!browserSaveIsCurrent(browserSaveId, Option.getOrNull(video.metadata))
+				) {
+					return c.json(
+						{
+							error: new SupersededBrowserSaveError().message,
+							code: "SAVE_SUPERSEDED",
+						},
+						409,
+					);
+				}
 				const [bucket] = yield* Storage.getAccessForVideo(video, {
 					resolvePublishedOutput: false,
 				});
@@ -155,6 +192,7 @@ app.post(
 							uploadId: backendUploadId,
 							provider: bucket.provider,
 							outputKey,
+							browserSaveId,
 						}),
 					);
 					const state = {
@@ -196,6 +234,10 @@ app.post(
 			);
 		}
 
+		const sourceSidecarUpload = isStudioSourceUpload(getSubpath(body) ?? "");
+		if (sourceSidecarUpload && !isWebStudioEnabledForEmail(user.email)) {
+			return c.json({ error: "Studio recording is not available" }, 403);
+		}
 		const resp = await Effect.gen(function* () {
 			const policy = yield* VideosPolicy;
 			const db = yield* Database;
@@ -203,21 +245,23 @@ app.post(
 			const video = yield* policy.getOwnedById(videoId);
 			if (Option.isNone(video)) return yield* new Video.NotFoundError();
 
-			yield* db.use((db) =>
-				db
-					.insert(Db.videoUploads)
-					.values({
-						videoId: video.value[0].id,
-						mode: "multipart",
-					})
-					.onDuplicateKeyUpdate({
-						set: {
+			if (!sourceSidecarUpload) {
+				yield* db.use((db) =>
+					db
+						.insert(Db.videoUploads)
+						.values({
+							videoId: video.value[0].id,
 							mode: "multipart",
-							rawFileKey: null,
-							updatedAt: new Date(),
-						},
-					}),
-			);
+						})
+						.onDuplicateKeyUpdate({
+							set: {
+								mode: "multipart",
+								rawFileKey: null,
+								updatedAt: new Date(),
+							},
+						}),
+				);
+			}
 		}).pipe(
 			Effect.tapError(Effect.logError),
 			Effect.catchAll((e) => {
@@ -439,6 +483,10 @@ app.post(
 				width: stringOrNumberOptional,
 				height: stringOrNumberOptional,
 				fps: stringOrNumberOptional,
+				screenSubpath: z.string().optional(),
+				cameraOffsetMs: z.number().finite().optional(),
+				audioOffsetMs: z.number().finite().optional(),
+				recorderCamera: z.unknown().optional(),
 				replaceExisting: z.boolean().optional(),
 			})
 			.and(
@@ -506,8 +554,13 @@ app.post(
 			// match the recorder bootstrap.
 			const reportedDuration =
 				typeof body.durationInSecs === "number" ? body.durationInSecs : null;
+			const sourceSidecarUpload = isStudioSourceUpload(subpath);
+			if (sourceSidecarUpload && !isWebStudioEnabledForEmail(user.email)) {
+				return c.json({ error: "Studio recording is not available" }, 403);
+			}
 			const missingRequiredDuration =
-				isRawRecorderUpload(subpath) && reportedDuration === null;
+				(isRawRecorderUpload(subpath) || sourceSidecarUpload) &&
+				reportedDuration === null;
 			const exceedsFreePlanLimit =
 				reportedDuration !== null &&
 				reportedDuration >
@@ -565,11 +618,13 @@ app.post(
 								);
 						} else {
 							yield* bucket.multipart.abort(fileKey, uploadId);
-							yield* db.use((db) =>
-								db
-									.delete(Db.videoUploads)
-									.where(eq(Db.videoUploads.videoId, videoId)),
-							);
+							if (!sourceSidecarUpload) {
+								yield* db.use((db) =>
+									db
+										.delete(Db.videoUploads)
+										.where(eq(Db.videoUploads.videoId, videoId)),
+								);
+							}
 						}
 					}).pipe(
 						Effect.catchAll(() =>
@@ -586,6 +641,157 @@ app.post(
 							: "Recording exceeds the free plan duration limit. Upgrade to Cap Pro to upload longer recordings.",
 					);
 				}
+			}
+
+			if (sourceSidecarUpload) {
+				const cameraSourceUpload = isCameraRecorderUpload(subpath);
+				const sourceKind = cameraSourceUpload
+					? "camera"
+					: getAudioRecorderUploadKind(subpath);
+				if (sourceKind === null) {
+					return c.json({ error: "Invalid editor recording source" }, 400);
+				}
+				const screenSubpath = body.screenSubpath;
+				const sourceOffsetMs = cameraSourceUpload
+					? body.cameraOffsetMs
+					: body.audioOffsetMs;
+				const recorderCamera =
+					cameraSourceUpload && body.recorderCamera !== undefined
+						? parseRecorderCamera(body.recorderCamera)
+						: null;
+				if (
+					body.replaceExisting ||
+					!screenSubpath ||
+					!isDisplayRecorderUpload(screenSubpath) ||
+					typeof sourceOffsetMs !== "number" ||
+					Math.abs(sourceOffsetMs) > 30_000 ||
+					(body.recorderCamera !== undefined && !recorderCamera)
+				) {
+					return c.json({ error: "Invalid editor recording source" }, 400);
+				}
+
+				return yield* Effect.gen(function* () {
+					const [bucket] = yield* Storage.getAccessForVideo(video, {
+						resolvePublishedOutput: false,
+					});
+					const orderedParts = [...parts].sort(
+						(left, right) => left.partNumber - right.partNumber,
+					);
+					const totalSize = orderedParts.reduce(
+						(total, part) => total + part.size,
+						0,
+					);
+					if (
+						totalSize <= 0 ||
+						!orderedParts.every(
+							(part, index) => part.partNumber === index + 1 && part.size > 0,
+						)
+					) {
+						return c.json(
+							{ error: "Invalid recording source upload parts" },
+							400,
+						);
+					}
+
+					const verifyObject = bucket.headObject(fileKey).pipe(
+						Effect.filterOrFail(
+							(head) => head.ContentLength === totalSize,
+							() =>
+								new Error(
+									"Recording source size does not match uploaded parts",
+								),
+						),
+						Effect.retry({
+							times: 3,
+							schedule: Schedule.exponential("50 millis"),
+						}),
+					);
+					const result = yield* bucket.multipart
+						.complete(fileKey, uploadId, {
+							MultipartUpload: {
+								Parts: orderedParts.map((part) => ({
+									PartNumber: part.partNumber,
+									ETag: part.etag,
+								})),
+							},
+							...(bucket.provider === "googleDrive"
+								? { MpuObjectSize: totalSize }
+								: {}),
+						})
+						.pipe(
+							Effect.catchAll((error) =>
+								verifyObject.pipe(Effect.catchAll(() => Effect.fail(error))),
+							),
+						);
+					const head = yield* verifyObject;
+					const contentType = `${cameraSourceUpload ? "video" : "audio"}/${subpath.endsWith(".webm") ? "webm" : "mp4"}`;
+					const cameraFps = Number(body.fps);
+					const screenContentType = screenSubpath.endsWith(".webm")
+						? "video/webm"
+						: "video/mp4";
+					const sourcePatch = JSON.stringify({
+						editorSources: {
+							version: 1,
+							display: {
+								key: `${user.id}/${videoId}/${screenSubpath}`,
+								contentType: screenContentType,
+							},
+							[sourceKind]: {
+								key: fileKey,
+								contentType,
+								size: totalSize,
+								...(cameraSourceUpload &&
+								Number.isInteger(cameraFps) &&
+								cameraFps > 0 &&
+								cameraFps <= 120
+									? { fps: cameraFps }
+									: {}),
+								objectIdentity: head.ETag ?? result.ETag ?? null,
+								offsetMs: sourceOffsetMs,
+							},
+						},
+						...(recorderCamera ? { recorderCamera } : {}),
+					});
+					yield* db.use((db) =>
+						db
+							.update(Db.videos)
+							.set({
+								metadata: sql`JSON_MERGE_PATCH(COALESCE(${Db.videos.metadata}, JSON_OBJECT()), ${sourcePatch})`,
+							})
+							.where(
+								and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)),
+							),
+					);
+					yield* Effect.promise(() =>
+						onStudioSourcesComplete({
+							videoId,
+							key: fileKey,
+							origin:
+								editorRequestOrigin(c.req.url, c.req.header("origin")) ??
+								new URL(c.req.url).origin,
+						}),
+					);
+					return c.json({
+						success: true,
+						fileKey,
+						objectIdentity: head.ETag ?? result.ETag ?? null,
+						processingStarted: false,
+					});
+				}).pipe(
+					Effect.catchAll((error) =>
+						Effect.logError(
+							"Could not complete recording source upload",
+							error,
+						).pipe(
+							Effect.map(() =>
+								c.json(
+									{ error: "Could not complete recording source upload" },
+									500,
+								),
+							),
+						),
+					),
+				);
 			}
 
 			if (replacement) {
@@ -706,9 +912,18 @@ app.post(
 						objectIdentity: head.ETag,
 					});
 				}).pipe(
-					Effect.catchAll(() =>
+					Effect.catchAll((error) =>
 						Effect.succeed(
-							c.json({ error: "Could not publish replacement recording" }, 500),
+							error instanceof Error &&
+								error.cause instanceof SupersededBrowserSaveError
+								? c.json(
+										{ error: error.cause.message, code: "SAVE_SUPERSEDED" },
+										409,
+									)
+								: c.json(
+										{ error: "Could not publish replacement recording" },
+										500,
+									),
 						),
 					),
 				);
@@ -847,6 +1062,45 @@ app.post(
 					);
 
 					if (isRawRecorderUpload(subpath)) {
+						const retainDisplaySource =
+							isDisplayRecorderUpload(subpath) &&
+							isWebStudioEnabledForEmail(user.email) &&
+							canRetainDisplaySource(Option.getOrNull(video.metadata), fileKey);
+						const totalSize = parts.reduce(
+							(total, part) => total + part.size,
+							0,
+						);
+						const sourceHead = retainDisplaySource
+							? yield* bucket.headObject(fileKey).pipe(
+									Effect.filterOrFail(
+										(head) => totalSize > 0 && head.ContentLength === totalSize,
+										() =>
+											new Error("Display source size does not match upload"),
+									),
+									Effect.retry({
+										times: 3,
+										schedule: Schedule.exponential("50 millis"),
+									}),
+								)
+							: null;
+						const sourcePatch = JSON.stringify({
+							editorSources: {
+								version: 1,
+								display: {
+									key: fileKey,
+									contentType: subpath.endsWith(".webm")
+										? "video/webm"
+										: "video/mp4",
+									size: totalSize,
+									...(Number.isInteger(Number(body.fps)) &&
+									Number(body.fps) > 0 &&
+									Number(body.fps) <= 120
+										? { fps: Number(body.fps) }
+										: {}),
+									objectIdentity: sourceHead?.ETag ?? result.ETag ?? null,
+								},
+							},
+						});
 						yield* db.use((db) =>
 							db
 								.update(Db.videos)
@@ -858,6 +1112,11 @@ app.post(
 									width: updateIfDefined(body.width, Db.videos.width),
 									height: updateIfDefined(body.height, Db.videos.height),
 									fps: updateIfDefined(body.fps, Db.videos.fps),
+									...(retainDisplaySource
+										? {
+												metadata: sql`JSON_MERGE_PATCH(COALESCE(${Db.videos.metadata}, JSON_OBJECT()), ${sourcePatch})`,
+											}
+										: {}),
 								})
 								.where(
 									and(
@@ -887,6 +1146,18 @@ app.post(
 								).pipe(Effect.map(() => false)),
 							),
 						);
+
+						if (retainDisplaySource) {
+							yield* Effect.promise(() =>
+								onStudioSourcesComplete({
+									videoId,
+									key: fileKey,
+									origin:
+										editorRequestOrigin(c.req.url, c.req.header("origin")) ??
+										new URL(c.req.url).origin,
+								}),
+							);
+						}
 
 						return c.json({
 							location: result.Location,
@@ -1191,6 +1462,22 @@ app.post("/abort", abortRequestValidator, (c) => {
 				fileKey: replacement.outputKey,
 				uploadId,
 			});
+		}
+
+		if (isStudioSourceUpload(getSubpath(body) ?? "")) {
+			const [bucket] = yield* Storage.getAccessForVideo(video, {
+				resolvePublishedOutput: false,
+			});
+			if (bucket.provider === "s3") {
+				yield* bucket.multipart
+					.abort(fileKey, uploadId)
+					.pipe(
+						Effect.catchAll(() =>
+							Effect.logWarning("Studio source upload was already completed"),
+						),
+					);
+			}
+			return c.json({ success: true, fileKey, uploadId });
 		}
 
 		const [bucket] = yield* Storage.getAccessForVideo(video);

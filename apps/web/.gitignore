@@ -40,3 +40,5 @@ next-env.d.ts
 # workflow devkit (generated)
 public/.well-known/workflow/
 /.swc
+/public/editor/
+/.studio-editor-build/

@@ -10,7 +10,9 @@ import {
 import { AnimatePresence, motion } from "framer-motion";
 import { MonitorIcon } from "lucide-react";
 import {
+	lazy,
 	type ReactElement,
+	Suspense,
 	useCallback,
 	useEffect,
 	useRef,
@@ -33,6 +35,7 @@ import {
 	type RecordingMode,
 	RecordingModeSelector,
 } from "./RecordingModeSelector";
+import { DEFAULT_RECORDING_QUALITY } from "./recording-quality";
 import { SettingsButton } from "./SettingsButton";
 import { SettingsPanel } from "./SettingsPanel";
 import { SystemAudioToggle } from "./SystemAudioToggle";
@@ -62,11 +65,35 @@ const waitForNextFrame = () =>
 		window.requestAnimationFrame(() => resolve());
 	});
 
+const StudioRecorderDialog = lazy(() =>
+	import("./studio-recorder-dialog").then((module) => ({
+		default: module.StudioRecorderDialog,
+	})),
+);
+
+const recordInBrowserButton = (
+	<Button variant="blue" size="sm" className="flex gap-2 items-center px-4 h-9">
+		<MonitorIcon className="size-3.5" />
+		Record in browser
+	</Button>
+);
+
 export const WebRecorderDialog = ({
 	trigger,
 }: {
 	trigger?: ReactElement;
 } = {}) => {
+	const { webStudioEnabled } = useDashboardContext();
+	return webStudioEnabled ? (
+		<Suspense fallback={trigger ?? recordInBrowserButton}>
+			<StudioRecorderDialog trigger={trigger} />
+		</Suspense>
+	) : (
+		<InstantRecorderDialog trigger={trigger} />
+	);
+};
+
+const InstantRecorderDialog = ({ trigger }: { trigger?: ReactElement }) => {
 	const [open, setOpen] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [howItWorksOpen, setHowItWorksOpen] = useState(false);
@@ -287,16 +314,7 @@ export const WebRecorderDialog = ({
 		<>
 			<Dialog open={open} onOpenChange={handleOpenChange}>
 				<DialogTrigger asChild>
-					{trigger ?? (
-						<Button
-							variant="blue"
-							size="sm"
-							className="flex gap-2 items-center px-4 h-9"
-						>
-							<MonitorIcon className="size-3.5" />
-							Record in browser
-						</Button>
-					)}
+					{trigger ?? recordInBrowserButton}
 				</DialogTrigger>
 				<DialogContent
 					ref={dialogContentRef}
@@ -488,6 +506,7 @@ export const WebRecorderDialog = ({
 			{showCameraPreview && (
 				<CameraPreviewWindow
 					ref={cameraPreviewRef}
+					captureHeight={DEFAULT_RECORDING_QUALITY.cameraHeight}
 					cameraId={selectedCameraId}
 					onClose={() => handleCameraChange(null)}
 				/>

@@ -19,6 +19,28 @@ const identifier = z
 	.min(1)
 	.max(255)
 	.regex(/^[A-Za-z0-9_-]+$/);
+export const browserSaveIdSchema = z.string().regex(/^[0-9a-f-]{36}$/);
+
+export class SupersededBrowserSaveError extends Error {
+	constructor() {
+		super("A newer save replaced this one");
+		this.name = "SupersededBrowserSaveError";
+	}
+}
+
+export function browserSaveIsCurrent(
+	browserSaveId: string | undefined,
+	metadata: {
+		webEditorBrowserSave?: { saveId: string; status: string };
+	} | null,
+) {
+	const save = metadata?.webEditorBrowserSave;
+	return (
+		browserSaveId === undefined ||
+		(save?.saveId === browserSaveId && save.status === "rendering")
+	);
+}
+
 const tokenSchema = z
 	.object({
 		version: z.literal(1),
@@ -30,6 +52,7 @@ const tokenSchema = z
 		uploadId: z.string().min(1).max(8192),
 		outputKey: z.string().min(1).max(1024),
 		sourceIdentity: z.string().regex(/^[a-f0-9]{64}$/),
+		browserSaveId: browserSaveIdSchema.optional(),
 		expiresAt: z.number().int().safe(),
 	})
 	.strict();
@@ -42,16 +65,33 @@ export type DesktopReuploadVideo = Pick<
 
 const decodeSource = Schema.decodeUnknownSync(Video.Video.fields.source);
 
-export function desktopReuploadSourceIdentity(source: unknown): string {
-	let normalized: Video.Video["source"];
+function hashSource(source: object) {
+	return createHash("sha256")
+		.update(JSON.stringify(source, Object.keys(source).sort()))
+		.digest("hex");
+}
+
+function decodeReuploadSource(source: unknown): Video.Video["source"] {
 	try {
-		normalized = decodeSource(source);
+		return decodeSource(source);
 	} catch {
 		throw new Error("Invalid recording source");
 	}
-	return createHash("sha256")
-		.update(JSON.stringify(normalized, Object.keys(normalized).sort()))
-		.digest("hex");
+}
+
+// Previews and audio levels are made for the published output after it
+// changes, so they can land mid-upload without anything being republished.
+export function desktopReuploadSourceIdentity(source: unknown): string {
+	const { type, outputKey } = decodeReuploadSource(source);
+	return hashSource({ type, outputKey });
+}
+
+// Tokens signed before then hashed the whole source.
+function sourceIdentityMatches(source: unknown, identity: string) {
+	return (
+		desktopReuploadSourceIdentity(source) === identity ||
+		hashSource(decodeReuploadSource(source)) === identity
+	);
 }
 
 function hasValidOutputKey(token: DesktopReuploadToken): boolean {
@@ -101,7 +141,10 @@ export function createDesktopReuploadKey(
 
 export function createDesktopReuploadToken(
 	video: DesktopReuploadVideo,
-	upload: Pick<DesktopReuploadToken, "uploadId" | "provider" | "outputKey">,
+	upload: Pick<
+		DesktopReuploadToken,
+		"uploadId" | "provider" | "outputKey" | "browserSaveId"
+	>,
 ): string {
 	const token = parseToken({
 		version: 1,
@@ -113,6 +156,9 @@ export function createDesktopReuploadToken(
 		uploadId: upload.uploadId,
 		outputKey: upload.outputKey,
 		sourceIdentity: desktopReuploadSourceIdentity(video.source),
+		...(upload.browserSaveId === undefined
+			? {}
+			: { browserSaveId: upload.browserSaveId }),
 		expiresAt: Date.now() + TOKEN_LIFETIME_MS,
 	});
 	const payload = Buffer.from(JSON.stringify(token)).toString("base64url");
@@ -187,7 +233,7 @@ export function assertDesktopReuploadTarget(
 	) {
 		return;
 	}
-	if (desktopReuploadSourceIdentity(video.source) !== token.sourceIdentity) {
+	if (!sourceIdentityMatches(video.source, token.sourceIdentity)) {
 		throw new Error("Recording source changed during reupload");
 	}
 }

@@ -4,12 +4,15 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
+		"./audio-sidecar": "./src/audio-sidecar.ts",
 		"./capture-streams": "./src/capture-streams.ts",
 		"./instant-mp4-uploader": "./src/instant-mp4-uploader.ts",
 		"./local-recording-backup": "./src/local-recording-backup.ts",
 		"./recorder-constants": "./src/recorder-constants.ts",
+		"./recorder-encoding": "./src/recorder-encoding.ts",
 		"./recorder-types": "./src/recorder-types.ts",
 		"./recorder-utils": "./src/recorder-utils.ts",
+		"./recording-index": "./src/recording-index.ts",
 		"./recording-spool": "./src/recording-spool.ts",
 		"./recording-spool-fallback": "./src/recording-spool-fallback.ts"
 	},

@@ -1,0 +1,263 @@
+name: Web Editor
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "packages/web-editor/**"
+      - "packages/recorder-core/**"
+      - "crates/rendering/**"
+      - "crates/project/**"
+      - "crates/camera-effects/**"
+      - "crates/cursor-info/**"
+      - "crates/flags/**"
+      - "crates/rnnoise/**"
+      - "rust-toolchain.toml"
+      - "apps/web/app/s/*/edit/**"
+      - "apps/web/app/api/editor/**"
+      - "apps/web/lib/editor-*"
+      - "apps/web/app/(org)/dashboard/caps/components/web-recorder-dialog/**"
+      - "apps/web/lib/*recorder*"
+      - "apps/web/__tests__/studio-recorder-paired-browser-replay.mjs"
+      - ".github/workflows/web-editor.yml"
+  # Main runs save the wasm Rust cache; a cache saved on a PR ref is invisible
+  # to every other PR.
+  push:
+    branches: [main]
+    paths:
+      - "packages/web-editor/**"
+      - "packages/recorder-core/**"
+      - "crates/rendering/**"
+      - "crates/project/**"
+      - "crates/camera-effects/**"
+      - "crates/cursor-info/**"
+      - "crates/flags/**"
+      - "crates/rnnoise/**"
+      - "rust-toolchain.toml"
+      - "apps/web/app/s/*/edit/**"
+      - "apps/web/app/api/editor/**"
+      - "apps/web/lib/editor-*"
+      - "apps/web/app/(org)/dashboard/caps/components/web-recorder-dialog/**"
+      - "apps/web/lib/*recorder*"
+      - "apps/web/__tests__/studio-recorder-paired-browser-replay.mjs"
+      - ".github/workflows/web-editor.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-editor-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  compositor-replay:
+    name: Compositor replay (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: chromium
+            browser: chromium
+            runner: blacksmith-8vcpu-ubuntu-2404
+            headed: "0"
+            launcher: bun
+          # Firefox has no WebGL in headless Linux; under Xvfb it gets
+          # software WebGL (llvmpipe).
+          - name: firefox
+            browser: firefox
+            runner: blacksmith-8vcpu-ubuntu-2404
+            headed: "1"
+            launcher: xvfb-run -a bun
+          - name: webkit
+            browser: webkit
+            runner: macos-15
+            headed: "1"
+            launcher: bun
+          # Headless Chromium has no WebGPU, so the WebGPU path runs headed
+          # on a Mac's GPU.
+          - name: chromium-webgpu
+            browser: chromium
+            runner: macos-15
+            headed: "1"
+            launcher: bun
+          # The runner's own Chrome and Edge. Windows runners have no GPU, so
+          # both draw with WebGL2 on SwiftShader and have no WebGPU adapter.
+          - name: windows-chrome
+            browser: chromium
+            channel: chrome
+            runner: windows-latest
+            headed: "0"
+            launcher: bun
+          - name: windows-edge
+            browser: chromium
+            channel: msedge
+            runner: windows-latest
+            headed: "0"
+            launcher: bun
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      CAP_REPLAY_HEADED: ${{ matrix.headed }}
+      CAP_REPLAY_CHANNEL: ${{ matrix.channel }}
+      REPLAY: ${{ matrix.launcher }} packages/web-editor/browser-replay/replay.cjs ${{ matrix.browser }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Install browser
+        if: matrix.channel == ''
+        run: bunx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} ${{ matrix.browser }}
+
+      - name: Build compositor replay
+        run: bunx vite build --config packages/web-editor/browser-replay/vite.config.ts
+
+      - name: Replay separate screen and camera clips (auto backend, then WebGL2)
+        if: matrix.name != 'chromium-webgpu'
+        run: $REPLAY
+
+      - name: Check screen and camera frame parity at 8x on indexed clips
+        if: matrix.name != 'chromium-webgpu'
+        run: $REPLAY
+        env:
+          CAP_REPLAY_INDEXED: "1"
+
+      - name: HTML video fallback on a slow decoder
+        if: matrix.name != 'chromium-webgpu'
+        run: $REPLAY
+        env:
+          CAP_REPLAY_FORCE_HTML: "1"
+          CAP_REPLAY_SLOW_HTML: "1"
+
+      - name: Require WebGPU
+        if: matrix.name == 'chromium-webgpu'
+        run: $REPLAY
+        env:
+          CAP_REPLAY_REQUIRE_WEBGPU: "1"
+
+      - name: Require WebGPU with 8x frame parity on indexed clips
+        if: matrix.name == 'chromium-webgpu'
+        run: $REPLAY
+        env:
+          CAP_REPLAY_REQUIRE_WEBGPU: "1"
+          CAP_REPLAY_INDEXED: "1"
+
+      - name: Require WebGL2 after a failed WebGPU presentation probe
+        if: matrix.name == 'chromium-webgpu'
+        run: $REPLAY
+        env:
+          CAP_REPLAY_SIMULATE_FAILED_PROBE: "1"
+
+  recorder-replay:
+    name: Recorder paired capture replay (${{ matrix.browser }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            runner: blacksmith-8vcpu-ubuntu-2404
+          - browser: webkit
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Install browser
+        run: bunx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} ${{ matrix.browser }}
+
+      - name: Replay paired screen, camera and mic capture
+        working-directory: apps/web
+        run: bun __tests__/studio-recorder-paired-browser-replay.mjs ${{ matrix.browser }}
+
+  wasm-fresh:
+    name: Committed wasm packages match their sources
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      # build.sh compiles a copy staged at /tmp/cap-wasm-src. The cache key
+      # still comes from the checkout's manifests (the stage doesn't exist yet
+      # when the cache restores), and rust-cache joins the target onto the
+      # root, so the extra ".." segments clamp at / to reach the staged target.
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: wasm32-unknown-unknown
+          prefix-key: v1-rust-web-editor-wasm
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: |
+            packages/web-editor/renderer -> ../../../../../../../../../../../../tmp/cap-wasm-src/packages/web-editor/renderer/target
+            packages/web-editor/image-decoder -> ../../../../../../../../../../../../tmp/cap-wasm-src/packages/web-editor/image-decoder/target
+
+      - name: Install wasm-bindgen 0.2.103, binaryen 123 and LLVM
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/wasm-tools"
+          mkdir -p "$tools"
+          cd "$tools"
+          curl -fsSL -o wasm-bindgen.tar.gz https://github.com/rustwasm/wasm-bindgen/releases/download/0.2.103/wasm-bindgen-0.2.103-x86_64-unknown-linux-musl.tar.gz
+          curl -fsSL -o binaryen.tar.gz https://github.com/WebAssembly/binaryen/releases/download/version_123/binaryen-version_123-x86_64-linux.tar.gz
+          sha256sum -c <<'EOF'
+          343b06a070b4cb74ec77facb393f0292b2ef7115adbb3aff58e8cb395b9d203e  wasm-bindgen.tar.gz
+          e959f2170af4c20c552e9de3a0253704d6a9d2766e8fdb88e4d6ac4bae9388fe  binaryen.tar.gz
+          EOF
+          tar xzf wasm-bindgen.tar.gz
+          tar xzf binaryen.tar.gz
+          echo "$tools/wasm-bindgen-0.2.103-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+          echo "$tools/binaryen-version_123/bin" >> "$GITHUB_PATH"
+          if ! command -v clang >/dev/null || ! command -v llvm-ar >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends clang llvm
+          fi
+
+      - name: Rebuild the renderer and image decoder packages
+        run: bash packages/web-editor/renderer/build.sh
+
+      # The image decoder rebuilds byte for byte. The renderer never does:
+      # wasm-bindgen 0.2.103 numbers closure adapters and orders some imports
+      # differently on every run, and rustc's closure symbol hashes depend on
+      # the checkout path. Its glue is compared with those names normalised.
+      - name: Fail if the committed packages are stale
+        run: |
+          set -euo pipefail
+          normalize() {
+            sed -E 's/__wbg_adapter_[0-9]+/__wbg_adapter_N/g; s/(_invoke__|_shim__)h[0-9a-f]{16}/\1hHASH/g; s/closure[0-9]+_externref_shim/closureN_externref_shim/g' | LC_ALL=C sort
+          }
+          stale=0
+          for pkg in pkg pkg-export; do
+            for file in cap_editor_browser_renderer.js cap_editor_browser_renderer.d.ts cap_editor_browser_renderer_bg.wasm.d.ts; do
+              path="packages/web-editor/renderer/$pkg/$file"
+              if ! diff -u <(git show "HEAD:$path" | normalize) <(normalize < "$path") > "$RUNNER_TEMP/glue.diff"; then
+                echo "::error file=$path::Differs from a fresh build"
+                head -n 60 "$RUNNER_TEMP/glue.diff"
+                stale=1
+              fi
+            done
+          done
+          renderer=(packages/web-editor/renderer/pkg packages/web-editor/renderer/pkg-export)
+          added=$(git status --porcelain --untracked-files=all -- "${renderer[@]}" | grep -v '^ M ' || true)
+          if [ -n "$added" ]; then
+            echo "::error::A fresh build adds or removes files in the renderer packages"
+            echo "$added"
+            stale=1
+          fi
+          decoder=packages/web-editor/image-decoder/pkg
+          git ls-files -z --others --exclude-standard -- "$decoder" | xargs -0 -r git add --intent-to-add --
+          if ! git diff --exit-code --stat -- "$decoder"; then
+            echo "::error::$decoder differs from a fresh build"
+            stale=1
+          fi
+          if [ "$stale" = 1 ]; then
+            echo "::error::The committed wasm packages are stale. Run packages/web-editor/renderer/build.sh on Linux and commit renderer/pkg, renderer/pkg-export and image-decoder/pkg."
+            exit 1
+          fi

@@ -15,7 +15,11 @@
 			"!capcodec/**/*.sh",
 			"!capcodec/**/*.jsonl",
 			"!capcodec/**/*.pyc",
-			"!capcodec/capcodec.bundle"
+			"!capcodec/capcodec.bundle",
+			"!packages/web-editor/renderer/pkg",
+			"!packages/web-editor/renderer/pkg-export",
+			"!packages/web-editor/image-decoder/pkg",
+			"!packages/web-editor/src/ui/auto-imports.d.ts"
 		],
 		"ignoreUnknown": false
 	},

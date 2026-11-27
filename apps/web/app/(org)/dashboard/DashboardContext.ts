@@ -37,6 +37,7 @@ export type SharedContext = {
 	referClickedState: boolean;
 	setReferClickedStateHandler: (referClicked: boolean) => void;
 	shareableLinkUsage: { used: number; limit: number } | null;
+	webStudioEnabled: boolean;
 };
 
 export type ITheme = "light" | "dark";

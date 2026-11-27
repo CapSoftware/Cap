@@ -8,6 +8,15 @@
 			"dependsOn": ["^build"],
 			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
 		},
+		"@cap/web-editor#build": {
+			"cache": false,
+			"outputs": []
+		},
+		"@cap/web#build": {
+			"inputs": ["**/*.ts", "**/*.tsx", "!node_modules/**"],
+			"dependsOn": ["^build", "@cap/web-editor#build"],
+			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
+		},
 		"@cap/chrome-extension#build": {
 			"inputs": [
 				"**/*.ts",

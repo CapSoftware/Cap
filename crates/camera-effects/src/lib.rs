@@ -3,13 +3,21 @@ mod blur_pipeline;
 mod gpu_tests;
 mod mask_refinement;
 mod matte;
+#[cfg(not(target_arch = "wasm32"))]
+mod segmentation;
+#[cfg(target_arch = "wasm32")]
+#[path = "segmentation_unavailable.rs"]
 mod segmentation;
 #[cfg(target_os = "macos")]
 mod vision;
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use blur_pipeline::{BlurPassInputs, BlurPipeline, CompositePassInputs, CompositePipeline};
 use mask_refinement::MaskRefiner;

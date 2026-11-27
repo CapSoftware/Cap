@@ -1,0 +1,26 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"lib": ["ES2023", "DOM", "DOM.Iterable"],
+		"jsx": "preserve",
+		"jsxImportSource": "solid-js",
+		"strict": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"resolveJsonModule": true,
+		"allowImportingTsExtensions": true,
+		"types": [
+			"vite/client",
+			"vitest/importMeta",
+			"unplugin-icons/types/solid",
+			"@webgpu/types",
+			"@types/dom-webcodecs"
+		],
+		"paths": {
+			"~/*": ["./src/app/*"]
+		}
+	},
+	"include": ["src", "vite.config.ts", "vitest.config.ts"]
+}

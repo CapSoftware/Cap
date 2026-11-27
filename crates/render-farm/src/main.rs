@@ -10,12 +10,17 @@
 //! - `video`: render + encode one output frame range to raw H.264 samples.
 //! - `audio`: render + encode one output sample range to raw AAC packets on
 //!   the global packet grid, with pre-roll so sections join seamlessly.
+//! - `levels`: waveform levels from whole audio files, once per export, for
+//!   video chunks whose workers only fetch parts of those files.
 
 mod audio;
+mod levels;
+mod prepare;
 mod project;
 #[cfg(test)]
 mod source_limit_tests;
 mod video;
+mod web_project;
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -72,6 +77,9 @@ enum Op {
     Probe(ProbeRequest),
     Video(video::VideoRequest),
     Audio(audio::AudioRequest),
+    Levels(levels::LevelsRequest),
+    Prepare(Box<prepare::PrepareRequest>),
+    DefaultConfig,
     Warm,
     Ping,
 }
@@ -112,6 +120,7 @@ async fn probe(request: ProbeRequest) -> Result<Value> {
         "spans": spans,
         "audio_cuts": project.audio_cuts(request.fps, audio::SAMPLE_RATE),
         "clips": clips,
+        "waveform_files": levels::inputs(&project),
     }))
 }
 
@@ -120,6 +129,9 @@ async fn handle(op: Op) -> Result<Value> {
         Op::Probe(request) => probe(request).await?,
         Op::Video(request) => serde_json::to_value(video::render(request).await?)?,
         Op::Audio(request) => serde_json::to_value(audio::render(request).await?)?,
+        Op::Levels(request) => levels::levels(request).await?,
+        Op::Prepare(request) => prepare::prepare(*request)?,
+        Op::DefaultConfig => prepare::default_config()?,
         Op::Warm => video::warm().await?,
         Op::Ping => json!({ "pong": true }),
     })

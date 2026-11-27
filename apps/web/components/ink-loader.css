@@ -1,0 +1,111 @@
+/* Keep in step with apps/desktop/src/routes/editor/ink-loader.css, which
+   draws the same mark inside the editor. */
+.ink-loader {
+	--ink-scale: 1;
+	position: relative;
+	display: inline-block;
+	flex: none;
+	width: calc(40px * var(--ink-scale));
+	height: calc(16px * var(--ink-scale));
+	overflow: hidden;
+	color: #8e8e96;
+	pointer-events: none;
+	-webkit-mask-image: linear-gradient(
+		90deg,
+		transparent,
+		#000 30%,
+		#000 70%,
+		transparent
+	);
+	mask-image: linear-gradient(
+		90deg,
+		transparent,
+		#000 30%,
+		#000 70%,
+		transparent
+	);
+}
+
+.ink-loader[data-size="sm"] {
+	--ink-scale: 0.75;
+}
+
+.ink-loader[data-size="lg"] {
+	--ink-scale: 1.5;
+}
+
+.ink-loader[data-tone="media"] {
+	color: rgb(255 255 255 / 0.92);
+}
+
+.ink-loader[data-tone="media"] svg {
+	filter: drop-shadow(0 1px 5px rgb(0 0 0 / 0.45));
+}
+
+.ink-loader-wave {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: calc(96px * var(--ink-scale));
+	animation: ink-loader-travel 1.4s linear infinite;
+	will-change: transform;
+}
+
+.ink-loader-boil {
+	position: absolute;
+	inset: 0;
+	opacity: 0;
+	animation: ink-loader-boil 0.45s steps(1, end) infinite;
+}
+
+.ink-loader-boil:nth-child(2) {
+	animation-delay: -0.15s;
+}
+
+.ink-loader-boil:nth-child(3) {
+	animation-delay: -0.3s;
+}
+
+.ink-loader-boil svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+	overflow: visible;
+}
+
+.ink-loader-boil path {
+	fill: none;
+	stroke: currentColor;
+	stroke-width: calc(2px * var(--ink-scale));
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	vector-effect: non-scaling-stroke;
+}
+
+@keyframes ink-loader-travel {
+	to {
+		transform: translateX(calc(-48px * var(--ink-scale)));
+	}
+}
+
+@keyframes ink-loader-boil {
+	0% {
+		opacity: 1;
+	}
+	33.333% {
+		opacity: 0;
+	}
+}
+
+/* Still, it is one steady stroke rather than a flicker. */
+@media (prefers-reduced-motion: reduce) {
+	.ink-loader-wave,
+	.ink-loader-boil {
+		animation: none;
+	}
+
+	.ink-loader-boil:first-child {
+		opacity: 1;
+	}
+}

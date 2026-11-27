@@ -18,11 +18,12 @@ export type SchedulableJob = {
 	runningTasks: number;
 };
 
-export type SchedulerOptions = {
+export type SchedulerOptions<S extends SchedulableState = SchedulableState> = {
 	/** Unfinished chunks per job, from the front, that outrank other work. */
 	headChunks: number;
 	fifo: boolean;
 	now: number;
+	canTake?: (state: S) => boolean;
 };
 
 /**
@@ -36,18 +37,19 @@ export type SchedulerOptions = {
  *  2. fairness: the job currently holding the fewest running tasks;
  *  3. the older job, then the earlier position in the timeline.
  */
-export function pickQueued(
-	queue: readonly SchedulableState[],
+export function pickQueued<S extends SchedulableState>(
+	queue: readonly S[],
 	jobs: Iterable<SchedulableJob>,
 	accepts: (kind: SchedulableTask["kind"]) => boolean,
-	options: SchedulerOptions,
+	options: SchedulerOptions<S>,
 ) {
 	const byId = new Map<string, { job: SchedulableJob; head: Set<number> }>();
-	const eligible = (state: SchedulableState) =>
+	const eligible = (state: S) =>
 		state.state === "queued" &&
 		byId.has(state.task.jobId) &&
 		accepts(state.task.kind) &&
-		!(state.heldUntil && state.heldUntil > options.now);
+		!(state.heldUntil && state.heldUntil > options.now) &&
+		(options.canTake?.(state) ?? true);
 	for (const job of jobs) {
 		if (job.status !== "rendering") continue;
 		const head = new Set<number>();

@@ -192,6 +192,7 @@ describe("media processing workflows", () => {
 			[],
 			[metadata],
 			[video],
+			[video],
 			[],
 		];
 		await expect(processVideoWorkflow(payload)).resolves.toMatchObject({
@@ -201,6 +202,38 @@ describe("media processing workflows", () => {
 		expect(mocks.fetch).toHaveBeenCalledOnce();
 		expect(mocks.sleep.mock.calls).toEqual([[5_000], [10_000]]);
 		expect(mocks.remove).toHaveBeenCalledWith(payload.rawFileKey);
+	});
+
+	it("keeps a Studio recording's screen upload, which the editor reads", async () => {
+		const studioVideo = {
+			...video,
+			metadata: {
+				editorSources: {
+					version: 1,
+					display: {
+						key: payload.rawFileKey,
+						contentType: "video/webm",
+						size: 2048,
+						objectIdentity: "source-etag",
+					},
+				},
+			},
+		};
+		mocks.rows = [
+			[studioVideo],
+			[{ ...pending, rawFileKey: payload.rawFileKey }],
+			[studioVideo],
+			[pending],
+			[pending],
+			[],
+			[metadata],
+			[studioVideo],
+			[],
+		];
+		await expect(processVideoWorkflow(payload)).resolves.toMatchObject({
+			success: true,
+		});
+		expect(mocks.remove).not.toHaveBeenCalled();
 	});
 
 	describe("transcription after processing", () => {
@@ -217,6 +250,7 @@ describe("media processing workflows", () => {
 			[pending],
 			[],
 			[metadata],
+			[video],
 			[video],
 			[owner],
 		];

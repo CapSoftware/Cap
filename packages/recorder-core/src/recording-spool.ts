@@ -37,6 +37,37 @@ const DATABASE_VERSION = 1;
 const SESSIONS_STORE = "sessions";
 const CHUNKS_STORE = "chunks";
 const DEFAULT_MAX_PENDING_CHUNK_BYTES = 32 * 1024 * 1024;
+// WebKit's private browsing fails a Blob put and then never settles another
+// transaction on that database, reads included. Every backend call a live
+// recording waits on gets this deadline, so Stop falls back to memory instead
+// of hanging.
+export const RECORDING_SPOOL_OPERATION_TIMEOUT_MS = 10_000;
+const UPLOADED_SESSION_KEY_PREFIX = "cap-recording-spool-uploaded:";
+
+const uploadedSessionKey = (sessionId: string) =>
+	`${UPLOADED_SESSION_KEY_PREFIX}${sessionId}`;
+
+export const isRecordingSpoolUploaded = (sessionId: string) => {
+	try {
+		return (
+			globalThis.localStorage?.getItem(uploadedSessionKey(sessionId)) === "1"
+		);
+	} catch {
+		return false;
+	}
+};
+
+const markUploadedSession = (sessionId: string) => {
+	try {
+		globalThis.localStorage?.setItem(uploadedSessionKey(sessionId), "1");
+	} catch {}
+};
+
+const clearUploadedSession = (sessionId: string) => {
+	try {
+		globalThis.localStorage?.removeItem(uploadedSessionKey(sessionId));
+	} catch {}
+};
 
 // Liveness contract between live recorders and recovery sweeps: a spool whose
 // session was updated within this window must be treated as live and never
@@ -66,15 +97,38 @@ const transactionToPromise = (transaction: IDBTransaction) =>
 		transaction.onerror = () => reject(normalizeError(transaction.error));
 	});
 
-const createSessionId = () => {
-	if (
-		typeof crypto !== "undefined" &&
-		typeof crypto.randomUUID === "function"
-	) {
-		return crypto.randomUUID();
-	}
+export const fallbackRecordingSessionId = () => {
+	const random = Array.from(
+		crypto.getRandomValues(new Uint8Array(16)),
+		(byte) => byte.toString(16).padStart(2, "0"),
+	).join("");
+	return `recording-${Date.now()}-${random}`;
+};
 
-	return `recording-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+// randomUUID is limited to secure contexts; getRandomValues works everywhere.
+export const createRecordingSessionId = () =>
+	typeof crypto.randomUUID === "function"
+		? crypto.randomUUID()
+		: fallbackRecordingSessionId();
+
+export class RecordingSpoolStalledError extends Error {
+	constructor(operation: string) {
+		super(`Recording spool ${operation} did not finish`);
+		this.name = "RecordingSpoolStalledError";
+	}
+}
+
+const withDeadline = <T>(operation: string, task: Promise<T>) => {
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	return Promise.race([
+		task,
+		new Promise<never>((_, reject) => {
+			timeoutId = setTimeout(
+				() => reject(new RecordingSpoolStalledError(operation)),
+				RECORDING_SPOOL_OPERATION_TIMEOUT_MS,
+			);
+		}),
+	]).finally(() => clearTimeout(timeoutId));
 };
 
 export class RecordingSpoolBackpressureError extends Error {
@@ -235,7 +289,7 @@ export class RecordingSpool {
 	) {
 		const now = Date.now();
 		const session = {
-			sessionId: options.sessionId ?? createSessionId(),
+			sessionId: options.sessionId ?? createRecordingSessionId(),
 			mimeType: options.mimeType,
 			totalBytes: 0,
 			chunkCount: 0,
@@ -243,8 +297,10 @@ export class RecordingSpool {
 			updatedAt: now,
 		} satisfies RecordingSpoolSessionRecord;
 
-		await backend.initialize();
-		await backend.createSession(session);
+		await withDeadline(
+			"setup",
+			backend.initialize().then(() => backend.createSession(session)),
+		);
 
 		return new RecordingSpool(
 			backend,
@@ -263,6 +319,14 @@ export class RecordingSpool {
 
 	get chunkCount() {
 		return this.session.chunkCount;
+	}
+
+	getUnwrittenChunks() {
+		return [...this.pendingChunks];
+	}
+
+	markUploaded() {
+		markUploadedSession(this.session.sessionId);
 	}
 
 	appendChunk(chunk: Blob) {
@@ -290,7 +354,10 @@ export class RecordingSpool {
 				updatedAt: Date.now(),
 			} satisfies RecordingSpoolSessionRecord;
 
-			await this.backend.appendChunk(updatedSession, index, chunk);
+			await withDeadline(
+				"write",
+				this.backend.appendChunk(updatedSession, index, chunk),
+			);
 			const persistedChunk = this.pendingChunks.shift();
 			if (persistedChunk) {
 				this.pendingChunkBytes = Math.max(
@@ -319,7 +386,10 @@ export class RecordingSpool {
 				...this.session,
 				updatedAt: Date.now(),
 			} satisfies RecordingSpoolSessionRecord;
-			await this.backend.createSession(updatedSession);
+			await withDeadline(
+				"heartbeat",
+				this.backend.createSession(updatedSession),
+			);
 			this.session = updatedSession;
 		});
 		this.pendingWrite = operation.then(
@@ -357,8 +427,22 @@ export class RecordingSpool {
 		);
 	}
 
+	async recoverPersistedBlob() {
+		await this.pendingWrite;
+		if (this.session.chunkCount === 0) {
+			return null;
+		}
+		return this.readPersistedBlob();
+	}
+
 	private async readPersistedBlob() {
-		const chunks = await this.backend.readChunks(this.session.sessionId);
+		if (this.session.chunkCount === 0) {
+			return null;
+		}
+		const chunks = await withDeadline(
+			"read",
+			this.backend.readChunks(this.session.sessionId),
+		);
 		if (chunks.length === 0) {
 			return null;
 		}
@@ -377,7 +461,11 @@ export class RecordingSpool {
 		try {
 			await this.pendingWrite;
 		} catch {}
-		await this.backend.deleteSession(this.session.sessionId);
+		await withDeadline(
+			"delete",
+			this.backend.deleteSession(this.session.sessionId),
+		);
+		clearUploadedSession(this.session.sessionId);
 	}
 
 	private enqueue(task: () => Promise<void>) {
@@ -419,6 +507,19 @@ export const recoverOrphanedRecordingSpools = async (
 		// would offer the user a "recovered" copy whose dismissal deletes the
 		// live session's crash backup out from under it.
 		if (minIdleMs > 0 && now - session.updatedAt < minIdleMs) {
+			continue;
+		}
+		if (isRecordingSpoolUploaded(session.sessionId)) {
+			void backend
+				.deleteSession(session.sessionId)
+				.then(() => clearUploadedSession(session.sessionId))
+				.catch((error) => {
+					console.error(
+						"Failed to remove uploaded recording backup",
+						session.sessionId,
+						error,
+					);
+				});
 			continue;
 		}
 
@@ -491,4 +592,5 @@ export const deleteRecoveredRecordingSpool = async (
 ) => {
 	await backend.initialize();
 	await backend.deleteSession(sessionId);
+	clearUploadedSession(sessionId);
 };

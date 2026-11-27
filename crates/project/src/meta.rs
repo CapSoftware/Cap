@@ -109,6 +109,9 @@ impl Default for Platform {
 
         #[cfg(target_os = "linux")]
         return Self::Linux;
+
+        #[cfg(target_arch = "wasm32")]
+        return Self::MacOS;
     }
 }
 

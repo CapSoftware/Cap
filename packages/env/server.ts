@@ -293,6 +293,29 @@ function createServerEnv() {
 				.describe(
 					"Base URL for media server webhooks (use host.docker.internal for Docker setups)",
 				),
+			CAP_WEB_EDITOR_STUDIO_ENABLED: z
+				.literal("enabled")
+				.optional()
+				.describe("Turns on the Studio web editor for allowlisted accounts"),
+			CAP_WEB_EDITOR_STUDIO_ALLOWLIST: z
+				.string()
+				.optional()
+				.describe(
+					"Comma-separated emails or @domains that get the Studio web editor. * allows every account outside production",
+				),
+			RENDER_FARM_URL: z
+				.string()
+				.url()
+				.optional()
+				.describe("HTTPS URL of the GPU render farm coordinator"),
+			RENDER_FARM_TOKEN: z
+				.string()
+				.optional()
+				.describe("Bearer token for the render farm coordinator"),
+			RENDER_FARM_CALLBACK_SECRET: z
+				.string()
+				.optional()
+				.describe("HMAC secret the render farm signs job callbacks with"),
 			INFRA_PLAYBACK_URL: z
 				.string()
 				.optional()

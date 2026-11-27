@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+	getAudioRecorderUploadKind,
 	getMultipartFileKey,
 	getSubpath,
+	isCameraRecorderUpload,
+	isDisplayRecorderUpload,
 	isRawRecorderUpload,
+	isStudioSourceUpload,
 } from "@/app/api/upload/[...route]/multipart-utils";
 
 describe("multipart upload utils", () => {
@@ -43,6 +47,51 @@ describe("multipart upload utils", () => {
 		expect(isRawRecorderUpload("raw-upload.webm")).toBe(true);
 		expect(isRawRecorderUpload("raw-upload.mp4")).toBe(true);
 		expect(isRawRecorderUpload("result.mp4")).toBe(false);
+	});
+
+	it("accepts only canonical paired recording media paths", () => {
+		for (const extension of ["webm", "mp4"]) {
+			expect(isDisplayRecorderUpload(`raw-upload.${extension}`)).toBe(true);
+			expect(isCameraRecorderUpload(`camera-upload.${extension}`)).toBe(true);
+		}
+		for (const subpath of [
+			"camera-upload.webm/extra",
+			"camera-upload.webm.bak",
+			"raw-upload.webm/extra",
+			"../camera-upload.webm",
+			"result.mp4",
+		]) {
+			expect(isDisplayRecorderUpload(subpath)).toBe(false);
+			expect(isCameraRecorderUpload(subpath)).toBe(false);
+		}
+	});
+
+	it("accepts only canonical microphone and system-audio sidecar paths", () => {
+		for (const extension of ["webm", "mp4"]) {
+			expect(getAudioRecorderUploadKind(`mic-upload.${extension}`)).toBe("mic");
+			expect(
+				getAudioRecorderUploadKind(`system-audio-upload.${extension}`),
+			).toBe("systemAudio");
+		}
+		for (const subpath of [
+			"../mic-upload.webm",
+			"mic-upload.webm/extra",
+			"mic-upload.webm.bak",
+			"system-audio-upload.wav",
+			"system-audio-upload.webm/extra",
+			"audio-upload.webm",
+		]) {
+			expect(getAudioRecorderUploadKind(subpath)).toBeNull();
+		}
+	});
+
+	it("treats camera and audio tracks, never the screen, as Studio sources", () => {
+		expect(isStudioSourceUpload("camera-upload.mp4")).toBe(true);
+		expect(isStudioSourceUpload("mic-upload.webm")).toBe(true);
+		expect(isStudioSourceUpload("system-audio-upload.mp4")).toBe(true);
+		expect(isStudioSourceUpload("raw-upload.mp4")).toBe(false);
+		expect(isStudioSourceUpload("result.mp4")).toBe(false);
+		expect(isStudioSourceUpload("input-events-upload.ndjson")).toBe(false);
 	});
 
 	it("rejects missing video ids", () => {

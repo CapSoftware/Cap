@@ -20,7 +20,6 @@
 	"apps/media-server/src/__tests__/routes/recording-verification.test.ts": 22,
 	"apps/media-server/src/__tests__/routes/video.test.ts": 2,
 	"apps/render-farm/src/s3-imds.test.ts": 8,
-	"apps/render-farm/src/s3.test.ts": 1,
 	"apps/status/tests/routes.test.ts": 4,
 	"packages/infra-mcp/__tests__/video-import.test.ts": 5,
 	"packages/recorder-core/__tests__/capture-streams.test.ts": 19,

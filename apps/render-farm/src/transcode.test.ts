@@ -1,6 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { localS3, memoryBucket, stopLocalS3 } from "./local-s3.test-util";
 import {
 	canRemux,
+	downloadSource,
 	encodedSeconds,
 	MAX_DECODE_PIXELS,
 	probeArgs,
@@ -126,5 +131,71 @@ describe("source size", () => {
 			expect(args[limit + 1]).toBe(String(MAX_DECODE_PIXELS));
 			expect(limit).toBeLessThan(args.indexOf("https://in"));
 		}
+	});
+});
+
+describe("downloadSource", () => {
+	afterEach(stopLocalS3);
+
+	const source = (data: Uint8Array<ArrayBuffer>) => {
+		const ranges: string[] = [];
+		const bucket = memoryBucket("bucket", {
+			before: (request) => {
+				const range = request.headers.get("range");
+				if (range) ranges.push(range);
+				return undefined;
+			},
+		});
+		bucket.objects.set("k", { body: data, contentType: null });
+		return { s3: localS3(bucket.handle), bucket, ranges };
+	};
+
+	test("reassembles a source from parallel ranged reads", async () => {
+		const data = new Uint8Array(1000).map((_, index) => index % 251);
+		const { s3, ranges } = source(data);
+		const path = join(mkdtempSync(join(tmpdir(), "rf-dl-")), "source");
+		const size = await downloadSource(s3, "k", path, {
+			piece: 128,
+			concurrency: 3,
+		});
+		expect(size).toBe(1000);
+		expect(new Uint8Array(readFileSync(path))).toEqual(data);
+		expect(ranges.sort()).toEqual(
+			Array.from(
+				{ length: 8 },
+				(_, index) =>
+					`bytes=${index * 128}-${Math.min(1000, index * 128 + 128) - 1}`,
+			).sort(),
+		);
+	});
+
+	test("reports progress as each range lands", async () => {
+		const { s3 } = source(new Uint8Array(300));
+		const progress: number[] = [];
+		await downloadSource(
+			s3,
+			"k",
+			join(mkdtempSync(join(tmpdir(), "rf-dl-")), "source"),
+			{
+				piece: 100,
+				concurrency: 1,
+				onProgress: (bytes) => progress.push(bytes),
+			},
+		);
+		expect(progress).toEqual([100, 200, 300]);
+	});
+
+	test("refuses a short read", async () => {
+		const bucket = memoryBucket("bucket", {
+			before: (request) =>
+				request.method === "GET"
+					? new Response(new Uint8Array(10), { status: 206 })
+					: undefined,
+		});
+		bucket.objects.set("k", { body: new Uint8Array(100), contentType: null });
+		const path = join(mkdtempSync(join(tmpdir(), "rf-dl-")), "source");
+		await expect(
+			downloadSource(localS3(bucket.handle), "k", path),
+		).rejects.toThrow("short read");
 	});
 });

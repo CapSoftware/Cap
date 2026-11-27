@@ -334,6 +334,8 @@ impl MatrixPipelines {
 pub struct YuvConverterPipelines {
     nv12: MatrixPipelines,
     yuv420p: MatrixPipelines,
+    #[cfg(target_arch = "wasm32")]
+    pub browser_nv12_pipelines: [[wgpu::ComputePipeline; 2]; 2],
     pub nv12_bind_group_layout: wgpu::BindGroupLayout,
     pub yuv420p_bind_group_layout: wgpu::BindGroupLayout,
 }
@@ -453,6 +455,34 @@ impl YuvConverterPipelines {
                 push_constant_ranges: &[],
             });
 
+        #[cfg(target_arch = "wasm32")]
+        let browser_nv12_pipelines = {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Browser NV12 to RGBA Converter"),
+                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                    "shaders/browser_nv12_to_rgba.wgsl"
+                ))),
+            });
+            [0.0, 1.0].map(|full_range| {
+                [0.0, 1.0].map(|smooth_chroma| {
+                    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Browser NV12 Converter Pipeline"),
+                        layout: Some(&nv12_pipeline_layout),
+                        module: &module,
+                        entry_point: Some("main"),
+                        compilation_options: wgpu::PipelineCompilationOptions {
+                            constants: &[
+                                ("FULL_RANGE", full_range),
+                                ("SMOOTH_CHROMA", smooth_chroma),
+                            ],
+                            ..Default::default()
+                        },
+                        cache: None,
+                    })
+                })
+            })
+        };
+
         let nv12 = MatrixPipelines::new(
             device,
             "NV12 Converter Pipeline",
@@ -472,6 +502,8 @@ impl YuvConverterPipelines {
         Self {
             nv12,
             yuv420p,
+            #[cfg(target_arch = "wasm32")]
+            browser_nv12_pipelines,
             nv12_bind_group_layout,
             yuv420p_bind_group_layout,
         }
@@ -553,6 +585,8 @@ pub struct YuvToRgbaConverter {
     d3d11_interop: D3D11WgpuInterop,
     #[cfg(target_os = "linux")]
     cuda_staging: Option<crate::linux_gpu::SharedRing>,
+    #[cfg(target_arch = "wasm32")]
+    browser_nv12: crate::decoder::BrowserNv12,
 }
 
 impl YuvToRgbaConverter {
@@ -624,7 +658,14 @@ impl YuvToRgbaConverter {
             d3d11_interop: D3D11WgpuInterop::new(),
             #[cfg(target_os = "linux")]
             cuda_staging: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_nv12: Default::default(),
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_browser_nv12(&mut self, nv12: crate::decoder::BrowserNv12) {
+        self.browser_nv12 = nv12;
     }
 
     /// NV12 straight from NVDEC: device-to-device into a Vulkan-shared
@@ -1036,6 +1077,12 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 Conversion Pass"),
                 ..Default::default()
             });
+            #[cfg(target_arch = "wasm32")]
+            compute_pass.set_pipeline(
+                &self.pipelines.browser_nv12_pipelines[usize::from(self.browser_nv12.full_range)]
+                    [usize::from(self.browser_nv12.smooth_chroma)],
+            );
+            #[cfg(not(target_arch = "wasm32"))]
             compute_pass.set_pipeline(self.pipelines.nv12.get(self.matrix));
             compute_pass.set_bind_group(0, bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
@@ -1122,6 +1169,12 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 Conversion Pass (Batched)"),
                 ..Default::default()
             });
+            #[cfg(target_arch = "wasm32")]
+            compute_pass.set_pipeline(
+                &self.pipelines.browser_nv12_pipelines[usize::from(self.browser_nv12.full_range)]
+                    [usize::from(self.browser_nv12.smooth_chroma)],
+            );
+            #[cfg(not(target_arch = "wasm32"))]
             compute_pass.set_pipeline(self.pipelines.nv12.get(self.matrix));
             compute_pass.set_bind_group(0, bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);

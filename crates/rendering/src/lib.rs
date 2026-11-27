@@ -1,3 +1,7 @@
+// Native-only export and decoder code is compiled out of the browser build,
+// which leaves some shared helpers unused there.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
+
 use anyhow::Result;
 use cap_project::{
     AspectRatio, Camera, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets,
@@ -10,6 +14,7 @@ use core::f64;
 use cursor_interpolation::{
     InterpolatedCursorPosition, interpolate_cursor, interpolate_cursor_with_click_spring,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 #[cfg(target_os = "macos")]
 use frame_pipeline::finish_encoder_bgra_surface;
@@ -17,24 +22,25 @@ use frame_pipeline::{
     NV12BufferPool, RenderSession, finish_encoder_nv12_pooled, finish_encoder_timed,
     flush_pending_readback,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use futures::future::OptionFuture;
 use layers::{
     BackgroundLayer, BlurLayer, Camera3DBlurKind, Camera3DLayer, CameraLayer, ClickRippleLayer,
     ColorGradeLayer, CursorLayer, DisplayLayer, FrameLayer, MaskLayer, NotchLayer, NotchUniforms,
     ShapeLayer,
 };
+use platform::{Instant, sleep};
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::{
-    path::{Path, PathBuf},
-    time::Instant,
-};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc;
 
+mod audio_levels;
 pub mod audio_visualizer;
 pub mod camera3d;
 pub mod camera_picture;
@@ -54,10 +60,13 @@ pub mod iosurface_texture;
 mod layers;
 #[cfg(target_os = "linux")]
 pub mod linux_gpu;
+#[cfg(not(target_arch = "wasm32"))]
 mod managed_segment;
 mod mask;
 pub mod notch_shape;
 mod overlay_layers;
+mod platform;
+#[cfg(not(target_arch = "wasm32"))]
 mod project_recordings;
 mod readiness;
 mod recorded_cursor_assets;
@@ -66,7 +75,7 @@ pub mod screen_enhance;
 #[cfg(test)]
 mod screen_enhance_render_tests;
 mod screen_upscale_net;
-mod segment_timing;
+pub mod segment_timing;
 mod shape;
 pub mod spring_mass_damper;
 mod takeover;
@@ -78,6 +87,7 @@ pub mod yuv_converter;
 mod zoom;
 mod zoom_spring;
 
+pub use audio_levels::*;
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
 #[cfg(target_os = "macos")]
@@ -88,16 +98,22 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 #[cfg(target_os = "macos")]
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
+#[cfg(target_arch = "wasm32")]
+pub use layers::register_browser_font;
 pub use layers::{
     BackgroundTextureCache, CaptionFrameBox, clean_background_path, last_caption_center,
     new_font_system,
 };
+#[cfg(not(target_arch = "wasm32"))]
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
     ManagedSegmentVideoError, ManagedSegmentVideoExit, ManagedSegmentVideoInput,
     ManagedVideoTrackInput,
 };
 use overlay_layers::OverlayLayers;
+#[cfg(target_arch = "wasm32")]
+pub use platform::{browser_assets, browser_sleep};
+#[cfg(not(target_arch = "wasm32"))]
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 pub use recorded_cursor_assets::{FrozenCursorAssetError, FrozenRecordedCursorAssets};
 pub use screen_enhance::{RenderQuality, ScreenEnhanceFrame};
@@ -120,6 +136,7 @@ pub fn prewarm_fonts() {
 /// driver finishing each pipeline the first time it draws (the first preview
 /// of the first editor took ~50 ms longer than any later one); building
 /// `layers` and drawing once off the hot path moves both costs there.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn prewarm_first_frame(
     shared: SharedWgpuDevice,
     layers: &mut RendererLayers,
@@ -549,6 +566,7 @@ pub struct PreparedMask {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg(not(target_arch = "wasm32"))]
 enum FrameFetch {
     Playback,
     PlaybackInitial,
@@ -556,6 +574,7 @@ enum FrameFetch {
     Export { initial: bool },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl FrameFetch {
     async fn frame(
         self,
@@ -571,6 +590,7 @@ impl FrameFetch {
 }
 
 #[derive(Clone)]
+#[cfg(not(target_arch = "wasm32"))]
 pub struct RecordingSegmentDecoders {
     screen: AsyncVideoDecoderHandle,
     camera: Option<AsyncVideoDecoderHandle>,
@@ -589,12 +609,14 @@ pub fn source_video_path(display: &Path) -> PathBuf {
 
 /// The screen reader for a segment's kept source video, opened on first use
 /// so a session that only plays, scrubs or exports never pays for it.
+#[cfg(not(target_arch = "wasm32"))]
 struct SourceVideo {
     source: DecoderSource,
     force_ffmpeg: bool,
     decoder: tokio::sync::OnceCell<Option<AsyncVideoDecoderHandle>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl SourceVideo {
     fn find(display: &DecoderSource, force_ffmpeg: bool) -> Option<Arc<Self>> {
         if display.path.file_name() != Some(std::ffi::OsStr::new("display.mp4")) {
@@ -641,6 +663,7 @@ impl SourceVideo {
 /// FFmpeg and Media Foundation readers each hold one position, so two sides
 /// read through one reader take each other's frames or seek every frame.
 /// The AVAssetReader pool opens readers per position itself and is shared.
+#[cfg(not(target_arch = "wasm32"))]
 struct TransitionSideDecoders {
     screen: DecoderSource,
     camera: Option<DecoderSource>,
@@ -649,12 +672,14 @@ struct TransitionSideDecoders {
 }
 
 #[derive(Clone)]
+#[cfg(not(target_arch = "wasm32"))]
 struct DecoderSource {
     path: PathBuf,
     fps: u32,
     offset: f64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn spawn_screen_decoder(
     source: DecoderSource,
     force_ffmpeg: bool,
@@ -671,6 +696,7 @@ async fn spawn_screen_decoder(
     .map_err(|e| format!("Screen:{e}"))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn spawn_camera_decoder(
     source: DecoderSource,
     force_ffmpeg: bool,
@@ -687,6 +713,7 @@ async fn spawn_camera_decoder(
     .map_err(|e| format!("Camera:{e}"))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn serves_two_positions(decoder: &AsyncVideoDecoderHandle) -> bool {
     #[cfg(target_os = "macos")]
     if decoder.decoder_status().decoder_type == decoder::DecoderType::AVAssetReader {
@@ -696,14 +723,18 @@ fn serves_two_positions(decoder: &AsyncVideoDecoderHandle) -> bool {
     false
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const SCREEN_MAX_FALLBACK_DISTANCE: u32 = 4;
+#[cfg(not(target_arch = "wasm32"))]
 const CAMERA_MAX_FALLBACK_DISTANCE: u32 = 2;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct SegmentVideoPaths {
     pub display: PathBuf,
     pub camera: Option<PathBuf>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl RecordingSegmentDecoders {
     pub async fn new(
         _recording_meta: &RecordingMeta,
@@ -1054,8 +1085,10 @@ pub enum RenderingError {
     )]
     ReadbackAllocationFailed { frame_number: u32 },
     #[error("Sending frame to channel failed")]
+    #[cfg(not(target_arch = "wasm32"))]
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
     #[error("Sending NV12 frame to channel failed")]
+    #[cfg(not(target_arch = "wasm32"))]
     ChannelSendNv12FrameFailed(#[from] mpsc::error::SendError<(Nv12RenderedFrame, u32)>),
     #[error("Failed to load image: {0}")]
     ImageLoadError(String),
@@ -1089,6 +1122,7 @@ pub enum RenderingError {
     ExportFrameLost { frame_number: u32 },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct RenderSegment {
     pub cursor: Arc<CursorEvents>,
     pub hover_changes: Arc<HoverChanges>,
@@ -1097,6 +1131,7 @@ pub struct RenderSegment {
     pub render_display: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn validate_timeline(
     project: &ProjectConfiguration,
     available: usize,
@@ -1132,6 +1167,7 @@ fn validate_timeline(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn render_video_to_channel(
     constants: &RenderVideoConstants,
     project: &ProjectConfiguration,
@@ -1655,10 +1691,13 @@ pub mod loop_stats {
 /// next render with the same key on the same device. Layers cache per-project
 /// assets (cursor images, backgrounds) under ids that are only unique within
 /// a recording, so they are never shared across keys.
+#[cfg(not(target_arch = "wasm32"))]
 static LAYERS_REUSE_KEY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+#[cfg(not(target_arch = "wasm32"))]
 static LAYERS_POOL: std::sync::Mutex<Vec<(wgpu::Device, String, RendererLayers)>> =
     std::sync::Mutex::new(Vec::new());
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn set_layers_reuse_key(key: Option<String>) {
     if let Ok(mut current) = LAYERS_REUSE_KEY.lock() {
         *current = key;
@@ -1667,8 +1706,10 @@ pub fn set_layers_reuse_key(key: Option<String>) {
 
 /// Key of never-used layers: they hold no project state, so any project
 /// may take them.
+#[cfg(not(target_arch = "wasm32"))]
 const SPARE_LAYERS: &str = "\0spare";
 
+#[cfg(not(target_arch = "wasm32"))]
 fn take_pooled_layers(device: &wgpu::Device, key: &str) -> Option<RendererLayers> {
     let mut pool = LAYERS_POOL.lock().ok()?;
     // Layers for other projects will not be asked for again.
@@ -1682,6 +1723,7 @@ fn take_pooled_layers(device: &wgpu::Device, key: &str) -> Option<RendererLayers
 
 /// Builds a fresh set of layers for the next project's first render, off
 /// its critical path (an idle engine calls this between tasks).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn prebuild_spare_layers(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -1698,6 +1740,7 @@ pub fn prebuild_spare_layers(
     return_pooled_layers(device.clone(), SPARE_LAYERS.to_string(), layers);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn return_pooled_layers(device: wgpu::Device, key: String, layers: RendererLayers) {
     if let Ok(mut pool) = LAYERS_POOL.lock() {
         pool.push((device, key, layers));
@@ -1705,6 +1748,7 @@ fn return_pooled_layers(device: wgpu::Device, key: String, layers: RendererLayer
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn render_video_to_channel_nv12(
     constants: &RenderVideoConstants,
     project: &ProjectConfiguration,
@@ -2377,6 +2421,7 @@ pub async fn render_video_to_channel_nv12(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 type PrefetchedDecode = (
     u32,
     f64,
@@ -2385,6 +2430,7 @@ type PrefetchedDecode = (
 );
 
 /// A frame the offline export loops send to the encoder.
+#[cfg(not(target_arch = "wasm32"))]
 trait ExportFrame: Sized {
     fn frame_number(&self) -> u32;
     /// A copy of this picture shown at `frame_number`, for a frame that has
@@ -2392,6 +2438,7 @@ trait ExportFrame: Sized {
     fn held_as(&self, frame_number: u32, fps: u32) -> Self;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ExportFrame for RenderedFrame {
     fn frame_number(&self) -> u32 {
         self.frame_number
@@ -2405,6 +2452,7 @@ impl ExportFrame for RenderedFrame {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ExportFrame for Nv12RenderedFrame {
     fn frame_number(&self) -> u32 {
         self.frame_number
@@ -2424,8 +2472,10 @@ impl ExportFrame for Nv12RenderedFrame {
 /// (a session reset after a readback failure) stops the export instead of
 /// leaving a gap or shifting every later timestamp.
 #[derive(Debug, Default)]
+#[cfg(not(target_arch = "wasm32"))]
 struct InFlightFrame(Option<u32>);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl InFlightFrame {
     fn rendered(&mut self, submitted: u32, returned: Option<u32>) -> Result<(), RenderingError> {
         let expected = self.0.replace(submitted);
@@ -2469,6 +2519,7 @@ impl InFlightFrame {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct TransitionExportContext<'a> {
     constants: &'a RenderVideoConstants,
     project: &'a Arc<ProjectConfiguration>,
@@ -2482,6 +2533,7 @@ struct TransitionExportContext<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(not(target_arch = "wasm32"))]
 async fn decode_transition_outgoing_frames(
     project: &ProjectConfiguration,
     render_segments: &[RenderSegment],
@@ -2516,6 +2568,7 @@ async fn decode_transition_outgoing_frames(
     .await
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn render_transition_rgba(
     context: TransitionExportContext<'_>,
     frame_renderer: &mut FrameRenderer<'_>,
@@ -2576,6 +2629,7 @@ async fn render_transition_rgba(
         .await
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn render_transition_nv12_export(
     context: TransitionExportContext<'_>,
     frame_renderer: &mut FrameRenderer<'_>,
@@ -2636,11 +2690,16 @@ async fn render_transition_nv12_export(
         .await
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const DECODE_MAX_RETRIES_INITIAL: u32 = 5;
+#[cfg(not(target_arch = "wasm32"))]
 const DECODE_MAX_RETRIES_STEADY: u32 = 2;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_INITIAL_CONSECUTIVE_FAILURES: u32 = 8;
+#[cfg(not(target_arch = "wasm32"))]
 const INITIAL_FRAME_BACKTRACK_FRAMES: [u32; 12] = [1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128];
 
+#[cfg(not(target_arch = "wasm32"))]
 fn initial_decode_recovery_times(segment_time: f32, fps: u32) -> Vec<f32> {
     if segment_time <= 0.0 || fps == 0 {
         return Vec::new();
@@ -2655,6 +2714,7 @@ fn initial_decode_recovery_times(segment_time: f32, fps: u32) -> Vec<f32> {
         .collect()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn recover_initial_frames_with_backtrack(
     decoders: &RecordingSegmentDecoders,
     segment_time: f64,
@@ -2707,6 +2767,7 @@ async fn recover_initial_frames_with_backtrack(
 /// `EXPORT_STALL_LIMIT`); retries and `Ok(None)` are only for requests the
 /// decoder answered without a frame.
 #[allow(clippy::too_many_arguments)]
+#[cfg(not(target_arch = "wasm32"))]
 async fn decode_segment_frames_with_retry(
     decoders: &RecordingSegmentDecoders,
     segment_time: f64,
@@ -2779,6 +2840,7 @@ async fn decode_segment_frames_with_retry(
     Ok(result)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn get_duration(
     recordings: &ProjectRecordingsMeta,
     recording_meta: &RecordingMeta,
@@ -2824,6 +2886,7 @@ pub struct RenderVideoConstants {
     /// Loudness envelope an audio-only recording's visualiser draws from. Set
     /// once it is computed; until then the visualiser rests flat.
     audio_levels: std::sync::RwLock<Option<Arc<AudioLevels>>>,
+    pub waveform_levels: AudioLevelStore,
 }
 
 /// Instance, adapter and device the way every renderer creates them. A
@@ -3067,6 +3130,7 @@ impl RenderVideoConstants {
             .and_then(FrozenRecordedCursorAssets::first_error)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new_with_device(
         shared: SharedWgpuDevice,
         segments: &[SegmentRecordings],
@@ -3105,6 +3169,7 @@ impl RenderVideoConstants {
             project_styles: ProjectStyleCache::default(),
             camera_picture: Default::default(),
             audio_levels: Default::default(),
+            waveform_levels: AudioLevelStore::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         })
@@ -3138,11 +3203,13 @@ impl RenderVideoConstants {
             project_styles: ProjectStyleCache::default(),
             camera_picture: Default::default(),
             audio_levels: Default::default(),
+            waveform_levels: AudioLevelStore::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn new(
         segments: &[SegmentRecordings],
         recording_meta: RecordingMeta,
@@ -3166,6 +3233,7 @@ impl RenderVideoConstants {
     /// of probed from segment videos -- the still-image path (screenshot
     /// editors), where there is no `SegmentRecordings` to measure and the
     /// alpha channel must survive (`preserve_screen_alpha`).
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn new_with_options(
         options: RenderOptions,
         recording_meta: RecordingMeta,
@@ -3202,6 +3270,7 @@ impl RenderVideoConstants {
             project_styles: ProjectStyleCache::default(),
             camera_picture: Default::default(),
             audio_levels: Default::default(),
+            waveform_levels: AudioLevelStore::default(),
             is_software_adapter,
             adapter_name,
         })
@@ -7291,6 +7360,7 @@ mod style_image_tests {
             project_styles: ProjectStyleCache::default(),
             camera_picture: Default::default(),
             audio_levels: Default::default(),
+            waveform_levels: AudioLevelStore::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: false,
         };
@@ -7690,6 +7760,7 @@ mod export_order_tests {
             project_styles: ProjectStyleCache::default(),
             camera_picture: Default::default(),
             audio_levels: Default::default(),
+            waveform_levels: AudioLevelStore::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: is_software_adapter || software_path,
         })
@@ -8031,6 +8102,7 @@ mod nv12_flush_tests {
             project_styles: ProjectStyleCache::default(),
             camera_picture: Default::default(),
             audio_levels: Default::default(),
+            waveform_levels: AudioLevelStore::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter,
         })
@@ -8379,8 +8451,7 @@ impl<'a> FrameRenderer<'a> {
                     "Retrying frame render after GPU error"
                 );
                 self.reset_session();
-                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
-                    .await;
+                sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1))).await;
             }
 
             let session = self.session.get_or_insert_with(|| {
@@ -8458,8 +8529,7 @@ impl<'a> FrameRenderer<'a> {
                     "Retrying transition frame render after GPU error"
                 );
                 self.reset_session();
-                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
-                    .await;
+                sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1))).await;
             }
 
             let session = self.session.get_or_insert_with(|| {
@@ -8581,6 +8651,99 @@ impl<'a> FrameRenderer<'a> {
         Ok((frame, timings))
     }
 
+    pub async fn render_and_present(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        render_display: bool,
+        layers: &mut RendererLayers,
+        present: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Texture, &wgpu::TextureView),
+    ) -> Result<(), RenderingError> {
+        let constants = self.constants;
+        let session = self.session.get_or_insert_with(|| {
+            RenderSession::new(
+                &constants.device,
+                uniforms.output_size.0,
+                uniforms.output_size.1,
+            )
+        });
+        session.update_texture_size(
+            &constants.device,
+            uniforms.output_size.0,
+            uniforms.output_size.1,
+        );
+        let mut encoder =
+            constants
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Present Render Encoder"),
+                });
+        layers
+            .prepare_with_encoder(
+                constants,
+                &uniforms,
+                &segment_frames,
+                cursor,
+                &mut encoder,
+                render_display,
+            )
+            .await?;
+        layers.render(
+            &constants.device,
+            &constants.queue,
+            &mut encoder,
+            session,
+            &uniforms,
+            render_display,
+        )?;
+        present(
+            &mut encoder,
+            session.current_texture(),
+            session.current_texture_view(),
+        );
+        constants.queue.submit(std::iter::once(encoder.finish()));
+        Ok(())
+    }
+
+    pub async fn render_transition_and_present(
+        &mut self,
+        outgoing: TransitionRenderInput<'_>,
+        incoming: TransitionRenderInput<'_>,
+        kind: ClipTransitionType,
+        progress: f32,
+        layers: &mut RendererLayers,
+        present: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Texture, &wgpu::TextureView),
+    ) -> Result<(), RenderingError> {
+        let constants = self.constants;
+        let (width, height) = incoming.uniforms.output_size;
+        let session = self
+            .session
+            .get_or_insert_with(|| RenderSession::new(&constants.device, width, height));
+        session.update_texture_size(&constants.device, width, height);
+        let compositor = self
+            .transition_compositor
+            .get_or_insert_with(|| TransitionCompositor::new(&constants.device));
+        compositor.ensure_size(&constants.device, width, height);
+        let mut encoder = produce_transition_texture(
+            constants,
+            &outgoing,
+            &incoming,
+            (kind, progress),
+            layers,
+            session,
+            compositor,
+        )
+        .await?;
+        present(
+            &mut encoder,
+            session.current_texture(),
+            session.current_texture_view(),
+        );
+        constants.queue.submit(std::iter::once(encoder.finish()));
+        Ok(())
+    }
+
     pub async fn flush_pipeline(&mut self) -> Option<Result<RenderedFrame, RenderingError>> {
         if let Some(session) = &mut self.session {
             flush_pending_readback(session, &self.constants.device).await
@@ -8628,8 +8791,7 @@ impl<'a> FrameRenderer<'a> {
                     "Retrying BGRA surface frame render after GPU error"
                 );
                 self.reset_session();
-                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
-                    .await;
+                sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1))).await;
             }
             if self.bgra_surface_converter.is_none() {
                 self.bgra_surface_converter =
@@ -8767,8 +8929,7 @@ impl<'a> FrameRenderer<'a> {
                 );
                 self.reset_session();
                 self.nv12_converter = None;
-                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
-                    .await;
+                sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1))).await;
             }
 
             if self.nv12_converter.is_none() {
@@ -8854,8 +9015,7 @@ impl<'a> FrameRenderer<'a> {
                     "Retrying BGRA surface transition frame after GPU error"
                 );
                 self.reset_session();
-                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
-                    .await;
+                sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1))).await;
             }
             if self.bgra_surface_converter.is_none() {
                 self.bgra_surface_converter =
@@ -9009,8 +9169,7 @@ impl<'a> FrameRenderer<'a> {
                 );
                 self.reset_session();
                 self.nv12_converter = None;
-                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
-                    .await;
+                sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1))).await;
             }
 
             if self.nv12_converter.is_none() {
@@ -9120,10 +9279,34 @@ pub struct RendererLayers {
     split_layer_passes: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::thread::scope as layer_scope;
+
+#[cfg(not(target_arch = "wasm32"))]
 fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
     handle
         .join()
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn layer_scope<R>(build: impl FnOnce(&InlineScope) -> R) -> R {
+    build(&InlineScope)
+}
+
+#[cfg(target_arch = "wasm32")]
+struct InlineScope;
+
+#[cfg(target_arch = "wasm32")]
+impl InlineScope {
+    fn spawn<T>(&self, build: impl FnOnce() -> T) -> T {
+        build()
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn join_layer<T>(layer: T) -> T {
+    layer
 }
 
 impl RendererLayers {
@@ -9193,7 +9376,7 @@ impl RendererLayers {
         // Each layer compiles its own shaders and pipelines, and none reads
         // another's, so they build side by side; only the layers that share
         // the YUV and composite pipelines wait for those.
-        let layers = std::thread::scope(|scope| {
+        let layers = layer_scope(|scope| {
             let background = scope
                 .spawn(|| readiness::measure("layers.background", || BackgroundLayer::new(device)));
             let background_blur = scope
@@ -9491,7 +9674,7 @@ impl RendererLayers {
         self.background_color_grade
             .prepare(&constants.queue, uniforms);
 
-        if render_display {
+        if render_display && !uniforms.project.hide_display {
             self.frame.prepare(constants, uniforms);
             self.notch
                 .prepare(&constants.device, &constants.queue, uniforms.notch);
@@ -9575,6 +9758,7 @@ impl RendererLayers {
                 uniforms.output_size,
                 &uniforms.shapes,
             );
+            overlays.waveforms.prepare(constants, uniforms);
 
             if !uniforms.project.has_overlay_order() {
                 overlays.text.prepare(
@@ -9662,7 +9846,7 @@ impl RendererLayers {
         timings.background_blur_prepare_duration = start.elapsed();
 
         let start = Instant::now();
-        if render_display {
+        if render_display && !uniforms.project.hide_display {
             self.frame.prepare(constants, uniforms);
             self.notch
                 .prepare(&constants.device, &constants.queue, uniforms.notch);
@@ -9768,6 +9952,7 @@ impl RendererLayers {
                 uniforms.output_size,
                 &uniforms.shapes,
             );
+            overlays.waveforms.prepare(constants, uniforms);
 
             if !uniforms.project.has_overlay_order() {
                 overlays.text.prepare(
@@ -9866,6 +10051,9 @@ impl RendererLayers {
                 OverlayTrackKind::Shape => {
                     overlay_below |= overlays.shapes.has_track(overlay.track)
                 }
+                OverlayTrackKind::Waveform => {
+                    overlay_below |= overlays.waveforms.has_track(overlay.track)
+                }
                 OverlayTrackKind::Mask => {
                     if overlay_below
                         && uniforms
@@ -9903,7 +10091,7 @@ impl RendererLayers {
         }
 
         if parts.content {
-            if render_display {
+            if render_display && !uniforms.project.hide_display {
                 self.display.copy_to_texture(encoder);
                 self.display.encode_enhancement(device, queue, encoder);
             }
@@ -10031,14 +10219,15 @@ impl RendererLayers {
         let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
         let load = wgpu::LoadOp::Load;
 
-        let should_render_screen = render_display
+        let display_visible = render_display && !uniforms.project.hide_display;
+        let should_render_screen = display_visible
             && uniforms.scene.should_render_screen()
             // A fully-faded card (e.g. a held Fullscreen text takeover) draws
             // nothing visible; skip the pass entirely.
             && uniforms.display.opacity > 0.001
             && self.display.has_valid_frame();
         let should_render_cursor = if render_display {
-            uniforms.scene.should_render_screen()
+            display_visible && uniforms.scene.should_render_screen()
         } else {
             true
         };
@@ -10171,6 +10360,12 @@ impl RendererLayers {
                         .render(passes.pass(session.current_texture_view(), load));
                 }
 
+                if overlays.waveforms.has_content() {
+                    overlays
+                        .waveforms
+                        .render(passes.pass(session.current_texture_view(), load));
+                }
+
                 if !uniforms.texts.is_empty() {
                     overlays
                         .text
@@ -10216,10 +10411,19 @@ impl RendererLayers {
                             overlay.track,
                         );
                     }
+                    OverlayTrackKind::Waveform
+                        if parts.overlays && overlays.waveforms.has_track(overlay.track) =>
+                    {
+                        overlays.waveforms.render_track(
+                            passes.pass(session.current_texture_view(), load),
+                            overlay.track,
+                        );
+                    }
                     OverlayTrackKind::Mask
                     | OverlayTrackKind::Text
                     | OverlayTrackKind::Image
-                    | OverlayTrackKind::Shape => {}
+                    | OverlayTrackKind::Shape
+                    | OverlayTrackKind::Waveform => {}
                 }
             }
         }

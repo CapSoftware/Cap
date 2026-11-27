@@ -7,6 +7,7 @@ pub mod mp4;
 pub mod preview;
 pub mod settings;
 pub mod tracks;
+pub mod web_project;
 
 use cap_editor::{ExportAudioPreparation, ExportAudioRenderer, SegmentMedia};
 use cap_project::{
@@ -284,6 +285,8 @@ impl ExporterBuilder {
             }
         }
 
+        cap_editor::load_waveform_levels(&render_constants, &project_config, &segments).await;
+
         Ok(ExporterBase {
             output_path,
             studio_meta: studio_meta.clone(),
@@ -390,6 +393,7 @@ pub fn synthesize_default_timeline(
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
             camera3d_segments: Vec::new(),
+            waveform_segments: Vec::new(),
         });
     }
 }

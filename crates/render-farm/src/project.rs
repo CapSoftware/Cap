@@ -16,6 +16,96 @@ pub const MAX_SOURCE_SIDE: u32 = 16_384;
 /// `max_pixels`, up to `(width + 63) * (height + 15)` for an accepted source.
 pub const DECODE_MAX_PIXELS: i64 = MAX_SOURCE_PIXELS as i64 + 80 * MAX_SOURCE_SIDE as i64 + 1024;
 
+/// Longest source or edit a cloud export reads: 5M frames at 60 fps, the
+/// coordinator's own index limit. Declared lengths size the probe's spans and
+/// each audio track's buffer, and uploads declare whatever they like.
+pub const MAX_SOURCE_SECONDS: f64 = 5_000_000.0 / 60.0;
+/// Fewest bytes a second of recorded audio can take. Encoded silence is the
+/// smallest audio there is: 150 bytes a second for Opus in Ogg with 120 ms
+/// frames, 240 for Chrome's 60 ms Opus in WebM, 380 for AAC, 1000 for MP3. A
+/// file that declares more seconds than this allows misstates its length.
+pub const MIN_AUDIO_BYTES_PER_SECOND: f64 = 16.0;
+pub const MAX_AUDIO_SAMPLE_RATE: u32 = 768_000;
+pub const MAX_AUDIO_CHANNELS: u16 = 64;
+
+/// A probed length the engine can rely on. Browser WebM carries none, and
+/// probing it gives a negative one.
+pub fn usable_duration(duration: f64) -> Option<f64> {
+    (duration.is_finite() && duration > 0.0).then_some(duration)
+}
+
+fn check_video_duration(kind: &str, clip: usize, video: &Video) -> Result<()> {
+    if video.duration.is_nan() || video.duration > MAX_SOURCE_SECONDS {
+        bail!(
+            "the {kind} video of clip {} declares {:.0} s, longer than cloud export supports ({MAX_SOURCE_SECONDS:.0} s)",
+            clip + 1,
+            video.duration
+        );
+    }
+    Ok(())
+}
+
+/// `probed` is the file's sample rate, channel count and declared length.
+fn check_audio_source(kind: &str, clip: usize, probed: (u32, u16, f64), path: &Path) -> Result<()> {
+    let (sample_rate, channels, duration) = probed;
+    if sample_rate > MAX_AUDIO_SAMPLE_RATE || channels > MAX_AUDIO_CHANNELS {
+        bail!(
+            "the {kind} audio of clip {} is {sample_rate} Hz with {channels} channels, more than cloud export supports ({MAX_AUDIO_SAMPLE_RATE} Hz, {MAX_AUDIO_CHANNELS} channels)",
+            clip + 1
+        );
+    }
+    let Some(duration) = usable_duration(duration) else {
+        return Ok(());
+    };
+    if duration > MAX_SOURCE_SECONDS {
+        bail!(
+            "the {kind} audio of clip {} declares {duration:.0} s, longer than cloud export supports ({MAX_SOURCE_SECONDS:.0} s)",
+            clip + 1
+        );
+    }
+    let bytes = std::fs::metadata(path)
+        .with_context(|| format!("{kind} audio of clip {}", clip + 1))?
+        .len();
+    if duration * MIN_AUDIO_BYTES_PER_SECOND > bytes as f64 {
+        bail!(
+            "the {kind} audio of clip {} declares {duration:.0} s in {bytes} bytes, more than the file can hold",
+            clip + 1
+        );
+    }
+    Ok(())
+}
+
+/// Each clip's mic and system audio files, in recording order.
+pub fn audio_tracks(
+    recording_meta: &RecordingMeta,
+    studio_meta: &StudioRecordingMeta,
+) -> Vec<(Option<PathBuf>, Option<PathBuf>)> {
+    match studio_meta {
+        StudioRecordingMeta::SingleSegment { segment } => vec![(
+            segment
+                .audio
+                .as_ref()
+                .map(|audio| recording_meta.path(&audio.path)),
+            None,
+        )],
+        StudioRecordingMeta::MultipleSegments { inner } => inner
+            .segments
+            .iter()
+            .map(|segment| {
+                (
+                    segment
+                        .mic
+                        .as_ref()
+                        .map(|audio| recording_meta.path(&audio.path)),
+                    segment
+                        .usable_system_audio()
+                        .map(|audio| recording_meta.path(&audio.path)),
+                )
+            })
+            .collect(),
+    }
+}
+
 fn check_source_size(kind: &str, clip: usize, video: &Video) -> Result<()> {
     let pixels = u64::from(video.width) * u64::from(video.height);
     if pixels > MAX_SOURCE_PIXELS || video.width.max(video.height) > MAX_SOURCE_SIDE {
@@ -54,10 +144,27 @@ impl LoadedProject {
             ProjectRecordingsMeta::new(&recording_meta.project_path, &studio_meta)
                 .map_err(|error| anyhow!("recordings: {error}"))?,
         );
+        let tracks = audio_tracks(&recording_meta, &studio_meta);
         for (clip, segment) in recordings.segments.iter().enumerate() {
             check_source_size("screen", clip, &segment.display)?;
+            check_video_duration("screen", clip, &segment.display)?;
             if let Some(camera) = &segment.camera {
                 check_source_size("camera", clip, camera)?;
+                check_video_duration("camera", clip, camera)?;
+            }
+            let (mic_path, system_path) = tracks.get(clip).cloned().unwrap_or_default();
+            for (kind, audio, path) in [
+                ("mic", segment.mic.as_ref(), mic_path),
+                ("system", segment.system_audio.as_ref(), system_path),
+            ] {
+                if let (Some(audio), Some(path)) = (audio, path) {
+                    check_audio_source(
+                        kind,
+                        clip,
+                        (audio.sample_rate, audio.channels, audio.duration),
+                        &path,
+                    )?;
+                }
             }
         }
         cap_export::synthesize_default_timeline(&mut config, &recordings);
@@ -77,13 +184,20 @@ impl LoadedProject {
                 .map(|segment| segment.display.duration)
                 .collect::<Vec<_>>(),
         );
-        Ok(Self {
+        let project = Self {
             path: path.to_path_buf(),
             config,
             recording_meta,
             studio_meta,
             recordings,
-        })
+        };
+        let duration = project.duration();
+        if duration.is_nan() || duration > MAX_SOURCE_SECONDS {
+            bail!(
+                "the edited project is {duration:.0} s long, longer than cloud export supports ({MAX_SOURCE_SECONDS:.0} s)"
+            );
+        }
+        Ok(project)
     }
 
     pub fn duration(&self) -> f64 {
@@ -259,6 +373,7 @@ mod tests {
                 image_segments: Vec::new(),
                 shape_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
+                waveform_segments: Vec::new(),
             }),
             ..Default::default()
         }

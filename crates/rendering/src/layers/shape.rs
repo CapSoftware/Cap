@@ -252,7 +252,7 @@ pub(crate) fn badge_label(shape: &PreparedShape) -> Option<PreparedText> {
 }
 
 pub struct ShapeLayer {
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Option<wgpu::RenderPipeline>,
     globals: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     instance_buffer: wgpu::Buffer,
@@ -262,6 +262,13 @@ pub struct ShapeLayer {
     labels: Option<TextLayer>,
     label_texts: Vec<PreparedText>,
     output_size: [f32; 2],
+}
+
+// The shape shader hands 32 flat components between stages. WebGL2 allows
+// 31, so a browser without WebGPU skips shapes instead of failing to build
+// the pipeline.
+fn shape_pipeline_supported(device: &wgpu::Device) -> bool {
+    !cfg!(target_arch = "wasm32") || device.limits().max_inter_stage_shader_components >= 32
 }
 
 impl ShapeLayer {
@@ -285,34 +292,36 @@ impl ShapeLayer {
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Shape overlay pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<ShapeInstance>() as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &INSTANCE_ATTRIBUTES,
-                }],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
+        let pipeline = shape_pipeline_supported(device).then(|| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Shape overlay pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<ShapeInstance>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &INSTANCE_ATTRIBUTES,
+                    }],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
         });
         let globals = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Shape overlay globals"),
@@ -412,7 +421,10 @@ impl ShapeLayer {
     }
 
     fn draw(&self, pass: &mut wgpu::RenderPass<'_>, range: Range<u32>) {
-        pass.set_pipeline(&self.pipeline);
+        let Some(pipeline) = &self.pipeline else {
+            return;
+        };
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
         pass.draw(0..6, range);

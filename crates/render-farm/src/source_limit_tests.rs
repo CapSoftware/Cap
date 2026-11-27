@@ -1,4 +1,4 @@
-use crate::{ProbeRequest, probe, video};
+use crate::{ProbeRequest, audio, probe, project::LoadedProject, video};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     path::{Path, PathBuf},
@@ -105,6 +105,53 @@ fn project_with_mic(display: &str, mic: Option<&str>) -> tempfile::TempDir {
     directory
 }
 
+/// A project of `display` and `mic` fixtures under their own extensions,
+/// edited down to its first `edit` seconds when one is given.
+fn project_from(display: &str, mic: Option<&str>, edit: Option<f64>) -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    let stage = |name: &str, role: &str| {
+        let staged = format!("{role}.{}", name.rsplit('.').next().unwrap());
+        std::fs::copy(fixture(name), directory.path().join(&staged)).unwrap();
+        staged
+    };
+    let mut meta = serde_json::json!({
+        "pretty_name": "Source limit",
+        "display": { "path": stage(display, "display"), "fps": 30 }
+    });
+    if let Some(mic) = mic {
+        meta["audio"] = serde_json::json!({ "path": stage(mic, "mic") });
+    }
+    let mut config = cap_project::ProjectConfiguration::default();
+    if let Some(end) = edit {
+        config.timeline = serde_json::from_value(serde_json::json!({
+            "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": end }],
+            "zoomSegments": []
+        }))
+        .unwrap();
+    }
+    std::fs::write(
+        directory.path().join("recording-meta.json"),
+        serde_json::to_vec(&meta).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("project-config.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    directory
+}
+
+fn audio_request(project: &Path, section: [i64; 2]) -> audio::AudioRequest {
+    audio::AudioRequest {
+        project: project.to_path_buf(),
+        fps: 30,
+        section,
+        preroll: 0,
+        out: project.join("section.aac"),
+    }
+}
+
 fn probe_request(project: &Path) -> ProbeRequest {
     ProbeRequest {
         project: project.to_path_buf(),
@@ -123,6 +170,7 @@ fn video_request(project: &Path, frames: [u32; 2]) -> video::VideoRequest {
         frames,
         threads: Some(2),
         out: project.join("chunk.h264"),
+        waveform_levels: None,
     }
 }
 
@@ -263,6 +311,26 @@ fn rss_case_child() {
                 .expect("opened a decoder for an 8192x8192 stream");
             assert!(error.contains("8192x8192"), "{error}");
         }
+        "probe-mic-ogg-100h" => {
+            let project = project_from("small.mp4", Some("mic-100h.ogg"), None);
+            report_outcome(runtime.block_on(probe(probe_request(project.path()))));
+        }
+        "audio-mic-ogg-100h" => {
+            let project = project_from("small.mp4", Some("mic-100h.ogg"), Some(1.0));
+            report_outcome(
+                runtime.block_on(audio::render(audio_request(project.path(), [0, 48_000]))),
+            );
+        }
+        "probe-display-webm-100h" => {
+            let project = project_from("display-100h.webm", None, None);
+            report_outcome(runtime.block_on(probe(probe_request(project.path()))));
+        }
+        "audio-webm-mic-on-20h-display" => {
+            let project = project_from("display-20h.webm", Some("mic-live.webm"), Some(1.0));
+            report_outcome(
+                runtime.block_on(audio::render(audio_request(project.path(), [0, 48_000]))),
+            );
+        }
         other => panic!("unknown case {other}"),
     }
     #[cfg(unix)]
@@ -270,10 +338,36 @@ fn rss_case_child() {
 }
 
 const RSS_PEAK: &str = "rss_peak=";
+const OUTCOME: &str = "outcome=";
 
-/// This process's own peak RSS, so no earlier child's peak can mask it.
+fn report_outcome<T>(result: anyhow::Result<T>) {
+    match result {
+        Ok(_) => println!("{OUTCOME}ok"),
+        Err(error) => println!("{OUTCOME}{error:#}"),
+    }
+}
+
+/// This process's own peak RSS, so no earlier child's peak can mask it. On
+/// Linux `ru_maxrss` keeps the spawning test process's peak across exec, so a
+/// case spawned while other tests ran reported their memory; VmHWM is the
+/// child's own.
 #[cfg(unix)]
 fn own_peak_rss() -> u64 {
+    #[cfg(target_os = "linux")]
+    if let Some(kilobytes) = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("VmHWM:"))?
+                .split_whitespace()
+                .next()?
+                .parse::<u64>()
+                .ok()
+        })
+    {
+        return kilobytes * 1024;
+    }
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
     assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) }, 0);
     let peak = usage.ru_maxrss as u64;
@@ -286,6 +380,12 @@ fn own_peak_rss() -> u64 {
 
 #[cfg(unix)]
 fn child_peak_rss(case: &str) -> u64 {
+    child_run(case).0
+}
+
+/// A case's own peak RSS, and its outcome when it reports one.
+#[cfg(unix)]
+fn child_run(case: &str) -> (u64, String) {
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "source_limit_tests::rss_case_child",
@@ -303,11 +403,17 @@ fn child_peak_rss(case: &str) -> u64 {
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    stdout
+    let peak = stdout
         .lines()
         .find_map(|line| line.split_once(RSS_PEAK))
         .and_then(|(_, peak)| peak.split_whitespace().next()?.parse().ok())
-        .unwrap_or_else(|| panic!("{case} reported no peak:\n{stdout}"))
+        .unwrap_or_else(|| panic!("{case} reported no peak:\n{stdout}"));
+    let outcome = stdout
+        .lines()
+        .find_map(|line| line.split_once(OUTCOME))
+        .map(|(_, outcome)| outcome.to_owned())
+        .unwrap_or_default();
+    (peak, outcome)
 }
 
 #[cfg(unix)]
@@ -349,4 +455,164 @@ fn chunk_with_a_stream_larger_than_its_container_declares_fails() {
         .expect("render decoded an 8192x8192 stream");
     let error = format!("{error:#}");
     assert!(error.contains("8192x8192"), "{error}");
+}
+
+#[test]
+fn audio_that_declares_more_than_its_file_holds_is_refused_before_probing() {
+    init();
+    let _heavy = HEAVY.lock().unwrap_or_else(|error| error.into_inner());
+    let runtime = runtime();
+    for (mic, declared) in [
+        (
+            "mic-100h.ogg",
+            "declares 360000 s, longer than cloud export supports",
+        ),
+        (
+            "mic-24h.m4a",
+            "declares 86400 s, longer than cloud export supports",
+        ),
+        ("mic-10h.ogg", "declares 36000 s in 3943 bytes"),
+    ] {
+        let project = project_from("small.mp4", Some(mic), None);
+        let (probed, peak) =
+            peak_heap_during(|| runtime.block_on(probe(probe_request(project.path()))));
+        let error = format!("{:#}", probed.expect_err(mic));
+        assert!(
+            error.contains("mic audio") && error.contains(declared),
+            "{mic}: {error}"
+        );
+        assert!(
+            peak < REFUSAL_HEAP_BUDGET,
+            "refusing {mic} grew the heap by {peak} bytes"
+        );
+    }
+}
+
+#[test]
+fn webm_display_that_declares_100_hours_is_refused() {
+    init();
+    let _heavy = HEAVY.lock().unwrap_or_else(|error| error.into_inner());
+    let project = project_from("display-100h.webm", None, None);
+    let (probed, peak) =
+        peak_heap_during(|| runtime().block_on(probe(probe_request(project.path()))));
+    let error = format!("{:#}", probed.expect_err("probe accepted a 100 h display"));
+    assert!(
+        error.contains("screen video") && error.contains("360000 s"),
+        "{error}"
+    );
+    assert!(
+        peak < REFUSAL_HEAP_BUDGET,
+        "refusing a 100 h display grew the heap by {peak} bytes"
+    );
+}
+
+#[test]
+fn audio_beyond_the_supported_rate_or_channels_is_refused() {
+    init();
+    let _heavy = HEAVY.lock().unwrap_or_else(|error| error.into_inner());
+    for (rate, channels) in [(1_000_000u32, 1u16), (48_000, 65)] {
+        let project = project_from("small.mp4", None, None);
+        let block = u32::from(channels) * 2;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + block * 16).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&channels.to_le_bytes());
+        wav.extend_from_slice(&rate.to_le_bytes());
+        wav.extend_from_slice(&(rate * block).to_le_bytes());
+        wav.extend_from_slice(&(block as u16).to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(block * 16).to_le_bytes());
+        wav.resize(wav.len() + (block * 16) as usize, 0);
+        std::fs::write(project.path().join("mic.wav"), wav).unwrap();
+        let meta_path = project.path().join("recording-meta.json");
+        let mut meta: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
+        meta["audio"] = serde_json::json!({ "path": "mic.wav" });
+        std::fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+
+        let error = format!(
+            "{:#}",
+            runtime()
+                .block_on(probe(probe_request(project.path())))
+                .expect_err("probe accepted the WAV")
+        );
+        assert!(
+            error.contains(&format!("{rate} Hz with {channels} channels")),
+            "{error}"
+        );
+    }
+}
+
+/// A browser WebM mic has no usable length, so its clip's stands in
+/// (audio.rs `track_duration`). A display can declare 20 h inside the source
+/// limit while the edit is 1 s: the mic's buffer has to follow the edit.
+#[test]
+fn a_clip_length_standing_in_for_a_webm_mic_sizes_only_what_the_edit_reads() {
+    init();
+    let _heavy = HEAVY.lock().unwrap_or_else(|error| error.into_inner());
+    let project = project_from("display-20h.webm", Some("mic-live.webm"), Some(1.0));
+    let loaded = LoadedProject::load(project.path()).unwrap();
+    let segment = &loaded.recordings.segments[0];
+    assert_eq!(segment.display.duration, 72_000.0);
+    let mic = segment.mic.as_ref().expect("mic.webm probed");
+    assert!(
+        crate::project::usable_duration(mic.duration).is_none(),
+        "mic.webm probed a usable {} s",
+        mic.duration
+    );
+
+    let (rendered, peak) = peak_heap_during(|| {
+        runtime().block_on(audio::render(audio_request(project.path(), [0, 48_000])))
+    });
+    let rendered = rendered.unwrap();
+    assert_eq!(rendered.total_samples, 48_000);
+    assert!(!rendered.sizes.is_empty());
+    let twenty_hours_of_mono = 72_000u64 * 48_000 * 4;
+    assert!(
+        peak < 64 << 20,
+        "a 1 s edit of a 20 h clip grew the heap by {peak} bytes ({twenty_hours_of_mono} for its whole length)"
+    );
+}
+
+#[test]
+fn a_webm_mic_without_a_length_still_renders_its_clip() {
+    init();
+    let _heavy = HEAVY.lock().unwrap_or_else(|error| error.into_inner());
+    let project = project_from("display-red.webm", Some("mic-live.webm"), None);
+    let rendered = runtime()
+        .block_on(audio::render(audio_request(
+            project.path(),
+            [0, 3 * 48_000],
+        )))
+        .unwrap();
+    assert_eq!(rendered.total_samples, 3 * 48_000);
+    assert_eq!(rendered.first_packet, 0);
+    assert_eq!(
+        rendered.sizes.len(),
+        (3 * 48_000 + 1024usize).div_ceil(1024)
+    );
+    assert!(rendered.sizes.iter().any(|&size| size > 16));
+}
+
+#[cfg(unix)]
+#[test]
+fn crafted_lengths_are_refused_within_the_probe_budget() {
+    let control = child_peak_rss("probe-small");
+    for (case, expected) in [
+        ("probe-mic-ogg-100h", "declares 360000 s"),
+        ("audio-mic-ogg-100h", "declares 360000 s"),
+        ("probe-display-webm-100h", "declares 360000 s"),
+        ("audio-webm-mic-on-20h-display", "ok"),
+    ] {
+        let (peak, outcome) = child_run(case);
+        assert!(outcome.contains(expected), "{case}: {outcome}");
+        assert!(
+            peak < control + FFMPEG_RSS_BUDGET,
+            "{case} peaked at {peak} bytes, {control} probing small.mp4"
+        );
+    }
 }

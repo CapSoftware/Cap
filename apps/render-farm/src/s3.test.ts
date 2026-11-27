@@ -1,12 +1,10 @@
-import {
-	afterEach,
-	describe,
-	expect,
-	setSystemTime,
-	spyOn,
-	test,
-} from "bun:test";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { localS3, memoryBucket, stopLocalS3 } from "./local-s3.test-util";
 import { decodeXml, S3, type S3Config } from "./s3";
+
+afterEach(stopLocalS3);
 
 describe("decodeXml", () => {
 	test("decodes the predefined entities", () => {
@@ -148,26 +146,123 @@ describe("S3 signing", () => {
 	}
 
 	test("copy sources use the same escaping while retaining key separators", async () => {
-		const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				"<CopyPartResult><ETag>&quot;copied&quot;</ETag></CopyPartResult>",
-			),
+		const requests: { path: string; copySource: string | null }[] = [];
+		const s3 = localS3(
+			(request) => {
+				requests.push({
+					path: new URL(request.url).pathname,
+					copySource: request.headers.get("x-amz-copy-source"),
+				});
+				return new Response(
+					"<CopyPartResult><ETag>&quot;copied&quot;</ETag></CopyPartResult>",
+				);
+			},
+			{ ...signingConfig, virtualHost: false },
 		);
-		try {
-			const s3 = new S3({ ...signingConfig });
-			expect(
-				await s3.uploadPartCopy("out/export.mp4", "upload+id", 2, {
-					bucket: "source-bucket",
-					key: "recordings/it's (final)!*.mp4",
-				}),
-			).toBe('"copied"');
-			const [url, init] = fetchMock.mock.calls[0] ?? [];
-			expect(new URL(String(url)).pathname).toBe("/out/export.mp4");
-			expect(new Headers(init?.headers).get("x-amz-copy-source")).toBe(
-				"/source-bucket/recordings/it%27s%20%28final%29%21%2A.mp4",
-			);
-		} finally {
-			fetchMock.mockRestore();
-		}
+		expect(
+			await s3.uploadPartCopy("out/export.mp4", "upload+id", 2, {
+				bucket: "source-bucket",
+				key: "recordings/it's (final)!*.mp4",
+			}),
+		).toBe('"copied"');
+		expect(requests).toEqual([
+			{
+				path: "/media/out/export.mp4",
+				copySource: "/source-bucket/recordings/it%27s%20%28final%29%21%2A.mp4",
+			},
+		]);
+	});
+});
+
+describe("getRangeTagged", () => {
+	test("reports the whole object's size, not the range's", async () => {
+		const bucket = memoryBucket();
+		const s3 = localS3(bucket.handle);
+		await s3.put("source.mp4", new Uint8Array(1000));
+		expect(await s3.getRangeTagged("source.mp4", 0, 99)).toMatchObject({
+			size: 1000,
+		});
+		expect(
+			(await s3.getRangeTagged("source.mp4", 0, 128 * 1024 - 1)).bytes
+				.byteLength,
+		).toBe(1000);
+		expect(
+			await s3.getRangeTagged("source.mp4", 0, 128 * 1024 - 1),
+		).toMatchObject({ size: 1000 });
+
+		const whole = localS3(() => new Response(new Uint8Array(30)));
+		expect(await whole.getRangeTagged("source.mp4", 0, 99)).toMatchObject({
+			size: 30,
+		});
+	});
+});
+
+describe("uploadFile", () => {
+	test("a cancelled upload stops sending and aborts its multipart upload", async () => {
+		const requests: string[] = [];
+		const controller = new AbortController();
+		const s3 = localS3((request) => {
+			const url = new URL(request.url);
+			requests.push(`${request.method} ${url.search}`);
+			if (url.searchParams.has("uploads")) {
+				return new Response(
+					"<InitiateMultipartUploadResult><UploadId>u1</UploadId></InitiateMultipartUploadResult>",
+				);
+			}
+			if (url.searchParams.has("partNumber")) {
+				controller.abort(new Error("cancelled"));
+			}
+			return new Response("", { status: 204 });
+		});
+		const path = join(tmpdir(), `s3-upload-${Date.now()}.bin`);
+		await Bun.write(path, new Uint8Array(1024));
+		await expect(
+			s3.uploadFile("out/file.mp4", path, "video/mp4", {
+				signal: controller.signal,
+			}),
+		).rejects.toThrow("cancelled");
+		expect(requests).toEqual([
+			"POST ?uploads=",
+			"PUT ?partNumber=1&uploadId=u1",
+			"DELETE ?uploadId=u1",
+		]);
+	});
+
+	test("cleanup after a cancelled upload gives up on an unresponsive store", async () => {
+		const controller = new AbortController();
+		const cleanupGaveUp = Promise.withResolvers<void>();
+		let cleanupAborted = false;
+		const s3 = localS3(
+			(request) => {
+				const url = new URL(request.url);
+				if (url.searchParams.has("uploads")) {
+					return new Response("<UploadId>u1</UploadId>");
+				}
+				if (request.method === "DELETE") {
+					return new Promise<Response>((resolve) => {
+						request.signal.addEventListener("abort", () => {
+							cleanupAborted = true;
+							cleanupGaveUp.resolve();
+							resolve(new Response(null, { status: 499 }));
+						});
+					});
+				}
+				controller.abort(new Error("cancelled"));
+				return new Response("", { status: 204 });
+			},
+			{ cleanupTimeoutMs: 50 },
+		);
+		const path = join(tmpdir(), `s3-cleanup-${Date.now()}.bin`);
+		await Bun.write(path, new Uint8Array(16));
+		const started = performance.now();
+		await expect(
+			s3.uploadFile("out/file.mp4", path, "video/mp4", {
+				signal: controller.signal,
+			}),
+		).rejects.toThrow("cancelled");
+		const elapsed = performance.now() - started;
+		await cleanupGaveUp.promise;
+		expect(cleanupAborted).toBe(true);
+		expect(elapsed).toBeLessThan(5_000);
 	});
 });

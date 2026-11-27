@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { localS3, memoryBucket, stopLocalS3 } from "./local-s3.test-util";
 import { type FileSpec, ProjectCache } from "./materialize";
 import { S3 } from "./s3";
 
@@ -168,5 +169,78 @@ describe("ProjectCache lifecycle", () => {
 		await cache.materialize([spec(1)]);
 		expect(requests).toBe(2);
 		expect([...readFileSync(join(root, spec(1).path))]).toEqual([42]);
+	});
+});
+
+describe("prefixed files", () => {
+	afterEach(stopLocalS3);
+
+	function bucketCache(concurrency = 1) {
+		const reads: string[] = [];
+		const bucket = memoryBucket("bucket", {
+			before: (request, key) => {
+				const range = request.headers.get("range");
+				if (range) reads.push(`${key}:${range.slice("bytes=".length)}`);
+				return undefined;
+			},
+		});
+		const root = mkdtempSync(join(tmpdir(), "cap-project-cache-"));
+		roots.push(root);
+		const cache = new ProjectCache(localS3(bucket.handle), root, concurrency);
+		caches.push(cache);
+		return { bucket, cache, root, reads };
+	}
+
+	test("are their prefix, then the source shifted by it", async () => {
+		const { bucket, cache, root, reads } = bucketCache(12);
+		const prefix = Uint8Array.from({ length: 100 }, (_, index) => index + 1);
+		const source = Uint8Array.from(
+			{ length: 10 << 20 },
+			(_, index) => (index % 250) + 1,
+		);
+		bucket.objects.set("prefix", { body: prefix, contentType: null });
+		bucket.objects.set("source", { body: source, contentType: null });
+		const size = 100 + (10 << 20);
+		await cache.materialize([
+			{
+				path: "display.mp4",
+				key: "source",
+				size,
+				prefix: { key: "prefix", size: 100 },
+				ranges: [
+					[0, 100],
+					[100 + PIECE - 10, 100 + PIECE + 10],
+				],
+			},
+		]);
+		expect(reads.sort()).toEqual([
+			"prefix:0-99",
+			`source:0-${PIECE - 1}`,
+			`source:${PIECE}-${2 * PIECE - 1}`,
+		]);
+		const file = readFileSync(join(root, "display.mp4"));
+		expect(file.byteLength).toBe(size);
+		expect([...file.subarray(0, 100)]).toEqual([...prefix]);
+		for (const at of [0, 1, PIECE - 1, PIECE, 2 * PIECE - 1]) {
+			expect(file[100 + at]).toBe(source[at] as number);
+		}
+		expect(file[100 + (9 << 20)]).toBe(0);
+	});
+
+	test("are not fetched once the cache is closed", async () => {
+		const { bucket, cache } = bucketCache();
+		cache.close();
+		await expect(
+			cache.materialize([
+				{
+					path: "display.mp4",
+					key: "source",
+					size: 200,
+					prefix: { key: "prefix", size: 100 },
+					ranges: [[0, 200]],
+				},
+			]),
+		).rejects.toThrow("closed");
+		expect(bucket.requests).toEqual([]);
 	});
 });

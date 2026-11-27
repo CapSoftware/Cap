@@ -124,6 +124,17 @@ export const users = mysqlTable(
 					pageSize?: number;
 				};
 				passkeyPromptDismissedAt?: string;
+				editorDefaultStyle?: {
+					version: 1;
+					aspectRatio?: unknown;
+					background?: Record<string, unknown>;
+					camera?: Record<string, unknown>;
+					cursor?: Record<string, unknown>;
+				};
+				studioSound?: {
+					enabledByDefault: boolean;
+					isolation: "light" | "balanced" | "strong";
+				};
 			} | null>()
 			.default(null),
 		activeOrganizationId: nanoId(

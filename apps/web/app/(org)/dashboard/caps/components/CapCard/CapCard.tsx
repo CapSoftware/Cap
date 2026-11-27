@@ -43,7 +43,12 @@ import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
+import {
+	renderProgressLabel,
+	useRenderSaveStatus,
+} from "@/app/s/[videoId]/_components/render-save-status";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
+import { RenderFog } from "@/components/render-fog";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import {
 	type ImageLoadingStatus,
@@ -281,7 +286,15 @@ export const CapCard = ({
 	);
 	const hasRawFallback =
 		uploadProgress?.status === "error" && uploadProgress.hasRawFallback;
+	const savedRendering =
+		cap.metadata?.renderFarmSave?.status === "rendering" ||
+		cap.metadata?.webEditorBrowserSave?.status === "rendering";
+	const renderStatus = useRenderSaveStatus(cap.id, savedRendering);
+	const isRendering = renderStatus
+		? renderStatus.state === "rendering"
+		: savedRendering;
 	const hasVisibleUploadProgress =
+		!isRendering &&
 		uploadProgress !== null &&
 		uploadProgress.status !== "fetching" &&
 		!hasRawFallback;
@@ -811,6 +824,15 @@ export const CapCard = ({
 						}}
 						href={href ?? `/s/${cap.id}`}
 					>
+						{isRendering && (
+							<RenderFog
+								overlay
+								compact
+								className="z-20"
+								label={renderProgressLabel(renderStatus?.progress ?? 0)}
+								progress={renderStatus?.progress ?? 0}
+							/>
+						)}
 						{hasVisibleUploadProgress && (
 							<>
 								<div className="absolute inset-0 z-20 transition-all duration-300 bg-black/60" />

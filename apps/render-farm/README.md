@@ -81,6 +81,7 @@ expiry there is only a backstop.
 | `RF_CALLBACK_HOSTS` | none | Host suffixes a job's `callbackUrl` may use (e.g. `vercel.app,cap.so`) |
 | `RF_CALLBACK_SECRET` | `RF_TOKEN` | HMAC key for callback signatures |
 | `RF_TRANSCODE_ENCODER` | `h264_nvenc` | Encoder for source transcodes (`libx264` without a GPU) |
+| `RF_FFMPEG_BIN` / `RF_FFPROBE_BIN` | `ffmpeg` / `ffprobe` | Binaries source transcodes run |
 | `RF_COORDINATOR_URL` | `http://127.0.0.1:8080` | Coordinator address (workers) and its advertised URL |
 | `RF_SLOTS` / `RF_AUDIO_SLOTS` | `5` / `4` | Render slots and audio lanes per worker (tuned on one L4 with 8 vCPUs) |
 | `RF_LOCAL_AUDIO_SLOTS` | `2` | Audio lanes on the coordinator |
@@ -121,7 +122,18 @@ names such a source; the coordinator first has a GPU slot re-encode it into
 the entry's `key` as H.264 with a keyframe every second (kept and reused for
 later exports). `POST /transcodes {sourceRoot, source, output}` starts one
 ahead of time (e.g. when the editor opens) and `GET /transcodes/:id` reports
-it.
+it. A fragmented MP4 that a transcode would only remux is read in place
+instead: the coordinator turns its fragments into a regular `moov`, stores it
+beside the transcode key as `<key>.prefix-v1`, and workers fetch the samples
+they need from the recording itself (`RF_FRAGMENT_INDEX=0` turns this off).
+
+A browser recording can also arrive unprepared: `prepare: "prepare.json"`
+names a file in the recording whose `sources` the engine turns into the
+project files (`recording-meta.json`, `project-config.json`, pointer input)
+before planning, and the manifest lists only the media. Manifest entries with
+`builtin` (`backgrounds/<group>/<name>.jpg`, `music/<name>.mp3`) are read
+from the image's `/opt/cap`. `/health` advertises `prepare` (the default
+configuration and the built-in music) once the engine can do this.
 
 ## Development
 

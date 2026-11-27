@@ -18,6 +18,7 @@ module.exports = (__app, _options) => {
 			`../../apps/*/app/**/*.{js,ts,jsx,tsx,mdx}`,
 			`../../apps/*/src/**/*.{js,ts,jsx,tsx,mdx}`,
 			"../../packages/*/src/**/*.{ts,tsx,html,stories.tsx}",
+			"!../../packages/web-editor/**",
 		],
 		theme: {
 			screens: {

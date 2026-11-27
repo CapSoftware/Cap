@@ -354,6 +354,7 @@ pub fn write_project_files(
         keyboard_segments: Vec::new(),
         audio_segments: Vec::new(),
         camera3d_segments: Vec::new(),
+        waveform_segments: Vec::new(),
     });
     config.clips = clips;
     config.write(dir)?;

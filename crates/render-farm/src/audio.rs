@@ -1,7 +1,9 @@
-use crate::{project::LoadedProject, video::base64_encode};
+use crate::{
+    project::{LoadedProject, MAX_SOURCE_SECONDS, usable_duration},
+    video::base64_encode,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use cap_editor::AudioRenderer;
-use cap_project::StudioRecordingMeta;
 use ffmpeg::{ChannelLayout, format::Sample, format::sample::Type, frame};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -279,40 +281,18 @@ async fn load_audio_segments(
     .ok();
     let repairs =
         cap_editor::segment_audio_timing_repairs(&project.studio_meta, legacy_log.as_deref());
-    let tracks: Vec<(Option<PathBuf>, Option<PathBuf>)> = match &project.studio_meta {
-        StudioRecordingMeta::SingleSegment { segment } => vec![(
-            segment
-                .audio
-                .as_ref()
-                .map(|audio| project.recording_meta.path(&audio.path)),
-            None,
-        )],
-        StudioRecordingMeta::MultipleSegments { inner } => inner
-            .segments
-            .iter()
-            .map(|segment| {
-                (
-                    segment
-                        .mic
-                        .as_ref()
-                        .map(|audio| project.recording_meta.path(&audio.path)),
-                    segment
-                        .usable_system_audio()
-                        .map(|audio| project.recording_meta.path(&audio.path)),
-                )
-            })
-            .collect(),
-    };
+    let tracks = crate::project::audio_tracks(&project.recording_meta, &project.studio_meta);
     let mut segments = Vec::with_capacity(tracks.len());
     for (index, (mic, system)) in tracks.into_iter().enumerate() {
         let window = windows.get(index).copied().flatten();
         let recorded = project.recordings.segments.get(index);
+        let clip = recorded.map(|segment| segment.display.duration);
         let mic_duration = recorded
             .and_then(|segment| segment.mic.as_ref())
-            .map(|audio| audio.duration);
+            .and_then(|audio| track_duration(audio.duration, clip));
         let system_duration = recorded
             .and_then(|segment| segment.system_audio.as_ref())
-            .map(|audio| audio.duration);
+            .and_then(|audio| track_duration(audio.duration, clip));
         let mic = load_track(mic, "mic", window, mic_duration).await?;
         let system = load_track(system, "system audio", window, system_duration).await?;
         segments.push(cap_editor::audio_segment_from_decoded(
@@ -323,6 +303,16 @@ async fn load_audio_segments(
     }
     Ok(segments)
 }
+
+// Browser WebM audio has no container duration (probing gives a negative
+// one); without a length every section decoded the whole track through EOF,
+// ~11 s per section of a 2 h mic. The clip's video length stands in.
+fn track_duration(probed: f64, clip: Option<f64>) -> Option<f64> {
+    usable_duration(probed).or(clip.and_then(usable_duration))
+}
+
+/// Track kept past the end of a section's source window.
+const TRACK_TAIL_SECONDS: f64 = 60.0;
 
 /// Decodes only the first `VOICE_PROFILE_SAMPLES` (what Studio Sound's voice
 /// profile reads) plus the section's source window, placed at their true
@@ -362,12 +352,21 @@ async fn load_track(
         let channels = section.channels().max(profile.channels()) as usize;
         let section_start = section.source_start_sample();
         let decoded_end = section_start + section.sample_count();
+        // Past `to` the buffer is zeros, not audio, so nothing the renderer
+        // reads lies past it; a longer declared length only sizes zeros.
+        let reach = ((to + TRACK_TAIL_SECONDS) * rate) as usize;
         let total = if near_end {
             decoded_end
         } else {
-            decoded_end.max(duration_samples.unwrap_or(0))
+            decoded_end.max(duration_samples.unwrap_or(0).min(reach))
         }
         .max(profile.sample_count());
+        if total as f64 > (MAX_SOURCE_SECONDS + TRACK_TAIL_SECONDS) * rate {
+            bail!(
+                "{label} spans {:.0} s, longer than cloud export supports",
+                total as f64 / rate
+            );
+        }
         let mut samples = vec![0.0f32; total * channels];
         let copy = |samples: &mut [f32], data: &cap_audio::AudioData| {
             let offset = data.source_start_sample() * channels;
@@ -385,4 +384,18 @@ async fn load_track(
         ))))
     })
     .await?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::track_duration;
+
+    #[test]
+    fn unknown_track_lengths_fall_back_to_the_clip() {
+        assert_eq!(track_duration(61.5, Some(60.0)), Some(61.5));
+        assert_eq!(track_duration(-9.2e12, Some(7200.0)), Some(7200.0));
+        assert_eq!(track_duration(f64::NAN, Some(7200.0)), Some(7200.0));
+        assert_eq!(track_duration(0.0, None), None);
+        assert_eq!(track_duration(-1.0, Some(f64::NAN)), None);
+    }
 }

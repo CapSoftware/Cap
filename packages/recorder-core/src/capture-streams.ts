@@ -18,31 +18,61 @@ import {
  * same code path.
  */
 
+export interface VideoCaptureQuality {
+	height: number;
+	frameRate?: number;
+}
+
+export interface MicProcessing {
+	echoCancellation: boolean;
+	autoGainControl: boolean;
+	noiseSuppression: boolean;
+}
+
+const DEFAULT_CAMERA_QUALITY: VideoCaptureQuality = {
+	height: 1080,
+	frameRate: 30,
+};
+
+export const DEFAULT_MIC_PROCESSING: MicProcessing = {
+	echoCancellation: true,
+	autoGainControl: true,
+	noiseSuppression: true,
+};
+
 export const cameraVideoConstraints = (
 	cameraId?: string | null,
+	quality: VideoCaptureQuality = DEFAULT_CAMERA_QUALITY,
 ): MediaTrackConstraints => ({
 	...(cameraId ? { deviceId: { exact: cameraId } } : {}),
-	frameRate: { ideal: 30 },
-	width: { ideal: 1920 },
-	height: { ideal: 1080 },
+	frameRate: { ideal: quality.frameRate ?? 30 },
+	width: { ideal: Math.round((quality.height * 16) / 9) },
+	height: { ideal: quality.height },
 });
 
 export const micAudioConstraints = (
 	micId?: string | null,
+	processing: MicProcessing = DEFAULT_MIC_PROCESSING,
 ): MediaTrackConstraints => ({
 	...(micId ? { deviceId: { exact: micId } } : {}),
-	echoCancellation: true,
-	autoGainControl: true,
-	noiseSuppression: true,
+	...processing,
 });
 
-export const acquireCameraStream = (cameraId?: string | null) =>
+export const acquireCameraStream = (
+	cameraId?: string | null,
+	quality?: VideoCaptureQuality,
+) =>
 	navigator.mediaDevices.getUserMedia({
-		video: cameraVideoConstraints(cameraId),
+		video: cameraVideoConstraints(cameraId, quality),
 	});
 
-export const acquireMicStream = (micId?: string | null) =>
-	navigator.mediaDevices.getUserMedia({ audio: micAudioConstraints(micId) });
+export const acquireMicStream = (
+	micId?: string | null,
+	processing?: MicProcessing,
+) =>
+	navigator.mediaDevices.getUserMedia({
+		audio: micAudioConstraints(micId, processing),
+	});
 
 /** Camera and mic in one call — one permission prompt instead of two. */
 export const acquireCameraWithMicStream = (input: {
@@ -67,6 +97,7 @@ export interface AcquireDisplayStreamOptions {
 	 * fired once per fallback, before the retry, so the caller can warn.
 	 */
 	onSystemAudioFallback?: () => void;
+	quality?: VideoCaptureQuality;
 }
 
 /**
@@ -78,12 +109,20 @@ export const acquireDisplayStream = async ({
 	mode,
 	systemAudioEnabled,
 	onSystemAudioFallback,
+	quality,
 }: AcquireDisplayStreamOptions): Promise<MediaStream> => {
 	const desiredSurface = mode ? RECORDING_MODE_TO_DISPLAY_SURFACE[mode] : null;
 	const videoConstraints: MediaTrackConstraints & {
 		displaySurface?: DisplaySurfacePreference;
 	} = {
 		...DISPLAY_MEDIA_VIDEO_CONSTRAINTS,
+		...(quality
+			? {
+					frameRate: { ideal: quality.frameRate ?? 30 },
+					width: { ideal: Math.round((quality.height * 16) / 9) },
+					height: { ideal: quality.height },
+				}
+			: {}),
 		// undefined dictionary members are treated as absent by the constraint
 		// algorithm, so the generic-picker path adds no surface preference.
 		displaySurface: desiredSurface ?? undefined,
@@ -261,6 +300,14 @@ export const createAudioMixer = async ({
 		limiter.attack.value = 0.002;
 		limiter.release.value = 0.05;
 		limiter.connect(destination);
+
+		// Chrome's MediaStreamAudioDestinationNode stops producing samples while no
+		// source feeds it, and MediaRecorder then closes the gap, so every later
+		// sound plays early. A silent source keeps it clocked.
+		const clock = context.createConstantSource();
+		clock.offset.value = 0;
+		clock.connect(limiter);
+		clock.start();
 
 		if (systemAudioTracks.length > 0) {
 			context

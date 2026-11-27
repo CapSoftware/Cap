@@ -705,6 +705,10 @@ impl CaptionsLayer {
         self.highlight_scissor = None;
         self.has_highlight = false;
         self.output_size = (output_size.x, output_size.y);
+        if !super::sync_browser_fonts(&mut self.font_system) {
+            self.current_text = None;
+            return;
+        }
 
         let Some(caption_data) = &uniforms.project.captions else {
             self.current_text = None;
@@ -2177,6 +2181,7 @@ mod gpu_tests {
             image_segments: vec![],
             shape_segments: Vec::new(),
             camera3d_segments: vec![],
+            waveform_segments: Vec::new(),
         });
         uniforms
     }

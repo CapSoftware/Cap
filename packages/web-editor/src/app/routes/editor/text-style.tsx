@@ -1,0 +1,187 @@
+import { createWritableMemo } from "@solid-primitives/memo";
+import {
+	getHexColorDigitCount,
+	normalizeOpaqueHexColor,
+} from "~/utils/hex-color";
+import type { OrganizationBrandColorSwatch } from "~/utils/organization-branding";
+import { BrandColorsDropdown } from "./BrandColorsDropdown";
+import { getColorPreviewBorderColor } from "./color-utils";
+import { TextInput } from "./TextInput";
+import type { TextAnimation, TextBackgroundStyle } from "./text";
+
+export const FONT_OPTIONS = [
+	{ value: "System Sans-Serif", label: "System Sans-Serif" },
+	{ value: "System Serif", label: "System Serif" },
+	{ value: "System Monospace", label: "System Monospace" },
+];
+
+export const CAPTION_POSITION_OPTIONS = [
+	{ value: "manual", label: "Manual" },
+	{ value: "top-left", label: "Top Left" },
+	{ value: "top-center", label: "Top Center" },
+	{ value: "top-right", label: "Top Right" },
+	{ value: "bottom-left", label: "Bottom Left" },
+	{ value: "bottom-center", label: "Bottom Center" },
+	{ value: "bottom-right", label: "Bottom Right" },
+];
+
+export const KEYBOARD_POSITION_OPTIONS = [
+	{ value: "top-left", label: "Top Left" },
+	{ value: "top-center", label: "Top Center" },
+	{ value: "top-right", label: "Top Right" },
+	{ value: "bottom-left", label: "Bottom Left" },
+	{ value: "bottom-center", label: "Bottom Center" },
+	{ value: "bottom-right", label: "Bottom Right" },
+];
+
+export const TEXT_WEIGHT_OPTIONS = [
+	{ label: "Normal", value: 400 },
+	{ label: "Medium", value: 500 },
+	{ label: "Bold", value: 700 },
+];
+
+export const TEXT_SEGMENT_WEIGHT_OPTIONS = [
+	{ label: "Light", value: 300 },
+	{ label: "Regular", value: 400 },
+	{ label: "Medium", value: 500 },
+	{ label: "Semibold", value: 600 },
+	{ label: "Bold", value: 700 },
+	{ label: "Extra Bold", value: 800 },
+	{ label: "Black", value: 900 },
+];
+
+export const TEXT_ANIMATION_OPTIONS: {
+	value: TextAnimation;
+	label: string;
+}[] = [
+	{ value: "none", label: "None" },
+	{ value: "fade", label: "Fade" },
+	{ value: "slideUp", label: "Slide up" },
+	{ value: "slideDown", label: "Slide down" },
+	{ value: "slideLeft", label: "Slide left" },
+	{ value: "slideRight", label: "Slide right" },
+	{ value: "pop", label: "Pop" },
+	{ value: "zoom", label: "Zoom" },
+	{ value: "bounce", label: "Bounce" },
+	{ value: "wipe", label: "Wipe" },
+	{ value: "words", label: "Words" },
+	{ value: "letters", label: "Letters" },
+	{ value: "tracking", label: "Tracking" },
+	{ value: "typewriter", label: "Typewriter" },
+];
+
+export const TEXT_BACKGROUND_STYLE_OPTIONS: {
+	value: TextBackgroundStyle;
+	label: string;
+}[] = [
+	{ value: "box", label: "Box" },
+	{ value: "pill", label: "Pill" },
+	{ value: "highlight", label: "Highlight" },
+];
+
+export const CAPTION_ANIMATION_OPTIONS = [
+	{ value: "none", label: "None" },
+	{ value: "bounce", label: "Bounce" },
+	{ value: "pop", label: "Pop" },
+];
+
+export const CAPTION_HIGHLIGHT_STYLE_OPTIONS = [
+	{ value: "color", label: "Color" },
+	{ value: "pill", label: "Pill" },
+];
+
+export function getTextWeightLabel(weight: number | null | undefined) {
+	const option = TEXT_WEIGHT_OPTIONS.find((option) => option.value === weight);
+	if (option) return option.label;
+	if (weight != null) return `Custom (${weight})`;
+	return "Normal";
+}
+
+export function HexColorInput(props: {
+	value: string;
+	onChange: (value: string) => void;
+	brandColorSwatches?: OrganizationBrandColorSwatch[];
+}) {
+	const [text, setText] = createWritableMemo(() => props.value);
+	let prevColor = props.value;
+	let colorInput!: HTMLInputElement;
+
+	const commitValue = (raw: string) => {
+		const normalized = normalizeOpaqueHexColor(raw);
+		if (normalized) {
+			props.onChange(normalized);
+			setText(normalized);
+			return true;
+		}
+		return false;
+	};
+
+	const selectBrandColor = (color: string) => {
+		setText(color);
+		prevColor = color;
+		props.onChange(color);
+	};
+
+	return (
+		<div class="flex flex-col gap-2">
+			<div class="flex relative flex-row gap-2 items-center">
+				<button
+					type="button"
+					class="size-[30px] shrink-0 rounded-[7px]"
+					style={{
+						"background-color": text(),
+						"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(
+							text(),
+						)}`,
+					}}
+					onClick={() => colorInput.click()}
+				/>
+				<input
+					ref={colorInput}
+					type="color"
+					class="absolute bottom-0 left-0 opacity-0 size-[30px]"
+					value={text()}
+					onChange={(e) => {
+						setText(e.target.value);
+						props.onChange(e.target.value);
+					}}
+				/>
+				<TextInput
+					class="h-[30px] min-w-0 flex-1 rounded-[7px] border-0 bg-ed-ctl px-2 text-[12px] text-ed-text-1 caret-ed-accent outline-hidden transition-colors duration-150 hover:bg-ed-ctl-hover focus:bg-ed-ctl-hover focus:ring-1 focus:ring-ed-accent"
+					value={text()}
+					onFocus={() => {
+						prevColor = props.value;
+					}}
+					onKeyDown={(e) => {
+						if (e.key === "Enter") {
+							e.preventDefault();
+							if (!commitValue(e.currentTarget.value)) {
+								setText(prevColor);
+							}
+							e.currentTarget.blur();
+						}
+					}}
+					onInput={(e) => {
+						setText(e.currentTarget.value);
+						if (getHexColorDigitCount(e.currentTarget.value) !== 6) return;
+
+						const normalized = normalizeOpaqueHexColor(e.currentTarget.value);
+						if (normalized) {
+							props.onChange(normalized);
+						}
+					}}
+					onBlur={(e) => {
+						if (!commitValue(e.target.value)) {
+							setText(prevColor);
+							props.onChange(props.value);
+						}
+					}}
+				/>
+			</div>
+			<BrandColorsDropdown
+				swatches={props.brandColorSwatches ?? []}
+				onSelect={selectBrandColor}
+			/>
+		</div>
+	);
+}

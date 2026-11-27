@@ -1,0 +1,114 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@source "../**/*.{ts,tsx}";
+
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+@theme {
+	--color-transparent: rgba(0, 0, 0, 0);
+	--color-solid-white: #ffffff;
+	--color-ed-window: var(--ed-window);
+	--color-ed-card: var(--ed-card);
+	--color-ed-card-2: var(--ed-card-2);
+	--color-ed-stage: var(--ed-stage);
+	--color-ed-line: var(--ed-line);
+	--color-ed-line-strong: var(--ed-line-strong);
+	--color-ed-text-1: var(--ed-text-1);
+	--color-ed-text-2: var(--ed-text-2);
+	--color-ed-text-3: var(--ed-text-3);
+	--color-ed-ctl: var(--ed-ctl);
+	--color-ed-ctl-hover: var(--ed-ctl-hover);
+	--color-ed-ctl-active: var(--ed-ctl-active);
+	--color-ed-accent: var(--ed-accent);
+	--color-ed-accent-2: var(--ed-accent-fill-2);
+	--color-ed-accent-ink: var(--ed-accent-ink);
+	--color-ed-accent-fill: var(--ed-accent-fill);
+	--color-ed-track: var(--ed-track);
+	--color-ed-pill: var(--ed-pill);
+	--color-ed-choice: var(--ed-choice);
+	--color-ed-playhead: var(--ed-playhead);
+	--color-ed-thumb: var(--ed-thumb);
+	--shadow-ed-card: var(--ed-card-shadow);
+	--shadow-ed-pop: var(--ed-pop-shadow);
+	--shadow-ed-pill: var(--ed-pill-shadow);
+	--shadow-ed-choice: var(--ed-choice-ring);
+	--shadow-ed-thumb: var(--ed-thumb-shadow);
+
+	--color-gray-1: var(--gray-1);
+	--color-gray-2: var(--gray-2);
+	--color-gray-3: var(--gray-3);
+	--color-gray-4: var(--gray-4);
+	--color-gray-5: var(--gray-5);
+	--color-gray-6: var(--gray-6);
+	--color-gray-7: var(--gray-7);
+	--color-gray-8: var(--gray-8);
+	--color-gray-9: var(--gray-9);
+	--color-gray-10: var(--gray-10);
+	--color-gray-11: var(--gray-11);
+	--color-gray-12: var(--gray-12);
+	--color-gray-400: var(--gray-400);
+
+	--color-blue-3: var(--blue-3);
+	--color-blue-4: var(--blue-4);
+	--color-blue-5: var(--blue-5);
+	--color-blue-6: var(--blue-6);
+	--color-blue-7: var(--blue-7);
+	--color-blue-8: var(--blue-8);
+	--color-blue-9: var(--blue-9);
+	--color-blue-10: var(--blue-10);
+	--color-blue-11: var(--blue-11);
+	--color-blue-12: var(--blue-12);
+
+	--color-red-2: var(--red-2);
+	--color-red-3: var(--red-3);
+	--color-red-4: var(--red-4);
+	--color-red-9: var(--red-9);
+	--color-red-10: var(--red-10);
+	--color-red-11: var(--red-11);
+	--color-red-300: var(--red-300);
+	--color-red-400: var(--red-400);
+
+	--animate-collapsible-down: collapsible-down 0.2s ease-out;
+	--animate-collapsible-up: collapsible-up 0.2s ease-out;
+	--animate-shimmer: shimmer 2s ease-in-out infinite;
+
+	@keyframes collapsible-down {
+		from {
+			height: 0;
+			filter: blur(5px);
+		}
+		to {
+			height: var(--kb-collapsible-content-height);
+			filter: blur(0px);
+		}
+	}
+	@keyframes collapsible-up {
+		from {
+			height: var(--kb-collapsible-content-height);
+			filter: blur(0px);
+		}
+		to {
+			height: 0;
+			filter: blur(5px);
+		}
+	}
+	@keyframes shimmer {
+		0% {
+			transform: translateX(-100%);
+		}
+		100% {
+			transform: translateX(100%);
+		}
+	}
+}
+
+:root {
+	@apply antialiased;
+}
+
+body {
+	font-family:
+		-apple-system, BlinkMacSystemFont, "Segoe UI", "Geist Sans", sans-serif;
+	font-weight: 400;
+}

@@ -3,7 +3,8 @@ import { users, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { FatalError, sleep } from "workflow";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import { getMediaProcessingRejection } from "@/lib/media-processing-policy";
@@ -89,7 +90,11 @@ export async function processVideoWorkflow(
 		await saveMetadataAndComplete(videoId, metadata);
 
 		const outputKey = `${userId}/${videoId}/result.mp4`;
-		if (rawFileKey !== outputKey) {
+		const retainEditorSource = await shouldRetainEditorSource(
+			videoId,
+			rawFileKey,
+		);
+		if (rawFileKey !== outputKey && !retainEditorSource) {
 			await cleanupRawUpload(videoId, rawFileKey);
 		}
 
@@ -374,13 +379,19 @@ async function saveMetadataAndComplete(
 
 	const duration = getValidDuration(metadata.duration);
 
+	// A Studio render published meanwhile (one started when the recording
+	// finished) is the share video now, so its dimensions stay.
+	const unlessRendered = (column: AnyMySqlColumn, value: number) =>
+		sql`CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.renderFarmSave.status')) = 'published' THEN ${column} ELSE ${value} END`;
 	await db()
 		.update(videos)
 		.set({
-			width: metadata.width,
-			height: metadata.height,
-			fps: metadata.fps,
-			...(duration === undefined ? {} : { duration }),
+			width: unlessRendered(videos.width, metadata.width),
+			height: unlessRendered(videos.height, metadata.height),
+			fps: unlessRendered(videos.fps, metadata.fps),
+			...(duration === undefined
+				? {}
+				: { duration: unlessRendered(videos.duration, duration) }),
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
 
@@ -412,6 +423,22 @@ async function cleanupRawUpload(
 	} catch (error) {
 		console.error("[process-video] Failed to delete raw upload", error);
 	}
+}
+
+// A Studio recording's screen upload is also the editor's display source,
+// which the editor and render farm read after processing.
+async function shouldRetainEditorSource(
+	videoId: string,
+	rawFileKey: string,
+): Promise<boolean> {
+	"use step";
+
+	const [video] = await db()
+		.select({ metadata: videos.metadata })
+		.from(videos)
+		.where(eq(videos.id, Video.VideoId.make(videoId)));
+	const sources = video?.metadata?.editorSources;
+	return sources?.version === 1 && sources.display?.key === rawFileKey;
 }
 
 async function queueProcessedVideoTranscription(

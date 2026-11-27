@@ -11,7 +11,7 @@ export class ProbeEngine {
 		private readonly timeoutMs = 120_000,
 	) {}
 
-	request<T>(body: Record<string, unknown>): Promise<T> {
+	request<T>(body: Record<string, unknown>, op = "probe"): Promise<T> {
 		const result = this.tail.then(async () => {
 			for (let attempt = 0; ; attempt++) {
 				if (!this.engine?.alive) this.engine = this.create();
@@ -20,13 +20,13 @@ export class ProbeEngine {
 				let timer: ReturnType<typeof setTimeout> | undefined;
 				try {
 					return await Promise.race([
-						engine.request<T>("probe", body),
+						engine.request<T>(op, body),
 						new Promise<never>((_, reject) => {
 							timer = setTimeout(() => {
 								timedOut = true;
 								engine.kill("SIGKILL");
 								this.engine = undefined;
-								reject(new Error("probe engine timed out"));
+								reject(new Error(`${op} engine timed out`));
 							}, this.timeoutMs);
 						}),
 					]);

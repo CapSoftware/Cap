@@ -1,0 +1,1064 @@
+import { defaultCaptionSettings } from "~/store/captions";
+import { commands } from "../../../engine/editor-api";
+import type {
+	CaptionData,
+	CaptionSegment,
+	CaptionTrackSegment,
+	CaptionWord,
+	SegmentRecordings,
+	TimelineSegment,
+} from "../../../engine/types";
+import { type ClipTransition, clipTimelineOffsets } from "./clip-transitions";
+import type { TextSegment } from "./text";
+import {
+	effectiveToOutput,
+	effectiveToOutputEnd,
+	heldTimeBefore,
+	holdWindows,
+} from "./timeline-holds";
+export const DEFAULT_CAPTION_MODEL = "best";
+export const DEFAULT_CAPTION_LANGUAGE = "auto";
+
+// Transcription can stretch a trailing word's end across a following silence,
+// which keeps the caption on screen and duplicates the word across cuts.
+// Must match MAX_CAPTION_WORD_DURATION in the Rust transcription and rendering layers.
+export const MAX_CAPTION_WORD_DURATION = 2.5;
+
+function clampCaptionSegmentWords(segment: CaptionSegment): CaptionSegment {
+	const words = segment.words;
+	if (!words || words.length === 0) return segment;
+
+	const clampedWords = words.map((word) => ({
+		...word,
+		end: Math.min(word.end, word.start + MAX_CAPTION_WORD_DURATION),
+	}));
+
+	const lastWordEnd = clampedWords[clampedWords.length - 1]?.end ?? segment.end;
+
+	return {
+		...segment,
+		end: Math.min(segment.end, lastWordEnd),
+		words: clampedWords,
+	};
+}
+
+export function getSelectedTranscriptionLanguage() {
+	return (
+		localStorage.getItem("selectedTranscriptionLanguage") ??
+		DEFAULT_CAPTION_LANGUAGE
+	);
+}
+
+interface SourceToEditedMapping {
+	segmentIndex: number;
+	sourceStart: number;
+	sourceEnd: number;
+	editedStart: number;
+	timescale: number;
+}
+
+export interface MappedTimeRange {
+	segmentIndex: number;
+	start: number;
+	end: number;
+}
+
+function buildSourceToEditedMappings(
+	timelineSegments: TimelineSegment[],
+	recordingSegments: SegmentRecordings[],
+	transitions: ClipTransition[] = [],
+): SourceToEditedMapping[] {
+	const recordingOffsets: number[] = [];
+	let cumulativeOffset = 0;
+	for (const rec of recordingSegments) {
+		recordingOffsets.push(cumulativeOffset);
+		cumulativeOffset += rec.display.duration;
+	}
+
+	const mappings: SourceToEditedMapping[] = [];
+	const editedOffsets = clipTimelineOffsets(timelineSegments, transitions);
+
+	for (let index = 0; index < timelineSegments.length; index++) {
+		const seg = timelineSegments[index];
+		const recIdx = seg.recordingSegment ?? 0;
+		const recOff = recordingOffsets[recIdx] ?? 0;
+
+		mappings.push({
+			segmentIndex: index,
+			sourceStart: recOff + seg.start,
+			sourceEnd: recOff + seg.end,
+			editedStart: editedOffsets[index],
+			timescale: seg.timescale,
+		});
+	}
+
+	return mappings;
+}
+
+function mapTimeRangeWithinMapping(
+	start: number,
+	end: number,
+	mapping: SourceToEditedMapping,
+): MappedTimeRange | null {
+	const overlapStart = Math.max(start, mapping.sourceStart);
+	const overlapEnd = Math.min(end, mapping.sourceEnd);
+
+	if (overlapStart >= overlapEnd) return null;
+
+	return {
+		segmentIndex: mapping.segmentIndex,
+		start:
+			mapping.editedStart +
+			(overlapStart - mapping.sourceStart) / mapping.timescale,
+		end:
+			mapping.editedStart +
+			(overlapEnd - mapping.sourceStart) / mapping.timescale,
+	};
+}
+
+const CAPTION_EDL_SEPARATOR = "::edl";
+
+function mappedCaptionSegmentId(
+	baseId: string,
+	index: number,
+	total: number,
+): string {
+	return total === 1 ? baseId : `${baseId}${CAPTION_EDL_SEPARATOR}${index}`;
+}
+
+export function sourceCaptionId(trackId: string): string {
+	const index = trackId.indexOf(CAPTION_EDL_SEPARATOR);
+	return index === -1 ? trackId : trackId.slice(0, index);
+}
+
+export function mapCaptionsToEditedTimeline(
+	rawSegments: CaptionSegment[],
+	timelineSegments: TimelineSegment[],
+	recordingSegments: SegmentRecordings[],
+	transitions: ClipTransition[] = [],
+	textSegments?: readonly TextSegment[],
+): CaptionSegment[] {
+	const sanitizedSegments = rawSegments.map(clampCaptionSegmentWords);
+
+	if (timelineSegments.length === 0 || recordingSegments.length === 0) {
+		return sanitizedSegments;
+	}
+
+	const mappings = buildSourceToEditedMappings(
+		timelineSegments,
+		recordingSegments,
+		transitions,
+	);
+
+	// The edit-list mappings live in the gapless recording-flow domain; the
+	// rendered track is compared against the output clock, which includes
+	// fullscreen-text holds. Land every projected range back in output time
+	// so captions after (or across) a hold stay on their spoken content.
+	const holds = holdWindows(textSegments);
+	const holdAdjusted = (range: MappedTimeRange): MappedTimeRange =>
+		holds.length === 0
+			? range
+			: {
+					...range,
+					start: effectiveToOutput(holds, range.start),
+					end: effectiveToOutputEnd(holds, range.end),
+				};
+
+	const result: CaptionSegment[] = [];
+
+	for (const caption of sanitizedSegments) {
+		const mappedCaptionSegments = mappings.flatMap((mapping) => {
+			if (caption.words && caption.words.length > 0) {
+				const mappedWords = caption.words.flatMap((word) => {
+					const wordMapped = mapTimeRangeWithinMapping(
+						word.start,
+						word.end,
+						mapping,
+					);
+					if (!wordMapped) return [];
+
+					const adjusted = holdAdjusted(wordMapped);
+					return [
+						{
+							text: word.text,
+							start: adjusted.start,
+							end: adjusted.end,
+						},
+					];
+				});
+
+				if (mappedWords.length === 0) {
+					return [];
+				}
+
+				return [
+					{
+						...caption,
+						start: mappedWords[0]?.start ?? caption.start,
+						end: mappedWords[mappedWords.length - 1]?.end ?? caption.end,
+						text: getCaptionTextFromWords(mappedWords),
+						words: mappedWords,
+					},
+				];
+			}
+
+			const mappedRange = mapTimeRangeWithinMapping(
+				caption.start,
+				caption.end,
+				mapping,
+			);
+			if (!mappedRange) return [];
+
+			const adjusted = holdAdjusted(mappedRange);
+			return [
+				{
+					...caption,
+					start: adjusted.start,
+					end: adjusted.end,
+					words: caption.words,
+				},
+			];
+		});
+
+		mappedCaptionSegments.forEach((segment, index) => {
+			result.push({
+				...segment,
+				id: mappedCaptionSegmentId(
+					caption.id,
+					index,
+					mappedCaptionSegments.length,
+				),
+			});
+		});
+	}
+
+	return result;
+}
+
+export function createCaptionTrackSegments(
+	segments: CaptionSegment[],
+): CaptionTrackSegment[] {
+	return segments.map((rawSegment) => {
+		const segment = clampCaptionSegmentWords(rawSegment);
+		return {
+			id: segment.id,
+			start: segment.start,
+			end: segment.end,
+			text: segment.text,
+			words: segment.words ?? [],
+			fadeDurationOverride: null,
+			lingerDurationOverride: null,
+			positionOverride: null,
+			colorOverride: null,
+			backgroundColorOverride: null,
+			fontSizeOverride: null,
+		};
+	});
+}
+
+type CaptionTrackOverrides = Pick<
+	CaptionTrackSegment,
+	| "fadeDurationOverride"
+	| "lingerDurationOverride"
+	| "positionOverride"
+	| "colorOverride"
+	| "backgroundColorOverride"
+	| "fontSizeOverride"
+>;
+
+const EMPTY_CAPTION_OVERRIDES: CaptionTrackOverrides = {
+	fadeDurationOverride: null,
+	lingerDurationOverride: null,
+	positionOverride: null,
+	colorOverride: null,
+	backgroundColorOverride: null,
+	fontSizeOverride: null,
+};
+
+export function deriveCaptionTrackSegments(
+	sourceSegments: CaptionSegment[],
+	timelineSegments: TimelineSegment[],
+	recordingSegments: SegmentRecordings[],
+	previousTrack: CaptionTrackSegment[] = [],
+	transitions: ClipTransition[] = [],
+	textSegments?: readonly TextSegment[],
+): CaptionTrackSegment[] {
+	const overridesBySourceId = new Map<string, CaptionTrackOverrides>();
+	for (const segment of previousTrack) {
+		const id = sourceCaptionId(segment.id);
+		if (!overridesBySourceId.has(id)) {
+			overridesBySourceId.set(id, {
+				fadeDurationOverride: segment.fadeDurationOverride ?? null,
+				lingerDurationOverride: segment.lingerDurationOverride ?? null,
+				positionOverride: segment.positionOverride ?? null,
+				colorOverride: segment.colorOverride ?? null,
+				backgroundColorOverride: segment.backgroundColorOverride ?? null,
+				fontSizeOverride: segment.fontSizeOverride ?? null,
+			});
+		}
+	}
+
+	const mapped = mapCaptionsToEditedTimeline(
+		sourceSegments,
+		timelineSegments,
+		recordingSegments,
+		transitions,
+		textSegments,
+	);
+
+	return mapped
+		.slice()
+		.sort((a, b) => a.start - b.start)
+		.map((segment) => ({
+			id: segment.id,
+			start: segment.start,
+			end: segment.end,
+			text: segment.text,
+			words: segment.words ?? [],
+			...(overridesBySourceId.get(sourceCaptionId(segment.id)) ??
+				EMPTY_CAPTION_OVERRIDES),
+		}));
+}
+
+export function mapSourceTimeToEdited(
+	sourceTime: number,
+	timelineSegments: TimelineSegment[],
+	recordingSegments: SegmentRecordings[],
+	transitions: ClipTransition[] = [],
+	textSegments?: readonly TextSegment[],
+): number | null {
+	const mappings = buildSourceToEditedMappings(
+		timelineSegments,
+		recordingSegments,
+		transitions,
+	);
+	for (const mapping of mappings) {
+		if (sourceTime >= mapping.sourceStart && sourceTime <= mapping.sourceEnd) {
+			return effectiveToOutput(
+				holdWindows(textSegments),
+				mapping.editedStart +
+					(sourceTime - mapping.sourceStart) / mapping.timescale,
+			);
+		}
+	}
+	return null;
+}
+
+export function mapSourceRangeToEdited(
+	sourceStart: number,
+	sourceEnd: number,
+	timelineSegments: TimelineSegment[],
+	recordingSegments: SegmentRecordings[],
+	transitions: ClipTransition[] = [],
+): MappedTimeRange[] {
+	const mappings = buildSourceToEditedMappings(
+		timelineSegments,
+		recordingSegments,
+		transitions,
+	);
+	const ranges: MappedTimeRange[] = [];
+	for (const mapping of mappings) {
+		const mapped = mapTimeRangeWithinMapping(sourceStart, sourceEnd, mapping);
+		if (mapped) ranges.push(mapped);
+	}
+	return ranges;
+}
+
+export function mapEditedTimeToSource(
+	editedTime: number,
+	timelineSegments: TimelineSegment[],
+	recordingSegments: SegmentRecordings[],
+	transitions: ClipTransition[] = [],
+	sourceRange?: { start: number; end: number },
+	overlapPreference: "outgoing" | "incoming" = "outgoing",
+	textSegments?: readonly TextSegment[],
+): number | null {
+	editedTime -= heldTimeBefore(holdWindows(textSegments), editedTime);
+	const mappings = buildSourceToEditedMappings(
+		timelineSegments,
+		recordingSegments,
+		transitions,
+	);
+	let fallback: number | null = null;
+	for (const mapping of mappings) {
+		const editedEnd =
+			mapping.editedStart +
+			(mapping.sourceEnd - mapping.sourceStart) / mapping.timescale;
+		if (editedTime >= mapping.editedStart && editedTime <= editedEnd) {
+			const sourceTime =
+				mapping.sourceStart +
+				(editedTime - mapping.editedStart) * mapping.timescale;
+			if (
+				sourceRange &&
+				sourceRange.start < mapping.sourceEnd &&
+				sourceRange.end > mapping.sourceStart
+			) {
+				return sourceTime;
+			}
+			if (fallback === null || overlapPreference === "incoming") {
+				fallback = sourceTime;
+			}
+		}
+	}
+	return fallback;
+}
+
+export function syncCaptionSourceFromTrack(
+	project: {
+		captions?: { segments: CaptionSegment[] } | null;
+		timeline?: {
+			segments: TimelineSegment[];
+			captionSegments?: CaptionTrackSegment[] | null;
+			transitions?: ClipTransition[] | null;
+			textSegments?: TextSegment[] | null;
+		} | null;
+	},
+	trackIndex: number,
+	recordingSegments: SegmentRecordings[],
+) {
+	const timeline = project.timeline;
+	const track = timeline?.captionSegments?.[trackIndex];
+	if (!timeline || !track) return;
+	const sourceId = sourceCaptionId(track.id);
+	const source = project.captions?.segments?.find(
+		(segment) => segment.id === sourceId,
+	);
+	if (!source) return;
+	const sourceRange = { start: source.start, end: source.end };
+	const toSource = (time: number) =>
+		mapEditedTimeToSource(
+			time,
+			timeline.segments,
+			recordingSegments,
+			timeline.transitions ?? [],
+			sourceRange,
+			"outgoing",
+			timeline.textSegments ?? undefined,
+		);
+	const start = toSource(track.start);
+	const end = toSource(track.end);
+	if (track.id !== sourceId) {
+		syncSplitCaptionPiece(source, track, timeline, recordingSegments, {
+			start,
+			end,
+			toSource,
+		});
+		return;
+	}
+	if (start !== null) source.start = start;
+	if (end !== null) source.end = end;
+	source.text = track.text;
+	source.words = syncCaptionWordsWithText(
+		source.text,
+		source.words,
+		source.start,
+		source.end,
+	);
+}
+
+function syncSplitCaptionPiece(
+	source: CaptionSegment,
+	track: CaptionTrackSegment,
+	timeline: {
+		segments: TimelineSegment[];
+		transitions?: ClipTransition[] | null;
+		textSegments?: TextSegment[] | null;
+	},
+	recordingSegments: SegmentRecordings[],
+	mapped: {
+		start: number | null;
+		end: number | null;
+		toSource: (time: number) => number | null;
+	},
+) {
+	const words = source.words ?? [];
+	const pieceIndex = Number(
+		track.id.slice(
+			track.id.lastIndexOf(CAPTION_EDL_SEPARATOR) +
+				CAPTION_EDL_SEPARATOR.length,
+		),
+	);
+	const pieces = mapCaptionsToEditedTimeline(
+		[source],
+		timeline.segments,
+		recordingSegments,
+		timeline.transitions ?? [],
+		timeline.textSegments ?? undefined,
+	);
+	const shownBy = (piece: CaptionSegment | undefined) => {
+		const shown = new Set<number>();
+		for (const word of piece?.words ?? []) {
+			const time = mapped.toSource((word.start + word.end) / 2);
+			if (time === null) continue;
+			const index = words.findIndex(
+				(candidate) => candidate.start <= time && time <= candidate.end,
+			);
+			if (index !== -1) shown.add(index);
+		}
+		return shown;
+	};
+	const shown = shownBy(pieces[pieceIndex]);
+	if (shown.size === 0) {
+		if (words.length === 0) source.text = track.text;
+		return;
+	}
+	const elsewhere = new Set(
+		pieces.flatMap((piece, index) =>
+			index === pieceIndex ? [] : [...shownBy(piece)],
+		),
+	);
+	let first = Math.min(...shown);
+	let last = Math.max(...shown);
+	let tokens = track.text.trim().split(/\s+/).filter(Boolean);
+	// A word a cut runs through shows in both pieces; unless this edit changed
+	// it, it stays as it is so the other piece doesn't change too.
+	const kept = (index: number, token: string | undefined) =>
+		elsewhere.has(index) && token === words[index]?.text;
+	while (first <= last && tokens.length > 0 && kept(first, tokens[0])) {
+		first++;
+		tokens = tokens.slice(1);
+	}
+	while (first <= last && tokens.length > 0 && kept(last, tokens.at(-1))) {
+		last--;
+		tokens = tokens.slice(0, -1);
+	}
+	const before = words.slice(0, first);
+	const after = words.slice(last + 1);
+	const floor = before.at(-1)?.end ?? Number.NEGATIVE_INFINITY;
+	const ceiling = after[0]?.start ?? Number.POSITIVE_INFINITY;
+	const runStart = Math.max(
+		mapped.start ?? words[first]?.start ?? floor,
+		floor,
+	);
+	const runEnd = Math.max(
+		runStart,
+		Math.min(mapped.end ?? words[last]?.end ?? ceiling, ceiling),
+	);
+	const run = syncCaptionWordsWithText(
+		tokens.join(" "),
+		words.slice(first, last + 1),
+		runStart,
+		runEnd,
+	);
+	source.words = [...before, ...run, ...after];
+	source.text = getCaptionTextFromWords(source.words);
+	if (before.length === 0 && run[0]) source.start = run[0].start;
+	if (after.length === 0 && run.length > 0) {
+		source.end = run[run.length - 1].end;
+	}
+}
+
+export function applyCaptionResultToProject<
+	T extends {
+		captions?:
+			| ({
+					segments: CaptionSegment[];
+					settings?: Record<string, unknown> | null;
+			  } & Record<string, unknown>)
+			| null;
+		timeline?:
+			| ({
+					segments: TimelineSegment[];
+					captionSegments?: CaptionTrackSegment[] | null;
+					transitions?: ClipTransition[] | null;
+					textSegments?: TextSegment[] | null;
+			  } & Record<string, unknown>)
+			| null;
+	},
+>(
+	currentProject: T,
+	rawSegments: CaptionSegment[],
+	recordingSegments: SegmentRecordings[],
+	recordingDuration: number,
+) {
+	if (!currentProject.captions) {
+		currentProject.captions = {
+			segments: [],
+			settings: { ...defaultCaptionSettings, enabled: true },
+		} as NonNullable<T["captions"]>;
+	}
+	const captions = currentProject.captions;
+	captions.settings = {
+		...defaultCaptionSettings,
+		...captions.settings,
+		enabled: true,
+	};
+	if (!currentProject.timeline) {
+		currentProject.timeline = {
+			segments: [{ start: 0, end: recordingDuration, timescale: 1 }],
+			zoomSegments: [],
+			sceneSegments: [],
+			maskSegments: [],
+			textSegments: [],
+			styleSegments: [],
+			imageSegments: [],
+			captionSegments: [],
+			keyboardSegments: [],
+		} as NonNullable<T["timeline"]>;
+	}
+	const timeline = currentProject.timeline;
+
+	captions.segments = rawSegments;
+	captions.sourceTimed = true;
+	timeline.captionSegments = deriveCaptionTrackSegments(
+		rawSegments,
+		timeline.segments,
+		recordingSegments,
+		timeline.captionSegments ?? [],
+		timeline.transitions ?? [],
+		timeline.textSegments ?? [],
+	);
+}
+
+export async function transcribeEditorCaptions(
+	videoPath: string,
+	language = DEFAULT_CAPTION_LANGUAGE,
+): Promise<CaptionData> {
+	return await commands.transcribeAudio(
+		videoPath,
+		DEFAULT_CAPTION_MODEL,
+		language,
+		"Parakeet",
+	);
+}
+
+const CAPTION_ATTACHING_PUNCTUATION = new Set([
+	",",
+	".",
+	"!",
+	"?",
+	";",
+	":",
+	"%",
+	")",
+	"]",
+	"}",
+	"'",
+	"’",
+	"、",
+	"。",
+	"！",
+	"？",
+	"；",
+	"：",
+	"，",
+]);
+
+function captionTokenAttachesToPrevious(text: string) {
+	const firstChar = text.trim().charAt(0);
+	return firstChar.length > 0 && CAPTION_ATTACHING_PUNCTUATION.has(firstChar);
+}
+
+export function getCaptionTextFromWords(words: CaptionWord[]) {
+	let text = "";
+
+	for (const word of words) {
+		const wordText = word.text.trim();
+		if (wordText.length === 0) continue;
+
+		if (text.length > 0 && !captionTokenAttachesToPrevious(wordText)) {
+			text += " ";
+		}
+		text += wordText;
+	}
+
+	return text;
+}
+
+export function syncCaptionWordsWithText(
+	text: string,
+	existingWords: CaptionWord[] | undefined,
+	start: number,
+	end: number,
+): CaptionWord[] {
+	const tokens = text
+		.trim()
+		.split(/\s+/)
+		.map((token) => token.trim())
+		.filter((token) => token.length > 0);
+
+	if (tokens.length === 0) {
+		return [];
+	}
+
+	const baseWords = existingWords ?? [];
+	if (baseWords.length === tokens.length && baseWords.length > 0) {
+		return baseWords.map((word, index) => ({
+			...word,
+			text: tokens[index] ?? word.text,
+		}));
+	}
+
+	const duration = Math.max(end - start, 0);
+	const step = tokens.length > 0 ? duration / tokens.length : 0;
+
+	return tokens.map((token, index) => {
+		const source = baseWords[index];
+		const wordStart = start + step * index;
+		const wordEnd =
+			index === tokens.length - 1 ? end : start + step * (index + 1);
+
+		return {
+			text: token,
+			start: source?.start ?? wordStart,
+			end: source?.end ?? wordEnd,
+		};
+	});
+}
+
+export function getCaptionGenerationErrorMessage(error: unknown) {
+	let message = "Unknown error occurred";
+
+	if (error instanceof Error) {
+		message = error.message;
+	} else if (typeof error === "string") {
+		message = error;
+	}
+
+	if (message.includes("No audio stream found")) {
+		return "No audio found in the video file";
+	}
+
+	if (message.includes("Model file not found")) {
+		return "Caption model not found. Please download it first";
+	}
+
+	if (message.includes("Failed to load Whisper model")) {
+		return "Failed to load the caption model. Try downloading it again";
+	}
+
+	if (
+		message.includes("Parakeet transcription is not available on Intel macOS")
+	) {
+		return "Parakeet models are not available on Intel Macs. Use a Whisper model instead";
+	}
+
+	return message;
+}
+
+if (import.meta.vitest) {
+	const { describe, expect, it } = import.meta.vitest;
+
+	describe("getCaptionTextFromWords", () => {
+		it("attaches punctuation tokens to the previous word", () => {
+			expect(
+				getCaptionTextFromWords([
+					{ text: "test", start: 0, end: 0.2 },
+					{ text: ",", start: 0.2, end: 0.3 },
+					{ text: "test", start: 0.3, end: 0.6 },
+					{ text: ".", start: 0.6, end: 0.7 },
+				]),
+			).toBe("test, test.");
+		});
+	});
+
+	describe("mapCaptionsToEditedTimeline", () => {
+		it("splits caption words across retained timeline ranges", () => {
+			const result = mapCaptionsToEditedTimeline(
+				[
+					{
+						id: "caption",
+						start: 0.4,
+						end: 2.3,
+						text: "hello world",
+						words: [
+							{ text: "hello", start: 0.4, end: 0.6 },
+							{ text: "world", start: 2.1, end: 2.3 },
+						],
+					},
+				],
+				[
+					{ start: 0, end: 1, timescale: 1, recordingSegment: 0 },
+					{ start: 2, end: 3, timescale: 1, recordingSegment: 0 },
+				],
+				[{ display: { duration: 4 } } as SegmentRecordings],
+			);
+
+			expect(result).toHaveLength(2);
+			expect(result[0]).toEqual({
+				id: "caption::edl0",
+				start: 0.4,
+				end: 0.6,
+				text: "hello",
+				words: [{ text: "hello", start: 0.4, end: 0.6 }],
+			});
+			expect(result[1]?.id).toBe("caption::edl1");
+			expect(result[1]?.text).toBe("world");
+			expect(result[1]?.start).toBeCloseTo(1.1);
+			expect(result[1]?.end).toBeCloseTo(1.3);
+			expect(result[1]?.words?.[0]?.text).toBe("world");
+			expect(result[1]?.words?.[0]?.start).toBeCloseTo(1.1);
+			expect(result[1]?.words?.[0]?.end).toBeCloseTo(1.3);
+		});
+
+		it("clamps an inflated trailing word so it neither sticks nor duplicates across cuts", () => {
+			const result = mapCaptionsToEditedTimeline(
+				[
+					{
+						id: "caption",
+						start: 0.4,
+						end: 16.4,
+						text: "a few seconds.",
+						words: [
+							{ text: "a", start: 0.4, end: 0.5 },
+							{ text: "few", start: 0.5, end: 0.8 },
+							{ text: "seconds.", start: 0.8, end: 16.4 },
+						],
+					},
+				],
+				[
+					{ start: 0, end: 1.5, timescale: 1, recordingSegment: 0 },
+					{ start: 10, end: 12, timescale: 1, recordingSegment: 0 },
+				],
+				[{ display: { duration: 20 } } as SegmentRecordings],
+			);
+
+			expect(result).toHaveLength(1);
+			expect(result[0]?.id).toBe("caption");
+			expect(result[0]?.text).toBe("a few seconds.");
+			expect(result[0]?.words?.[2]?.text).toBe("seconds.");
+			expect(result[0]?.words?.[2]?.end).toBeCloseTo(1.5);
+		});
+
+		it("projects captions into hold-extended output time", () => {
+			const fullscreenText = (start: number, end: number): TextSegment =>
+				({
+					start,
+					end,
+					enabled: true,
+					layout: "fullscreen",
+				}) as TextSegment;
+			const identityTimeline: TimelineSegment[] = [
+				{ start: 0, end: 10, timescale: 1, recordingSegment: 0 },
+			];
+			const recordings = [{ display: { duration: 10 } } as SegmentRecordings];
+
+			const after = mapCaptionsToEditedTimeline(
+				[
+					{
+						id: "caption",
+						start: 4,
+						end: 5,
+						text: "later",
+						words: [{ text: "later", start: 4, end: 5 }],
+					},
+				],
+				identityTimeline,
+				recordings,
+				[],
+				[fullscreenText(2, 5)],
+			);
+			expect(after).toHaveLength(1);
+			expect(after[0]?.start).toBeCloseTo(7);
+			expect(after[0]?.end).toBeCloseTo(8);
+			expect(after[0]?.words?.[0]?.start).toBeCloseTo(7);
+			expect(after[0]?.words?.[0]?.end).toBeCloseTo(8);
+
+			const before = mapCaptionsToEditedTimeline(
+				[{ id: "caption", start: 1, end: 2, text: "before", words: [] }],
+				identityTimeline,
+				recordings,
+				[],
+				[fullscreenText(2, 5)],
+			);
+			expect(before[0]?.start).toBeCloseTo(1);
+			expect(before[0]?.end).toBeCloseTo(2);
+
+			const across = mapCaptionsToEditedTimeline(
+				[
+					{
+						id: "caption",
+						start: 1,
+						end: 3,
+						text: "across it",
+						words: [
+							{ text: "across", start: 1, end: 2 },
+							{ text: "it", start: 2, end: 3 },
+						],
+					},
+				],
+				identityTimeline,
+				recordings,
+				[],
+				[fullscreenText(2, 5)],
+			);
+			expect(across).toHaveLength(1);
+			expect(across[0]?.start).toBeCloseTo(1);
+			expect(across[0]?.end).toBeCloseTo(6);
+			expect(across[0]?.words?.[0]?.start).toBeCloseTo(1);
+			expect(across[0]?.words?.[0]?.end).toBeCloseTo(2);
+			expect(across[0]?.words?.[1]?.start).toBeCloseTo(5);
+			expect(across[0]?.words?.[1]?.end).toBeCloseTo(6);
+		});
+
+		it("splits captions without word timing across retained timeline ranges", () => {
+			const result = mapCaptionsToEditedTimeline(
+				[
+					{
+						id: "caption",
+						start: 0.25,
+						end: 2.5,
+						text: "hello world",
+						words: [],
+					},
+				],
+				[
+					{ start: 0, end: 1, timescale: 1, recordingSegment: 0 },
+					{ start: 2, end: 3, timescale: 1, recordingSegment: 0 },
+				],
+				[{ display: { duration: 4 } } as SegmentRecordings],
+			);
+
+			expect(result).toEqual([
+				{
+					id: "caption::edl0",
+					start: 0.25,
+					end: 1,
+					text: "hello world",
+					words: [],
+				},
+				{
+					id: "caption::edl1",
+					start: 1,
+					end: 1.5,
+					text: "hello world",
+					words: [],
+				},
+			]);
+		});
+	});
+
+	describe("deriveCaptionTrackSegments", () => {
+		const sourceSegments: CaptionSegment[] = [
+			{
+				id: "capA",
+				start: 1,
+				end: 2,
+				text: "a",
+				words: [{ text: "a", start: 1, end: 2 }],
+			},
+			{
+				id: "capB",
+				start: 6,
+				end: 7,
+				text: "b",
+				words: [{ text: "b", start: 6, end: 7 }],
+			},
+		];
+		const recordings = [{ display: { duration: 10 } } as SegmentRecordings];
+
+		it("follows clip reordering to keep captions on their content", () => {
+			const reordered: TimelineSegment[] = [
+				{ start: 5, end: 8, timescale: 1, recordingSegment: 0 },
+				{ start: 0, end: 3, timescale: 1, recordingSegment: 0 },
+			];
+
+			const track = deriveCaptionTrackSegments(
+				sourceSegments,
+				reordered,
+				recordings,
+			);
+
+			expect(track.map((s) => s.id)).toEqual(["capB", "capA"]);
+			expect(track[0]?.start).toBeCloseTo(1);
+			expect(track[0]?.end).toBeCloseTo(2);
+			expect(track[1]?.start).toBeCloseTo(4);
+			expect(track[1]?.end).toBeCloseTo(5);
+		});
+
+		it("drops captions whose content was cut out", () => {
+			const cut: TimelineSegment[] = [
+				{ start: 0, end: 3, timescale: 1, recordingSegment: 0 },
+			];
+
+			const track = deriveCaptionTrackSegments(sourceSegments, cut, recordings);
+
+			expect(track.map((s) => s.id)).toEqual(["capA"]);
+		});
+
+		it("carries style overrides across re-derivation by source id", () => {
+			const identity: TimelineSegment[] = [
+				{ start: 0, end: 10, timescale: 1, recordingSegment: 0 },
+			];
+
+			const previous = deriveCaptionTrackSegments(
+				sourceSegments,
+				identity,
+				recordings,
+			).map((segment) =>
+				segment.id === "capA" ? { ...segment, fontSizeOverride: 42 } : segment,
+			);
+
+			const rederived = deriveCaptionTrackSegments(
+				sourceSegments,
+				identity,
+				recordings,
+				previous,
+			);
+
+			expect(rederived.find((s) => s.id === "capA")?.fontSizeOverride).toBe(42);
+		});
+
+		it("derives the render track in hold-extended output time", () => {
+			const identity: TimelineSegment[] = [
+				{ start: 0, end: 10, timescale: 1, recordingSegment: 0 },
+			];
+
+			const track = deriveCaptionTrackSegments(
+				sourceSegments,
+				identity,
+				recordings,
+				[],
+				[],
+				[
+					{
+						start: 3,
+						end: 5,
+						enabled: true,
+						layout: "fullscreen",
+					} as TextSegment,
+				],
+			);
+
+			expect(track.find((s) => s.id === "capA")?.start).toBeCloseTo(1);
+			expect(track.find((s) => s.id === "capB")?.start).toBeCloseTo(8);
+			expect(track.find((s) => s.id === "capB")?.end).toBeCloseTo(9);
+		});
+	});
+
+	describe("mapEditedTimeToSource", () => {
+		it("selects overlap sources explicitly and honors a caption source hint", () => {
+			const segments: TimelineSegment[] = [
+				{ start: 4, end: 6, timescale: 1, recordingSegment: 0 },
+				{ start: 0, end: 2, timescale: 1, recordingSegment: 1 },
+			];
+			const recordings = [
+				{ display: { duration: 10 } } as SegmentRecordings,
+				{ display: { duration: 10 } } as SegmentRecordings,
+			];
+			const transitions: ClipTransition[] = [
+				{ segmentIndex: 1, type: "cross-fade", duration: 0.5 },
+			];
+
+			expect(
+				mapEditedTimeToSource(1.75, segments, recordings, transitions),
+			).toBeCloseTo(5.75);
+			expect(
+				mapEditedTimeToSource(
+					1.75,
+					segments,
+					recordings,
+					transitions,
+					undefined,
+					"incoming",
+				),
+			).toBeCloseTo(10.25);
+			expect(
+				mapEditedTimeToSource(1.75, segments, recordings, transitions, {
+					start: 5,
+					end: 6,
+				}),
+			).toBeCloseTo(5.75);
+		});
+	});
+}

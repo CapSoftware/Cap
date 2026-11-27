@@ -4,14 +4,21 @@ import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { isAbandonedEditorReplacementUpload } from "@/lib/editor-replacement-upload";
+import {
+	editorSourcesUploaded,
+	hasStudioEditorSource,
+} from "@/lib/editor-sources-ready";
 import { isEditSourceKey } from "@/lib/video-edit-processing";
 import {
 	areEditSpecsEquivalent,
 	createIdentityEditSpec,
 } from "@/lib/video-edits";
+import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import { EditUpgradeGate } from "./EditUpgradeGate";
 import { EditVideoClient } from "./EditVideoClient";
+import { EditProcessing } from "./edit-processing";
 import { EditRecovery } from "./edit-recovery";
 
 function isMp4BackedVideo(source: typeof videos.$inferSelect.source) {
@@ -41,6 +48,7 @@ export default async function EditVideoPage(props: {
 			transcriptionStatus: videos.transcriptionStatus,
 			uploadPhase: videoUploads.phase,
 			rawFileKey: videoUploads.rawFileKey,
+			uploadUpdatedAt: videoUploads.updatedAt,
 		})
 		.from(videos)
 		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
@@ -50,12 +58,65 @@ export default async function EditVideoPage(props: {
 		!video ||
 		video.ownerId !== user.id ||
 		video.isScreenshot ||
-		!isMp4BackedVideo(video.source) ||
-		!video.duration ||
-		video.duration <= 0
+		!isMp4BackedVideo(video.source)
 	) {
 		notFound();
 	}
+
+	// Pilot accounts edit in Studio, which reads the raw sources and so opens
+	// as soon as they are uploaded instead of 404ing while the share video
+	// processes.
+	if (
+		isWebStudioEnabledForEmail(user.email) &&
+		!(
+			video.uploadPhase &&
+			isEditSourceKey({
+				ownerId: video.ownerId,
+				videoId,
+				rawFileKey: video.rawFileKey,
+			})
+		)
+	) {
+		const [studioEdit] = await db()
+			.select({ sourceKey: videoEdits.sourceKey })
+			.from(videoEdits)
+			.where(eq(videoEdits.videoId, videoId));
+		if (
+			video.uploadPhase &&
+			["uploading", "processing", "generating_thumbnail", "error"].includes(
+				video.uploadPhase,
+			) &&
+			!isAbandonedEditorReplacementUpload(
+				video.ownerId,
+				videoId,
+				video.uploadPhase,
+				video.rawFileKey,
+				video.uploadUpdatedAt,
+			)
+		) {
+			if (
+				!studioEdit &&
+				(video.duration ?? 0) > 0 &&
+				editorSourcesUploaded(video.metadata, video.uploadPhase)
+			) {
+				redirect(`/s/${videoId}/edit/studio`);
+			}
+			return <EditProcessing videoId={videoId} />;
+		}
+		if (
+			!video.metadata?.editProcessing &&
+			hasStudioEditorSource(
+				video.ownerId,
+				videoId,
+				video.metadata,
+				studioEdit?.sourceKey,
+			)
+		) {
+			redirect(`/s/${videoId}/edit/studio`);
+		}
+	}
+
+	if (!video.duration || video.duration <= 0) notFound();
 
 	if (!userIsPro(user)) {
 		return <EditUpgradeGate />;

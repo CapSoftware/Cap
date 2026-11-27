@@ -1246,6 +1246,7 @@ mod tests {
             keyboard_segments: vec![],
             audio_segments: vec![],
             camera3d_segments: Vec::new(),
+            waveform_segments: Vec::new(),
         };
         let config = ProjectConfiguration {
             timeline: Some(timeline),
@@ -1322,6 +1323,7 @@ mod tests {
                 transition_in: 0.5,
                 transition_out: 0.8,
             }],
+            waveform_segments: Vec::new(),
         };
         let config = ProjectConfiguration {
             timeline: Some(timeline),
@@ -1398,6 +1400,7 @@ mod tests {
             keyboard_segments: vec![],
             audio_segments: vec![],
             camera3d_segments: Vec::new(),
+            waveform_segments: Vec::new(),
         };
         let config = ProjectConfiguration {
             timeline: Some(timeline),

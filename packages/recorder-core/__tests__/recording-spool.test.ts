@@ -1,12 +1,17 @@
 import {
+	createRecordingSessionId,
 	deleteRecoveredRecordingSpool,
+	fallbackRecordingSessionId,
+	isRecordingSpoolUploaded,
+	RECORDING_SPOOL_OPERATION_TIMEOUT_MS,
 	RecordingSpool,
 	type RecordingSpoolBackend,
 	RecordingSpoolBackpressureError,
 	type RecordingSpoolSessionRecord,
+	RecordingSpoolStalledError,
 	recoverOrphanedRecordingSpools,
 } from "@cap/recorder-core/recording-spool";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 class MemoryRecordingSpoolBackend implements RecordingSpoolBackend {
 	private readonly sessions = new Map<string, RecordingSpoolSessionRecord>();
@@ -133,6 +138,170 @@ class DelayedRecordingSpoolBackend implements RecordingSpoolBackend {
 		this.pendingAppend = null;
 	}
 }
+
+// What WebKit's private browsing does: a Blob put fails at once, and after
+// that no transaction on the database settles, reads included.
+class WedgedRecordingSpoolBackend implements RecordingSpoolBackend {
+	private wedged = false;
+	private readonly persisted: Blob[] = [];
+	reads = 0;
+
+	constructor(private readonly healthyWrites = 0) {}
+
+	private never<T>() {
+		return new Promise<T>(() => undefined);
+	}
+
+	async initialize() {
+		if (this.wedged) await this.never();
+	}
+
+	async createSession() {
+		if (this.wedged) await this.never();
+	}
+
+	async appendChunk(
+		_session: RecordingSpoolSessionRecord,
+		_index: number,
+		chunk: Blob,
+	) {
+		if (this.wedged) await this.never();
+		if (this.persisted.length < this.healthyWrites) {
+			this.persisted.push(chunk);
+			return;
+		}
+		this.wedged = true;
+		throw new DOMException("Error preparing Blob data", "UnknownError");
+	}
+
+	async readChunks() {
+		this.reads += 1;
+		if (this.wedged) await this.never();
+		return [...this.persisted];
+	}
+
+	async listSessions() {
+		if (this.wedged) await this.never();
+		return [];
+	}
+
+	async deleteSession() {
+		if (this.wedged) await this.never();
+	}
+
+	wedge() {
+		this.wedged = true;
+	}
+}
+
+describe("RecordingSpool on a storage that stops answering", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("recovers every chunk without reading storage when nothing was written", async () => {
+		const backend = new WedgedRecordingSpoolBackend();
+		const spool = await RecordingSpool.create(
+			{ mimeType: "video/mp4" },
+			backend,
+		);
+
+		await expect(spool.appendChunk(new Blob(["first"]))).rejects.toThrow(
+			"Error preparing Blob data",
+		);
+		await expect(spool.appendChunk(new Blob(["second"]))).rejects.toThrow(
+			"Error preparing Blob data",
+		);
+
+		const recovered = await spool.recoverBlob();
+		expect(backend.reads).toBe(0);
+		expect(recovered && (await blobToText(recovered))).toBe("first");
+	});
+
+	it("gives up on a read that never settles instead of hanging", async () => {
+		vi.useFakeTimers();
+		const backend = new WedgedRecordingSpoolBackend(1);
+		const spool = await RecordingSpool.create(
+			{ mimeType: "video/mp4" },
+			backend,
+		);
+		await spool.appendChunk(new Blob(["persisted"]));
+		await expect(spool.appendChunk(new Blob(["failed"]))).rejects.toThrow(
+			"Error preparing Blob data",
+		);
+
+		const recovery = spool.recoverBlob();
+		const outcome = expect(recovery).rejects.toBeInstanceOf(
+			RecordingSpoolStalledError,
+		);
+		await vi.advanceTimersByTimeAsync(RECORDING_SPOOL_OPERATION_TIMEOUT_MS);
+		await outcome;
+	});
+
+	it("fails a write that never settles and keeps its chunk for recovery", async () => {
+		vi.useFakeTimers();
+		const backend = new WedgedRecordingSpoolBackend();
+		const spool = await RecordingSpool.create(
+			{ mimeType: "video/mp4" },
+			backend,
+		);
+		backend.wedge();
+
+		const write = spool.appendChunk(new Blob(["kept"]));
+		const outcome = expect(write).rejects.toBeInstanceOf(
+			RecordingSpoolStalledError,
+		);
+		await vi.advanceTimersByTimeAsync(RECORDING_SPOOL_OPERATION_TIMEOUT_MS);
+		await outcome;
+		await expect(spool.flush()).rejects.toBeInstanceOf(
+			RecordingSpoolStalledError,
+		);
+		await expect(spool.appendChunk(new Blob(["later"]))).rejects.toBeInstanceOf(
+			RecordingSpoolStalledError,
+		);
+
+		const recovered = await spool.recoverBlob();
+		expect(recovered && (await blobToText(recovered))).toBe("kept");
+	});
+
+	it("does not let a heartbeat that never settles block later writes", async () => {
+		vi.useFakeTimers();
+		const backend = new WedgedRecordingSpoolBackend();
+		const spool = await RecordingSpool.create(
+			{ mimeType: "video/mp4" },
+			backend,
+		);
+		backend.wedge();
+
+		const heartbeat = spool.touch();
+		const flushed = spool.flush();
+		await vi.advanceTimersByTimeAsync(RECORDING_SPOOL_OPERATION_TIMEOUT_MS);
+		await expect(heartbeat).resolves.toBeUndefined();
+		await expect(flushed).resolves.toBeUndefined();
+	});
+
+	it("fails setup and disposal that never settle", async () => {
+		vi.useFakeTimers();
+		const backend = new WedgedRecordingSpoolBackend();
+		const spool = await RecordingSpool.create(
+			{ mimeType: "video/mp4" },
+			backend,
+		);
+		backend.wedge();
+
+		const created = RecordingSpool.create({ mimeType: "video/mp4" }, backend);
+		const createOutcome = expect(created).rejects.toBeInstanceOf(
+			RecordingSpoolStalledError,
+		);
+		const disposed = spool.dispose();
+		const disposeOutcome = expect(disposed).rejects.toBeInstanceOf(
+			RecordingSpoolStalledError,
+		);
+		await vi.advanceTimersByTimeAsync(RECORDING_SPOOL_OPERATION_TIMEOUT_MS);
+		await createOutcome;
+		await disposeOutcome;
+	});
+});
 
 describe("RecordingSpool", () => {
 	it("persists chunks in order and rebuilds the recording blob", async () => {
@@ -525,5 +694,70 @@ describe("RecordingSpool", () => {
 		expect(recovered).toEqual([]);
 		expect(backend.getSessionCount()).toBe(1);
 		expect(backend.getChunkCount("stuck")).toBe(1);
+	});
+
+	it("hands back the chunks still waiting to be written", async () => {
+		const backend = new DelayedRecordingSpoolBackend();
+		const spool = await RecordingSpool.create(
+			{ mimeType: "video/webm", sessionId: "session-unwritten" },
+			backend,
+		);
+
+		const first = spool.appendChunk(new Blob(["first-"]));
+		const second = spool.appendChunk(new Blob(["second"]));
+		expect(await blobToText(new Blob(spool.getUnwrittenChunks()))).toBe(
+			"first-second",
+		);
+
+		backend.releaseAppend();
+		await first;
+		backend.releaseAppend();
+		await second;
+		expect(spool.getUnwrittenChunks()).toEqual([]);
+	});
+
+	it("reads back only what was written, after pending writes settle", async () => {
+		const backend = new MemoryRecordingSpoolBackend();
+		const spool = await RecordingSpool.create(
+			{ mimeType: "video/mp4", sessionId: "session-persisted" },
+			backend,
+		);
+		expect(await spool.recoverPersistedBlob()).toBeNull();
+
+		void spool.appendChunk(new Blob(["persisted"]));
+		const blob = await spool.recoverPersistedBlob();
+
+		expect(blob?.type).toBe("video/mp4");
+		expect(await blobToText(blob as Blob)).toBe("persisted");
+	});
+
+	it("never reports a spool as uploaded without browser storage", async () => {
+		const backend = new MemoryRecordingSpoolBackend();
+		const spool = await RecordingSpool.create(
+			{ mimeType: "video/webm", sessionId: "session-no-storage" },
+			backend,
+		);
+		spool.markUploaded();
+
+		expect(isRecordingSpoolUploaded("session-no-storage")).toBe(false);
+		expect(await recoverOrphanedRecordingSpools(backend)).toEqual([]);
+	});
+
+	it("creates unique session ids", () => {
+		const ids = new Set(
+			Array.from({ length: 64 }, () => createRecordingSessionId()),
+		);
+		expect(ids.size).toBe(64);
+	});
+
+	it("creates unique session ids where randomUUID is missing outside a secure context", () => {
+		const ids = new Set(
+			Array.from({ length: 64 }, () => fallbackRecordingSessionId()),
+		);
+		expect(ids.size).toBe(64);
+		for (const id of ids) expect(id).toMatch(/^recording-\d+-[0-9a-f]{32}$/);
+		expect(createRecordingSessionId()).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+		);
 	});
 });

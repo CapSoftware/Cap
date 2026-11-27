@@ -51,9 +51,11 @@ import type { VideoStatusResult } from "@/actions/videos/get-status";
 import { useDashboardContext } from "@/app/(org)/dashboard/DashboardContext";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { EditorPrewarm } from "@/components/editor-shell/editor-prewarm";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
+import { rememberEntryFrame } from "@/lib/editor-entry-frame";
 import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";
 import {
 	copyRichVideoLink,
@@ -64,6 +66,7 @@ import { navigateWithTransition } from "@/utils/view-transition";
 import type { SharePageBranding, VideoData } from "../types";
 import { DashboardBackLink } from "./DashboardBackLink";
 import { RelativeTime } from "./RelativeTime";
+import { RecordingPublisherSlot } from "./recording-publisher-slot";
 import { describeShareAudience } from "./share-audience";
 import { useVideoDownload } from "./use-video-download";
 import { fromNow } from "./utils/from-now";
@@ -173,6 +176,8 @@ export const ShareHeader = ({
 	canDownload = false,
 	canMoveToFolder = false,
 	hasEdits = false,
+	studioEditor = false,
+	studioRecording = null,
 	views,
 	dashboardDestination = null,
 }: {
@@ -208,6 +213,8 @@ export const ShareHeader = ({
 	canDownload?: boolean;
 	canMoveToFolder?: boolean;
 	hasEdits?: boolean;
+	studioEditor?: boolean;
+	studioRecording?: { publish: boolean } | null;
 	/**
 	 * Shown to every viewer, not just the owner. The sidebar's analytics row is
 	 * members-only, which left a shared link with no sense of reach at all.
@@ -682,21 +689,30 @@ export const ShareHeader = ({
 
 	const userIsOwnerAndNotPro = user?.id === data.owner.id && !data.owner.isPro;
 	const canEditVideo =
-		isOwner &&
-		!data.isScreenshot &&
-		!data.hasActiveUpload &&
-		(data.source.type === "desktopMP4" || data.source.type === "webMP4");
+		studioEditor ||
+		(isOwner &&
+			!data.isScreenshot &&
+			!data.hasActiveUpload &&
+			(data.source.type === "desktopMP4" || data.source.type === "webMP4"));
 	const customThumbnail = getCustomThumbnailMetadata(data.metadata);
 	const canPickThumbnailFrame =
 		!data.hasActiveUpload &&
 		(data.source.type === "desktopMP4" || data.source.type === "webMP4");
 	const handleEditVideo = () => {
-		if (userIsOwnerAndNotPro) {
+		if (userIsOwnerAndNotPro && !studioEditor) {
 			setUpgradeModalOpen(true);
 			return;
 		}
 
-		navigateWithTransition("edit-enter", () => push(`/s/${data.id}/edit`));
+		if (studioEditor) {
+			rememberEntryFrame(
+				data.id,
+				document.querySelector<HTMLVideoElement>("[data-edit-video] video"),
+			);
+		}
+		navigateWithTransition("edit-enter", () => push(`/s/${data.id}/edit`), {
+			waitForNextPage: studioEditor,
+		});
 	};
 
 	const handleHideBranding = async () => {
@@ -851,6 +867,13 @@ export const ShareHeader = ({
 
 	return (
 		<>
+			{studioEditor && <EditorPrewarm route={`/s/${data.id}/edit/studio`} />}
+			{studioRecording && (
+				<RecordingPublisherSlot
+					start={studioRecording.publish}
+					videoId={data.id}
+				/>
+			)}
 			{userIsOwnerAndNotPro && (
 				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
 					<p className="text-center text-gray-12">

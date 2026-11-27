@@ -135,6 +135,9 @@ pub struct VideoRequest {
     pub frames: [u32; 2],
     pub threads: Option<usize>,
     pub out: PathBuf,
+    /// Levels the coordinator computed from whole audio files (see levels.rs).
+    #[serde(default)]
+    pub waveform_levels: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -231,6 +234,10 @@ pub async fn render(request: VideoRequest) -> Result<VideoResult> {
     .await
     .map_err(|error| anyhow!("decoders: {error}"))?;
     timings.decoders_ms = phase.elapsed().as_millis() as u64;
+    match &request.waveform_levels {
+        Some(path) => crate::levels::load(path, &constants.waveform_levels)?,
+        None => cap_editor::load_waveform_levels(&constants, &project.config, &segments).await,
+    }
 
     // A render that silently fell off the GPU (llvmpipe, software decode)
     // still produces correct frames, just several times slower, and would

@@ -24,6 +24,7 @@ import {
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
 import { Tooltip } from "@/components/Tooltip";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
+import { shareVideoRevision } from "@/lib/share-video-revision";
 import type { SpaceUpNext } from "@/lib/space-up-next";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
@@ -37,6 +38,7 @@ import {
 	shouldDeferPlaybackSource,
 	type UploadProgress,
 } from "./upload-progress";
+import { useShareVideoUpdates } from "./use-share-video-updates";
 import { formatChaptersAsVTT } from "./utils/transcript-utils";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
@@ -64,6 +66,9 @@ const ShareableLinkLimitOverlay = dynamic(() =>
 // Both ride outside the first paint: the tracker only mounts mid-upload (its
 // RPC client drags the Effect runtime along), and the upgrade modal — which
 // carries the Rive animation runtime — mounts on the first upgrade prompt.
+const RenderFarmSaveView = dynamic(() =>
+	import("./render-farm-save-view").then((m) => m.RenderFarmSaveView),
+);
 const UploadProgressTracker = dynamic(() => import("./UploadProgressTracker"), {
 	ssr: false,
 });
@@ -133,6 +138,7 @@ export const ShareVideo = forwardRef<
 		canFinalizeDesktopSegments?: boolean;
 		showPlaybackStatusBadge?: boolean;
 		isEditProcessing: boolean;
+		renderStarting?: boolean;
 		recordingStopped?: boolean;
 		earlySegmentPlayback?: boolean;
 		defaultPlaybackSpeed?: number;
@@ -160,6 +166,7 @@ export const ShareVideo = forwardRef<
 			canFinalizeDesktopSegments = false,
 			showPlaybackStatusBadge = false,
 			isEditProcessing,
+			renderStarting = false,
 			recordingStopped = false,
 			earlySegmentPlayback = false,
 			defaultPlaybackSpeed,
@@ -380,6 +387,24 @@ export const ShareVideo = forwardRef<
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
 		const isSegmentsSource = data.source.type === "desktopSegments";
 		const isOverShareLimit = data.ownerIsOverShareLimit === true;
+		const renderSaveActive =
+			isMp4Source &&
+			(renderStarting ||
+				data.metadata?.renderFarmSave?.status === "rendering" ||
+				data.metadata?.webEditorBrowserSave?.status === "rendering");
+		const savedFromWebEditor = !!(
+			data.metadata?.renderFarmSave || data.metadata?.webEditorBrowserSave
+		);
+		const { updateAvailable, showLatest } = useShareVideoUpdates({
+			videoId: data.id,
+			revision: isMp4Source ? shareVideoRevision(data.source) : null,
+			videoRef,
+			enabled:
+				(savedFromWebEditor ||
+					(viewerIsOwner && data.metadata?.editorSources?.version === 1)) &&
+				!renderSaveActive &&
+				!isOverShareLimit,
+		});
 		const isActivelyRecording =
 			isSegmentsSource &&
 			(data.hasActiveUpload ?? false) &&
@@ -538,9 +563,52 @@ export const ShareVideo = forwardRef<
 			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=video`;
 		}
 
+		const capVideoPlayer = (
+			<CapVideoPlayer
+				videoId={data.id}
+				mediaPlayerClassName={clsx(
+					"w-full h-full max-w-full max-h-full overflow-visible",
+					externalTimeline ? "rounded-none" : "rounded-xl",
+				)}
+				videoSrc={videoSrc}
+				rawFallbackSrc={rawFallbackSrc}
+				initialPlaybackUrl={initialPlaybackUrl}
+				serverPlaybackUrl={serverPlaybackUrl}
+				duration={data.duration}
+				defaultPlaybackSpeed={defaultPlaybackSpeed}
+				showPlaybackStatusBadge={showPlaybackStatusBadge}
+				disableCaptions={areCaptionsDisabled ?? false}
+				captionsInitiallyOff={captionsInitiallyOff}
+				disableCommentStamps={areCommentStampsDisabled ?? false}
+				disableReactionStamps={areReactionStampsDisabled ?? false}
+				externalTimeline={externalTimeline}
+				controlsPortalEl={controlsPortalEl}
+				chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
+				captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
+				videoRef={videoRef}
+				enableCrossOrigin={enableCrossOrigin}
+				hasActiveUpload={data.hasActiveUpload}
+				blockPlaybackDuringProcessing={isEditProcessing}
+				onUploadComplete={handleUploadComplete}
+				comments={stampComments}
+				onSeek={handleSeek}
+				captionLanguage={captionContext.selectedLanguage}
+				onCaptionLanguageChange={handleCaptionLanguageChange}
+				availableCaptions={captionContext.availableTranslations}
+				isCaptionLoading={captionContext.isTranslating}
+				hasCaptions={
+					data.transcriptionStatus === "COMPLETE" || liveVttContent != null
+				}
+				canRetryProcessing={canRetryProcessing}
+				callToAction={callToAction}
+				posterUrl={posterUrl}
+			/>
+		);
+
 		return (
 			<>
 				<div
+					data-edit-video
 					className="relative h-full"
 					style={{ viewTransitionName: "cap-edit-video" }}
 				>
@@ -588,48 +656,17 @@ export const ShareVideo = forwardRef<
 							className="h-full"
 						/>
 					) : isMp4Source ? (
-						<CapVideoPlayer
-							videoId={data.id}
-							mediaPlayerClassName={clsx(
-								"w-full h-full max-w-full max-h-full overflow-visible",
-								// Timeline view: the player is a slice of the widescreen
-								// theater block, so no rounded corners against the black.
-								externalTimeline ? "rounded-none" : "rounded-xl",
-							)}
-							videoSrc={videoSrc}
-							rawFallbackSrc={rawFallbackSrc}
-							initialPlaybackUrl={initialPlaybackUrl}
-							serverPlaybackUrl={serverPlaybackUrl}
-							duration={data.duration}
-							defaultPlaybackSpeed={defaultPlaybackSpeed}
-							showPlaybackStatusBadge={showPlaybackStatusBadge}
-							disableCaptions={areCaptionsDisabled ?? false}
-							captionsInitiallyOff={captionsInitiallyOff}
-							disableCommentStamps={areCommentStampsDisabled ?? false}
-							disableReactionStamps={areReactionStampsDisabled ?? false}
-							externalTimeline={externalTimeline}
-							controlsPortalEl={controlsPortalEl}
-							chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
-							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
-							videoRef={videoRef}
-							enableCrossOrigin={enableCrossOrigin}
-							hasActiveUpload={data.hasActiveUpload}
-							blockPlaybackDuringProcessing={isEditProcessing}
-							onUploadComplete={handleUploadComplete}
-							comments={stampComments}
-							onSeek={handleSeek}
-							captionLanguage={captionContext.selectedLanguage}
-							onCaptionLanguageChange={handleCaptionLanguageChange}
-							availableCaptions={captionContext.availableTranslations}
-							isCaptionLoading={captionContext.isTranslating}
-							hasCaptions={
-								data.transcriptionStatus === "COMPLETE" ||
-								liveVttContent != null
-							}
-							canRetryProcessing={canRetryProcessing}
-							callToAction={callToAction}
-							posterUrl={posterUrl}
-						/>
+						renderSaveActive ? (
+							<RenderFarmSaveView
+								videoId={data.id}
+								videoRef={videoRef}
+								fallback={capVideoPlayer}
+								startingRender={renderStarting}
+								className="h-full rounded-xl"
+							/>
+						) : (
+							capVideoPlayer
+						)
 					) : (
 						<HLSVideoPlayer
 							videoId={data.id}
@@ -668,6 +705,18 @@ export const ShareVideo = forwardRef<
 							callToAction={callToAction}
 							posterUrl={posterUrl}
 						/>
+					)}
+					{updateAvailable && !renderSaveActive && (
+						<div className="absolute top-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/15 bg-black/70 py-1 pr-1 pl-3 text-[12px] font-medium text-white shadow-sm backdrop-blur-sm">
+							<span>This video was updated</span>
+							<button
+								type="button"
+								onClick={showLatest}
+								className="h-6 rounded-full bg-white px-2.5 text-[11.5px] font-medium text-black transition-colors hover:bg-white/85"
+							>
+								Show latest
+							</button>
+						</div>
 					)}
 					{upNext && !isActivelyRecording && (
 						<Suspense fallback={null}>

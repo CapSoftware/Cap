@@ -35,6 +35,133 @@ export interface VideoMetadata {
 		status: "pending" | "started" | "complete";
 		startedAt?: string;
 	};
+	/** Imported from an audio file: the video is a title card the editor hides. */
+	audioOnly?: boolean;
+	/** Camera placement chosen in the browser recorder, applied to the project. */
+	recorderCamera?: {
+		version: 1;
+		position: {
+			x: "left" | "center" | "right";
+			y: "top" | "bottom";
+		};
+		size: number;
+		mirror: boolean;
+		shape: "round" | "square" | "full";
+	};
+	webEditorAudioDefault?: {
+		enabledByDefault: boolean;
+		isolation: "light" | "balanced" | "strong";
+	};
+	webEditorProject?:
+		| {
+				version: 1;
+				config: Record<string, unknown>;
+				savedAt: string;
+		  }
+		| {
+				version: 2;
+				configGzipBase64: string;
+				uncompressedBytes: number;
+				savedAt: string;
+		  };
+	webEditorAssets?: {
+		version: 1;
+		items: Array<{
+			kind: "audio" | "image";
+			key: string;
+			path: string;
+			name: string;
+			contentType: string;
+			size: number;
+			objectIdentity: string | null;
+		}>;
+	};
+	webEditorVideoUpload?: {
+		version: 1;
+		sessionId: string;
+		key: string;
+		path: string;
+		fileName: string;
+		size: number;
+		contentType: string;
+		uploadId: string;
+		provider: "s3" | "googleDrive";
+		bucketId: string | null;
+		storageIntegrationId: string | null;
+		expiresAt: string;
+	};
+	webEditorVideos?: {
+		version: 1;
+		items: Array<{
+			key: string;
+			path: string;
+			name: string;
+			contentType: string;
+			size: number;
+			objectIdentity: string | null;
+		}>;
+	};
+	webEditorClips?: {
+		version: 1;
+		items: Array<{
+			displayPath: string;
+			duration: number;
+			fps: number;
+			hasAudio: boolean;
+			cameraPath?: string;
+			cameraFps?: number;
+			cameraOffsetMs?: number;
+		}>;
+	};
+	webEditorImports?: {
+		version: 1;
+		items: Array<
+			| { kind: "clip"; path: string }
+			| { kind: "cap"; path: string; clipCount: number }
+		>;
+	};
+	webEditorCaptionJob?: {
+		status: "processing" | "error";
+		requestId: string;
+		sourceHash: string;
+		requestedAt: string;
+	};
+	/** The duration of the recording the editor edits, kept once a Save publishes a different length. */
+	editorSourceDuration?: number;
+	editorSources?: {
+		version: 1;
+		display: {
+			key: string;
+			contentType: "video/webm" | "video/mp4";
+			size?: number;
+			fps?: number;
+			objectIdentity?: string | null;
+			/** An imported video's own audio, which the editor plays with it. */
+			embeddedAudio?: true;
+		};
+		camera?: {
+			key: string;
+			contentType: "video/webm" | "video/mp4";
+			size: number;
+			fps?: number;
+			objectIdentity: string | null;
+			offsetMs: number;
+		};
+		mic?: {
+			key: string;
+			contentType: "audio/webm" | "audio/mp4";
+			size: number;
+			objectIdentity: string | null;
+			offsetMs: number;
+		};
+		systemAudio?: {
+			key: string;
+			contentType: "audio/webm" | "audio/mp4";
+			size: number;
+			objectIdentity: string | null;
+			offsetMs: number;
+		};
+	};
 	editProcessing?: {
 		token: string;
 		startedAt: string;
@@ -52,6 +179,38 @@ export interface VideoMetadata {
 			height: number;
 			fps: number;
 		};
+	};
+	renderFarmSave?: {
+		version: 1;
+		exportId: string;
+		/** Empty while a render started on recording completion is being prepared. */
+		jobId: string;
+		status: "rendering" | "error" | "published";
+		/** Absent for editor saves; "recording" renders the finished upload. */
+		trigger?: "recording";
+		/** The `webEditorProject.savedAt` it renders, null for the recording as recorded. */
+		projectSavedAt?: string | null;
+		startedAt: string;
+		outputKey: string;
+		hlsPrefix: string;
+		error?: string;
+		publishedAt?: string;
+	};
+	/**
+	 * A Save the owner's browser renders and uploads because the render farm
+	 * can't take it. The share page shows its progress while it runs.
+	 */
+	webEditorBrowserSave?: {
+		version: 1;
+		saveId: string;
+		status: "rendering" | "error" | "published";
+		/** The `webEditorProject.savedAt` it renders. */
+		projectSavedAt: string | null;
+		progress: number;
+		startedAt: string;
+		updatedAt: string;
+		publishedAt?: string;
+		error?: string;
 	};
 	completedVideoEdit?: {
 		token: string;

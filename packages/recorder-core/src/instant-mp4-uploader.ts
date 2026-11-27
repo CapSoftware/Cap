@@ -1,4 +1,9 @@
 import type { ChunkUploadState, UploadStatus, VideoId } from "./recorder-types";
+import {
+	createRecordingIndexer,
+	indexBlob,
+	type RecordingIndexer,
+} from "./recording-index";
 
 const MIN_PART_SIZE_BYTES = 5 * 1024 * 1024;
 // Part uploads ride out transient network loss: with exponential backoff the
@@ -21,6 +26,20 @@ const FINAL_BLOB_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const DRIVE_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const PART_UPLOAD_STALL_TIMEOUT_MS = 30_000;
 const PART_UPLOAD_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+// With adaptive transfer, a part is stalled only after a few progress steps'
+// worth of its share of the measured throughput: on a slow uplink parallel
+// parts share the link unevenly and one can sit for minutes while the others
+// move.
+const PART_PROGRESS_STEP_BYTES = 1024 * 1024;
+const PART_STALL_STEPS = 4;
+const THROUGHPUT_WINDOW_MS = 60_000;
+// Once the browser has handed over every byte of a part, the OS can take
+// minutes to drain a deep send buffer on a slow uplink.
+const PART_UPLOAD_DRAIN_TIMEOUT_MS = 5 * 60 * 1000;
+const ADAPTIVE_PART_UPLOAD_REQUEST_TIMEOUT_MS = 20 * 60 * 1000;
+const PART_PROGRESS_INTERVAL_MS = 250;
+// Part URLs are signed for an hour; one signed ahead is only trusted for half.
+const PRESIGNED_PART_REUSE_MS = 30 * 60 * 1000;
 // JSON control-plane calls (initiate/presign/complete/abort) are always
 // timed: a lost response would otherwise wedge the pipeline — a hung presign
 // stalls its part's retry loop until the pending-bytes overflow guard kills
@@ -350,10 +369,25 @@ export class InstantRecordingUploader {
 		(error: CancelledUploadError) => void
 	>();
 	private readonly stallTimeouts = new Set<number>();
+	private readonly progressSamples: { at: number; bytes: number }[] = [];
 	private processingStarted = true;
 	private completionUncertain = false;
 	private queuedBytes = 0;
 	private readonly partOffsets = new Map<number, number>();
+	private sendingRemaining = false;
+	private readonly presignedAhead = new Map<
+		number,
+		{
+			signedAt: number;
+			upload: Promise<{ url: string; provider: "s3" | "googleDrive" } | null>;
+		}
+	>();
+	private readonly adaptiveTransfer: boolean;
+	private readonly indexer: RecordingIndexer | null;
+	private indexing: Promise<void> = Promise.resolve();
+	private indexedBytes = 0;
+	private indexBytes = 0;
+	private indexAppended = false;
 
 	constructor(options: {
 		videoId: VideoId;
@@ -367,6 +401,13 @@ export class InstantRecordingUploader {
 		onOverflow?: (error: Error) => void;
 		onFatalError?: (error: Error) => void;
 		api?: RecorderApiOptions;
+		adaptiveTransfer?: boolean;
+		/**
+		 * Append a seek index (an `mfra` to fragmented MP4, Cues to WebM) to the
+		 * uploaded object, built from the bytes as they pass. The local backups
+		 * stay the bytes as recorded.
+		 */
+		index?: boolean;
 	}) {
 		this.videoId = options.videoId;
 		this.uploadId = options.uploadId;
@@ -379,8 +420,42 @@ export class InstantRecordingUploader {
 		this.onOverflow = options.onOverflow;
 		this.onFatalError = options.onFatalError;
 		this.api = options.api ?? {};
+		this.adaptiveTransfer = options.adaptiveTransfer ?? false;
+		this.indexer = options.index
+			? createRecordingIndexer(options.mimeType)
+			: null;
 		this.availableUploadSlots =
 			this.provider === "googleDrive" ? 1 : MAX_PARALLEL_PART_UPLOADS;
+		this.presignAhead(1);
+	}
+
+	private presignAhead(partNumber: number) {
+		if (
+			!this.adaptiveTransfer ||
+			this.provider !== "s3" ||
+			this.finished ||
+			this.sendingRemaining
+		)
+			return;
+		this.presignedAhead.set(partNumber, {
+			signedAt: Date.now(),
+			upload: presignMultipartPart(
+				this.videoId,
+				this.uploadId,
+				partNumber,
+				this.subpath,
+				this.api,
+			).catch(() => null),
+		});
+	}
+
+	private takePresignedAhead(partNumber: number) {
+		const ahead = this.presignedAhead.get(partNumber);
+		if (!ahead) return null;
+		this.presignedAhead.delete(partNumber);
+		return Date.now() - ahead.signedAt < PRESIGNED_PART_REUSE_MS
+			? ahead.upload
+			: null;
 	}
 
 	private markFatalError(error: Error) {
@@ -482,6 +557,7 @@ export class InstantRecordingUploader {
 		this.totalRecordedBytes = recordedTotalBytes;
 		this.bufferedChunks.push(blob);
 		this.bufferedBytes += blob.size;
+		this.indexChunk(blob);
 
 		if (
 			this.pendingUploadBytes + this.bufferedBytes >
@@ -560,14 +636,49 @@ export class InstantRecordingUploader {
 		};
 	}
 
+	private indexChunk(blob: Blob) {
+		const indexer = this.indexer;
+		if (!indexer) return;
+		const start = this.indexedBytes;
+		this.indexedBytes += blob.size;
+		this.indexing = this.indexing.then(() =>
+			indexer.failed ? undefined : indexBlob(indexer, blob, start),
+		);
+	}
+
+	/// The seek index for the `recordedBytes` handed over so far, or null when
+	/// the recording can't take one. Never fails the upload: a recording
+	/// without an index reads as before.
+	private async takeIndex(recordedBytes: number, finalBlob: Blob | null) {
+		const indexer = this.indexer;
+		if (!indexer || this.indexAppended) return null;
+		this.indexAppended = true;
+		try {
+			if (finalBlob && this.indexedBytes === 0) {
+				this.indexedBytes = finalBlob.size;
+				await indexBlob(indexer, finalBlob, 0);
+			} else {
+				await this.indexing;
+			}
+			if (this.indexedBytes !== recordedBytes) return null;
+			return indexer.finish(recordedBytes);
+		} catch (error) {
+			console.warn("Recording seek index was not written", error);
+			return null;
+		}
+	}
+
 	private createFinalBlobPart(finalBlob: Blob, start: number, end: number) {
 		return finalBlob.slice(start, end, this.mimeType);
 	}
 
 	private resolveFinalTotalBytes(finalBlob?: Blob | null) {
 		return (
-			finalBlob?.size ??
-			Math.max(this.totalRecordedBytes, this.queuedBytes + this.bufferedBytes)
+			(finalBlob?.size ??
+				Math.max(
+					this.totalRecordedBytes,
+					this.queuedBytes + this.bufferedBytes - this.indexBytes,
+				)) + this.indexBytes
 		);
 	}
 
@@ -581,6 +692,7 @@ export class InstantRecordingUploader {
 		}
 
 		const partNumber = this.nextPartNumber++;
+		this.presignAhead(this.nextPartNumber);
 		this.partOffsets.set(partNumber, this.queuedBytes);
 		this.queuedBytes += part.size;
 		this.pendingUploadBytes += part.size;
@@ -815,13 +927,15 @@ export class InstantRecordingUploader {
 	}
 
 	private async uploadPart(partNumber: number, part: Blob) {
-		const upload = await presignMultipartPart(
-			this.videoId,
-			this.uploadId,
-			partNumber,
-			this.subpath,
-			this.api,
-		);
+		const upload =
+			(await this.takePresignedAhead(partNumber)) ??
+			(await presignMultipartPart(
+				this.videoId,
+				this.uploadId,
+				partNumber,
+				this.subpath,
+				this.api,
+			));
 
 		const etag = await this.uploadBlobWithProgress({
 			url: upload.url,
@@ -834,6 +948,35 @@ export class InstantRecordingUploader {
 		this.pendingUploadBytes = Math.max(0, this.pendingUploadBytes - part.size);
 		this.uploadedBytes += part.size;
 		this.emitProgress();
+	}
+
+	private recordProgress(at: number, bytes: number) {
+		this.progressSamples.push({ at, bytes });
+		while (
+			this.progressSamples.length > 0 &&
+			at - (this.progressSamples[0]?.at ?? at) > THROUGHPUT_WINDOW_MS
+		)
+			this.progressSamples.shift();
+	}
+
+	private partStallWindowMs(now: number) {
+		const recent = this.progressSamples.filter(
+			(sample) => now - sample.at <= THROUGHPUT_WINDOW_MS,
+		);
+		const first = recent[0];
+		if (!first) return PART_UPLOAD_STALL_TIMEOUT_MS;
+		const bytes = recent.reduce((total, sample) => total + sample.bytes, 0);
+		const bytesPerMs =
+			bytes /
+			Math.max(1, now - first.at) /
+			Math.max(1, this.activeRequests.size);
+		return Math.min(
+			PART_UPLOAD_DRAIN_TIMEOUT_MS,
+			Math.max(
+				PART_UPLOAD_STALL_TIMEOUT_MS,
+				(PART_STALL_STEPS * PART_PROGRESS_STEP_BYTES) / bytesPerMs,
+			),
+		);
 	}
 
 	private uploadBlobWithProgress({
@@ -856,7 +999,9 @@ export class InstantRecordingUploader {
 			const xhr = new XMLHttpRequest();
 			xhr.open("PUT", url);
 			xhr.responseType = "text";
-			xhr.timeout = PART_UPLOAD_REQUEST_TIMEOUT_MS;
+			xhr.timeout = this.adaptiveTransfer
+				? ADAPTIVE_PART_UPLOAD_REQUEST_TIMEOUT_MS
+				: PART_UPLOAD_REQUEST_TIMEOUT_MS;
 			let isFinalDrivePart = false;
 			if (provider === "googleDrive") {
 				const start = this.partOffsets.get(partNumber) ?? 0;
@@ -882,6 +1027,9 @@ export class InstantRecordingUploader {
 				this.activeRequests.delete(partNumber);
 			};
 			let stallTimeoutId: number | null = null;
+			let sentAt: number | null = null;
+			let progressAt = Date.now();
+			let loaded: number | null = null;
 			const clearStallTimeout = () => {
 				if (stallTimeoutId === null) {
 					return;
@@ -890,20 +1038,40 @@ export class InstantRecordingUploader {
 				this.stallTimeouts.delete(stallTimeoutId);
 				stallTimeoutId = null;
 			};
-			const refreshStallTimeout = () => {
+			const refreshStallTimeout = (delay = PART_UPLOAD_STALL_TIMEOUT_MS) => {
 				clearStallTimeout();
 				const timeoutId = window.setTimeout(() => {
 					this.stallTimeouts.delete(timeoutId);
 					stallTimeoutId = null;
-					xhr.abort();
-				}, PART_UPLOAD_STALL_TIMEOUT_MS);
+					const now = Date.now();
+					const waiting = !this.adaptiveTransfer
+						? 0
+						: sentAt !== null
+							? PART_UPLOAD_DRAIN_TIMEOUT_MS - (now - sentAt)
+							: this.partStallWindowMs(now) - (now - progressAt);
+					if (waiting > 0) refreshStallTimeout(waiting);
+					else xhr.abort();
+				}, delay);
 				stallTimeoutId = timeoutId;
 				this.stallTimeouts.add(timeoutId);
 			};
 			refreshStallTimeout();
 
+			let progressReportedAt = 0;
 			xhr.upload.onprogress = (event) => {
 				refreshStallTimeout();
+				if (this.adaptiveTransfer) {
+					progressAt = Date.now();
+					// The first event counts what the socket buffered at once, not
+					// what the link carried.
+					if (loaded !== null && event.loaded > loaded)
+						this.recordProgress(progressAt, event.loaded - loaded);
+					loaded = event.loaded;
+					if (event.loaded >= part.size) sentAt ??= progressAt;
+					const now = performance.now();
+					if (now - progressReportedAt < PART_PROGRESS_INTERVAL_MS) return;
+					progressReportedAt = now;
+				}
 				const uploaded = event.lengthComputable
 					? event.loaded
 					: Math.min(part.size, event.loaded);
@@ -979,14 +1147,47 @@ export class InstantRecordingUploader {
 		});
 	}
 
-	async finalize(options: FinalizeOptions) {
+	uploadRemaining(finalBlob: Blob | null) {
+		if (!this.remainingUpload) {
+			this.remainingUpload = this.sendRemaining(finalBlob).catch((error) => {
+				this.remainingUpload = null;
+				throw error;
+			});
+		}
+		return this.remainingUpload;
+	}
+
+	private remainingUpload: Promise<void> | null = null;
+
+	private async sendRemaining(finalBlob: Blob | null) {
 		if (this.cancelled) throw new CancelledUploadError();
 		if (this.finished) return;
 		if (this.fatalError) {
 			throw this.fatalError;
 		}
+		this.sendingRemaining = true;
 
-		const finalTotalBytes = this.resolveFinalTotalBytes(options.finalBlob);
+		const streamed =
+			!finalBlob ||
+			this.parts.length > 0 ||
+			this.queuedBytes > 0 ||
+			this.bufferedBytes > 0;
+		const index = await this.takeIndex(
+			finalBlob?.size ??
+				Math.max(
+					this.totalRecordedBytes,
+					this.queuedBytes + this.bufferedBytes,
+				),
+			finalBlob,
+		);
+		if (this.cancelled) throw new CancelledUploadError();
+		if (index && streamed) {
+			const trailer = new Blob([index], { type: this.mimeType });
+			this.bufferedChunks.push(trailer);
+			this.bufferedBytes += trailer.size;
+		}
+		if (index) this.indexBytes = index.byteLength;
+		const finalTotalBytes = this.resolveFinalTotalBytes(finalBlob);
 
 		if (this.provider === "googleDrive") {
 			if (finalTotalBytes <= 0) {
@@ -995,10 +1196,10 @@ export class InstantRecordingUploader {
 				);
 			}
 			this.finalTotalBytes = finalTotalBytes;
-			this.totalRecordedBytes = finalTotalBytes;
-		} else if (options.finalBlob) {
-			this.finalTotalBytes = options.finalBlob.size;
-			this.totalRecordedBytes = options.finalBlob.size;
+			this.totalRecordedBytes = finalTotalBytes - this.indexBytes;
+		} else if (finalBlob) {
+			this.finalTotalBytes = finalTotalBytes;
+			this.totalRecordedBytes = finalBlob.size;
 		}
 
 		// The tail flush enqueues whatever is still buffered; drain in-flight
@@ -1013,10 +1214,26 @@ export class InstantRecordingUploader {
 		this.flushBuffer(true);
 		await this.waitForPendingUploads();
 
-		if (options.finalBlob && this.parts.length === 0) {
-			await this.uploadFinalBlob(options.finalBlob);
+		if (finalBlob && this.parts.length === 0) {
+			await this.uploadFinalBlob(
+				index && !streamed
+					? new Blob([finalBlob, index], { type: this.mimeType })
+					: finalBlob,
+			);
+		}
+	}
+
+	async finalize(options: FinalizeOptions) {
+		if (this.cancelled) throw new CancelledUploadError();
+		if (this.finished) return;
+		if (this.fatalError) {
+			throw this.fatalError;
 		}
 
+		await this.uploadRemaining(options.finalBlob ?? null);
+		const finalTotalBytes =
+			this.finalTotalBytes ??
+			this.resolveFinalTotalBytes(options.finalBlob ?? null);
 		if (this.parts.length === 0) {
 			throw new Error("No uploaded parts available for completion");
 		}

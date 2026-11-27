@@ -1,0 +1,318 @@
+@import "../../ui/main.css";
+
+@plugin "tailwind-scrollbar";
+
+@tailwind utilities;
+
+/* Mirrors EditorPalette, the track colours and the Radix scales transcribed
+ * in apps/desktop-gpui/src/theme.rs and editor_timeline.rs. Every track
+ * colour keeps white labels at 4.5:1 across its segment gradient. */
+:root {
+	color-scheme: light;
+	--track-clip: #3065c8;
+	--track-zoom: #6c50de;
+	--track-caption: #0a6ea9;
+	--track-keyboard: #b44b0b;
+	--track-style: #a33fba;
+	--track-image: #945c07;
+	--track-text: #0e7768;
+	--track-mask: #c63838;
+	--track-scene: #5e6f12;
+	--track-audio: #1b7940;
+	--track-3d: #be3b69;
+	--track-waveform: #48720f;
+
+	--ed-window: #f7f7f9;
+	--ed-card: #ffffff;
+	--ed-card-2: #ffffff;
+	--ed-stage: #f7f7f9;
+	--ed-line: rgba(0, 0, 0, 0.078);
+	--ed-line-strong: rgba(0, 0, 0, 0.13);
+	--ed-text-1: #17171a;
+	--ed-text-2: #4f4f56;
+	--ed-text-3: #68686f;
+	--ed-ctl: rgba(0, 0, 0, 0.031);
+	--ed-ctl-hover: rgba(0, 0, 0, 0.059);
+	--ed-ctl-active: rgba(0, 0, 0, 0.094);
+	--ed-accent: #0a7cff;
+	--ed-accent-ink: #0058c8;
+	--ed-accent-fill: #0563d8;
+	--ed-accent-fill-2: #1670e6;
+	--ed-track: rgba(0, 0, 0, 0.43);
+	--ed-playhead: #ff3b30;
+	--ed-thumb: #ffffff;
+	--ed-pill: #ffffff;
+	--ed-choice: #ffffff;
+	--ed-choice-hover: var(--ed-window);
+	--ed-seg-dim: 0%;
+	--ed-seg-label-base: #000000;
+	--ed-lit: rgba(255, 255, 255, 0.9);
+	--ed-card-shadow:
+		inset 0 1px 0 var(--ed-lit), 0 0 0 1px var(--ed-line), 0 1px 2px
+		rgba(0, 0, 0, 0.05), 0 8px 28px -10px rgba(0, 0, 0, 0.04);
+	--ed-pop-shadow:
+		inset 0 1px 0 var(--ed-lit), 0 0 0 1px var(--ed-line-strong), 0 14px 36px
+		-12px rgba(0, 0, 0, 0.22);
+	--ed-pill-shadow:
+		inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 0 0 1px rgba(0, 0, 0, 0.09), 0 1px
+		2px rgba(0, 0, 0, 0.08);
+	--ed-choice-ring:
+		inset 0 0 0 1px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.04);
+	--ed-choice-selected: color-mix(in srgb, var(--ed-accent) 7%, var(--ed-card));
+	--ed-thumb-shadow:
+		0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.22);
+	--ed-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+	--gray-1: #fcfcfc;
+	--gray-2: #f8f8fa;
+	--gray-3: #eff0f2;
+	--gray-4: #e7e8eb;
+	--gray-5: #dfe0e3;
+	--gray-6: #d8d9dd;
+	--gray-7: #cdced2;
+	--gray-8: #bbbbbb;
+	--gray-9: #6c6c6c;
+	--gray-10: #686868;
+	--gray-11: #505050;
+	--gray-12: #202020;
+	--gray-400: #868e9f;
+	--blue-3: #e6f4fe;
+	--blue-4: #d5efff;
+	--blue-5: #c2e5ff;
+	--blue-6: #acd8fc;
+	--blue-7: #8ec8f6;
+	--blue-8: #5eb1ef;
+	--blue-9: #0090ff;
+	--blue-10: #0588f0;
+	--blue-11: #0d74ce;
+	--blue-12: #113264;
+	--red-2: #fff7f7;
+	--red-3: #feebec;
+	--red-4: #ffdbdc;
+	--red-9: #e5484d;
+	--red-10: #dc3e42;
+	--red-11: #ce2c31;
+	--red-300: #ff4766;
+	--red-400: #e03f5a;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		color-scheme: dark;
+		--ed-window: #0c0d10;
+		--ed-card: #16171b;
+		--ed-card-2: #1e1f24;
+		--ed-stage: #0e0f12;
+		--ed-line: rgba(255, 255, 255, 0.071);
+		--ed-line-strong: rgba(255, 255, 255, 0.122);
+		--ed-text-1: #f5f5f7;
+		--ed-text-2: #b8b9c2;
+		--ed-text-3: #9a9ba5;
+		--ed-ctl: rgba(255, 255, 255, 0.051);
+		--ed-ctl-hover: rgba(255, 255, 255, 0.086);
+		--ed-ctl-active: rgba(255, 255, 255, 0.13);
+		--ed-accent: #0a84ff;
+		--ed-accent-ink: #5aaaff;
+		--ed-track: rgba(255, 255, 255, 0.36);
+		--ed-playhead: #ff453a;
+		--ed-thumb: #f4f4f6;
+		--ed-pill: #2c2d32;
+		--ed-choice: var(--ed-ctl);
+		--ed-choice-hover: var(--ed-ctl-hover);
+		--ed-seg-dim: 10%;
+		--ed-seg-label-base: #ffffff;
+		--ed-lit: rgba(255, 255, 255, 0.045);
+		--ed-card-shadow:
+			inset 0 1px 0 var(--ed-lit), 0 0 0 1px var(--ed-line), 0 1px 2px
+			rgba(0, 0, 0, 0.42), 0 8px 28px -10px rgba(0, 0, 0, 0.34);
+		--ed-pop-shadow:
+			inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 0 1px var(--ed-line-strong),
+			0 16px 44px -12px rgba(0, 0, 0, 0.62);
+		--ed-pill-shadow:
+			inset 0 1px 0 rgba(255, 255, 255, 0.05), inset 0 0 0 1px
+			rgba(255, 255, 255, 0.07);
+		--ed-choice-ring: inset 0 0 0 1px var(--ed-line);
+		--ed-choice-selected: var(--ed-pill);
+
+		--gray-1: #101114;
+		--gray-2: #1a1b1f;
+		--gray-3: #26272c;
+		--gray-4: #303136;
+		--gray-5: #38393f;
+		--gray-6: #424349;
+		--gray-7: #47484e;
+		--gray-8: #5f6067;
+		--gray-9: #909198;
+		--gray-10: #95969d;
+		--gray-11: #b0b1b8;
+		--gray-12: #eeeef0;
+		--gray-400: #a1a2a9;
+		--blue-3: #0d2847;
+		--blue-4: #003362;
+		--blue-5: #004074;
+		--blue-6: #104d87;
+		--blue-7: #205d9e;
+		--blue-8: #2870bd;
+		--blue-10: #3b9eff;
+		--blue-11: #70b8ff;
+		--blue-12: #c2e6ff;
+		--red-2: #201314;
+		--red-3: #3b1219;
+		--red-4: #500f1c;
+		--red-10: #ec5d5e;
+		--red-11: #ff9592;
+		--red-400: #ff5c7a;
+	}
+}
+
+body {
+	background-color: var(--ed-window);
+	color: var(--ed-text-1);
+}
+
+.custom-scroll {
+	margin-right: 3px;
+	overflow-y: scroll;
+	margin-top: var(--margin-top-scroll);
+}
+
+.custom-scroll::-webkit-scrollbar {
+	width: 4px;
+	height: 4px;
+	background-color: transparent;
+}
+
+.hide-scroll::-webkit-scrollbar {
+	display: none;
+}
+
+.custom-scroll::-webkit-scrollbar-thumb {
+	background-color: color-mix(in srgb, var(--ed-text-3) 45%, transparent);
+	border-radius: 500px;
+}
+
+/* A panel that scrolls fades out at its foot instead of cutting a row. A
+ * sticky painted edge rather than a mask, which costs Firefox a layer. */
+[data-sheet-content]::after {
+	content: "";
+	position: sticky;
+	bottom: 0;
+	display: block;
+	height: 24px;
+	margin-top: -24px;
+	background: linear-gradient(transparent, var(--ed-card));
+	pointer-events: none;
+}
+
+@keyframes bounce {
+	0%,
+	100% {
+		transform: translateY(-15%);
+		animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
+	}
+	50% {
+		transform: none;
+		animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
+	}
+}
+
+.bounce {
+	animation: bounce 1s ease-in-out forwards;
+	animation-iteration-count: infinite;
+}
+
+/* Hover fills fade in quickly and out slowly, as the desktop editor's do. */
+.ed-fade {
+	transition-property: background-color, color, box-shadow, opacity;
+	transition-duration: 220ms;
+	transition-timing-function: ease-out;
+}
+
+.ed-fade:hover {
+	transition-duration: 90ms;
+}
+
+/* The one primary control: a lit accent gradient that deepens on hover so
+ * its white label keeps contrast. */
+.ed-primary {
+	background-image: linear-gradient(
+		var(--ed-accent-fill-2),
+		var(--ed-accent-fill)
+	);
+	color: #ffffff;
+	box-shadow:
+		inset 0 1px 0 rgba(255, 255, 255, 0.22),
+		0 1px 2px rgba(0, 0, 0, 0.12),
+		0 4px 12px -4px color-mix(in srgb, var(--ed-accent-fill) 32%, transparent);
+	transition:
+		filter 90ms ease-out,
+		opacity 150ms ease-out;
+}
+
+.ed-primary:enabled:hover {
+	filter: brightness(0.92);
+}
+
+.ed-primary:enabled:active {
+	filter: brightness(0.84);
+}
+
+.ed-trough {
+	border-radius: 9px;
+	background-color: var(--ed-ctl);
+	box-shadow: inset 0 0 0 1px var(--ed-line);
+}
+
+/* Choice tiles: the panel's own surface behind a hairline, and an accent
+ * ring over a faint accent wash once chosen. Shadows only, so choosing a
+ * tile never shifts the layout. */
+.ed-choice {
+	background-color: var(--ed-choice);
+	box-shadow: var(--ed-choice-ring);
+	transition:
+		background-color 220ms ease-out,
+		box-shadow 220ms ease-out,
+		color 220ms ease-out;
+}
+
+.ed-choice:hover {
+	background-color: var(--ed-choice-hover);
+	transition-duration: 90ms;
+}
+
+.ed-choice[data-selected],
+.ed-choice-on {
+	background-color: var(--ed-choice-selected);
+	box-shadow: inset 0 0 0 1.5px var(--ed-accent);
+}
+
+/* A slider row reads as label and value over a full-width track. */
+.ed-field:has(> .ed-field-ctl > .ed-slider) {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	height: auto;
+	row-gap: 6px;
+	padding-bottom: 4px;
+}
+
+.ed-field:has(> .ed-field-ctl > .ed-slider) > .ed-field-ctl {
+	grid-column: 1 / -1;
+	grid-row: 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ed-fade,
+	.ed-fade:hover {
+		transition-duration: 0ms;
+	}
+}
+
+@layer base {
+	*,
+	::after,
+	::before,
+	::backdrop,
+	::file-selector-button {
+		border-color: var(--ed-line, currentColor);
+	}
+}

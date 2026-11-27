@@ -4,6 +4,10 @@ All web recording pipelines keep a local IndexedDB spool when browser storage is
 
 The video and its share URL are created before capture starts. Chromium's streaming WebM path uploads multipart chunks during capture. Buffered browsers retain their existing capture format and upload the original WebM or MP4 through multipart upload after Stop. The media server prepares playback and thumbnails; browser-side conversion is no longer required to finish a web recording.
 
+## Studio recordings
+
+Accounts in the web editor pilot use `useStudioRecorder` instead. It uploads the screen (`raw-upload.*`), camera (`camera-upload.*`), microphone (`mic-upload.*`) and system audio (`system-audio-upload.*`) as separate multipart uploads. Chromium streams the screen and camera as fragmented H.264 MP4 and falls back to WebM. Audio tracks are Opus in WebM, or AAC in MP4 where WebM audio can't be recorded. Each track has its own spool (`<pair id>-display`, `-camera`, `-microphone`), memory backups are capped at 256 MB, and a retry sends every track that did not finish from its backup. At Stop the camera, audio and the screen's tail upload together; the screen completes last. Studio uploads sign the next part ahead and judge a stalled part against the measured throughput.
+
 Stop waits for the recorder's final data and stop events and flushes pending local writes before completing the upload. A missing stop event has a 30-second deadline and leaves available data recoverable. The share URL is exposed while the upload finishes, and opens automatically after the server confirms receipt. Playback can still be processing at that point.
 
 ## Failure handling

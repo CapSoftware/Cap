@@ -15,9 +15,11 @@ mod preparing_playback;
 mod preparing_preview;
 mod preview_speed;
 mod preview_stretch;
+mod screen_recording_defaults;
 mod segments;
 mod telemetry;
 mod thumbnail;
+mod waveform_levels;
 
 #[cfg(feature = "test-hooks")]
 pub use audio::set_progressive_audio_allocation_limit;
@@ -67,6 +69,7 @@ pub use preparing_preview::{
     PreparingPreviewSegment, PreparingPreviewStopHandle,
 };
 pub use preview_speed::{PreviewSpeed, PreviewSpeedHandle};
+pub use screen_recording_defaults::default_screen_recording_project_config;
 pub use segments::{
     audio_segment_from_decoded, get_audio_segments, load_music_tracks, load_music_tracks_uncached,
     music_track_ranges,
@@ -74,4 +77,7 @@ pub use segments::{
 pub use telemetry::{
     PlaybackFrameSource, PlaybackRenderOutputFormat, PlaybackSkipReason, PlaybackTelemetry,
     PlaybackTelemetryEvent,
+};
+pub use waveform_levels::{
+    has_waveform_segments, load_waveform_levels, load_waveform_levels_into, waveform_level_inputs,
 };

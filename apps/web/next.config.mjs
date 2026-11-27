@@ -1,13 +1,41 @@
 import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withSentryConfig } from "@sentry/nextjs/config";
 import ffmpegStaticPath from "ffmpeg-static";
+import { PHASE_PRODUCTION_BUILD } from "next/constants.js";
 import workflowNext from "workflow/next";
 
 const { withWorkflow } = workflowNext;
+
+// The workflow build leaves its esbuild service running, holding about 0.5 GB
+// for the rest of `next build`. On the 8 GB Vercel builder that is the margin
+// that decides whether the Sentry upload and page data phases hit OOM.
+// stop() only ends the idle process; esbuild starts a new one if called again.
+const stopWorkflowEsbuild = async () => {
+	try {
+		const resolveFrom = (from, request) => createRequire(from).resolve(request);
+		const workflow = resolveFrom(import.meta.url, "workflow/next");
+		const builders = resolveFrom(
+			resolveFrom(workflow, "@workflow/next"),
+			"@workflow/builders",
+		);
+		await createRequire(builders)("esbuild").stop();
+	} catch {}
+};
+
+const withWorkflowBuild = (config) => {
+	const resolveConfig = withWorkflow(config);
+	if (typeof resolveConfig !== "function") return resolveConfig;
+	return async (phase, context) => {
+		const resolved = await resolveConfig(phase, context);
+		if (phase === PHASE_PRODUCTION_BUILD) await stopWorkflowEsbuild();
+		return resolved;
+	};
+};
 
 const packageJson = JSON.parse(
 	fs.readFileSync(path.resolve("./package.json"), "utf8"),
@@ -110,6 +138,17 @@ const nextConfig = {
 					{ key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
 				],
 			},
+			{
+				// The Studio editor's build output is content-hashed, so repeat opens
+				// read it straight from the browser cache without revalidating.
+				source: "/editor/assets/:file([^/]+)",
+				headers: [
+					{
+						key: "Cache-Control",
+						value: "public, max-age=31536000, immutable",
+					},
+				],
+			},
 		];
 	},
 	async rewrites() {
@@ -195,7 +234,7 @@ const nextConfig = {
 		process.env.NEXT_PUBLIC_DOCKER_BUILD === "true" ? "standalone" : undefined,
 };
 
-export default withSentryConfig(withWorkflow(nextConfig), {
+export default withSentryConfig(withWorkflowBuild(nextConfig), {
 	org: "cap-s2",
 	project: "cap-web",
 	authToken: process.env.SENTRY_AUTH_TOKEN,
