@@ -98,7 +98,11 @@ jobs:
       - name: Segmented encoder tests
         run: cargo test --locked -p cap-enc-ffmpeg --lib mux::segmented_stream -- --nocapture
 
+      # The variable lets the input recorder tests send real input into this
+      # runner's session, and makes a hidden cursor a failure, not a skip.
       - name: Studio stop keeps recordings whose tracks finish late
+        env:
+          CAP_REQUIRE_INPUT_INJECTION: "1"
         run: cargo test --locked -p cap-recording --lib late_stop_ -- --nocapture
 
       - name: Encoder selection and isolated self-test tests

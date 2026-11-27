@@ -2653,8 +2653,10 @@ mod cursor_image_tests {
     }
 }
 
-/// Real input sent into the session the tests run in, for the input
-/// recorder's stop cut tests.
+/// Real input for the input recorder's stop cut tests. It goes into the
+/// session that runs the tests, so it is only sent when
+/// `CAP_REQUIRE_INPUT_INJECTION` is set (CI sets it); without it the tests
+/// send nothing and check only what needs no injected input.
 #[cfg(all(test, windows))]
 pub(crate) mod test_input {
     use super::CursorActorResponse;
@@ -2663,23 +2665,35 @@ pub(crate) mod test_input {
         atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use std::time::Duration;
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-        KEYEVENTF_KEYUP, MOUSE_EVENT_FLAGS, MOUSEEVENTF_MOVE, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP,
-        MOUSEINPUT, SendInput, VK_LSHIFT,
+        KEYEVENTF_KEYUP, MOUSE_EVENT_FLAGS, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
+        MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput, VK_F20,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{CURSORINFO, GetCursorInfo};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CURSORINFO, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+        GetCursorInfo, GetCursorPos, MSG, PM_REMOVE, PeekMessageW, RegisterClassW,
+        SW_SHOWNOACTIVATE, ShowWindow, TranslateMessage, WNDCLASSW, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    };
+    use windows::core::{PCWSTR, w};
 
-    const XBUTTON1: u32 = 1;
+    pub(crate) const REQUIRE_VAR: &str = "CAP_REQUIRE_INPUT_INJECTION";
 
-    fn mouse(dx: i32, flags: MOUSE_EVENT_FLAGS, data: u32) -> INPUT {
+    pub(crate) fn injection_required() -> bool {
+        std::env::var_os(REQUIRE_VAR).is_some()
+    }
+
+    fn mouse(dx: i32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
         INPUT {
             r#type: INPUT_MOUSE,
             Anonymous: INPUT_0 {
                 mi: MOUSEINPUT {
                     dx,
                     dy: 0,
-                    mouseData: data,
+                    mouseData: 0,
                     dwFlags: flags,
                     time: 0,
                     dwExtraInfo: 0,
@@ -2693,7 +2707,7 @@ pub(crate) mod test_input {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
                 ki: KEYBDINPUT {
-                    wVk: VK_LSHIFT,
+                    wVk: VK_F20,
                     wScan: 0,
                     dwFlags: flags,
                     time: 0,
@@ -2707,8 +2721,66 @@ pub(crate) mod test_input {
         unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) as usize }
     }
 
-    /// Moves the pointer, clicks the back button (no effect on a desktop)
-    /// and taps left Shift, every 20 ms until stopped.
+    unsafe extern "system" fn target_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+
+    /// A small topmost window of the test's own under the pointer, shown
+    /// without activation, so the injected clicks land on it and nothing
+    /// else.
+    fn click_target() -> Option<HWND> {
+        unsafe {
+            let instance: HINSTANCE = GetModuleHandleW(PCWSTR::null()).ok()?.into();
+            let class = WNDCLASSW {
+                lpfnWndProc: Some(target_proc),
+                hInstance: instance,
+                lpszClassName: w!("CapInputRecorderTestTarget"),
+                ..Default::default()
+            };
+            // Registered once per process; a second registration fails and
+            // the class is reused.
+            RegisterClassW(&class);
+            let mut at = POINT::default();
+            GetCursorPos(&mut at).ok()?;
+            let hwnd = CreateWindowExW(
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                w!("CapInputRecorderTestTarget"),
+                w!(""),
+                WS_POPUP,
+                at.x - 100,
+                at.y - 100,
+                200,
+                200,
+                None,
+                None,
+                Some(instance),
+                None,
+            )
+            .ok()?;
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            Some(hwnd)
+        }
+    }
+
+    fn pump() {
+        let mut msg = MSG::default();
+        unsafe {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+
+    /// Every 20 ms: moves the pointer 6 px back and forth, presses the
+    /// middle button over the test's own window, and taps F20 (no app or
+    /// accessibility shortcut uses it). Only started when injection is
+    /// required.
     pub(crate) struct Injector {
         stop: Arc<AtomicBool>,
         sent: Arc<AtomicUsize>,
@@ -2716,35 +2788,54 @@ pub(crate) mod test_input {
     }
 
     impl Injector {
-        pub(crate) fn start() -> Self {
+        pub(crate) fn start_if_required() -> Option<Self> {
+            if !injection_required() {
+                eprintln!(
+                    "{REQUIRE_VAR} not set: no input is injected; checking only what needs none"
+                );
+                return None;
+            }
             let stop = Arc::new(AtomicBool::new(false));
             let sent = Arc::new(AtomicUsize::new(0));
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel();
             let thread = std::thread::spawn({
                 let stop = stop.clone();
                 let sent = sent.clone();
                 move || {
+                    let target = click_target();
+                    ready_tx.send(target.is_some()).ok();
+                    let Some(target) = target else {
+                        return;
+                    };
                     let mut step = 0_i32;
                     while !stop.load(Ordering::Relaxed) {
                         let dx = if step % 2 == 0 { 6 } else { -6 };
                         let down = [
-                            mouse(dx, MOUSEEVENTF_MOVE, 0),
-                            mouse(0, MOUSEEVENTF_XDOWN, XBUTTON1),
+                            mouse(dx, MOUSEEVENTF_MOVE),
+                            mouse(0, MOUSEEVENTF_MIDDLEDOWN),
                             key(KEYBD_EVENT_FLAGS(0)),
                         ];
                         sent.fetch_add(send(&down), Ordering::Relaxed);
+                        pump();
                         std::thread::sleep(Duration::from_millis(10));
-                        let up = [mouse(0, MOUSEEVENTF_XUP, XBUTTON1), key(KEYEVENTF_KEYUP)];
+                        let up = [mouse(0, MOUSEEVENTF_MIDDLEUP), key(KEYEVENTF_KEYUP)];
                         sent.fetch_add(send(&up), Ordering::Relaxed);
+                        pump();
                         std::thread::sleep(Duration::from_millis(10));
                         step += 1;
                     }
+                    unsafe { DestroyWindow(target).ok() };
                 }
             });
-            Self {
+            assert!(
+                ready_rx.recv().unwrap_or(false),
+                "{REQUIRE_VAR} is set but the test's click target window could not be created"
+            );
+            Some(Self {
                 stop,
                 sent,
                 thread: Some(thread),
-            }
+            })
         }
 
         /// Stops sending and returns how many inputs the system accepted.
@@ -2768,13 +2859,33 @@ pub(crate) mod test_input {
     }
 
     /// The recorder only records input while the session shows a cursor; a
-    /// session with no mouse attached hides it.
+    /// session with no mouse attached hides it until mouse input arrives.
     pub(crate) fn cursor_shown() -> bool {
         let mut info = CURSORINFO {
             cbSize: std::mem::size_of::<CURSORINFO>() as u32,
             ..Default::default()
         };
         unsafe { GetCursorInfo(&mut info) }.is_ok() && !info.hCursor.is_invalid()
+    }
+
+    /// With injection required, the cursor must be shown and every kind of
+    /// injected input must have been recorded before the request.
+    pub(crate) fn assert_injected_input_recorded(
+        response: &CursorActorResponse,
+        shown: bool,
+        sent: usize,
+    ) {
+        assert!(
+            shown,
+            "{REQUIRE_VAR} is set but the session shows no cursor, so the recorder records nothing"
+        );
+        assert!(
+            !response.moves.is_empty()
+                && !response.clicks.is_empty()
+                && !response.keyboard_presses.is_empty(),
+            "input injected before the request must be recorded ({sent} inputs sent): {}",
+            summary(response)
+        );
     }
 
     fn late(times: impl Iterator<Item = f64>, limit_ms: f64) -> Vec<f64> {
@@ -2831,8 +2942,8 @@ pub(crate) mod test_input {
 #[cfg(all(test, windows))]
 mod stop_cut_input_tests {
     use super::test_input::{
-        Injector, assert_recorded_by, assert_response_recorded_by, cursor_shown, last_event_ms,
-        summary,
+        Injector, assert_injected_input_recorded, assert_recorded_by, assert_response_recorded_by,
+        cursor_shown, last_event_ms, summary,
     };
     use super::*;
     use crate::output_pipeline::StopCut;
@@ -2875,7 +2986,7 @@ mod stop_cut_input_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn late_stop_cut_ends_input_recording_at_the_stop_request() {
         let dir = tempfile::tempdir().unwrap();
-        let input = Injector::start();
+        let input = Injector::start_if_required();
         let start_time = Timestamps::now();
         let cut = StopCut::default();
         let actor = cut
@@ -2895,7 +3006,7 @@ mod stop_cut_input_tests {
             .unwrap();
         let ended = request.elapsed();
         tokio::time::sleep(Duration::from_millis(200)).await;
-        let sent = input.stop();
+        let sent = input.map(Injector::stop);
 
         let limit = request.checked_add(STOP_CUT_INPUT_TOLERANCE).unwrap();
         let limit_ms = ms_since(start_time.instant(), limit);
@@ -2920,8 +3031,8 @@ mod stop_cut_input_tests {
         assert_eq!(presses.len(), response.keyboard_presses.len());
 
         eprintln!(
-            "input recorder: ended {ended:?} after the request at {:.1} ms; {}; {sent} inputs \
-             sent; cursor shown {shown}",
+            "input recorder: ended {ended:?} after the request at {:.1} ms; {}; injected {sent:?}; \
+             cursor shown {shown}",
             ms_since(start_time.instant(), request),
             summary(&response),
         );
@@ -2929,13 +3040,8 @@ mod stop_cut_input_tests {
             ended < Duration::from_secs(1),
             "the recorder ended {ended:?} after the request"
         );
-        if shown {
-            assert!(
-                !response.moves.is_empty()
-                    && !response.clicks.is_empty()
-                    && !response.keyboard_presses.is_empty(),
-                "input sent before the request must be recorded ({sent} inputs sent)"
-            );
+        if let Some(sent) = sent {
+            assert_injected_input_recorded(&response, shown, sent);
         }
     }
 
@@ -2944,7 +3050,7 @@ mod stop_cut_input_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn late_stop_cut_unmarked_keeps_input_recording_until_stopped() {
         let dir = tempfile::tempdir().unwrap();
-        let input = Injector::start();
+        let input = Injector::start_if_required();
         let start_time = Timestamps::now();
         let cut = StopCut::default();
         let mut actor = cut
@@ -2962,15 +3068,16 @@ mod stop_cut_input_tests {
         let stopped_ms = ms_since(start_time.instant(), Instant::now());
         tokio::task::block_in_place(|| actor.stop());
         let response = actor.rx.clone().await.unwrap();
-        let sent = input.stop();
+        let sent = input.map(Injector::stop);
 
         assert!(cut.instant().is_none());
         eprintln!(
-            "input recorder, no request: stopped at {stopped_ms:.1} ms; {}; {sent} inputs sent; \
+            "input recorder, no request: stopped at {stopped_ms:.1} ms; {}; injected {sent:?}; \
              cursor shown {shown}",
             summary(&response),
         );
-        if shown {
+        if let Some(sent) = sent {
+            assert_injected_input_recorded(&response, shown, sent);
             let last = last_event_ms(&response).expect("input was recorded");
             assert!(
                 last >= stopped_ms - 100.0,

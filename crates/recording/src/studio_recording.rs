@@ -5694,7 +5694,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn late_stop_cut_reaches_the_input_recorder_of_a_real_segment() {
         let temp = tempfile::tempdir().unwrap();
-        let input = crate::cursor::test_input::Injector::start();
+        let input = crate::cursor::test_input::Injector::start_if_required();
         let (completion_tx, _completion_rx) = watch::channel(None);
         let mut factory = SegmentPipelineFactory::new(
             temp.path().join("content/segments"),
@@ -5744,22 +5744,19 @@ mod tests {
             )
             .unwrap();
         let ended = request.elapsed();
-        let sent = input.stop();
+        let sent = input.map(crate::cursor::test_input::Injector::stop);
 
         let limit = request.checked_add(Duration::from_millis(16)).unwrap();
         let limit_ms = limit.saturating_duration_since(epoch).as_secs_f64() * 1000.0;
         crate::cursor::test_input::assert_response_recorded_by(&response, limit_ms);
         eprintln!(
-            "segment input recorder: ended {ended:?} after the request at {:.1} ms; {}; {sent} \
-             inputs sent; cursor shown {shown}",
+            "segment input recorder: ended {ended:?} after the request at {:.1} ms; {}; injected \
+             {sent:?}; cursor shown {shown}",
             request.saturating_duration_since(epoch).as_secs_f64() * 1000.0,
             crate::cursor::test_input::summary(&response),
         );
-        if shown {
-            assert!(
-                !response.moves.is_empty() && !response.keyboard_presses.is_empty(),
-                "input sent before the request must be recorded ({sent} inputs sent)"
-            );
+        if let Some(sent) = sent {
+            crate::cursor::test_input::assert_injected_input_recorded(&response, shown, sent);
         }
         pipeline.stop().await.ok();
     }
