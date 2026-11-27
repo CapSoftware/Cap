@@ -5,14 +5,17 @@ import NumberFlow from "@number-flow/react";
 import { useMutation } from "@tanstack/react-query";
 import { useCurrency } from "hooks/useCurrency";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useLayoutEffect, useState } from "react";
+import { Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { useStripeContext } from "@/app/Layout/StripeContext";
 import { trackEvent } from "@/app/utils/analytics";
 import { useEnded } from "@/components/pages/blackfriday/Claim";
 import { CODE, PRICE } from "@/components/pages/blackfriday/content";
-import { PRICING_OFFER_ANCHOR } from "@/components/pages/blackfriday/SiteBanner";
+import {
+	OFFER_LINK_EVENT,
+	PRICING_OFFER_ANCHOR,
+} from "@/components/pages/blackfriday/SiteBanner";
 import { useInAppCheckout } from "@/components/pages/checkout/useInAppCheckout";
 import {
 	BTN_PRIMARY,
@@ -71,9 +74,30 @@ export const ProCard = ({ collapsed, onToggle }: PlanToggle) => {
 	const discounted = capFriday && annual;
 	const theme = capFriday ? CAP_FRIDAY_THEME : MODE_THEME.instant;
 
+	const card = useRef({ collapsed, onToggle });
+	useLayoutEffect(() => {
+		card.current = { collapsed, onToggle };
+	});
+	const scrollWhenOpen = useRef(false);
+
 	useEffect(() => {
-		if (capFriday) setAnnual(true);
+		if (!capFriday) return;
+		const showOffer = () => {
+			setAnnual(true);
+			if (!card.current.collapsed) return;
+			scrollWhenOpen.current = true;
+			card.current.onToggle();
+		};
+		showOffer();
+		window.addEventListener(OFFER_LINK_EVENT, showOffer);
+		return () => window.removeEventListener(OFFER_LINK_EVENT, showOffer);
 	}, [capFriday]);
+
+	useEffect(() => {
+		if (collapsed || !scrollWhenOpen.current) return;
+		scrollWhenOpen.current = false;
+		document.getElementById(PRICING_OFFER_ANCHOR)?.scrollIntoView();
+	}, [collapsed]);
 
 	const perUser = discounted
 		? PRICE.perMonth
@@ -175,7 +199,7 @@ export const ProCard = ({ collapsed, onToggle }: PlanToggle) => {
 				tag={capFriday ? "Cap Friday, 50% off" : "Most popular"}
 				theme={theme}
 				frameShadow={capFriday ? CAP_FRIDAY_FRAME_SHADOW : undefined}
-				summary={`${symbol}${capFriday ? PRICE.perMonth : copy.pricing.monthly} per user, per month`}
+				summary={`${symbol}${discounted ? PRICE.perMonth : copy.pricing.monthly} per user, per month`}
 				collapsed={collapsed}
 				onToggle={onToggle}
 				featured

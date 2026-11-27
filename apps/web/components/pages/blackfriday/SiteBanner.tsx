@@ -8,6 +8,7 @@ import { Countdown } from "./Countdown";
 import { CODE } from "./content";
 
 export const PRICING_OFFER_ANCHOR = "pro";
+export const OFFER_LINK_EVENT = "cap-friday-offer-link";
 
 const HREF = `/pricing?promo=${CODE}#${PRICING_OFFER_ANCHOR}`;
 
@@ -29,12 +30,13 @@ export function SiteBanner() {
 			<Link
 				href={HREF}
 				data-site-banner
-				onClick={() =>
+				onClick={() => {
 					trackEvent("black_friday_cta_clicked", {
 						cta_location: "site_banner",
 						target_billing_period: "annual",
-					})
-				}
+					});
+					window.dispatchEvent(new Event(OFFER_LINK_EVENT));
+				}}
 				className="group/banner relative isolate flex h-11 items-center justify-center gap-2.5 overflow-hidden bg-[#0A0A0B] px-4 text-[#F5F1EA] [-webkit-tap-highlight-color:transparent] focus-visible:outline-none has-[~[data-site-banner-off]]:hidden sm:gap-3.5"
 			>
 				<span
