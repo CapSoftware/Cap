@@ -1,4 +1,4 @@
-name: rc064 bench
+name: gate064 bench
 
 # Temporary release-candidate comparison harness. Runs on ci/rc064-* branches
 # only; each branch is a release ref plus this workflow.
@@ -6,7 +6,7 @@ name: rc064 bench
 on:
   push:
     branches:
-      - "ci/rc064b-**"
+      - "ci/gate064-**"
 
 permissions:
   contents: read
