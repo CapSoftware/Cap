@@ -1338,9 +1338,7 @@ fn create_system_audio_capturer(
                     *guard = Some(timestamp);
                 }
 
-                let (trace_w, trace_h) = (frame_width, frame_height);
-                let trace_send_start = std::time::Instant::now();
-                let trace_outcome = match output_pipeline::send_with_stall_budget_futures(
+                match output_pipeline::send_with_stall_budget_futures(
                     &mut tx,
                     frame,
                     "screen-system-audio",
@@ -1489,9 +1487,7 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                             ts = ts + chunk_duration;
                             let silence = create_silence_frame(&audio_info, silence_chunk_samples);
                             let frame = AudioFrame::new(silence, ts);
-                            let (trace_w, trace_h) = (frame_width, frame_height);
-                let trace_send_start = std::time::Instant::now();
-                let trace_outcome = match output_pipeline::send_with_stall_budget_futures(
+                match output_pipeline::send_with_stall_budget_futures(
                                 &mut watcher_tx,
                                 frame,
                                 "screen-system-audio:silence-fill",
