@@ -186,7 +186,7 @@ impl StopItem {
 
     #[zbus(property)]
     fn title(&self) -> &str {
-        "Stop Cap recording"
+        "Start or stop Cap recording"
     }
 
     #[zbus(property)]
@@ -690,6 +690,7 @@ mod tests {
     #[test]
     fn the_menu_entry_does_what_activating_the_icon_does() {
         let (item, receiver) = item();
+        assert_eq!(item.title(), "Start or stop Cap recording");
         assert!(!item.item_is_menu());
         assert_eq!(item.menu().as_str(), MENU_PATH);
         item.scroll(1, "vertical");
