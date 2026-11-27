@@ -276,6 +276,8 @@ export const RATE_LIMIT_IDS = {
 	MEETINGS_NOTES: "rl_meetings_notes",
 	/** Desktop meeting questions (LLM cost): one unit per request plus one per started 100 KB of body past the first. Suggested: 120 / 1h per key (user). */
 	MEETINGS_ASK: "rl_meetings_ask",
+	/** Desktop note share links: one unit per request plus one per started 100 KB of body past the first. Suggested: 120 / 1h per key (user). */
+	MEETINGS_SHARE: "rl_meetings_share",
 	/** Desktop meeting audio, charged one unit per started 10 s of audio (see `checkFirewallRateLimitUnits`). Suggested: 720 / 1h per key (user). Firewall windows stop at one hour; the daily cap is kept in the database (lib/meetings/audio-usage.ts). */
 	MEETINGS_AUDIO: "rl_meetings_audio",
 	/** Desktop meeting requests whose sign-in was not accepted. Suggested: 60 / 1m per IP. */
@@ -355,6 +357,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	},
 	[RATE_LIMIT_IDS.MEETINGS_NOTES]: { limit: 60, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.MEETINGS_ASK]: { limit: 120, windowMs: 60 * MINUTE_MS },
+	[RATE_LIMIT_IDS.MEETINGS_SHARE]: { limit: 120, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.MEETINGS_AUDIO]: {
 		limit: 5_760,
 		windowMs: 24 * 60 * MINUTE_MS,

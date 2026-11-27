@@ -30,6 +30,16 @@ const mocks = vi.hoisted(() => ({
 		{ completed: boolean; runs: number; asks: number }
 	>(),
 	daily: vi.fn(),
+	shareUpsert: vi.fn(),
+	shareDelete: vi.fn(),
+}));
+
+vi.mock("@/lib/meetings/share", () => ({
+	upsertSharedNote: mocks.shareUpsert,
+	deleteSharedNote: mocks.shareDelete,
+}));
+vi.mock("@/lib/desktop-share-url", () => ({
+	getDesktopShareUrl: async () => undefined,
 }));
 
 vi.mock("@/lib/meetings/audio-usage", () => ({
@@ -300,6 +310,7 @@ beforeEach(() => {
 		ASSEMBLY_API_KEY: "test-key",
 		ASSEMBLY_BASE_URL: "https://speech.example/asr",
 		NEXTAUTH_SECRET: "test-secret",
+		WEB_URL: "https://cap.so",
 	};
 	mocks.aiConfigured = true;
 	mocks.after = [];
@@ -314,6 +325,8 @@ beforeEach(() => {
 		mocks.remove,
 		mocks.streamText,
 		mocks.generateText,
+		mocks.shareUpsert,
+		mocks.shareDelete,
 	])
 		fn.mockReset();
 	mocks.daily.mockReset();
@@ -1551,5 +1564,209 @@ describe("remote control", () => {
 			await call("/capabilities", { method: "GET" })
 		).json();
 		expect(capabilities.notes).toBe(true);
+	});
+});
+
+describe("note share links", () => {
+	const note = {
+		documentId: "doc_weekly-sync",
+		title: "Weekly sync",
+		summaryMarkdown: `## Summary\n\n${SECRET}`,
+		transcript: [{ speaker: "Sam", startMs: 1_000, text: SECRET }],
+		participants: ["Sam", "Priya"],
+		startedAt: "2026-11-27T10:00:00+01:00",
+		durationSeconds: 1_934,
+	};
+	const saved = { id: "0123456789abcde", orgId: "org-1", created: true };
+
+	it("needs a sign-in to share or stop sharing", async () => {
+		const share = await call("/share", {
+			auth: false,
+			body: JSON.stringify(note),
+			headers: { "content-type": "application/json" },
+		});
+		const stop = await call("/share/doc_weekly-sync", {
+			auth: false,
+			method: "DELETE",
+		});
+
+		expect([share.status, stop.status]).toEqual([401, 401]);
+		expect(mocks.shareUpsert).not.toHaveBeenCalled();
+		expect(mocks.shareDelete).not.toHaveBeenCalled();
+	});
+
+	it("creates a link for a free account and returns it uncached", async () => {
+		const user = signIn(null);
+		mocks.shareUpsert.mockResolvedValue(saved);
+
+		const response = await postJson("/share", note);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		expect(await response.json()).toEqual({
+			id: saved.id,
+			shareUrl: `https://cap.so/s/${saved.id}`,
+			created: true,
+		});
+		expect(mocks.shareUpsert).toHaveBeenCalledWith(
+			expect.objectContaining({ id: user.id }),
+			expect.objectContaining({
+				documentId: note.documentId,
+				title: note.title,
+				notesMarkdown: "",
+				transcript: note.transcript,
+			}),
+		);
+	});
+
+	it("reports an update of the same document as not created", async () => {
+		signIn();
+		mocks.shareUpsert.mockResolvedValue({ ...saved, created: false });
+
+		const response = await postJson("/share", note);
+
+		expect(await response.json()).toMatchObject({
+			id: saved.id,
+			created: false,
+		});
+	});
+
+	it.each([
+		["text/plain", JSON.stringify(note), "content-type"],
+		["application/json", "{", "body"],
+	])("rejects a %s body it cannot read", async (type, body, field) => {
+		signIn();
+
+		const response = await call("/share", {
+			body,
+			headers: { "content-type": type },
+		});
+
+		expect(response.status).toBe(400);
+		expect((await response.json()).detail).toContain(field);
+		expect(mocks.shareUpsert).not.toHaveBeenCalled();
+	});
+
+	it("names the invalid field without repeating the note", async () => {
+		signIn();
+
+		const response = await postJson("/share", {
+			...note,
+			documentId: "../other",
+		});
+		const body = await response.text();
+
+		expect(response.status).toBe(400);
+		expect(body).toContain("documentId");
+		expect(body).not.toContain(SECRET);
+		expect(mocks.shareUpsert).not.toHaveBeenCalled();
+	});
+
+	it("refuses a body over the size limit", async () => {
+		signIn();
+
+		const response = await postJson("/share", {
+			...note,
+			summaryMarkdown: "a".repeat(4_000_001),
+		});
+
+		expect(response.status).toBe(413);
+		expect(mocks.shareUpsert).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["no_organization", 403, "no_valid_org"],
+		["conflict", 409, "conflict"],
+	])("answers %s without a link", async (result, status, error) => {
+		signIn();
+		mocks.shareUpsert.mockResolvedValue(result);
+
+		const response = await postJson("/share", note);
+
+		expect(response.status).toBe(status);
+		expect(await response.json()).toEqual({ error });
+	});
+
+	it("keeps note text out of the response and the logs when saving fails", async () => {
+		signIn();
+		mocks.shareUpsert.mockRejectedValue(new Error(`insert failed: ${SECRET}`));
+
+		const response = await postJson("/share", note);
+
+		expect(response.status).toBe(500);
+		expect(await response.text()).not.toContain(SECRET);
+		const logged = JSON.stringify(
+			[console.log, console.error, console.warn].flatMap(
+				(log) => vi.mocked(log).mock.calls,
+			),
+		);
+		expect(logged).not.toContain(SECRET);
+	});
+
+	it("limits how often one account can share", async () => {
+		signIn();
+		mocks.shareUpsert.mockResolvedValue(saved);
+		for (let index = 0; index < 120; index++)
+			expect((await postJson("/share", note)).status).toBe(200);
+
+		const limited = await postJson("/share", note);
+
+		expect(limited.status).toBe(429);
+		expect(limited.headers.get("retry-after")).not.toBeNull();
+		expect(mocks.shareUpsert).toHaveBeenCalledTimes(120);
+	});
+
+	it("charges a large note more of the same allowance", async () => {
+		signIn();
+		mocks.shareUpsert.mockResolvedValue(saved);
+		const large = {
+			...note,
+			transcript: Array.from({ length: 47 }, () => ({
+				speaker: "Sam",
+				startMs: 0,
+				text: "a".repeat(20_000),
+			})),
+		};
+		for (let index = 0; index < 12; index++)
+			expect((await postJson("/share", large)).status).toBe(200);
+
+		expect((await postJson("/share", large)).status).toBe(429);
+	});
+
+	it("stops sharing a document", async () => {
+		const user = signIn();
+		mocks.shareDelete.mockResolvedValue(true);
+
+		const response = await call("/share/doc_weekly-sync", {
+			method: "DELETE",
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ deleted: true });
+		expect(mocks.shareDelete).toHaveBeenCalledWith(
+			expect.objectContaining({ id: user.id }),
+			"doc_weekly-sync",
+		);
+	});
+
+	it("answers a document that is not shared without an error", async () => {
+		signIn();
+		mocks.shareDelete.mockResolvedValue(false);
+
+		const response = await call("/share/doc_unknown", { method: "DELETE" });
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ deleted: false });
+	});
+
+	it("rejects a document id it cannot have issued", async () => {
+		signIn();
+
+		const response = await call(`/share/${"a".repeat(65)}`, {
+			method: "DELETE",
+		});
+
+		expect(response.status).toBe(400);
+		expect(mocks.shareDelete).not.toHaveBeenCalled();
 	});
 });
