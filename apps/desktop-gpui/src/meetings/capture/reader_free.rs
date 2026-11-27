@@ -556,8 +556,11 @@ mod platform {
                     .name("cap-meeting-reader-free-links".into())
                     .spawn(move || {
                         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                            // A stream moved to another output can show only as
+                            // a change on the outputs, not on the stream.
                             if line.contains("'new' on sink-input")
                                 || line.contains("'change' on sink-input")
+                                || line.contains("'change' on sink #")
                             {
                                 let _ = wake.try_send(());
                             }
