@@ -1444,6 +1444,51 @@ def flow_playab():
             log("playab", side, rnd, g_cpu(e))
 
 
+EXPORT_1080 = {"format": "Mp4", "fps": 60, "export_to": "file", "resolution": "1080p", "compression": "Maximum", "custom_bpp": None}
+
+
+def flow_exportab():
+    """One project (recorded by the oldest build) exported by every build with
+    the same saved settings, rotated. GATE_EXPORT_PRESET=4k|1080, rounds."""
+    rounds = int(os.environ.get("GATE_EXPORT_ROUNDS", "4"))
+    prefs = EXPORT_4K if os.environ.get("GATE_EXPORT_PRESET", "1080" if OS == "Windows" else "4k") == "4k" else EXPORT_1080
+    src_side = SIDES[0]
+    sb, entry = studio_record(src_side, f"exab-src-{src_side}", secs=20)
+    record("exportab_source", src_side, entry)
+    if not entry.get("project"):
+        return
+    project = Path(entry["project"])
+    for rnd in range(rounds):
+        order = SIDES[rnd % len(SIDES):] + SIDES[: rnd % len(SIDES)]
+        for side in order:
+            view = Sandbox(f"exab-{side}-{rnd}")
+            dest = view.root / "recordings" / project.name
+            shutil.copytree(project, dest)
+            set_export_prefs(view, prefs)
+            with Sampler_after_window(view, side) as holder:
+                e = editor_export(side, view, dest, "mp4")
+            e["round"] = rnd
+            e["preset"] = prefs["resolution"]
+            for name, probe in (e.get("outputs") or {}).items():
+                try:
+                    e["bytes"] = (WORK / f"exports-{side}" / name).stat().st_size
+                except OSError:
+                    pass
+            record("exportab", side, e)
+            log("exportab", side, rnd, e.get("export_s"))
+
+
+class Sampler_after_window:
+    def __init__(self, sb, side):
+        self.sb, self.side = sb, side
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
 def g_cpu(e):
     return (e.get("playback_resources") or {}).get("cpu_mean_pct")
 
@@ -1658,6 +1703,7 @@ def main():
         "devices": flow_devices,
         "playab": flow_playab,
         "memmap": flow_memmap,
+        "exportab": flow_exportab,
     }
     for name, fn in flows.items():
         if "all" not in FLOWS and name not in FLOWS:
