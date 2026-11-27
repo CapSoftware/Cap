@@ -6,7 +6,9 @@ let confirmedInMemory = false;
 export const hasConfirmedNoMicrophone = () => {
 	if (confirmedInMemory) return true;
 	try {
-		return window.sessionStorage.getItem(NO_MICROPHONE_CONFIRMED_KEY) === "true";
+		return (
+			window.sessionStorage.getItem(NO_MICROPHONE_CONFIRMED_KEY) === "true"
+		);
 	} catch {
 		return false;
 	}
