@@ -8733,6 +8733,14 @@ impl EditorWindow {
         if !crate::store::set_editor_preview_quality(quality) {
             tracing::warn!("failed to persist preview quality");
         }
+        self.set_preview_quality_for_measurement(quality, cx);
+    }
+
+    pub(crate) fn set_preview_quality_for_measurement(
+        &mut self,
+        quality: crate::store::EditorPreviewQuality,
+        cx: &mut Context<Self>,
+    ) {
         if quality == self.preview_quality {
             return;
         }
@@ -14812,6 +14820,57 @@ mod tests {
                 assert_eq!(flags(&editor, cx).0, tab);
                 editor.update(cx, |editor, cx| editor.set_selection(None, cx));
             }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    mod preview_compare {
+        struct StoreGuard {
+            path: std::path::PathBuf,
+        }
+
+        impl StoreGuard {
+            fn new(contents: &str) -> Self {
+                let path = std::env::temp_dir().join(format!(
+                    "cap-preview-compare-store-{}-{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |elapsed| elapsed.as_nanos())
+                ));
+                std::fs::write(&path, contents).unwrap();
+                crate::store::set_test_tauri_store_path(Some(path.clone()));
+                Self { path }
+            }
+        }
+
+        impl Drop for StoreGuard {
+            fn drop(&mut self) {
+                crate::store::set_test_tauri_store_path(None);
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
+
+        #[gpui::test]
+        fn a_measurement_quality_change_leaves_the_store_file_alone(cx: &mut gpui::TestAppContext) {
+            let guard = StoreGuard::new(r#"{"general_settings":{"theme":"dark"}}"#);
+            let (editor, cx) = super::side_panel::fixture(cx);
+            let before = std::fs::read(&guard.path).unwrap();
+            editor.update(cx, |editor, cx| {
+                let next = match editor.preview_quality {
+                    crate::store::EditorPreviewQuality::Full => {
+                        crate::store::EditorPreviewQuality::Half
+                    }
+                    _ => crate::store::EditorPreviewQuality::Full,
+                };
+                editor.set_preview_quality_for_measurement(next, cx);
+                assert_eq!(editor.preview_quality, next);
+                assert_eq!(
+                    editor.preview_resolution(),
+                    super::super::preview_resolution(next)
+                );
+            });
+            assert_eq!(std::fs::read(&guard.path).unwrap(), before);
         }
     }
 

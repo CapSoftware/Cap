@@ -316,6 +316,7 @@ fn main() {
     // A copy of Cap started to self-test a hardware H264 encoder runs only
     // that test and exits, before logging, crash capture or single-instance.
     cap_enc_ffmpeg::isolated_self_test::run_child_or_register_host();
+    crate::editor_latency_bench::apply_preview_compare_args();
 
     #[cfg(target_os = "linux")]
     if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {

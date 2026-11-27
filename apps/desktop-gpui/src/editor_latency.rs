@@ -1,7 +1,8 @@
 //! Timestamps every preview frame through the editor's pipeline, from the
 //! frame demand to the canvas paint that hands it to the compositor. Only
-//! `CAP_GPUI_AUTO_LATENCY_BENCH=1` turns it on, and that bench drains the marks
-//! after every scenario. Off, each mark is one `OnceLock` read.
+//! `CAP_GPUI_AUTO_LATENCY_BENCH=1` or `CAP_GPUI_AUTO_PREVIEW_COMPARE=1` turns
+//! it on, and that bench drains the marks after every scenario. Off, each
+//! mark is one `OnceLock` read.
 //!
 //! Stages, in pipeline order:
 //! * `Input` -- the harness's synthetic pointer or edit, just before it runs.
@@ -36,16 +37,22 @@ struct Probe {
     sizes: Mutex<Vec<(u64, [u32; 2])>>,
 }
 
+pub(crate) fn probe_enabled() -> bool {
+    env_flag("CAP_GPUI_AUTO_LATENCY_BENCH") || env_flag("CAP_GPUI_AUTO_PREVIEW_COMPARE")
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| value == "1")
+}
+
 fn probe() -> Option<&'static Probe> {
     static PROBE: OnceLock<Option<Probe>> = OnceLock::new();
     PROBE
         .get_or_init(|| {
-            std::env::var("CAP_GPUI_AUTO_LATENCY_BENCH")
-                .is_ok_and(|value| value == "1")
-                .then(|| Probe {
-                    marks: Mutex::new(Vec::with_capacity(1 << 16)),
-                    sizes: Mutex::new(Vec::with_capacity(1 << 16)),
-                })
+            probe_enabled().then(|| Probe {
+                marks: Mutex::new(Vec::with_capacity(1 << 16)),
+                sizes: Mutex::new(Vec::with_capacity(1 << 16)),
+            })
         })
         .as_ref()
 }
@@ -292,6 +299,106 @@ pub(crate) fn percentiles(samples: &mut [f64]) -> Option<[f64; 4]> {
     Some([at(0.5), at(0.95), at(0.99), samples[samples.len() - 1]])
 }
 
+pub(crate) struct PlaybackStats {
+    pub frames: usize,
+    pub skipped: u32,
+    pub fps: f64,
+    pub present_p95_ms: Option<f64>,
+    pub rendered_to_painted_p95_ms: Option<f64>,
+    pub size: Option<[u32; 2]>,
+    pub steady: Vec<Presentation>,
+}
+
+pub(crate) fn playback_stats(
+    marks: &[Mark],
+    sizes: &[(u64, [u32; 2])],
+    from: Instant,
+    until: Instant,
+) -> PlaybackStats {
+    let (shown, _) = presentations(marks);
+    let steady: Vec<Presentation> = shown
+        .into_iter()
+        .filter(|presentation| presentation.painted >= from && presentation.painted <= until)
+        .collect();
+    let window_secs = until.saturating_duration_since(from).as_secs_f64();
+    let frames = steady.len();
+    let fps = if window_secs > 0.0 {
+        frames as f64 / window_secs
+    } else {
+        0.0
+    };
+    let skipped: u32 = steady
+        .windows(2)
+        .map(|pair| {
+            pair[1]
+                .frame
+                .saturating_sub(pair[0].frame)
+                .saturating_sub(1)
+        })
+        .sum();
+    let mut intervals: Vec<f64> = steady
+        .windows(2)
+        .map(|pair| millis(pair[0].painted, pair[1].painted))
+        .collect();
+    let mut rendered_to_painted: Vec<f64> = steady
+        .iter()
+        .filter_map(|presentation| {
+            presentation
+                .rendered
+                .map(|rendered| millis(rendered, presentation.painted))
+        })
+        .collect();
+    PlaybackStats {
+        frames,
+        skipped,
+        fps,
+        present_p95_ms: percentiles(&mut intervals).map(|percentile| percentile[1]),
+        rendered_to_painted_p95_ms: percentiles(&mut rendered_to_painted)
+            .map(|percentile| percentile[1]),
+        size: modal_painted_size(marks, sizes, from, until),
+        steady,
+    }
+}
+
+fn modal_painted_size(
+    marks: &[Mark],
+    sizes: &[(u64, [u32; 2])],
+    from: Instant,
+    until: Instant,
+) -> Option<[u32; 2]> {
+    let by_sequence: std::collections::HashMap<u64, [u32; 2]> = sizes.iter().copied().collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut counts: Vec<([u32; 2], usize)> = Vec::new();
+    for mark in marks {
+        if mark.stage != Stage::Painted || mark.at < from || mark.at > until {
+            continue;
+        }
+        if !seen.insert(mark.sequence) {
+            continue;
+        }
+        let Some(size) = by_sequence.get(&mark.sequence).copied() else {
+            continue;
+        };
+        if let Some((_, count)) = counts.iter_mut().find(|(known, _)| *known == size) {
+            *count += 1;
+        } else {
+            counts.push((size, 1));
+        }
+    }
+    counts
+        .into_iter()
+        .max_by(|left, right| {
+            left.1
+                .cmp(&right.1)
+                .then_with(|| {
+                    (u64::from(left.0[0]) * u64::from(left.0[1]))
+                        .cmp(&(u64::from(right.0[0]) * u64::from(right.0[1])))
+                })
+                .then_with(|| left.0[0].cmp(&right.0[0]))
+        })
+        .map(|(size, _)| size)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -477,5 +584,83 @@ mod tests {
         let mut samples: Vec<f64> = (1..=100).map(f64::from).collect();
         assert_eq!(percentiles(&mut samples), Some([51.0, 95.0, 99.0, 100.0]));
         assert_eq!(percentiles(&mut []), None);
+    }
+
+    fn steady_playback(frame_numbers: &[u32], size: [u32; 2]) -> PlaybackStats {
+        let base = Instant::now();
+        let from = at(base, 1_000);
+        let until = at(base, 2_000);
+        let mut marks = Vec::new();
+        let mut sizes = Vec::new();
+        for (index, frame) in frame_numbers.iter().copied().enumerate() {
+            let painted = from + Duration::from_millis(u64::try_from(index).unwrap() * 100);
+            let sequence = u64::try_from(index + 1).unwrap();
+            marks.push(mark(
+                Stage::Rendered,
+                frame,
+                0,
+                painted
+                    .checked_sub(Duration::from_millis(8))
+                    .expect("rendered fixture stays after the offset"),
+            ));
+            marks.push(mark(
+                Stage::Arrived,
+                frame,
+                sequence,
+                painted
+                    .checked_sub(Duration::from_millis(2))
+                    .expect("arrived fixture stays after the offset"),
+            ));
+            marks.push(mark(Stage::Painted, frame, sequence, painted));
+            sizes.push((sequence, size));
+        }
+        playback_stats(&marks, &sizes, from, until)
+    }
+
+    #[test]
+    fn steady_playback_reports_fps_latency_and_size() {
+        let stats = steady_playback(&(0..10).collect::<Vec<_>>(), [1248, 702]);
+        assert_eq!(stats.frames, 10);
+        assert_eq!(stats.skipped, 0);
+        assert!((stats.fps - 10.0).abs() < 1e-9);
+        assert_eq!(stats.present_p95_ms, Some(100.0));
+        assert_eq!(stats.rendered_to_painted_p95_ms, Some(8.0));
+        assert_eq!(stats.size, Some([1248, 702]));
+    }
+
+    #[test]
+    fn a_gap_in_frame_numbers_counts_as_skipped_source_frames() {
+        let stats = steady_playback(&[0, 1, 3, 4, 5, 6, 7, 8, 9, 10], [1920, 1080]);
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(stats.size, Some([1920, 1080]));
+    }
+
+    #[test]
+    fn no_painted_frame_is_not_a_playback_measurement() {
+        let base = Instant::now();
+        let stats = playback_stats(&[], &[], at(base, 0), at(base, 1_000));
+        assert_eq!(stats.frames, 0);
+        assert_eq!(stats.fps, 0.0);
+        assert_eq!(stats.present_p95_ms, None);
+        assert_eq!(stats.rendered_to_painted_p95_ms, None);
+        assert_eq!(stats.size, None);
+    }
+
+    #[test]
+    fn the_painted_size_is_the_one_that_appears_most() {
+        let base = Instant::now();
+        let from = at(base, 0);
+        let until = at(base, 1_000);
+        let marks = [
+            mark(Stage::Painted, 1, 1, at(base, 10)),
+            mark(Stage::Painted, 2, 2, at(base, 20)),
+            mark(Stage::Painted, 3, 3, at(base, 30)),
+            mark(Stage::Painted, 3, 3, at(base, 40)),
+        ];
+        let sizes = [(1, [10, 10]), (2, [1920, 1080]), (3, [1920, 1080])];
+        assert_eq!(
+            playback_stats(&marks, &sizes, from, until).size,
+            Some([1920, 1080])
+        );
     }
 }
