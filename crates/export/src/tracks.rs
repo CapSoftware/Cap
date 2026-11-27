@@ -588,6 +588,7 @@ fn write_video_track(
 
     let mut converter = Nv12Converter::default();
     let mut current = black_nv12(width, height);
+    let mut converted = None;
     for (index, job) in jobs.into_iter().enumerate() {
         match job {
             VideoJob::Frame(decoded) => converter.fill(&decoded, &mut current)?,
@@ -595,7 +596,7 @@ fn write_video_track(
             VideoJob::Repeat => {}
         }
         let timestamp = Duration::from_secs_f64(index as f64 / fps as f64);
-        file.queue_video_frame(current.clone(), timestamp)
+        file.queue_video_frame_reusable(&mut current, &mut converted, timestamp)
             .map_err(|error| format!("Encoding a track frame failed: {error}"))?;
     }
     let result = file
