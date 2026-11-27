@@ -123,6 +123,7 @@ let selection: HTMLButtonElement;
 
 beforeEach(async () => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+	vi.stubGlobal("matchMedia", (media: string) => ({ media, matches: true }));
 	mocks.mutate.mockClear();
 	mocks.mutations.length = 0;
 	mocks.pending = false;

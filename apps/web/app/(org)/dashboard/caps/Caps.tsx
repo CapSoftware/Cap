@@ -11,7 +11,7 @@ import { Effect, Exit } from "effect";
 import { AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import {
@@ -53,6 +53,12 @@ import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import { FoldersSection } from "./components/FoldersSection";
 import { NotesEmptyState } from "./components/NotesEmptyState";
+import {
+	gridColumns,
+	OVERVIEW_ROWS,
+	overviewItemClass,
+	overviewShows,
+} from "./overview-grid";
 import { QuickActions } from "./components/QuickActions";
 import { useArchiveCaps, useLeavingCaps } from "./components/useArchiveCaps";
 import { useCapSelection } from "./components/useCapSelection";
@@ -100,24 +106,17 @@ export type VideoData = {
 const GRID_CLASS =
 	"grid relative grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5";
 
-const OVERVIEW_ROWS: Record<CapKind, number> = {
-	videos: 2,
-	images: 1,
-	notes: 1,
+const subscribeToResize = (notify: () => void) => {
+	window.addEventListener("resize", notify);
+	return () => window.removeEventListener("resize", notify);
 };
 
-const GRID_COLUMNS = [
-	{ columns: 2, show: "sm:block" },
-	{ columns: 3, show: "lg:block" },
-	{ columns: 4, show: "xl:block" },
-	{ columns: 5, show: "2xl:block" },
-];
-
-function overviewItemClass(index: number, rows: number) {
-	if (index < Math.max(2, rows + 1)) return undefined;
-	const step = GRID_COLUMNS.find(({ columns }) => index < columns * rows);
-	return step ? `hidden ${step.show}` : "hidden";
-}
+const useGridColumns = () =>
+	useSyncExternalStore(
+		subscribeToResize,
+		() => gridColumns((query) => window.matchMedia(query).matches),
+		() => 1,
+	);
 
 const NO_COUNTS: CapKindCounts = { videos: 0, images: 0, notes: 0 };
 
@@ -164,9 +163,31 @@ export const Caps = ({
 	);
 	const leavingCaps = useLeavingCaps(listedVideos);
 	const visibleVideos = leavingCaps.present;
-	const pageIds = useMemo(
-		() => visibleVideos.map((video) => video.id),
+	const sections = useMemo(
+		() =>
+			CAP_KINDS.map((sectionKind) => ({
+				kind: sectionKind,
+				caps: visibleVideos.filter((video) => capKindOf(video) === sectionKind),
+			})),
 		[visibleVideos],
+	);
+	const gridColumnCount = useGridColumns();
+	const pageIds = useMemo(
+		() =>
+			isOverview
+				? sections.flatMap((section) =>
+						section.caps
+							.filter((_, index) =>
+								overviewShows(
+									index,
+									OVERVIEW_ROWS[section.kind],
+									gridColumnCount,
+								),
+							)
+							.map((video) => video.id),
+					)
+				: visibleVideos.map((video) => video.id),
+		[isOverview, sections, gridColumnCount, visibleVideos],
 	);
 	const selectAllView = useMemo(
 		() =>
@@ -200,14 +221,6 @@ export const Caps = ({
 			if (leavingCaps.leaving.has(video.id)) shown[capKindOf(video)] -= 1;
 		return shown;
 	}, [counts, listedVideos, leavingCaps.leaving]);
-	const sections = useMemo(
-		() =>
-			CAP_KINDS.map((sectionKind) => ({
-				kind: sectionKind,
-				caps: visibleVideos.filter((video) => capKindOf(video) === sectionKind),
-			})),
-		[visibleVideos],
-	);
 	const shownArchivedCount =
 		archivedCount + (isArchivedView ? 0 : leavingCaps.leavingCount);
 
