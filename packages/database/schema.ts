@@ -549,6 +549,7 @@ export const videos = mysqlTable(
 		xStreamInfo: text("xStreamInfo"),
 		firstViewEmailSentAt: timestamp("firstViewEmailSentAt"),
 		isScreenshot: boolean("isScreenshot").notNull().default(false),
+		isNote: boolean("isNote").notNull().default(false),
 		archivedAt: timestamp("archivedAt"),
 		// DEPRECATED
 		awsRegion: varchar("awsRegion", { length: 255 }),
@@ -592,6 +593,36 @@ export const videos = mysqlTable(
 			table.transcriptionStatus,
 			table.createdAt,
 		),
+	],
+);
+
+export type VideoNoteTranscriptTurn = {
+	speaker: string;
+	startMs: number;
+	text: string;
+};
+
+export const videoNotes = mysqlTable(
+	"video_notes",
+	{
+		videoId: nanoId("videoId")
+			.notNull()
+			.primaryKey()
+			.$type<Video.VideoId>()
+			.references(() => videos.id, { onDelete: "cascade" }),
+		ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
+		documentId: varchar("documentId", { length: 64 }).notNull(),
+		excerpt: varchar("excerpt", { length: 512 }).notNull().default(""),
+		summaryMarkdown: mediumtext("summaryMarkdown"),
+		notesMarkdown: mediumtext("notesMarkdown"),
+		transcript: json("transcript").$type<VideoNoteTranscriptTurn[]>(),
+		participants: json("participants").$type<string[]>(),
+		meetingStartedAt: timestamp("meetingStartedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => [
+		uniqueIndex("owner_document_idx").on(table.ownerId, table.documentId),
 	],
 );
 
