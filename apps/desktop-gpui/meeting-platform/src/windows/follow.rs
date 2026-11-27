@@ -218,8 +218,10 @@ fn look(
         HashMap::new()
     };
     let choice = chooser.choose(default.as_deref(), &playing, &recording, &procs, ours);
+    // What plays on the output read: the followed one, or the default.
     let there = choice
         .as_deref()
+        .or(default.as_deref())
         .map(|id| followed(id, &playing, &recording, &procs, ours));
     (choice, there)
 }

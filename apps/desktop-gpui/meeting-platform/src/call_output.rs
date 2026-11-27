@@ -142,6 +142,9 @@ pub struct Followed {
     pub call: Option<u32>,
     /// Every process with a session on that output.
     pub on_output: Vec<u32>,
+    /// Processes playing on other outputs right now (not Cap, not the
+    /// system sounds).
+    pub elsewhere: Vec<u32>,
 }
 
 /// [`Followed`] for `endpoint`, from the same look the choice came from.
@@ -154,10 +157,18 @@ pub fn followed(
 ) -> Followed {
     let call = call_sessions(playing, recording, procs, ours)
         .and_then(|sessions| call_root(&pids_on(endpoint, sessions.into_iter()), procs));
+    let mut elsewhere: Vec<u32> = playing
+        .iter()
+        .filter(|s| s.endpoint != endpoint && s.active && s.pid != 0 && s.pid != ours)
+        .map(|s| s.pid)
+        .collect();
+    elsewhere.sort_unstable();
+    elsewhere.dedup();
     Followed {
         endpoint: endpoint.to_string(),
         call,
         on_output: pids_on(endpoint, playing.iter()),
+        elsewhere,
     }
 }
 
@@ -319,8 +330,18 @@ mod tests {
                 endpoint: HEADSET.into(),
                 call: Some(4100),
                 on_output: vec![700, 4100],
+                elsewhere: vec![800],
             }
         );
+        // The call on the default output with music on the headset: the
+        // music is elsewhere.
+        let playing = [
+            session(SPEAKERS, 4100),
+            session(SPEAKERS, 700),
+            session(HEADSET, 800),
+        ];
+        let there = followed(SPEAKERS, &playing, &recording, &tree, OURS);
+        assert_eq!((there.call, there.elsewhere), (Some(4100), vec![800]));
         // Two processes of the call app there: the app that started both.
         let playing = [session(HEADSET, 4100), session(HEADSET, 4200)];
         let tree = procs(&[

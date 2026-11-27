@@ -1186,9 +1186,10 @@ enum WindowsLoopback {
     /// While a screen reader runs: what the computer plays, without the
     /// reader's speech.
     ReaderFree(cap_meeting_platform::ReaderFreeLoopback),
-    /// A followed output a screen reader plays to as well: only the call's
-    /// processes, by endpoint id.
-    CallOnly(cap_meeting_platform::ReaderFreeLoopback, String),
+    /// Only the call's processes, by endpoint id: on a followed output a
+    /// screen reader plays to as well (true), or on the default output while
+    /// a reader runs and other outputs play (false).
+    CallOnly(cap_meeting_platform::ReaderFreeLoopback, String, bool),
 }
 
 #[cfg(windows)]
@@ -1199,14 +1200,14 @@ impl WindowsLoopback {
                 let _ = capturer.pause();
             }
             Self::Call(loopback, _) => drop(loopback),
-            Self::ReaderFree(loopback) | Self::CallOnly(loopback, _) => drop(loopback),
+            Self::ReaderFree(loopback) | Self::CallOnly(loopback, _, _) => drop(loopback),
         }
     }
 
     fn followed(&self) -> Option<String> {
         match self {
-            Self::Default(_) | Self::ReaderFree(_) => None,
-            Self::Call(_, id) | Self::CallOnly(_, id) => Some(id.clone()),
+            Self::Default(_) | Self::ReaderFree(_) | Self::CallOnly(_, _, false) => None,
+            Self::Call(_, id) | Self::CallOnly(_, id, true) => Some(id.clone()),
         }
     }
 }
@@ -1482,22 +1483,44 @@ impl SystemPlatform {
                         {
                             call_only_refused = None;
                         }
-                        let call_only = wanted
-                            .as_deref()
-                            .and_then(|id| {
-                                let there = call_info.as_ref()?.lock().ok()?.clone()?;
+                        let there = call_info
+                            .as_ref()
+                            .and_then(|info| info.lock().ok()?.clone());
+                        // The default output read while a reader runs and
+                        // another output plays: leaving out only the reader
+                        // would take that output in too. The call alone is
+                        // read when it is known; otherwise the default output
+                        // as before.
+                        let others = wanted.is_none()
+                            && reader.zip(there.as_ref()).is_some_and(|(pid, there)| {
+                                there.elsewhere.iter().any(|other| *other != pid)
+                            });
+                        let call_only = match wanted.as_deref() {
+                            Some(id) => there.as_ref().and_then(|there| {
                                 let call = there.call.filter(|_| there.endpoint == id)?;
                                 let reader = cap_meeting_platform::running_reader()?;
-                                there.on_output.contains(&reader).then_some((call, reader))
-                            })
-                            .filter(|key| {
-                                call_only_refused.as_ref().is_none_or(|(refused, _)| refused != key)
-                            });
-                        if let (Some((call, pid)), Some(id)) = (call_only, wanted.as_deref()) {
-                            if let Some(WindowsLoopback::CallOnly(only, at)) = &current
+                                there
+                                    .on_output
+                                    .contains(&reader)
+                                    .then(|| (call, reader, id.to_string(), true))
+                            }),
+                            None if others => there.as_ref().and_then(|there| {
+                                Some((there.call?, reader?, there.endpoint.clone(), false))
+                            }),
+                            None => None,
+                        }
+                        .filter(|(call, pid, _, _)| {
+                            call_only_refused
+                                .as_ref()
+                                .is_none_or(|(refused, _)| *refused != (*call, *pid))
+                        });
+                        let reader = if others && call_only.is_none() { None } else { reader };
+                        if let Some((call, pid, id, follows)) = call_only {
+                            if let Some(WindowsLoopback::CallOnly(only, at, was)) = &current
                                 && only.call() == Some(call)
                                 && only.reader() == pid
-                                && at == id
+                                && *at == id
+                                && *was == follows
                                 && !errored
                             {
                                 continue;
@@ -1515,11 +1538,15 @@ impl SystemPlatform {
                                         old.stop();
                                     }
                                     restarts.fetch_add(1, Ordering::Relaxed);
-                                    tracing::info!(output = %id, "a screen reader plays to the call's output; only the call is read there");
-                                    current = Some(WindowsLoopback::CallOnly(loopback, id.to_string()));
-                                    if let Ok(mut slot) = followed.lock() {
-                                        *slot = Some(id.to_string());
+                                    if follows {
+                                        tracing::info!(output = %id, "a screen reader plays to the call's output; only the call is read there");
+                                    } else {
+                                        tracing::info!(output = %id, "a screen reader runs and another output plays; only the call is read");
                                     }
+                                    if let Ok(mut slot) = followed.lock() {
+                                        *slot = follows.then(|| id.clone());
+                                    }
+                                    current = Some(WindowsLoopback::CallOnly(loopback, id, follows));
                                     continue;
                                 }
                                 Err(error) => {
@@ -1555,7 +1582,11 @@ impl SystemPlatform {
                                     name = device_name();
                                     restarts.fetch_add(1, Ordering::Relaxed);
                                     current = Some(WindowsLoopback::Default(next));
-                                    tracing::info!("the screen reader quit; computer audio is read as before");
+                                    if others {
+                                        tracing::info!("another output plays and no call is known; the default output is read as before");
+                                    } else {
+                                        tracing::info!("the screen reader quit; computer audio is read as before");
+                                    }
                                 }
                                 continue;
                             }
