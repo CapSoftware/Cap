@@ -15,6 +15,7 @@ mod mask;
 mod notch;
 mod shape;
 mod text;
+mod video_background;
 
 use std::sync::OnceLock;
 
@@ -142,6 +143,7 @@ pub use mask::*;
 pub use notch::*;
 pub use shape::*;
 pub use text::*;
+pub use video_background::{is_video_background, video_background_poster};
 
 #[cfg(test)]
 mod font_tests {
