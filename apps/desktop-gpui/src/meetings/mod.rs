@@ -4067,6 +4067,8 @@ impl Meetings {
                 this.dirty_transcripts.insert(doc.clone());
                 this.schedule_notify(cx);
                 this.follow_late_renames(&doc, renames, cx);
+                // the notes list reads the corrected count of voices
+                cx.emit(MeetingEvent::LibraryChanged);
             })
             .ok();
         })
