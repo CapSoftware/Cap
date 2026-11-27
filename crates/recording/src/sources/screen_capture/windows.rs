@@ -1720,6 +1720,21 @@ mod update_interval_tests {
     }
 
     #[test]
+    fn never_longer_than_a_frame_whatever_the_display_reports() {
+        for reported in [
+            0.0, 1.0, 24.0, 30.0, 59.0, 59.94, 60.0, 64.0, 120.0, 144.0, 240.0, 1000.0,
+        ] {
+            for fps in [1u32, 15, 24, 25, 30, 48, 50, 60, 90, 120, 144, 240] {
+                let interval = wgc_min_update_interval(fps, reported).as_secs_f64();
+                assert!(
+                    interval < 1.0 / f64::from(fps),
+                    "{fps} fps with a reported {reported} Hz: {interval} s is not shorter than a frame"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn an_unknown_refresh_rate_keeps_half_a_frame() {
         assert_eq!(
             wgc_min_update_interval(30, 0.0),
