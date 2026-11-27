@@ -80,6 +80,15 @@ On macOS, a foreground Studio `cap record start --duration <seconds> --json` wit
 encoder and `written` to the file, and how many were lost in capture, before the encoder and in the encoder (which
 includes frames the writer could not put on disk).
 
+### Low disk space
+
+`cap record` watches free space on the recording's drive, like Cap Desktop. It refuses to start when 512 MB or
+less is free, and emits a `{"type":"storage","status":"low",...}` event when space runs low. Before saving
+would no longer fit, it stops by itself, saves everything captured so far, emits `stopped` with
+`"reason":"lowStorage"` and then an `error` event with `"code":"lowStorage"`, and exits `3`. The saved project
+is complete: validate and export it as usual. A detached recording records the same in its session
+(`storageLow`, `stopReason` in `cap record status`), and `cap record stop` reports it and exits `3`.
+
 ## Commands
 
 - `cap record start` / `record stop` / `record status` — record (foreground, or `--detach` for background) and manage sessions.
