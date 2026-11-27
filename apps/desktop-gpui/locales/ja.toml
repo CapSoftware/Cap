@@ -1429,6 +1429,7 @@ permissions_needed = "続けるには必要な権限を許可してください"
 relaunch = "Capを再起動"
 skip = "ツアーをスキップ"
 start = "Capを使い始める"
+step = "ステップ {current}/{total}"
 
 [onboarding.overview]
 subtitle = "スピード重視でも、スタジオ品質でも、手早いスクリーンショットでも。Capにはそれぞれに合ったモードがあります。"
@@ -1441,6 +1442,7 @@ title = "モードはいつでも切り替え可能"
 [onboarding.welcome]
 click_or_press = "ここをクリックするか、次のキーを押す："
 get_started = "はじめる"
+mute = "ミュート"
 space_key = "スペース"
 tagline = "誰もが使えるオープンソースの画面共有アプリ。"
 

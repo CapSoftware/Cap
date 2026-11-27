@@ -845,6 +845,16 @@ fn copy(text: impl Into<SharedString>, size: f32, color: impl Into<Hsla>) -> Div
         .child(text.into())
 }
 
+/// [`copy`] that screen readers read: the text is a label node. Kept apart
+/// from `copy` so the words inside buttons are not read twice.
+fn say(text: impl Into<SharedString>, size: f32, color: impl Into<Hsla>) -> Div {
+    let text: SharedString = text.into();
+    div()
+        .text_size(px(size))
+        .text_color(color.into())
+        .child(gpui::Text::new(gpui::ElementId::Name(text.clone()), text))
+}
+
 fn glyph(path: &'static str, size: f32, color: impl Into<Hsla>) -> gpui::Svg {
     svg().path(path).size(px(size)).text_color(color.into())
 }
@@ -1202,6 +1212,8 @@ impl OnboardingWindow {
         };
         let button = div()
             .id("onboarding-get-started")
+            .role(gpui::Role::Button)
+            .aria_label(tr::onboarding::welcome::get_started())
             .tab_index(0)
             .cursor_pointer()
             .relative()
@@ -1303,7 +1315,7 @@ impl OnboardingWindow {
                     .child(welcome_script(written, title_opacity)),
             )
             .child(
-                copy(tr::onboarding::welcome::tagline(), 22., ink.opacity(0.75))
+                say(tr::onboarding::welcome::tagline(), 22., ink.opacity(0.75))
                     .relative()
                     .top(px(subtitle_y))
                     .opacity(subtitle_opacity)
@@ -1314,10 +1326,17 @@ impl OnboardingWindow {
             )
             .child(button)
             .when_some(self.error.clone(), |el, error| {
-                el.child(copy(error, 12., ink).mt(px(12.)))
+                el.child(say(error, 12., ink).mt(px(12.)))
             });
         let mute = div()
             .id("onboarding-mute")
+            .role(gpui::Role::Button)
+            .aria_label(tr::onboarding::welcome::mute())
+            .aria_toggled(if self.muted {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
             .tab_index(0)
             .absolute()
             .top(px(ONBOARDING_HEADER_HEIGHT + 12.))
@@ -1386,13 +1405,13 @@ impl OnboardingWindow {
                             84.,
                         ))
                         .child(
-                            copy((mode.title)(), 15., paper.ink)
+                            say((mode.title)(), 15., paper.ink)
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_center()
                                 .mt(px(4.)),
                         )
                         .child(
-                            copy((mode.tagline)(), 12., paper.soft)
+                            say((mode.tagline)(), 12., paper.soft)
                                 .font_weight(FontWeight::NORMAL)
                                 .line_height(px(16.))
                                 .text_center(),
@@ -1447,17 +1466,17 @@ impl OnboardingWindow {
                                     .flex_col()
                                     .gap(px(3.))
                                     .child(
-                                        copy((mode.title)(), 20., paper.ink)
+                                        say((mode.title)(), 20., paper.ink)
                                             .font_weight(FontWeight::MEDIUM),
                                     )
                                     .child(
-                                        copy((mode.tagline)(), 12., paper.soft)
+                                        say((mode.tagline)(), 12., paper.soft)
                                             .font_weight(FontWeight::NORMAL),
                                     ),
                             ),
                     )
                     .child(
-                        copy((mode.description)(), 13., paper.soft)
+                        say((mode.description)(), 13., paper.soft)
                             .font_weight(FontWeight::NORMAL)
                             .line_height(px(20.)),
                     )
@@ -1476,7 +1495,7 @@ impl OnboardingWindow {
                                     18.,
                                 ))
                                 .child(
-                                    copy(feature(), 13., paper.ink).font_weight(FontWeight::NORMAL),
+                                    say(feature(), 13., paper.ink).font_weight(FontWeight::NORMAL),
                                 )
                         }),
                     )),
@@ -1534,6 +1553,13 @@ impl OnboardingWindow {
                             .children(MODES.iter().enumerate().map(|(index, mode)| {
                                 div()
                                     .id(("onboarding-mode", index))
+                                    .role(gpui::Role::RadioButton)
+                                    .aria_label((mode.title)())
+                                    .aria_toggled(if active == index {
+                                        gpui::Toggled::True
+                                    } else {
+                                        gpui::Toggled::False
+                                    })
                                     .tab_index(0)
                                     .size(px(80.))
                                     .rounded_full()
@@ -1643,13 +1669,13 @@ impl OnboardingWindow {
                                 .flex_col()
                                 .gap(px(4.))
                                 .child(
-                                    copy(title, 13., theme.gray_12).font_weight(FontWeight::MEDIUM),
+                                    say(title, 13., theme.gray_12).font_weight(FontWeight::MEDIUM),
                                 )
-                                .child(copy(description, 11., theme.gray_10).line_height(px(15.)))
+                                .child(say(description, 11., theme.gray_10).line_height(px(15.)))
                         }),
                     ),
             )
-            .child(copy(tr::onboarding::customize::footer(), 12., theme.gray_9))
+            .child(say(tr::onboarding::customize::footer(), 12., theme.gray_9))
             .into_any_element()
     }
 
@@ -1682,6 +1708,16 @@ impl OnboardingWindow {
                             .child(
                                 div()
                                     .id(("onboarding-faq", index))
+                                    // State in the description: an expanded
+                                    // button cannot be pressed through UI
+                                    // Automation (no Expand handler in GPUI).
+                                    .role(gpui::Role::Button)
+                                    .aria_label(question())
+                                    .aria_description(if open {
+                                        tr::documents::a11y::expanded()
+                                    } else {
+                                        tr::documents::a11y::collapsed()
+                                    })
                                     .tab_index(0)
                                     .cursor_pointer()
                                     .px(px(20.))
@@ -1714,7 +1750,7 @@ impl OnboardingWindow {
                                         .px(px(20.))
                                         .pb(px(16.))
                                         .child(
-                                            copy(answer(), 13., theme.gray_10).line_height(px(20.)),
+                                            say(answer(), 13., theme.gray_10).line_height(px(20.)),
                                         )
                                         .when(index == 0, |el| {
                                             el.child(
@@ -1724,6 +1760,8 @@ impl OnboardingWindow {
                                                     theme.blue_10,
                                                 )
                                                 .id("onboarding-faq-pricing")
+                                                .role(gpui::Role::Link)
+                                                .aria_label(tr::onboarding::faq::pricing())
                                                 .cursor_pointer()
                                                 .mt(px(8.))
                                                 .on_click(|_, _, cx| {
@@ -1738,6 +1776,8 @@ impl OnboardingWindow {
             .child(
                 copy(tr::onboarding::faq::pricing_link(), 13., theme.blue_10)
                     .id("onboarding-pricing")
+                    .role(gpui::Role::Link)
+                    .aria_label(tr::onboarding::faq::pricing_link())
                     .cursor_pointer()
                     .on_click(|_, _, cx| cx.open_url(crate::auth::PRICING_URL)),
             )
@@ -1784,6 +1824,8 @@ impl OnboardingWindow {
                         el.child(
                             copy(tr::onboarding::nav::back(), 13., paper.soft)
                                 .id("onboarding-back")
+                                .role(gpui::Role::Button)
+                                .aria_label(tr::common::back())
                                 .cursor_pointer()
                                 .hover(move |el| el.text_color(paper.ink))
                                 .on_click(cx.listener(|this, _, window, cx| this.back(window, cx))),
@@ -1791,6 +1833,11 @@ impl OnboardingWindow {
                     }))
                     .child(
                         div()
+                            .id("onboarding-steps")
+                            .when(total > 1, |el| {
+                                el.role(gpui::Role::Label)
+                                    .aria_value(tr::onboarding::nav::step(current + 1, total))
+                            })
                             .flex()
                             .items_center()
                             .gap(px(5.))
@@ -1815,6 +1862,8 @@ impl OnboardingWindow {
                             div().flex().flex_col().items_end().gap(px(8.)).child(
                                 div()
                                     .id("onboarding-continue")
+                                    .role(gpui::Role::Button)
+                                    .aria_label(label)
                                     .tab_index(0)
                                     .h(px(46.))
                                     .px(px(26.))
@@ -1864,7 +1913,7 @@ impl OnboardingWindow {
                     .flex()
                     .items_center()
                     .gap(px(14.))
-                    .child(copy(
+                    .child(say(
                         if disabled {
                             tr::onboarding::nav::permissions_needed()
                         } else {
@@ -1879,6 +1928,8 @@ impl OnboardingWindow {
                             el.child(
                                 copy(tr::onboarding::nav::skip(), 11., paper.soft)
                                     .id("onboarding-skip")
+                                    .role(gpui::Role::Button)
+                                    .aria_label(tr::onboarding::nav::skip())
                                     .cursor_pointer()
                                     .hover(move |el| el.text_color(paper.ink))
                                     .on_click(cx.listener(|this, _, _, cx| this.finish(cx))),
@@ -1887,7 +1938,7 @@ impl OnboardingWindow {
                     ),
             )
             .when_some(self.error.clone(), |el, error| {
-                el.child(copy(error, 12., paper.red))
+                el.child(say(error, 12., paper.red))
             })
             .into_any_element()
     }
