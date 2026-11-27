@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: [{"os": "windows", "arm": "base-delay", "sha": "cd03d4244092ab894102f2859225fcbb99e6b8f2", "runner": "blacksmith-8vcpu-windows-2025", "triple": "x86_64-pc-windows-msvc"}, {"os": "windows", "arm": "head-delay", "sha": "5c984cc7a4c1b8362f39fddeea46e77b76aa87c6", "runner": "blacksmith-8vcpu-windows-2025", "triple": "x86_64-pc-windows-msvc"}]
+        include: [{"os": "windows", "arm": "base-delay", "sha": "cd03d4244092ab894102f2859225fcbb99e6b8f2", "runner": "blacksmith-8vcpu-windows-2025", "triple": "x86_64-pc-windows-msvc"}, {"os": "windows", "arm": "head-delay", "sha": "15f0cb0a7b25e717595858093ec87cde01ca7308", "runner": "blacksmith-8vcpu-windows-2025", "triple": "x86_64-pc-windows-msvc"}]
     steps:
       - uses: actions/checkout@v4
         with:
