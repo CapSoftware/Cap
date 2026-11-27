@@ -3699,6 +3699,7 @@ impl EditorWindow {
             .child(
                 ui::Field::inline(&theme, tr::editor::sidebar::border::title()).value(
                     ui::Toggle::plain(&theme, "border-enabled", enabled)
+                        .label(tr::editor::sidebar::border::title())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let next = !enabled;
                             this.sidebar.border_open.set_open(next);
@@ -3771,6 +3772,7 @@ impl EditorWindow {
             .child(
                 ui::Field::inline(&theme, tr::editor::sidebar::notch::title()).value(
                     ui::Toggle::plain(&theme, "notch-enabled", enabled)
+                        .label(tr::editor::sidebar::notch::title())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let next = !enabled;
                             this.sidebar.notch_open.set_open(next);

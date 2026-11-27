@@ -2080,6 +2080,7 @@ impl EditorWindow {
                     SharedString::from(format!("shape-enabled-{index}")),
                     enabled,
                 )
+                .label(SharedString::from(tr::editor::shape::title(index + 1)))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.edit_shape_segment("shape-enabled", index, window, cx, move |segment| {
                         segment.enabled = !enabled;
@@ -2126,6 +2127,7 @@ impl EditorWindow {
                     SharedString::from(format!("shape-fill-{index}")),
                     fill,
                 )
+                .label(tr::editor::shape::fill())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.edit_shape_segment("shape-fill", index, window, cx, move |segment| {
                         segment.fill = !fill;

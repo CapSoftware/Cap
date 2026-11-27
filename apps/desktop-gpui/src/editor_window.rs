@@ -2205,11 +2205,10 @@ fn clip_menu_toggle_row(
                         .child(description),
                 ),
         )
-        .child(ui::Toggle::plain(
-            theme,
-            SharedString::from(format!("{id}-toggle")),
-            checked,
-        ))
+        .child(
+            ui::Toggle::plain(theme, SharedString::from(format!("{id}-toggle")), checked)
+                .label(label),
+        )
 }
 
 fn clip_menu_row(
@@ -11438,6 +11437,7 @@ impl EditorWindow {
                         )
                         .child(
                             ui::Toggle::plain(&theme, "preset-default", default)
+                                .label(tr::editor::window::presets::set_default())
                                 .on_click(cx.listener(move |this, _, _window, cx| {
                                     this.preset_dialog =
                                         Some(PresetDialog::Create { default: !default });

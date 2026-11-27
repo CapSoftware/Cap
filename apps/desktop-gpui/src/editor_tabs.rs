@@ -1726,28 +1726,28 @@ impl EditorWindow {
                         .child(self.render_camera_position(cx))
                         .child(
                             ui::Subfield::plain(&theme, tr::editor::tabs::camera::hide()).child(
-                                ui::Toggle::plain(&theme, "camera-hide", camera.hide).on_click(
-                                    cx.listener(|this, _, window, cx| {
+                                ui::Toggle::plain(&theme, "camera-hide", camera.hide)
+                                    .label(tr::editor::tabs::camera::hide())
+                                    .on_click(cx.listener(|this, _, window, cx| {
                                         let next = !this.style_control_project().camera.hide;
                                         this.edit_project("camera-hide", window, cx, move |p| {
                                             p.camera.hide = next;
                                             true
                                         });
-                                    }),
-                                ),
+                                    })),
                             ),
                         )
                         .child(
                             ui::Subfield::plain(&theme, tr::editor::tabs::camera::mirror()).child(
-                                ui::Toggle::plain(&theme, "camera-mirror", camera.mirror).on_click(
-                                    cx.listener(|this, _, window, cx| {
+                                ui::Toggle::plain(&theme, "camera-mirror", camera.mirror)
+                                    .label(tr::editor::tabs::camera::mirror())
+                                    .on_click(cx.listener(|this, _, window, cx| {
                                         let next = !this.style_control_project().camera.mirror;
                                         this.edit_project("camera-mirror", window, cx, move |p| {
                                             p.camera.mirror = next;
                                             true
                                         });
-                                    }),
-                                ),
+                                    })),
                             ),
                         )
                         // A picture is drawn as is: there is no background to
@@ -1796,6 +1796,7 @@ impl EditorWindow {
                             "camera-keep-size",
                             camera.scale_during_zoom >= 1.,
                         )
+                        .label(tr::editor::tabs::camera::keep_size_during_zoom())
                         .on_click(cx.listener(|this, _, window, cx| {
                             // `keep ? 1 : DEFAULT_CAMERA_SCALE_DURING_ZOOM`.
                             let keep = this.style_control_project().camera.scale_during_zoom >= 1.;
@@ -2068,15 +2069,15 @@ impl EditorWindow {
                         .gap(px(16.))
                         .child(
                             ui::Subfield::plain(&theme, tr::editor::tabs::audio::mute()).child(
-                                ui::Toggle::plain(&theme, "audio-mute", audio.mute).on_click(
-                                    cx.listener(|this, _, window, cx| {
+                                ui::Toggle::plain(&theme, "audio-mute", audio.mute)
+                                    .label(tr::editor::tabs::audio::mute())
+                                    .on_click(cx.listener(|this, _, window, cx| {
                                         let next = !this.project.audio.mute;
                                         this.edit_project("audio-mute", window, cx, move |p| {
                                             p.audio.mute = next;
                                             true
                                         });
-                                    }),
-                                ),
+                                    })),
                             ),
                         )
                         // Only a two-channel microphone gets the stereo row
@@ -2202,14 +2203,14 @@ impl EditorWindow {
                             ),
                     )
                     .child(
-                        ui::Toggle::plain(&theme, "audio-improve", enabled).on_click(cx.listener(
-                            move |this, _, window, cx| {
+                        ui::Toggle::plain(&theme, "audio-improve", enabled)
+                            .label("Studio Sound")
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 this.edit_project("audio-improve", window, cx, move |project| {
                                     project.audio.improve = !enabled;
                                     true
                                 });
-                            },
-                        )),
+                            })),
                     ),
             )
             .children(enabled.then(|| {
@@ -2293,6 +2294,7 @@ impl EditorWindow {
                     )
                     .child(
                         ui::Toggle::plain(&theme, "audio-improve-default", enabled_by_default)
+                            .label(tr::editor::tabs::audio::use_for_new())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let next = !enabled_by_default;
                                 if store::set_studio_sound_defaults(
@@ -2332,6 +2334,7 @@ impl EditorWindow {
         let mut body = div().flex().flex_col().gap(px(14.)).child(
             ui::Field::inline(&theme, tr::editor::tabs::cursor::show()).value(
                 ui::Toggle::plain(&theme, "cursor-show", !hidden)
+                    .label(tr::editor::tabs::cursor::show())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.edit_project("cursor-hide", window, cx, move |p| {
                             p.cursor.hide = !hidden;
@@ -2373,6 +2376,7 @@ impl EditorWindow {
             .child(
                 ui::Field::inline(&theme, tr::editor::tabs::cursor::hide_when_idle()).value(
                     ui::Toggle::plain(&theme, "cursor-idle", idle)
+                        .label(tr::editor::tabs::cursor::hide_when_idle())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.edit_project("cursor-idle", window, cx, move |p| {
                                 p.cursor.hide_when_idle = !idle;
@@ -2457,6 +2461,7 @@ impl EditorWindow {
                         ui::Field::inline(&theme, tr::editor::tabs::cursor::smooth_movement())
                             .value(
                                 ui::Toggle::plain(&theme, "cursor-smooth", smooth)
+                                    .label(tr::editor::tabs::cursor::smooth_movement())
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.sidebar.cursor_physics_open.set_open(!smooth);
                                         this.animate_collapsibles(window, cx);
@@ -2503,6 +2508,7 @@ impl EditorWindow {
             body = body.child(
                 ui::Field::inline(&theme, tr::editor::tabs::cursor::follow_hover()).value(
                     ui::Toggle::plain(&theme, "cursor-hover-anchors", hover)
+                        .label(tr::editor::tabs::cursor::follow_hover())
                         .on_click(cx.listener(|this, _, window, cx| {
                             let next = {
                                 let cursor = &this.style_control_project().cursor;
@@ -2527,6 +2533,7 @@ impl EditorWindow {
             body = body.child(
                 ui::Field::inline(&theme, tr::editor::tabs::cursor::svg_cursors()).value(
                     ui::Toggle::plain(&theme, "cursor-svg", cursor.use_svg)
+                        .label(tr::editor::tabs::cursor::svg_cursors())
                         .on_click(cx.listener(|this, _, window, cx| {
                             let next = !this.style_control_project().cursor.use_svg;
                             this.edit_project("cursor-svg", window, cx, move |p| {
@@ -2804,6 +2811,7 @@ impl EditorWindow {
                                     "keyboard-modifiers",
                                     settings.show_modifiers,
                                 )
+                                .label(tr::editor::tabs::keyboard::show_modifiers())
                                 .on_click(cx.listener(
                                     |this, _, window, cx| {
                                         let next = !keyboard_settings(&this.project).show_modifiers;
@@ -2828,6 +2836,7 @@ impl EditorWindow {
                                     "keyboard-special",
                                     settings.show_special_keys,
                                 )
+                                .label(tr::editor::tabs::keyboard::show_special_keys())
                                 .on_click(cx.listener(
                                     |this, _, window, cx| {
                                         let next =
@@ -2850,6 +2859,7 @@ impl EditorWindow {
                                         "keyboard-uppercase",
                                         settings.uppercase,
                                     )
+                                    .label(tr::editor::tabs::keyboard::uppercase())
                                     .on_click(cx.listener(
                                         |this, _, window, cx| {
                                             let next = !keyboard_settings(&this.project).uppercase;
@@ -2922,6 +2932,7 @@ impl EditorWindow {
             .badge(tr::editor::tabs::keyboard::beta())
             .value(
                 ui::Toggle::plain(&theme, "keyboard-enabled", enabled)
+                    .label(tr::editor::tabs::keyboard::title())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let next = !enabled;
                         this.tracks.keyboard = next;
@@ -3438,6 +3449,7 @@ impl EditorWindow {
                                         "caption-uppercase",
                                         settings.uppercase,
                                     )
+                                    .label(tr::editor::tabs::captions::uppercase())
                                     .on_click(cx.listener(
                                         |this, _, window, cx| {
                                             let next = !caption_settings(&this.project).uppercase;
@@ -3463,6 +3475,7 @@ impl EditorWindow {
                                         "caption-filler-words",
                                         settings.show_filler_words,
                                     )
+                                    .label(tr::editor::tabs::captions::show_filler_words())
                                     .on_click(cx.listener(
                                         |this, _, window, cx| {
                                             let next =
@@ -3494,6 +3507,7 @@ impl EditorWindow {
                                             "caption-active-word",
                                             settings.active_word_highlight,
                                         )
+                                        .label(tr::editor::tabs::captions::active_word_highlight())
                                         .on_click(
                                             cx.listener(|this, _, window, cx| {
                                                 let next = !caption_settings(&this.project)

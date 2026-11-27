@@ -2582,12 +2582,12 @@ impl EditorWindow {
                 row()
                     .child(row_label(tr::editor::crop::snap_to_ratios()))
                     .child(
-                        ui::Toggle::plain(&theme, "crop-snap", snap).on_click(cx.listener(
-                            |this, _, _window, cx| {
+                        ui::Toggle::plain(&theme, "crop-snap", snap)
+                            .label(tr::editor::crop::snap_to_ratios())
+                            .on_click(cx.listener(|this, _, _window, cx| {
                                 this.crop_snap_to_ratio = !this.crop_snap_to_ratio;
                                 cx.notify();
-                            },
-                        )),
+                            })),
                     ),
             )
             .child(hairline())

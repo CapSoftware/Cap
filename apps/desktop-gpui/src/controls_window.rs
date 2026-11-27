@@ -1128,6 +1128,7 @@ impl ControlsWindow {
                     )
                     .child(
                         ui::Toggle::glass(&theme, "show-camera-preview-toggle", preview_shown)
+                            .label(tr::controls::settings::show_camera_preview())
                             .disabled(&theme, !has_camera)
                             .when(has_camera, |toggle| {
                                 toggle.on_click(cx.listener(move |_, _, _, cx| {

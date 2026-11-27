@@ -4462,6 +4462,7 @@ impl EditorWindow {
         ui::Field::inline(&theme, tr::editor::panel::zoom::start_early())
             .value(
                 ui::Toggle::plain(&theme, "zoom-start-early", enabled)
+                    .label(tr::editor::panel::zoom::start_early())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.edit_project_without_timeline(
                             "zoom-start-early",
@@ -5580,6 +5581,9 @@ impl EditorWindow {
                         SharedString::from(format!("text-enabled-{index}")),
                         enabled,
                     )
+                    .label(SharedString::from(tr::editor::panel::text_segment::title(
+                        index + 1,
+                    )))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.edit_text_segment("text-enabled", index, window, cx, move |segment| {
                             segment.enabled = !enabled;
@@ -5732,6 +5736,7 @@ impl EditorWindow {
                                         SharedString::from(format!("text-gradient-{index}")),
                                         gradient_color.is_some(),
                                     )
+                                    .label(tr::editor::panel::text_segment::gradient())
                                     .on_click(cx.listener(
                                         move |this, _, window, cx| {
                                             this.edit_text_segment(
@@ -6262,6 +6267,7 @@ impl EditorWindow {
                                                 )),
                                                 enabled,
                                             )
+                                            .label(tr::editor::panel::enabled())
                                             .on_click(
                                                 cx.listener(move |this, _, window, cx| {
                                                     this.edit_audio_segment(
@@ -6378,6 +6384,7 @@ impl EditorWindow {
                                     SharedString::from(format!("mask-enabled-{index}")),
                                     enabled,
                                 )
+                                .label(tr::editor::panel::enabled())
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| {
                                         this.edit_mask_segment(
@@ -7696,6 +7703,7 @@ impl EditorWindow {
                         SharedString::from(format!("camera3d-blur-{index}")),
                         blur_on,
                     )
+                    .label(tr::editor::panel::camera3d::depth_blur())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.toggle_camera3d_blur(index, window, cx);
                     })),
@@ -7810,6 +7818,7 @@ impl EditorWindow {
                                         SharedString::from(format!("camera3d-bokeh-{index}")),
                                         blur.bokeh,
                                     )
+                                    .label(tr::editor::panel::camera3d::bokeh())
                                     .on_click(cx.listener(
                                         move |this, _, window, cx| {
                                             this.set_camera3d_bokeh(index, window, cx);
@@ -9633,6 +9642,7 @@ impl EditorWindow {
                         SharedString::from(format!("image-{index}-{key}")),
                         value,
                     )
+                    .label(label)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.edit_image_segment("image-toggle", index, window, cx, move |segment| {
                             match key {
@@ -9700,6 +9710,7 @@ impl EditorWindow {
                         SharedString::from(format!("style-enabled-{index}")),
                         enabled,
                     )
+                    .label(tr::editor::panel::enabled())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.edit_style_segment(
                             "style-enabled",
@@ -9734,6 +9745,7 @@ impl EditorWindow {
                                 SharedString::from(format!("style-{index}-{group:?}")),
                                 active,
                             )
+                            .label(group.label())
                             .on_click(cx.listener(
                                 move |this, _, window, cx| {
                                     this.edit_project(
@@ -9855,6 +9867,7 @@ impl EditorWindow {
                     SharedString::from(format!("style-camera-only-{index}")),
                     padding,
                 )
+                .label(tr::editor::panel::style::camera_only_background())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.edit_style_segment(
                         "camera-only-background",

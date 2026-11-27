@@ -3421,15 +3421,15 @@ impl EditorWindow {
                     ),
             )
             .child(
-                ui::Toggle::plain(&self.theme, track_toggle_id(kind), checked).on_click(
-                    cx.listener(move |this, _, _, cx| {
+                ui::Toggle::plain(&self.theme, track_toggle_id(kind), checked)
+                    .label(track_label(kind))
+                    .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             ui.toggle_track(kind);
                             ui.persist();
                         }
                         cx.notify();
-                    }),
-                ),
+                    })),
             )
     }
 
@@ -3654,7 +3654,11 @@ impl EditorWindow {
                             .child(description),
                     ),
             )
-            .child(ui::Toggle::plain(&self.theme, id, checked).on_click(on_click))
+            .child(
+                ui::Toggle::plain(&self.theme, id, checked)
+                    .label(title)
+                    .on_click(on_click),
+            )
     }
 
     fn export_optimize_row(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {

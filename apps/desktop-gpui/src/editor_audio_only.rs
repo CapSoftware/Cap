@@ -280,16 +280,16 @@ impl EditorWindow {
             ui::Field::section(&theme, tr::editor::audio_only::visuals())
                 .child(
                     ui::Subfield::plain(&theme, tr::editor::audio_only::show_visuals()).child(
-                        ui::Toggle::plain(&theme, "audio-visuals-enabled", enabled).on_click(
-                            cx.listener(move |this, _, window, cx| {
+                        ui::Toggle::plain(&theme, "audio-visuals-enabled", enabled)
+                            .label(tr::editor::audio_only::show_visuals())
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 this.edit_audio_visuals(
                                     "audio-visuals-enabled",
                                     window,
                                     cx,
                                     move |visuals| visuals.enabled = !enabled,
                                 );
-                            }),
-                        ),
+                            })),
                     ),
                 )
                 .when(enabled, |field| {

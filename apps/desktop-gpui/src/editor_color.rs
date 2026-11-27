@@ -643,6 +643,7 @@ impl EditorWindow {
             section = section.child(
                 ui::Field::inline(&theme, tr::editor::color::apply_to_cursor()).value(
                     ui::Toggle::plain(&theme, "grade-cursor", grade_cursor)
+                        .label(tr::editor::color::apply_to_cursor())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.edit_project("grade-cursor", window, cx, |project| {
                                 project.color_correction.grade_cursor = !grade_cursor;

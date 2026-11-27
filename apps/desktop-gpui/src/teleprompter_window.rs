@@ -1117,11 +1117,10 @@ impl TeleprompterWindow {
                     .child(div().min_w_0().truncate().child(label)),
             )
             // `<Toggle size="sm">` on bare glass.
-            .child(ui::Toggle::glass(
-                &theme,
-                SharedString::from(format!("{id}-toggle")),
-                checked,
-            ))
+            .child(
+                ui::Toggle::glass(&theme, SharedString::from(format!("{id}-toggle")), checked)
+                    .label(label),
+            )
             .on_click(on_click)
     }
 }

@@ -616,13 +616,13 @@ impl EditorWindow {
                             ),
                     )
                     .child(
-                        ui::Toggle::plain(&theme, "voice-eq-enabled", enabled).on_click(
-                            cx.listener(move |this, _, window, cx| {
+                        ui::Toggle::plain(&theme, "voice-eq-enabled", enabled)
+                            .label(tr::editor::tabs::audio::voice_eq::title())
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 this.edit_voice_eq("voice-eq-enabled", window, cx, |voice_eq| {
                                     voice_eq.enabled = !enabled;
                                 });
-                            }),
-                        ),
+                            })),
                     ),
             )
             .when(clip_count > 1, |card| {
@@ -1110,13 +1110,15 @@ impl EditorWindow {
                                 .text_color(Hsla::from(theme.editor.text_2))
                                 .child(tr::editor::tabs::audio::voice_eq::low_cut_description()),
                         )
-                        .child(ui::Toggle::plain(&theme, "voice-eq-low-cut", on).on_click(
-                            cx.listener(move |this, _, window, cx| {
-                                this.edit_voice_eq_tone(window, cx, |voice_eq| {
-                                    voice_eq.high_pass = !on;
-                                });
-                            }),
-                        ))
+                        .child(
+                            ui::Toggle::plain(&theme, "voice-eq-low-cut", on)
+                                .label(VoiceEqHandle::HighPass.label())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.edit_voice_eq_tone(window, cx, |voice_eq| {
+                                        voice_eq.high_pass = !on;
+                                    });
+                                })),
+                        )
                         .into_any_element(),
                     self.slider_field_disabled(
                         tr::editor::tabs::audio::voice_eq::frequency(),

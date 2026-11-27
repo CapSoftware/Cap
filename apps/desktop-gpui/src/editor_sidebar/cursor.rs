@@ -364,6 +364,7 @@ impl EditorWindow {
             .child(
                 ui::Field::inline(&theme, tr::editor::sidebar::cursor::click_ripple()).value(
                     ui::Toggle::plain(&theme, "cursor-ripple", enabled)
+                        .label(tr::editor::sidebar::cursor::click_ripple())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let next = !this.style_control_project().cursor.ripple.enabled;
                             this.sidebar.cursor_ripple_open.set_open(next);

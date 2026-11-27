@@ -1152,6 +1152,7 @@ impl EditorWindow {
                             )
                             .child(
                                 ui::Toggle::plain(&theme, "style-preset-default", default)
+                                    .label(kind_copy(kind).use_for_new)
                                     .on_click(cx.listener(move |this, _, _window, cx| {
                                         this.preset_dialog =
                                             Some(PresetDialog::Style(StyleDialog::Create {

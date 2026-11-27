@@ -3983,8 +3983,9 @@ impl ScreenshotEditorWindow {
                             .child(tr::screenshot_editor::style::border()),
                     )
                     .child(
-                        ui::Toggle::plain(&theme, "screenshot-border-toggle", enabled).on_click(
-                            cx.listener(move |this, _, window, cx| {
+                        ui::Toggle::plain(&theme, "screenshot-border-toggle", enabled)
+                            .label(tr::screenshot_editor::style::border())
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.border_body.set_open(!enabled);
                                 this.animate_collapsibles(window, cx);
@@ -4000,8 +4001,7 @@ impl ScreenshotEditorWindow {
                                     window,
                                     cx,
                                 );
-                            }),
-                        ),
+                            })),
                     ),
             )
             .child(editor_sidebar::collapsible(&self.border_body, body))
