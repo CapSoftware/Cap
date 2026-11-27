@@ -89,12 +89,40 @@ impl SignIn {
             return;
         }
 
-        let session = auth::begin_sign_in();
+        let session = match auth::begin_sign_in() {
+            Ok(session) => session,
+            Err(error) => {
+                tracing::warn!("sign-in failed: {error}");
+                cx.emit(SignInEvent::Finished {
+                    origin,
+                    outcome: SignInOutcome::Failed(error),
+                });
+                cx.notify();
+                return;
+            }
+        };
         let url = session.url.clone();
         let id = self.next_id;
         self.next_id += 1;
         let timeout = cx.background_executor().timer(auth::SIGN_IN_TIMEOUT);
+        let browser_url = url.clone();
         let task = cx.spawn(async move |this, cx| {
+            if let Some(server) = session.custom_server().map(str::to_string) {
+                let probe_server = server.clone();
+                let support = gpui_tokio::Tokio::spawn(cx, async move {
+                    auth::probe_sign_in_state(&probe_server).await
+                })
+                .await
+                .unwrap_or(auth::SignInStateSupport::Unknown);
+                if !auth::sign_in_state_required(&server, support) {
+                    tracing::warn!(
+                        ?support,
+                        "sign-in server did not confirm state support; accepting callbacks without state for this attempt"
+                    );
+                    session.accept_callbacks_without_state();
+                }
+            }
+            cx.update(|cx| cx.open_url(&browser_url));
             let outcome = match session.wait(timeout).await {
                 Ok(params) => match auth::process_auth_data(params) {
                     Ok(()) => {
@@ -135,7 +163,6 @@ impl SignIn {
             .ok();
         });
 
-        cx.open_url(&url);
         self.attempt = Some(Attempt {
             id,
             origin,

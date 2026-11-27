@@ -376,6 +376,48 @@ describe("buildAskPrompt", () => {
 		expect(followUp.messages[0]?.content).toBe(first.messages[0]?.content);
 	});
 
+	it("says which speaker is the person asking when the desktop names them", () => {
+		const { system } = prompts.buildAskPrompt({
+			...askInput({
+				transcript: "Sam: Can you send the recap?\nAlex: I'll send it today.",
+				selfName: ' Alex\n"Rivera" ',
+			}),
+			boundary: B,
+		});
+		expect(system).toContain(
+			'The transcript labels their lines "Alex Rivera", so "Alex Rivera" is them',
+		);
+		expect(system).toContain("never sign it as anyone else");
+		expect(system).toContain("Sign it with their name, Alex Rivera,");
+	});
+
+	it("treats You lines as the person asking when no name is sent", () => {
+		const { system } = prompts.buildAskPrompt({
+			...askInput({
+				transcript: "Sam: Can you send the recap?\nYou: I'll send it today.",
+			}),
+			boundary: B,
+		});
+		expect(system).toContain('so "You" is them');
+		expect(system).toContain("never guess one");
+	});
+
+	it("leaves the prompt as it was when nothing says who is asking", () => {
+		const { system } = prompts.buildAskPrompt({
+			...askInput({
+				transcript: "Sam: Can you send the recap?\nAlex: I'll send it.",
+			}),
+			boundary: B,
+		});
+		expect(system).not.toContain("is them");
+		expect(system).not.toContain("never sign it as anyone else");
+		const youInText = prompts.buildAskPrompt({
+			...askInput({ transcript: "Sam: You: is how the label reads." }),
+			boundary: B,
+		});
+		expect(youInText.system).not.toContain("is them");
+	});
+
 	it("sends the whole transcript up to the request maximum", () => {
 		const transcript = Array.from(
 			{ length: 300 },

@@ -1090,6 +1090,17 @@ screenshots_description = "Vos captures d'écran apparaîtront ici. Prenez une c
 view_all_recordings = "Voir tous les enregistrements"
 view_all_screenshots = "Voir toutes les captures d'écran"
 
+[main.link_start]
+camera = "Caméra : {name}"
+instant = "Mode Instant : {target}"
+microphone = "Micro : {name}"
+none = "Aucun"
+requested = "Un lien veut démarrer un enregistrement."
+start = "Démarrer l'enregistrement"
+studio = "Mode Studio : {target}"
+system_audio = "Audio système : activé"
+title = "Démarrer l'enregistrement ?"
+
 [main.mic_warning]
 body = "Cet enregistrement n'inclura pas votre voix. Sélectionnez un micro ou continuez sans."
 dont_show_again = "Ne plus afficher"

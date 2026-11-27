@@ -37,6 +37,7 @@ import {
 	confirmedDesktopLogWebhookUrl,
 	createDesktopLogUpload,
 } from "@/lib/desktop-log-upload";
+import { recordingLimitStillApplies } from "@/lib/free-plan-duration";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
@@ -379,9 +380,20 @@ app.get("/plan", withAuth, async (c) => {
 		}
 	}
 
+	const videoId = c.req.query("videoId");
+	const recordingLimitApplies = videoId
+		? await recordingLimitStillApplies(user.id, videoId).catch((error) => {
+				console.error("[GET] Error reading the recording limit:", error);
+				return true;
+			})
+		: undefined;
+
 	return c.json({
 		upgraded: isSubscribed,
 		stripeSubscriptionStatus: user.stripeSubscriptionStatus,
+		...(recordingLimitApplies === undefined
+			? {}
+			: { recording_limit_applies: recordingLimitApplies }),
 	});
 });
 
