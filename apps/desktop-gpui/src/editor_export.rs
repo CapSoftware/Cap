@@ -4196,6 +4196,7 @@ impl EditorWindow {
                             || ui.clipboard_retry_path().is_some(),
                         |this| {
                             let path = ui.output_path.clone();
+                            let tracks = ui.format == ExportFormatKind::Tracks;
                             this.child(
                                 ui::Button::plain(
                                     &theme,
@@ -4203,14 +4204,16 @@ impl EditorWindow {
                                     ui::ButtonVariant::Gray,
                                     ui::ButtonSize::Md,
                                 )
-                                .label(if ui.format == ExportFormatKind::Tracks {
+                                .label(if tracks {
                                     tr::editor::export::tracks::open_folder()
                                 } else {
                                     tr::editor::export::done::open_file()
                                 })
                                 .on_click(move |_, _, cx| {
-                                    if let Some(path) = &path {
-                                        library::open_with_system(path, cx);
+                                    match &path {
+                                        Some(path) if tracks => library::open_with_system(path, cx),
+                                        Some(path) => library::open_output(path, cx),
+                                        None => {}
                                     }
                                 }),
                             )
