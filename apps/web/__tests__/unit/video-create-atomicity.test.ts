@@ -233,6 +233,60 @@ describe("video creation with upload progress", () => {
 		expect(mocks.createUploadTargetForUser).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		"abc\\',sleep(2)",
+		"ABCDEFGHJKMNPQR",
+		"0123456789abcd",
+		"0123456789abcdef",
+		"0123456789abcdi",
+	])("rejects a new recording with id %s", async (id) => {
+		await expect(
+			createVideoAndGetUploadUrl({
+				orgId,
+				videoId: Video.VideoId.make(id),
+				supportsUploadProgress: true,
+			}),
+		).rejects.toThrow("Invalid video id");
+		expect(mocks.store.videos.size).toBe(0);
+		expect(mocks.store.uploads.size).toBe(0);
+		expect(mocks.transactionCalls).toBe(0);
+		expect(mocks.createUploadTargetForUser).not.toHaveBeenCalled();
+	});
+
+	it("accepts a new recording with a Cap video id", async () => {
+		const videoId = Video.VideoId.make("0123456789abcde");
+		const result = await createVideoAndGetUploadUrl({ orgId, videoId });
+		expect(result.id).toBe(videoId);
+		expect(mocks.store.videos.get(videoId)?.ownerId).toBe("fixture-user");
+	});
+
+	it("signs an existing owned recording without creating one", async () => {
+		const videoId = Video.VideoId.make("fixture-video");
+		const existingVideo = {
+			id: videoId,
+			ownerId: "fixture-user",
+			orgId,
+			name: "Fixture recording",
+			public: true,
+			source: { type: "webMP4" },
+			bucket: null,
+			storageIntegrationId: null,
+			metadata: null,
+			folderId: null,
+			transcriptionStatus: null,
+			width: null,
+			height: null,
+			duration: null,
+			createdAt: new Date(0),
+			updatedAt: new Date(0),
+		};
+		mocks.store.videos.set(videoId, existingVideo);
+		const result = await createVideoAndGetUploadUrl({ orgId, videoId });
+		expect(result.id).toBe(videoId);
+		expect(mocks.transactionCalls).toBe(0);
+		expect(mocks.createUploadTargetForVideo).toHaveBeenCalledOnce();
+	});
+
 	it("rolls back a recording when the progress insert fails", async () => {
 		mocks.rejectUpload = true;
 		await expect(
