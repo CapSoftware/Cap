@@ -81,6 +81,15 @@ impl VideoSourceConfig {
     pub(crate) fn video_info(&self) -> VideoInfo {
         self.video_info
     }
+
+    pub(crate) fn wayland_pointer_feed(
+        &self,
+    ) -> Option<crate::wayland_pointer::WaylandPointerFeed> {
+        match &self.input {
+            LinuxInputConfig::Wayland(input) => Some(input.pointer.clone()),
+            LinuxInputConfig::X11(_) => None,
+        }
+    }
 }
 
 enum LinuxInputConfig {
@@ -106,6 +115,8 @@ struct WaylandInputConfig {
     fps: u32,
     crop_bounds: Option<CropBounds>,
     portal_session: WaylandPortalSession,
+    pointer: crate::wayland_pointer::WaylandPointerFeed,
+    publish_sprites: bool,
 }
 
 struct WaylandPortalSession {
@@ -375,6 +386,7 @@ struct WaylandPortalCapture {
     stream: PortalStream,
     fd: OwnedFd,
     portal_session: WaylandPortalSession,
+    cursor_embedded: bool,
 }
 
 struct PipewireCaptureState {
@@ -394,6 +406,9 @@ struct PipewireCaptureState {
     /// Reads frames with a GPU-tiled modifier; `None` without a usable EGL.
     importer: Option<linux_dmabuf_import::DmaBufImporter>,
     imported: Vec<u8>,
+    pointer: Option<crate::wayland_pointer::WaylandPointerFeed>,
+    publish_sprites: bool,
+    last_sprite_id: Option<u32>,
 }
 
 impl PipewireCaptureState {
@@ -410,6 +425,7 @@ async fn create_wayland_source_config(
 ) -> anyhow::Result<(VideoInfo, WaylandInputConfig)> {
     let portal =
         open_wayland_portal(&config.config.linux_source, config.config.show_cursor).await?;
+    let pointer = crate::wayland_pointer::WaylandPointerFeed::default();
     if matches!(config.config.linux_source, LinuxCaptureSource::Area) {
         let displays = Display::list();
         let selected = displays
@@ -444,6 +460,8 @@ async fn create_wayland_source_config(
             fps: config.config.fps,
             crop_bounds,
             portal_session: portal.portal_session,
+            pointer,
+            publish_sprites: !portal.cursor_embedded,
         },
     ))
 }
@@ -455,21 +473,43 @@ async fn open_wayland_portal(
     let proxy: Screencast<'static> = Screencast::new()
         .await
         .context("connect to XDG Desktop Portal ScreenCast")?;
+    if !show_cursor {
+        let session = proxy
+            .create_session()
+            .await
+            .context("create XDG Desktop Portal ScreenCast session")?;
+        let portal_session = WaylandPortalSession::new(session);
+        // A rejected SelectSources closes that session. The embedded fallback
+        // has to be a new session, and only a refused mode takes it.
+        if let Err(error) = proxy
+            .select_sources(
+                &portal_session.session,
+                CursorMode::Metadata,
+                wayland_source_type(source),
+                false,
+                None,
+                PersistMode::DoNot,
+            )
+            .await
+        {
+            tracing::warn!(
+                %error,
+                "Wayland cursor metadata was refused, embedding the cursor"
+            );
+            drop(portal_session);
+        } else {
+            return finish_wayland_portal(&proxy, portal_session, false).await;
+        }
+    }
     let session = proxy
         .create_session()
         .await
         .context("create XDG Desktop Portal ScreenCast session")?;
     let portal_session = WaylandPortalSession::new(session);
-    let cursor_mode = if show_cursor {
-        CursorMode::Embedded
-    } else {
-        CursorMode::Hidden
-    };
-
     proxy
         .select_sources(
             &portal_session.session,
-            cursor_mode,
+            CursorMode::Embedded,
             wayland_source_type(source),
             false,
             None,
@@ -477,7 +517,14 @@ async fn open_wayland_portal(
         )
         .await
         .context("select Wayland screen capture source")?;
+    finish_wayland_portal(&proxy, portal_session, true).await
+}
 
+async fn finish_wayland_portal(
+    proxy: &Screencast<'static>,
+    portal_session: WaylandPortalSession,
+    cursor_embedded: bool,
+) -> anyhow::Result<WaylandPortalCapture> {
     let response = proxy
         .start(&portal_session.session, None)
         .await
@@ -498,6 +545,7 @@ async fn open_wayland_portal(
         stream,
         fd,
         portal_session,
+        cursor_embedded,
     })
 }
 
@@ -572,6 +620,8 @@ fn capture_wayland(
         fps,
         crop_bounds,
         portal_session: _portal_session,
+        pointer,
+        publish_sprites,
     } = input;
     capture_pipewire_node(
         video_info,
@@ -580,6 +630,8 @@ fn capture_wayland(
             node_id,
             fps,
             crop_bounds,
+            pointer: Some(pointer),
+            publish_sprites,
         },
         video_tx,
         stop_token,
@@ -594,6 +646,8 @@ struct PipewireNodeInput {
     node_id: u32,
     fps: u32,
     crop_bounds: Option<CropBounds>,
+    pointer: Option<crate::wayland_pointer::WaylandPointerFeed>,
+    publish_sprites: bool,
 }
 
 fn capture_pipewire_node(
@@ -646,6 +700,9 @@ fn capture_pipewire_node(
         cadence_gate: FrameCadenceGate::new(1_000_000_000 / i64::from(input.fps.max(1))),
         importer,
         imported: Vec::new(),
+        pointer: input.pointer.clone(),
+        publish_sprites: input.publish_sprites,
+        last_sprite_id: None,
     };
 
     let stream = pw::stream::StreamBox::new(
@@ -711,6 +768,7 @@ fn capture_pipewire_node(
         pipewire_dmabuf_format_param(input.fps)?,
     ];
     param_bytes.extend(imported_params);
+    param_bytes.push(pipewire_cursor_meta_param()?);
     let mut params = param_bytes
         .iter()
         .map(|bytes| {
@@ -922,6 +980,105 @@ impl Drop for DmaBufMapping {
     }
 }
 
+fn pipewire_cursor_meta_param() -> anyhow::Result<Vec<u8>> {
+    // SPA_PARAM_META_type is 1 and SPA_PARAM_META_size is 2. libspa does not
+    // export that enum. The bitmap budget is a 384px square, which is enough
+    // for the cursor images compositors put in this meta.
+    let header = std::mem::size_of::<spa::sys::spa_meta_cursor>()
+        + std::mem::size_of::<spa::sys::spa_meta_bitmap>();
+    let cursor_meta_bytes = i32::try_from(header).unwrap_or(i32::MAX) + 384 * 384 * 4;
+    let object = spa::pod::object!(
+        spa::utils::SpaTypes::ObjectParamMeta,
+        spa::param::ParamType::Meta,
+        spa::pod::Property::new(
+            1,
+            spa::pod::Value::Id(spa::utils::Id(
+                <spa::buffer::meta::MetaCursor as spa::buffer::meta::Metadata>::META_TYPE,
+            )),
+        ),
+        spa::pod::Property::new(2, spa::pod::Value::Int(cursor_meta_bytes)),
+    );
+    serialize_pod(object, "PipeWire cursor metadata parameter")
+}
+
+fn publish_pipewire_cursor(buffer: &pw::buffer::Buffer, state: &mut PipewireCaptureState) {
+    let Some(feed) = state.pointer.clone() else {
+        return;
+    };
+    let Some(cursor) = buffer.find_meta::<spa::buffer::meta::MetaCursor>() else {
+        return;
+    };
+    let size = state.format.size();
+    if size.width == 0 || size.height == 0 {
+        return;
+    }
+    let Ok((crop_x, crop_y, crop_width, crop_height)) = pipewire_crop(
+        usize::try_from(size.width).unwrap_or(0),
+        usize::try_from(size.height).unwrap_or(0),
+        state.crop_bounds,
+    ) else {
+        return;
+    };
+    if state.publish_sprites
+        && cursor.id() != 0
+        && state.last_sprite_id != Some(cursor.id())
+        && let Some(sprite) = sprite_from_cursor(cursor)
+    {
+        state.last_sprite_id = Some(cursor.id());
+        feed.publish_sprite(Arc::new(sprite));
+    }
+    feed.publish_position(crate::wayland_pointer::cursor_meta_update(
+        cursor.id(),
+        cursor.flags(),
+        cursor.position().x,
+        cursor.position().y,
+        crate::wayland_pointer::CaptureRect {
+            x: i32::try_from(crop_x).unwrap_or(i32::MAX),
+            y: i32::try_from(crop_y).unwrap_or(i32::MAX),
+            width: u32::try_from(crop_width).unwrap_or(0),
+            height: u32::try_from(crop_height).unwrap_or(0),
+        },
+    ));
+}
+
+fn sprite_from_cursor(
+    cursor: &spa::buffer::meta::MetaCursor,
+) -> Option<crate::wayland_pointer::WaylandCursorSprite> {
+    use crate::wayland_pointer::{CursorPixelFormat, WaylandCursorSprite, cursor_rgba};
+    use spa::param::video::VideoFormat;
+
+    let bitmap = cursor.bitmap()?;
+    let format = match bitmap.format() {
+        VideoFormat::RGBA => CursorPixelFormat::Rgba,
+        VideoFormat::BGRA => CursorPixelFormat::Bgra,
+        VideoFormat::ARGB => CursorPixelFormat::Argb,
+        VideoFormat::ABGR => CursorPixelFormat::Abgr,
+        _ => return None,
+    };
+    let size = bitmap.size();
+    let rgba = cursor_rgba(
+        format,
+        size.width,
+        size.height,
+        bitmap.stride(),
+        bitmap.bitmap_data()?,
+    )?;
+    let width = f64::from(size.width);
+    let height = f64::from(size.height);
+    if width == 0.0 || height == 0.0 {
+        return None;
+    }
+    let hotspot = cursor.hotspot();
+    Some(WaylandCursorSprite {
+        id: cursor.id(),
+        width: size.width,
+        height: size.height,
+        hotspot_x: f64::from(hotspot.x) / width,
+        hotspot_y: f64::from(hotspot.y) / height,
+        rgba,
+    })
+}
+
 fn serialize_pod(object: spa::pod::Object, what: &str) -> anyhow::Result<Vec<u8>> {
     Ok(spa::pod::serialize::PodSerializer::serialize(
         std::io::Cursor::new(Vec::new()),
@@ -939,6 +1096,7 @@ fn process_pipewire_frame(
     let Some(mut buffer) = stream.dequeue_buffer() else {
         return Ok(None);
     };
+    publish_pipewire_cursor(&buffer, state);
     let datas = buffer.datas_mut();
     if datas.is_empty() {
         return Ok(None);
@@ -4961,6 +5119,8 @@ mod pipewire_frame_tests {
                         node_id,
                         fps: 30,
                         crop_bounds: None,
+                        pointer: None,
+                        publish_sprites: false,
                     },
                     video_tx,
                     stop,

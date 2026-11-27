@@ -3776,7 +3776,11 @@ async fn create_segment_pipeline(
     );
     let audio_only = base_inputs.capture_target.is_audio_only();
     #[cfg(target_os = "linux")]
-    let custom_cursor_capture = custom_cursor_capture && !screen_capture::prefers_wayland_portal();
+    let record_wayland_pointer = screen_capture::prefers_wayland_portal();
+    #[cfg(not(target_os = "linux"))]
+    let record_wayland_pointer = false;
+    #[cfg(target_os = "linux")]
+    let mut wayland_pointer = None;
     #[cfg(target_os = "linux")]
     let mut start_time = start_time;
 
@@ -3934,6 +3938,7 @@ async fn create_segment_pipeline(
         let (capture_source, system_audio) = screen_config.to_sources().await?;
         #[cfg(target_os = "linux")]
         {
+            wayland_pointer = capture_source.wayland_pointer_feed();
             start_time = Timestamps::now();
         }
         #[cfg(target_os = "macos")]
@@ -4127,7 +4132,7 @@ async fn create_segment_pipeline(
     let cursor = if camera_only || audio_only {
         None
     } else {
-        (custom_cursor_capture || keyboard_capture)
+        (custom_cursor_capture || keyboard_capture || record_wayland_pointer)
             .then(move || {
                 let cursor_crop_bounds = base_inputs
                     .capture_target
@@ -4136,11 +4141,12 @@ async fn create_segment_pipeline(
 
                 let cursor_output_path = dir.join("cursor.json");
                 let keyboard_output_path = dir.join(cap_project::KEYBOARD_EVENTS_FILE_NAME);
-                let incremental_output = if fragmented && custom_cursor_capture {
-                    Some(cursor_output_path.clone())
-                } else {
-                    None
-                };
+                let incremental_output =
+                    if fragmented && (custom_cursor_capture || record_wayland_pointer) {
+                        Some(cursor_output_path.clone())
+                    } else {
+                        None
+                    };
                 let keyboard_incremental_output = if fragmented && keyboard_capture {
                     Some(keyboard_output_path.clone())
                 } else {
@@ -4171,10 +4177,13 @@ async fn create_segment_pipeline(
                         keyboard: keyboard_incremental_output,
                     },
                     keyboard_capture,
+                    #[cfg(target_os = "linux")]
+                    wayland_pointer,
                 );
 
                 Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
-                    output_path: custom_cursor_capture.then_some(cursor_output_path),
+                    output_path: (custom_cursor_capture || record_wayland_pointer)
+                        .then_some(cursor_output_path),
                     keyboard_output_path: keyboard_capture.then_some(keyboard_output_path),
                     actor: cursor,
                 })

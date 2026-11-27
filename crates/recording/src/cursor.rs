@@ -662,6 +662,219 @@ fn input_epoch(start_gate: Option<&RecordingStartGate>, start_time: Timestamps) 
     }
 }
 
+#[cfg(target_os = "linux")]
+fn png_rgba_cursor(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    hotspot_x: f64,
+    hotspot_y: f64,
+) -> Option<CursorData> {
+    let image = image::RgbaImage::from_raw(width, height, rgba.to_vec())?;
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .ok()?;
+    Some(CursorData {
+        image: bytes.into_inner(),
+        hotspot: XY::new(hotspot_x, hotspot_y),
+        shape: None,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn transparent_cursor_data() -> CursorData {
+    png_rgba_cursor(&[0, 0, 0, 0], 1, 1, 0.0, 0.0).expect("1x1 cursor png")
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_wayland_cursor_recorder(
+    cursors_dir: PathBuf,
+    prev_cursors: Cursors,
+    next_cursor_id: u32,
+    start_time: Timestamps,
+    start_gate: Option<RecordingStartGate>,
+    incremental_outputs: IncrementalCaptureOutputs,
+    wayland_pointer: Option<crate::wayland_pointer::WaylandPointerFeed>,
+    readers: Vec<std::os::fd::OwnedFd>,
+    session_devices: bool,
+) -> CursorActor {
+    use crate::wayland_pointer::{ClickSource, PointerButtons, PointerPlace, PointerTrack};
+    use std::sync::mpsc::TryRecvError;
+    use std::time::Duration;
+
+    let stop_token = CancellationToken::new();
+    let (tx, rx) = oneshot::channel();
+    let (stop_wakeup_tx, stop_wakeup_rx) = std::sync::mpsc::channel();
+    let scope = crate::output_pipeline::PipelineBuildScope::current();
+    if let Some(scope) = &scope {
+        scope.register_token(stop_token.clone());
+    }
+    let completion = scope.map(|scope| scope.task_completion());
+    let stop_token_child = stop_token.child_token();
+    let thread = std::thread::spawn(move || {
+        let _completion = completion;
+        let (mut click_source, mut buttons) = if session_devices {
+            ClickSource::open()
+        } else {
+            (ClickSource::detached(), PointerButtons::default())
+        };
+        for reader in readers {
+            click_source.push_reader(reader);
+        }
+        let mut track = PointerTrack::new();
+        std::fs::create_dir_all(&cursors_dir).unwrap();
+        let mut response = CursorActorResponse {
+            cursors: prev_cursors,
+            next_cursor_id,
+            moves: vec![],
+            clicks: vec![],
+            keyboard_presses: vec![],
+        };
+        let has_incremental_outputs = incremental_outputs.cursor.is_some();
+        let writer = CursorFileWriter::spawn(incremental_outputs.clone())
+            .inspect_err(|error| {
+                tracing::error!("Failed to start cursor writer, writing inline: {error}")
+            })
+            .ok();
+        let mut inline_files = IncrementalFiles::new(incremental_outputs.clone());
+        let mut flushed = FlushedEvents::default();
+        let mut last_flush = Instant::now();
+        let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
+        let mut last_cursor_image = None;
+        let mut sprite_id: Option<u32> = None;
+        let mut cursor_id: Option<String> = None;
+
+        loop {
+            let stop_requested = stop_token_child.is_cancelled()
+                || matches!(
+                    stop_wakeup_rx.try_recv(),
+                    Ok(()) | Err(TryRecvError::Disconnected)
+                );
+            let changes = click_source.poll(
+                &mut buttons,
+                if stop_requested {
+                    Duration::ZERO
+                } else {
+                    Duration::from_millis(16)
+                },
+            );
+
+            let Some(epoch) = input_epoch(start_gate.as_ref(), start_time) else {
+                if stop_requested {
+                    break;
+                }
+                continue;
+            };
+            let elapsed = epoch.elapsed().as_secs_f64() * 1000.0;
+            let place = wayland_pointer
+                .as_ref()
+                .map(|feed| feed.place())
+                .unwrap_or(PointerPlace::Pending);
+            let tick = track.tick(place, &changes);
+            let sprite = wayland_pointer.as_ref().and_then(|feed| feed.sprite());
+            let incoming_sprite = sprite.as_ref().map(|sprite| sprite.id);
+            let shape_changed = cursor_id.is_some()
+                && incoming_sprite != sprite_id
+                && matches!(place, PointerPlace::At(_, _));
+            if (tick.moved_to.is_some() || tick.clicks > 0 || shape_changed)
+                && (cursor_id.is_none() || incoming_sprite != sprite_id)
+            {
+                let data = sprite
+                    .as_ref()
+                    .and_then(|sprite| {
+                        png_rgba_cursor(
+                            &sprite.rgba,
+                            sprite.width,
+                            sprite.height,
+                            sprite.hotspot_x,
+                            sprite.hotspot_y,
+                        )
+                    })
+                    .unwrap_or_else(transparent_cursor_data);
+                sprite_id = incoming_sprite;
+                cursor_id = Some(cursor_id_for_image(
+                    data,
+                    &mut response,
+                    &cursors_dir,
+                    writer.as_ref(),
+                    &mut last_cursor_image,
+                ));
+            }
+            let Some(active_cursor) = cursor_id.clone() else {
+                if stop_requested {
+                    break;
+                }
+                continue;
+            };
+            if let Some((x, y)) = tick.moved_to.or(match place {
+                PointerPlace::At(x, y) if shape_changed => Some((x, y)),
+                _ => None,
+            }) {
+                response.moves.push(CursorMoveEvent {
+                    active_modifiers: vec![],
+                    cursor_id: active_cursor.clone(),
+                    time_ms: elapsed,
+                    x,
+                    y,
+                });
+            }
+            for change in track.clicks() {
+                response.clicks.push(CursorClickEvent {
+                    down: change.down,
+                    active_modifiers: vec![],
+                    cursor_num: change.cursor_num,
+                    cursor_id: active_cursor.clone(),
+                    time_ms: elapsed,
+                });
+            }
+
+            if has_incremental_outputs && last_flush.elapsed() >= flush_interval {
+                let delta = flushed.take(&incremental_outputs, &response);
+                match &writer {
+                    Some(writer) => writer.flush(delta),
+                    None => inline_files.flush(delta),
+                }
+                last_flush = Instant::now();
+            }
+            if stop_requested {
+                break;
+            }
+        }
+
+        tracing::info!("cursor recorder done");
+        if let Some(epoch) = input_epoch(start_gate.as_ref(), start_time)
+            && let Some(confirmation) =
+                still_shape_confirmation(&response.moves, epoch.elapsed().as_secs_f64() * 1000.0)
+        {
+            response.moves.push(confirmation);
+        }
+        let delta = has_incremental_outputs.then(|| flushed.take(&incremental_outputs, &response));
+        match writer {
+            Some(writer) => {
+                let unsaved = writer.finish(delta);
+                response.cursors.retain(|_, cursor| {
+                    !unsaved.iter().any(|path| path.ends_with(&cursor.file_name))
+                });
+            }
+            None => {
+                if let Some(delta) = delta {
+                    inline_files.flush(delta);
+                }
+            }
+        }
+        let _ = tx.send(response);
+    });
+
+    CursorActor {
+        stop: Some(stop_token.drop_guard()),
+        stop_wakeup: Some(stop_wakeup_tx),
+        thread: Some(thread),
+        rx: rx.shared(),
+    }
+}
+
 #[tracing::instrument(name = "cursor", skip_all)]
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_cursor_recorder(
@@ -673,24 +886,24 @@ pub fn spawn_cursor_recorder(
     start_gate: Option<RecordingStartGate>,
     incremental_outputs: IncrementalCaptureOutputs,
     keyboard_capture: bool,
+    #[cfg(target_os = "linux")] wayland_pointer: Option<crate::wayland_pointer::WaylandPointerFeed>,
 ) -> CursorActor {
     #[cfg(target_os = "linux")]
     if prefers_wayland_portal_cursor() {
-        let (tx, rx) = oneshot::channel();
-        let _ = tx.send(CursorActorResponse {
-            cursors: prev_cursors,
+        return spawn_wayland_cursor_recorder(
+            cursors_dir,
+            prev_cursors,
             next_cursor_id,
-            moves: vec![],
-            clicks: vec![],
-            keyboard_presses: vec![],
-        });
-        return CursorActor {
-            stop: None,
-            stop_wakeup: None,
-            thread: None,
-            rx: rx.shared(),
-        };
+            start_time,
+            start_gate,
+            incremental_outputs,
+            wayland_pointer,
+            Vec::new(),
+            true,
+        );
     }
+    #[cfg(target_os = "linux")]
+    let _ = wayland_pointer;
 
     use device_query::{DeviceQuery, DeviceState};
     use std::time::Duration;
