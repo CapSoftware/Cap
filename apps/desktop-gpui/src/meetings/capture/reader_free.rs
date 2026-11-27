@@ -480,6 +480,8 @@ mod platform {
         events: Option<Child>,
         thread: Option<JoinHandle<()>>,
         reconciler: Option<JoinHandle<()>>,
+        /// Wakes the reconciler: every link update runs there, one at a time.
+        wake: Option<flume::Sender<()>>,
     }
 
     impl ReaderFree {
@@ -507,6 +509,7 @@ mod platform {
                 events: None,
                 thread: None,
                 reconciler: None,
+                wake: None,
             };
             // Our node appears in the graph a moment after it connects.
             let waited = Instant::now();
@@ -535,6 +538,7 @@ mod platform {
             // only its volume) wakes one look at the graph; a burst of
             // changes is one look.
             let (wake, woken) = flume::bounded::<()>(1);
+            made.wake = Some(wake.clone());
             made.reconciler = std::thread::Builder::new()
                 .name("cap-meeting-reader-free-reconcile".into())
                 .spawn(move || {
@@ -588,11 +592,10 @@ mod platform {
                     changed
                 })
                 .unwrap_or(false);
-            if !changed {
-                return;
-            }
-            if let Err(error) = reconcile(output) {
-                tracing::debug!(%error, "could not follow the new output with the reader-free capture");
+            // The reconciler reads the output when it runs, so the last update
+            // always uses the latest one.
+            if changed && let Some(wake) = &self.wake {
+                let _ = wake.try_send(());
             }
         }
     }
@@ -607,7 +610,9 @@ mod platform {
             if let Some(thread) = self.thread.take() {
                 let _ = thread.join();
             }
-            // The events thread is gone, so the reconciler's channel closes.
+            // The events thread is gone and our sender goes too, so the
+            // reconciler's channel closes.
+            drop(self.wake.take());
             if let Some(reconciler) = self.reconciler.take() {
                 let _ = reconciler.join();
             }
