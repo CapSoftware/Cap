@@ -56,7 +56,7 @@ jobs:
       - name: A/B 20 s
         run: |
           S=$("$RUNNER_TEMP/bins/base/cap" targets screens --format json | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
-          python3 ci-stoptime/run.py --stim ci-stoptime/stim.py --screen "$S" --out "$RUNNER_TEMP/ab20" --dur 20 --reps 6 --keep \
+          python3 ci-stoptime/run.py --stim ci-stoptime/stim.py --screen "$S" --out "$RUNNER_TEMP/ab20" --dur 20 --reps 12 --keep \
             --arm "base=$RUNNER_TEMP/bins/base/cap" --arm "fix=$RUNNER_TEMP/bins/fix/cap"
       - name: A/B 60 s
         run: |
@@ -66,6 +66,9 @@ jobs:
       - name: Files
         if: always()
         run: python3 ci-stoptime/files.py "$RUNNER_TEMP/ab20" "$RUNNER_TEMP/ab60" || true
+      - name: Open bench
+        if: always()
+        run: python3 ci-stoptime/openbench.py "$RUNNER_TEMP/ab20" "$RUNNER_TEMP/ab60" | tee "$RUNNER_TEMP/openbench.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -75,6 +78,7 @@ jobs:
             ${{ runner.temp }}/ab60/results.jsonl
             ${{ runner.temp }}/ab*/*/stderr.log
             ${{ runner.temp }}/files.txt
+            ${{ runner.temp }}/openbench.txt
 
   windows:
     if: github.ref_name == 'ci/stoptime-ab'
