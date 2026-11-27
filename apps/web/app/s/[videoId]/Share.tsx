@@ -197,7 +197,6 @@ interface ShareProps {
 	customDomain: string | null;
 	domainVerified: boolean;
 	videoSettings?: OrganizationSettings | null;
-	userOrganizations?: { id: string; name: string }[];
 	viewerId?: string | null;
 	isEditProcessing: boolean;
 	recordingStopped?: boolean;

@@ -5,7 +5,7 @@ import { Context, Effect } from "effect";
 import { type ComponentProps, isValidElement, type ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ query: vi.fn() }));
+const mocks = vi.hoisted(() => ({ query: vi.fn(), userId: "viewer" }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("@cap/database", async () => {
@@ -14,7 +14,10 @@ vi.mock("@cap/database", async () => {
 	return { db: () => client };
 });
 vi.mock("@cap/database/auth/session", () => ({
-	getCurrentUser: async () => ({ id: "viewer", activeOrganizationId: "org-1" }),
+	getCurrentUser: async () => ({
+		id: mocks.userId,
+		activeOrganizationId: "org-1",
+	}),
 }));
 vi.mock("@cap/env", () => ({
 	buildEnv: { NEXT_PUBLIC_WEB_URL: "https://cap.so" },
@@ -227,6 +230,7 @@ function rowsFor(query: string) {
 	}
 	if (query.includes("from `space_members`")) return [["space-member"]];
 	if (query.includes("from `video_edits`")) return [];
+	if (query.includes("from `video_viewer_grants`")) return [[0]];
 	throw new Error(`Unexpected query: ${query}`);
 }
 
@@ -260,7 +264,10 @@ async function loadPage() {
 	};
 }
 
-beforeEach(() => mocks.query.mockReset());
+beforeEach(() => {
+	mocks.query.mockReset();
+	mocks.userId = "viewer";
+});
 
 describe("share page database round trips", () => {
 	it("keeps download permission and edit checks within the existing page load", async () => {
@@ -292,12 +299,21 @@ describe("share page database round trips", () => {
 		const result = await page;
 		expect(result.comments).toHaveLength(30);
 		expect(result.data).toMatchObject({ duration: 600 });
-		expect(result.header.spacesData).toHaveLength(4);
+		expect(result.header.spacesData).toBeNull();
 		expect(result.header).toMatchObject({ canDownload: true, hasEdits: false });
 		expect({ roundTrips, queries: mocks.query.mock.calls.length }).toEqual({
 			roundTrips: 3,
-			queries: 20,
+			queries: 11,
 		});
+	});
+
+	it("loads the sharing dialog spaces only for the owner", async () => {
+		mocks.userId = "owner";
+		mocks.query.mockImplementation(async (query: string) => ({
+			rows: rowsFor(query),
+		}));
+		const result = await loadPage();
+		expect(result.header.spacesData).toHaveLength(4);
 	});
 
 	it.skipIf(!process.env.CAP_SHARE_PAGE_BENCH)(
