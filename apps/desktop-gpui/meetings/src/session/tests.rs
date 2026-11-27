@@ -297,6 +297,22 @@ fn own(s: &mut Sim, own_call: OwnCall) -> &mut Sim {
     s
 }
 
+/// "Join and take notes" opened the link; `link_app` is the app it opens in.
+fn joining(link_app: Option<&str>) -> OwnCall {
+    OwnCall {
+        joining: true,
+        link_app: link_app.map(str::to_string),
+    }
+}
+
+/// A start linked to an event whose link opens in `link_app`.
+fn linked(link_app: &str) -> OwnCall {
+    OwnCall {
+        joining: false,
+        link_app: Some(link_app.to_string()),
+    }
+}
+
 #[test]
 fn join_and_take_notes_ends_with_its_short_call() {
     let mut s = Sim::with(SessionConfig {
@@ -304,7 +320,7 @@ fn join_and_take_notes_ends_with_its_short_call() {
         ..SessionConfig::default()
     });
     s.recording(None);
-    own(&mut s, OwnCall::Joining);
+    own(&mut s, joining(Some("zoom")));
     s.at(20_000)
         .call_started("zoom")
         .expect(&[(20_000, "joined zoom")]);
@@ -325,7 +341,7 @@ fn a_short_call_in_the_linked_events_app_ends_the_notes() {
         ..SessionConfig::default()
     });
     s.recording(None);
-    own(&mut s, OwnCall::Apps(vec!["zoom".into()]));
+    own(&mut s, linked("zoom"));
     s.at(MIN)
         .call_started("slack")
         .expect(&[(60_000, "joined slack")]);
@@ -345,7 +361,7 @@ fn a_short_call_in_the_linked_events_app_ends_the_notes() {
 fn the_meetings_own_call_retaking_the_microphone_keeps_recording() {
     let mut s = Sim::new();
     s.recording(None);
-    own(&mut s, OwnCall::Joining);
+    own(&mut s, joining(Some("zoom")));
     s.at(10_000).call_started("zoom").take();
     s.at(MIN)
         .call_ended("zoom")
@@ -365,7 +381,7 @@ fn a_second_call_app_never_ends_the_meeting_it_joined() {
         ..SessionConfig::default()
     });
     s.recording(None);
-    own(&mut s, OwnCall::Joining);
+    own(&mut s, joining(Some("zoom")));
     s.at(10_000).call_started("zoom").take();
     s.at(MIN).call_started("teams").quiet();
     s.at(90_000).call_ended("teams").quiet();
@@ -383,7 +399,7 @@ fn the_meetings_own_call_still_ends_it_after_a_resume_from_sleep() {
         ..SessionConfig::default()
     });
     s.recording(None);
-    own(&mut s, OwnCall::Joining);
+    own(&mut s, joining(Some("zoom")));
     s.at(10_000).call_started("zoom").take();
     s.at(20_000).sleep().stopped(0);
     s.at(30_000).wake().call_still_on();
@@ -400,7 +416,7 @@ fn the_meetings_own_call_still_ends_it_after_a_resume_from_sleep() {
         ..SessionConfig::default()
     });
     s.recording(None);
-    own(&mut s, OwnCall::Joining);
+    own(&mut s, joining(Some("zoom")));
     s.at(5_000).sleep().stopped(0);
     s.at(15_000).wake().resume().captured().take();
     s.at(25_000)
@@ -418,7 +434,7 @@ fn a_new_start_forgets_the_last_meetings_own_call() {
         ..SessionConfig::default()
     });
     s.recording(None);
-    own(&mut s, OwnCall::Joining);
+    own(&mut s, joining(Some("zoom")));
     s.at(10_000).stop(StopReason::User).stopped(0).take();
     s.recording(None);
     s.at(20_000)
@@ -435,9 +451,95 @@ fn a_call_after_the_join_window_is_not_the_meetings_own_even_when_joining() {
         ..SessionConfig::default()
     });
     s.recording(None);
-    own(&mut s, OwnCall::Joining);
+    own(&mut s, joining(Some("zoom")));
     s.at(6 * MIN).call_started("zoom").quiet();
     s.at(7 * MIN).call_ended("zoom").quiet();
+    assert_eq!(s.session.state(), SessionState::Recording);
+}
+
+#[test]
+fn join_and_take_notes_never_joined_leaves_later_calls_to_the_speech_bar() {
+    let quiet_room = SessionConfig {
+        inactivity_warn_ms: None,
+        ..SessionConfig::default()
+    };
+    // A huddle long after the join window is not the meeting's call at all.
+    let mut s = Sim::with(quiet_room.clone());
+    s.recording(None);
+    own(&mut s, joining(Some("zoom")));
+    s.at(20 * MIN).call_started("slack").quiet();
+    s.speech(Source::Mic, 30_000).take();
+    s.at(21 * MIN).call_ended("slack").quiet();
+    assert_eq!(s.session.state(), SessionState::Recording);
+    assert_eq!(s.session.attached_app(), None);
+
+    // Another call app inside the window is joined late, as before; the
+    // link's app after it is the meeting's.
+    let mut s = Sim::with(quiet_room);
+    s.recording(None);
+    own(&mut s, joining(Some("zoom")));
+    s.at(2 * MIN)
+        .call_started("slack")
+        .expect(&[(120_000, "joined slack")]);
+    s.at(150_000)
+        .call_ended("slack")
+        .expect(&[(150_000, "left")]);
+    s.at(3 * MIN)
+        .call_started("zoom")
+        .expect(&[(180_000, "joined zoom")]);
+    s.at(230_000)
+        .call_ended("zoom")
+        .expect(&[(230_000, "ending 250000")]);
+}
+
+#[test]
+fn a_browser_taking_the_call_after_join_is_the_meetings_own() {
+    let mut s = Sim::with(SessionConfig {
+        inactivity_warn_ms: None,
+        ..SessionConfig::default()
+    });
+    s.recording(None);
+    own(&mut s, joining(Some("zoom")));
+    s.at(15_000)
+        .call_started("chrome")
+        .expect(&[(15_000, "joined chrome")]);
+    s.at(30_000).call_started("zoom").quiet();
+    assert_eq!(s.session.attached_app(), Some("chrome"));
+    s.at(80_000)
+        .call_ended("chrome")
+        .expect(&[(80_000, "ending 100000")]);
+}
+
+#[test]
+fn a_link_without_an_app_of_its_own_takes_whichever_call_comes() {
+    let mut s = Sim::with(SessionConfig {
+        inactivity_warn_ms: None,
+        ..SessionConfig::default()
+    });
+    s.recording(None);
+    own(&mut s, joining(None));
+    s.at(15_000)
+        .call_started("teams")
+        .expect(&[(15_000, "joined teams")]);
+    s.at(80_000)
+        .call_ended("teams")
+        .expect(&[(80_000, "ending 100000")]);
+}
+
+#[test]
+fn a_browser_call_in_a_linked_meeting_not_joined_from_cap_is_joined_late() {
+    let mut s = Sim::with(SessionConfig {
+        inactivity_warn_ms: None,
+        ..SessionConfig::default()
+    });
+    s.recording(None);
+    own(&mut s, linked("zoom"));
+    s.at(15_000)
+        .call_started("chrome")
+        .expect(&[(15_000, "joined chrome")]);
+    s.at(80_000)
+        .call_ended("chrome")
+        .expect(&[(80_000, "left")]);
     assert_eq!(s.session.state(), SessionState::Recording);
 }
 
@@ -1083,7 +1185,10 @@ fn randomised_invariants() {
                 5 => session.on_call_ended(t, if rng.chance(80) { "zoom" } else { "teams" }),
                 6 => {
                     if rng.chance(30) {
-                        session.set_own_call(OwnCall::Joining);
+                        session.set_own_call(OwnCall {
+                            joining: true,
+                            link_app: rng.chance(50).then(|| "zoom".to_string()),
+                        });
                     }
                     session.on_call_started(t, "zoom")
                 }

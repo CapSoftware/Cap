@@ -1622,19 +1622,17 @@ impl Meetings {
             origin.event_id =
                 calendar::auto_link(agenda.events(), Utc::now()).map(calendar::event_key);
         }
-        let event = origin.event_id.as_ref().and_then(|id| self.calendar.find(id));
+        let event = origin
+            .event_id
+            .as_ref()
+            .and_then(|id| self.calendar.find(id));
         let event_end = event.map(|e| e.end);
-        let own_call = if origin.joining {
-            OwnCall::Joining
-        } else {
-            OwnCall::Apps(
-                event
-                    .and_then(|e| e.link.as_ref())
-                    .and_then(|link| link_call_app(link.provider))
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect(),
-            )
+        let own_call = OwnCall {
+            joining: origin.joining,
+            link_app: event
+                .and_then(|e| e.link.as_ref())
+                .and_then(|link| link_call_app(link.provider))
+                .map(str::to_string),
         };
         self.pending_start = Some(origin.clone());
         let actions = self.session.start(self.now(), origin.app_id.clone());

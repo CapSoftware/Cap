@@ -79,26 +79,29 @@ pub enum SessionAction {
     LeftCall,
 }
 
-/// Which call that begins in a meeting started without one is that meeting's
-/// own (and ends it however short), rather than a call joined late.
+/// Which call that begins in a meeting started without one, within the join
+/// window, is that meeting's own (and ends it however short) rather than a
+/// call joined late.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum OwnCall {
-    #[default]
-    Unknown,
-    /// Cap opened the meeting's link as its notes started: the call that
-    /// begins next is that meeting.
-    Joining,
-    /// The linked calendar event's link opens in one of these call apps.
-    Apps(Vec<String>),
+pub struct OwnCall {
+    /// Cap opened the meeting's link as its notes started.
+    pub joining: bool,
+    /// The call app the linked calendar event's link opens in.
+    pub link_app: Option<String>,
 }
 
 impl OwnCall {
+    /// The link's own app always is. After Cap opened the link, so is a
+    /// browser (any link can open there) or, for a link without an app of
+    /// its own, whichever app takes the call; another call app is not.
     fn is(&self, app_id: &str) -> bool {
-        match self {
-            OwnCall::Unknown => false,
-            OwnCall::Joining => true,
-            OwnCall::Apps(apps) => apps.iter().any(|app| app == app_id),
+        if self.link_app.as_deref() == Some(app_id) {
+            return true;
         }
+        self.joining
+            && (self.link_app.is_none()
+                || crate::apps::app_by_id(app_id)
+                    .is_some_and(|app| app.kind == crate::apps::AppKind::Browser))
     }
 }
 
@@ -199,7 +202,7 @@ impl Session {
             warning: None,
             call_end_suppressed: false,
             joined_late: false,
-            own_call: OwnCall::Unknown,
+            own_call: OwnCall::default(),
             resume_offer_until: None,
             resume_queued: false,
             has_meeting: false,
@@ -311,7 +314,7 @@ impl Session {
         self.pending_notes = None;
         self.app_id = app_id;
         self.joined_late = false;
-        self.own_call = OwnCall::Unknown;
+        self.own_call = OwnCall::default();
         self.event_end = None;
         self.recorded_before_ms = 0;
         self.mic_speech_ms = 0;
