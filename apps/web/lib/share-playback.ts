@@ -12,6 +12,7 @@ type SharePlaybackVideo = Omit<
 
 export type SharePlaybackSource = {
 	url: string;
+	key: string;
 	// Cap's own bucket, not a custom bucket or a storage integration.
 	defaultStorage: boolean;
 };
@@ -32,12 +33,11 @@ export const getSharePlaybackSource = (
 			yield* Storage.getAccessForVideo(loadedVideo);
 		const source = Video.Video.getSource(loadedVideo);
 		if (!(source instanceof Video.Mp4Source)) return null;
-		const url = yield* bucket.getSignedObjectUrl(
-			source.getFileKey(),
-			playbackUrlValidity(),
-		);
+		const key = source.getFileKey();
+		const url = yield* bucket.getSignedObjectUrl(key, playbackUrlValidity());
 		return {
 			url,
+			key,
 			defaultStorage:
 				Option.isNone(customBucket) &&
 				Option.isNone(loadedVideo.storageIntegrationId),

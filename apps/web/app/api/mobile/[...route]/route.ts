@@ -79,6 +79,8 @@ import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
+import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
+import { firstViewDecision } from "@/lib/free-plan-measure-probe";
 import { logNewAccountAddress } from "@/lib/ip-reputation";
 import {
 	describeLinkAccessChoice,
@@ -2665,6 +2667,8 @@ const getMobileVideoRules = Effect.fn("Mobile.getVideoRules")(function* (
 				db
 					.select({
 						ownerId: Db.videos.ownerId,
+						orgId: Db.videos.orgId,
+						metadata: Db.videos.metadata,
 						createdAt: Db.videos.createdAt,
 						settings: Db.videos.settings,
 						orgSettings: Db.organizations.settings,
@@ -2714,6 +2718,8 @@ const getMobileVideoRules = Effect.fn("Mobile.getVideoRules")(function* (
 		isScreenshot: video.isScreenshot,
 		isSegmentsSource: video.source?.type === "desktopSegments",
 		ownerId: video.ownerId,
+		orgId: video.orgId,
+		metadata: video.metadata,
 		ownerImage: video.ownerImage,
 		createdAt: video.createdAt,
 		ownerBilling: {
@@ -2723,21 +2729,28 @@ const getMobileVideoRules = Effect.fn("Mobile.getVideoRules")(function* (
 	};
 });
 
-// Fail-open like the share page: a broken count never blocks playback.
+// Fail-open like the share page: a broken check never blocks playback.
 const isMobileVideoOverShareLimit = (
 	videoId: Video.VideoId,
 	rules: MobileVideoRules,
 ) =>
 	userIsPro(rules.ownerBilling)
 		? Effect.succeed(false)
-		: Effect.promise(() =>
-				isVideoOverShareableLinkLimit({
+		: Effect.promise(async () => {
+				const overShareLimit = await isVideoOverShareableLinkLimit({
 					id: videoId,
 					ownerId: rules.ownerId,
 					createdAt: rules.createdAt,
 					isScreenshot: rules.isScreenshot,
-				}).catch(() => false),
-			);
+				}).catch(() => false);
+				if (overShareLimit || !rules.orgId) return overShareLimit;
+				return isVideoOverFreePlanDuration({
+					id: videoId,
+					ownerId: rules.ownerId,
+					orgId: rules.orgId,
+					metadata: rules.metadata,
+				}).catch(() => false);
+			});
 
 type MobileVideoRules = Effect.Effect.Success<
 	ReturnType<typeof getMobileVideoRules>
@@ -3071,6 +3084,21 @@ const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 		: null;
 
 	if (source instanceof Video.Mp4Source) {
+		const viewer = yield* CurrentUser;
+		if (
+			viewer.id !== video.ownerId &&
+			(yield* Effect.promise(() =>
+				firstViewDecision(
+					{
+						id: video.id,
+						createdAt: video.createdAt,
+						metadata: Option.getOrNull(video.metadata),
+					},
+					source.getFileKey(),
+				),
+			)) !== "play"
+		)
+			return yield* Effect.fail(new HttpApiError.Forbidden());
 		const signedUrl = yield* bucket.getSignedObjectUrl(
 			source.getFileKey(),
 			playbackUrlValidity(),

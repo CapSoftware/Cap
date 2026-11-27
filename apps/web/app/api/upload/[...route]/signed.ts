@@ -2,6 +2,7 @@ import { inspect } from "node:util";
 
 import { db, updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
+import { userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
 import { isInternalRecordingKey } from "@cap/web-backend/src/Storage/recording-output";
 import { Video } from "@cap/web-domain";
@@ -9,6 +10,7 @@ import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
+import { markFreePlanUploadOpen } from "@/lib/free-plan-measure";
 import {
 	isNonMediaRawUploadKey,
 	nonMediaUploadMessage,
@@ -43,6 +45,13 @@ function contentTypeForSubpath(subpath: string): string {
 	if (subpath.endsWith(".m3u8")) return "application/x-mpegURL";
 	return "application/octet-stream";
 }
+
+const SIGNED_UPLOAD_EXPIRES_SECONDS = 1800 + 60;
+
+const isFreePlanPlayableKey = (fileKey: string) =>
+	fileKey.endsWith("/result.mp4") ||
+	fileKey.includes("/raw-upload.") ||
+	fileKey.endsWith(".m3u8");
 
 export const app = new Hono().use(withAuth);
 
@@ -113,6 +122,20 @@ app.post(
 				);
 				return { uploads, urls };
 			}).pipe(runPromise);
+
+			if (
+				!video.isScreenshot &&
+				!userIsPro(user) &&
+				subpaths.some((subpath) =>
+					isFreePlanPlayableKey(`${user.id}/${videoId}/${subpath}`),
+				)
+			)
+				await markFreePlanUploadOpen(
+					video.id,
+					SIGNED_UPLOAD_EXPIRES_SECONDS,
+				).catch((error) =>
+					console.error("Could not mark the upload for measurement:", error),
+				);
 
 			return c.json(batch);
 		} catch (error) {
@@ -211,6 +234,18 @@ app.post(
 			}).pipe(runPromise);
 
 			console.log("Presigned URL created successfully");
+
+			if (
+				!video.isScreenshot &&
+				!userIsPro(user) &&
+				isFreePlanPlayableKey(fileKey)
+			)
+				await markFreePlanUploadOpen(
+					video.id,
+					SIGNED_UPLOAD_EXPIRES_SECONDS,
+				).catch((error) =>
+					console.error("Could not mark the upload for measurement:", error),
+				);
 
 			if (videoIdToUse) {
 				const videoId = Video.VideoId.make(videoIdToUse);

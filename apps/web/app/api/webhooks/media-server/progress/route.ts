@@ -15,6 +15,14 @@ import {
 } from "@/lib/desktop-recording-verification";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import { applyDeveloperVideoProgress } from "@/lib/developer-video-processing";
+import {
+	exceedsFreePlanMeasuredDuration,
+	FREE_PLAN_DURATION_WEBHOOK_PARAM,
+	MEDIA_LENGTH_LIMIT_ERROR_PREFIX,
+	measuredMediaSeconds,
+} from "@/lib/free-plan-duration";
+import { rejectFreePlanOverLimitVideo } from "@/lib/free-plan-duration-rejection";
+import { recordFreePlanMeasure } from "@/lib/free-plan-measure";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { signalLoomImportFinished } from "@/lib/loom-import-signal";
 import { MEDIA_SERVER_SHUTDOWN_MESSAGE } from "@/lib/media-client";
@@ -64,6 +72,7 @@ interface ProgressWebhookPayload {
 		sampleRate: number | null;
 		bitrate: number;
 		fileSize: number;
+		timestampSpan?: number | null;
 	};
 	deferredSourceKey?: string;
 }
@@ -193,6 +202,41 @@ export async function POST(request: NextRequest) {
 		);
 
 		const dbPhase = mapPhaseToDbPhase(payload.phase);
+		// The limit applies only to the upload this job was started for: a
+		// late callback from an earlier upload is handled like any other.
+		const limitedUpload = request.nextUrl.searchParams.get(
+			FREE_PLAN_DURATION_WEBHOOK_PARAM,
+		);
+		const freePlanLimited = limitedUpload !== null;
+		const isLimitedUpload = (upload: { startedAt: Date | null } | undefined) =>
+			freePlanLimited &&
+			upload?.startedAt?.getTime().toString() === limitedUpload;
+
+		if (
+			freePlanLimited &&
+			payload.phase === "error" &&
+			payload.error?.startsWith(`${MEDIA_LENGTH_LIMIT_ERROR_PREFIX}:`)
+		) {
+			const [currentVideo] = await db()
+				.select()
+				.from(videos)
+				.where(eq(videos.id, payload.videoId as Video.VideoId));
+			const [currentUpload] = await db()
+				.select({
+					rawFileKey: videoUploads.rawFileKey,
+					startedAt: videoUploads.startedAt,
+				})
+				.from(videoUploads)
+				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+			const status =
+				!currentVideo || !currentUpload
+					? "no-upload"
+					: isLimitedUpload(currentUpload)
+						? await rejectFreePlanOverLimitVideo(currentVideo, currentUpload)
+						: "not-limited";
+			if (status !== "not-limited")
+				return NextResponse.json({ success: true, status });
+		}
 
 		if (dbPhase === "complete") {
 			const [currentVideo] = await db()
@@ -200,7 +244,10 @@ export async function POST(request: NextRequest) {
 				.from(videos)
 				.where(eq(videos.id, payload.videoId as Video.VideoId));
 			const [currentUpload] = await db()
-				.select({ rawFileKey: videoUploads.rawFileKey })
+				.select({
+					rawFileKey: videoUploads.rawFileKey,
+					startedAt: videoUploads.startedAt,
+				})
 				.from(videoUploads)
 				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
 			const isEditUpload =
@@ -233,6 +280,40 @@ export async function POST(request: NextRequest) {
 					status: "queued-for-verification",
 				});
 			}
+			if (
+				currentVideo &&
+				!isEditUpload &&
+				isLimitedUpload(currentUpload) &&
+				exceedsFreePlanMeasuredDuration(
+					measuredMediaSeconds(payload.metadata),
+				) &&
+				(await rejectFreePlanOverLimitVideo(
+					currentVideo,
+					currentUpload,
+					measuredMediaSeconds(payload.metadata),
+				)) === "rejected"
+			) {
+				return NextResponse.json({ success: true, status: "rejected" });
+			}
+			const processedSeconds = measuredMediaSeconds(payload.metadata);
+			if (
+				currentVideo &&
+				currentUpload &&
+				!isEditUpload &&
+				freePlanLimited &&
+				processedSeconds !== null
+			)
+				await recordFreePlanMeasure(
+					currentVideo.id,
+					`${currentVideo.ownerId}/${currentVideo.id}/result.mp4`,
+					processedSeconds,
+				).catch((error) =>
+					console.error(
+						"[media-server-webhook] Could not record the length of %s:",
+						currentVideo.id,
+						error,
+					),
+				);
 			const receipt = proof
 				? currentVideo && payload.metadata
 					? await createVerifiedRecordingReceipt(

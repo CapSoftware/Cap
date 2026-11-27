@@ -33,7 +33,7 @@ import {
 	type ImageUpload,
 	type Organisation,
 	type Policy,
-	type Video,
+	Video,
 } from "@cap/web-domain";
 import { and, eq, type InferSelectModel, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -51,6 +51,12 @@ import { getUser } from "@/app/utils/auth";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
 import { isEarlyInstantPlaybackEnabled } from "@/lib/early-instant-playback";
+import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
+import {
+	firstViewDecision,
+	measureFreePlanObjectIfNeeded,
+	remeasureHeldVideoIfNeeded,
+} from "@/lib/free-plan-measure-probe";
 import {
 	getPendingLoomProcessing,
 	startDeferredLoomProcessing,
@@ -639,13 +645,86 @@ async function AuthorizedContent({
 				);
 				return false;
 			});
+	const firstViewKey =
+		user?.id !== video.owner.id &&
+		!video.isScreenshot &&
+		!hasActiveUpload &&
+		(video.source.type === "desktopMP4" || video.source.type === "webMP4")
+			? (Video.getRetainedRecordingOutputKey(
+					video.owner.id,
+					videoId,
+					video.source.outputKey,
+				) ?? `${video.owner.id}/${videoId}/result.mp4`)
+			: null;
+	const firstViewPromise =
+		ownerIsPro || firstViewKey === null
+			? Promise.resolve("play" as const)
+			: firstViewDecision(
+					{
+						id: videoId,
+						createdAt: video.createdAt,
+						metadata: video.metadata,
+					},
+					firstViewKey,
+				);
+	const overDurationLimitPromise = ownerIsPro
+		? Promise.resolve(false)
+		: Promise.all([
+				isVideoOverFreePlanDuration({
+					id: videoId,
+					ownerId: video.owner.id,
+					orgId: video.orgId,
+					metadata: video.metadata,
+				}),
+				firstViewPromise,
+			])
+				.then(
+					([overDurationLimit, firstView]) =>
+						overDurationLimit || firstView === "held",
+				)
+				.catch((error) => {
+					console.error(
+						`[ShareVideoPage] Free plan duration check failed for ${videoId}:`,
+						error,
+					);
+					return false;
+				});
+	const playbackPendingPromise = firstViewPromise.then(
+		(firstView) => firstView === "pending",
+	);
+	void overDurationLimitPromise.then((overDurationLimit) => {
+		if (overDurationLimit)
+			remeasureHeldVideoIfNeeded({
+				id: videoId,
+				createdAt: video.createdAt,
+				metadata: video.metadata,
+			});
+	});
+	const playbackLockedPromise = Promise.all([
+		overShareLimitPromise,
+		overDurationLimitPromise,
+		playbackPendingPromise,
+	]).then(([overShareLimit, overDurationLimit, playbackPending]) =>
+		Boolean(overShareLimit || overDurationLimit || playbackPending),
+	);
 	const initialPlaybackSourcePromise =
 		!video.isScreenshot &&
 		!hasActiveUpload &&
 		(video.source.type === "desktopMP4" || video.source.type === "webMP4")
-			? overShareLimitPromise.then((overLimit) =>
-					overLimit ? null : getSharePlaybackSource(video),
-				)
+			? playbackLockedPromise.then(async (locked) => {
+					if (locked) return null;
+					const source = await getSharePlaybackSource(video);
+					if (source && !ownerIsPro)
+						measureFreePlanObjectIfNeeded(
+							{
+								id: videoId,
+								createdAt: video.createdAt,
+								metadata: video.metadata,
+							},
+							source.key,
+						);
+					return source;
+				})
 			: undefined;
 	const initialPlaybackUrlPromise = initialPlaybackSourcePromise?.then(
 		(source) => source?.url ?? null,
@@ -890,9 +969,9 @@ async function AuthorizedContent({
 			organizationSettings: video.orgSettings,
 		});
 	const canDownloadVideoPromise = viewerDownloadsEnabled
-		? Promise.all([memberCanDownloadPromise, overShareLimitPromise]).then(
-				([memberCanDownload, overShareLimit]) =>
-					memberCanDownload || !overShareLimit,
+		? Promise.all([memberCanDownloadPromise, playbackLockedPromise]).then(
+				([memberCanDownload, playbackLocked]) =>
+					memberCanDownload || !playbackLocked,
 			)
 		: memberCanDownloadPromise;
 
@@ -953,6 +1032,8 @@ async function AuthorizedContent({
 		canDownloadVideo,
 		videoHasEdits,
 		ownerIsOverShareLimit,
+		ownerIsOverDurationLimit,
+		playbackPending,
 		resolvedImages,
 		dashboardDestination,
 		serverPlaybackSource,
@@ -970,6 +1051,8 @@ async function AuthorizedContent({
 		canDownloadVideoPromise,
 		videoHasEditsPromise,
 		overShareLimitPromise,
+		overDurationLimitPromise,
+		playbackPendingPromise,
 		imagesPromise,
 		dashboardDestinationPromise,
 		serverPlaybackSourcePromise,
@@ -1051,6 +1134,8 @@ async function AuthorizedContent({
 		...video,
 		hasActiveUpload,
 		ownerIsOverShareLimit,
+		ownerIsOverDurationLimit,
+		playbackPending,
 		owner: {
 			id: video.owner.id,
 			name: video.owner.name,

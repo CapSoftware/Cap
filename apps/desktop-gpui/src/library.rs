@@ -707,6 +707,10 @@ fn recover_interrupted_for_editing_in(
     if !interrupted {
         return Ok(false);
     }
+    #[cfg(windows)]
+    if cap_recording::recovery::finishing::contains(project_path) {
+        return Err(tr::dialog::saving::in_background().to_string());
+    }
     if RecoveryManager::inspect_recording(project_path).is_none() {
         let has_segments = match studio {
             StudioRecordingMeta::MultipleSegments { inner } => !inner.segments.is_empty(),
