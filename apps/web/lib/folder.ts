@@ -22,6 +22,7 @@ import { CurrentUser, Folder } from "@cap/web-domain";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
 import { Effect } from "effect";
+import { visibleNoteExcerpt } from "./cap-kind";
 
 export const getFolderById = Effect.fn(function* (folderId: string) {
 	if (!folderId) throw new Error("Folder ID is required");
@@ -179,6 +180,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 	if (!folderId) throw new Error("Folder ID is required");
 	const db = yield* Database;
 	const imageUploads = yield* ImageUploads;
+	const viewer = yield* CurrentUser;
 
 	const videoData = yield* db.use((db) => {
 		const folderVideosPage =
@@ -386,7 +388,11 @@ export const getVideosByFolderId = Effect.fn(function* (
 					duration: video.duration ?? undefined,
 					isScreenshot: video.isScreenshot,
 					isNote: video.isNote,
-					noteExcerpt: video.noteExcerpt,
+					noteExcerpt: visibleNoteExcerpt(
+						video,
+						viewer.id,
+						rules.hasInheritedPassword,
+					),
 					hasPassword: video.hasPassword,
 					hasInheritedPassword: rules.hasInheritedPassword,
 					inheritedPasswordSources: rules.inheritedPasswordSources,

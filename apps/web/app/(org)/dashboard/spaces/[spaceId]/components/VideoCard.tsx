@@ -8,6 +8,7 @@ import { Check, Minus, Plus } from "lucide-react";
 import type React from "react";
 import { memo, useState } from "react";
 import { useTheme } from "@/app/(org)/dashboard/Contexts";
+import { NoteThumbnail } from "@/app/(org)/dashboard/caps/components/CapCard/NoteThumbnail";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { Tooltip } from "@/components/Tooltip";
 import {
@@ -130,16 +131,22 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 						"overflow-visible relative mb-2 w-full h-32 rounded-lg border transition-colors bg-gray-3 border-gray-5",
 					)}
 				>
-					<VideoThumbnail
-						imageClass="w-full h-full transition-all duration-200 group-hover:scale-105"
-						videoId={video.id}
-						alt={`${video.name} Thumbnail`}
-						objectFit="cover"
-						containerClass="!h-full !rounded-lg !border-b-0"
-						imageStatus={imageStatus}
-						setImageStatus={setImageStatus}
-						showPreview={video.isScreenshot !== true}
-					/>
+					{video.isNote ? (
+						<div className="overflow-hidden absolute inset-0 rounded-lg">
+							<NoteThumbnail excerpt={video.noteExcerpt} />
+						</div>
+					) : (
+						<VideoThumbnail
+							imageClass="w-full h-full transition-all duration-200 group-hover:scale-105"
+							videoId={video.id}
+							alt={`${video.name} Thumbnail`}
+							objectFit="cover"
+							containerClass="!h-full !rounded-lg !border-b-0"
+							imageStatus={imageStatus}
+							setImageStatus={setImageStatus}
+							showPreview={video.isScreenshot !== true}
+						/>
+					)}
 					{video.isScreenshot === true && (
 						<span
 							title="Screenshot"

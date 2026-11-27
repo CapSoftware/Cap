@@ -34,3 +34,16 @@ export const capKindCountsFromTotals = (
 	images: totals?.images ?? 0,
 	notes: totals?.notes ?? 0,
 });
+
+export const visibleNoteExcerpt = (
+	cap: {
+		ownerId: string;
+		noteExcerpt?: string | null;
+		hasPassword?: boolean;
+	},
+	viewerId: string | null | undefined,
+	hasInheritedPassword: boolean,
+) =>
+	cap.ownerId === viewerId || !(cap.hasPassword || hasInheritedPassword)
+		? (cap.noteExcerpt ?? null)
+		: null;

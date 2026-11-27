@@ -21,6 +21,7 @@ import {
 	type KeyboardEvent,
 	useEffect,
 	useMemo,
+	useRef,
 	useState,
 } from "react";
 import { toast } from "sonner";
@@ -32,7 +33,9 @@ import {
 } from "@/components/VideoThumbnail";
 import {
 	CAP_KIND_LABEL,
+	type CapKind,
 	type CapKindCounts,
+	capKindOf,
 	groupCapsByKind,
 } from "@/lib/cap-kind";
 import { DEFAULT_DASHBOARD_PAGE_SIZE } from "@/lib/dashboard-page-size";
@@ -48,7 +51,7 @@ import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import {
 	MAX_REORDER_ITEMS,
 	type ReorderPlacement,
-	reorderIds,
+	reorderIdsWithinGroups,
 	reorderShortcutDirection,
 	type SpaceVideoOrder,
 } from "@/lib/space-video-order";
@@ -245,9 +248,14 @@ export const SharedCaps = ({
 		side: "before" | "after";
 	} | null>(null);
 
+	const draggedKind = useRef<CapKind | null>(null);
+
 	useEffect(() => {
 		if (!canReorder) return;
-		const clear = () => setDropTarget(null);
+		const clear = () => {
+			draggedKind.current = null;
+			setDropTarget(null);
+		};
 		window.addEventListener("dragend", clear);
 		window.addEventListener("drop", clear, true);
 		return () => {
@@ -265,7 +273,11 @@ export const SharedCaps = ({
 		const previous = orderedData;
 		if (placement.type !== "start" || page === 1) {
 			const byId = new Map(previous.map((video) => [video.id, video]));
-			const nextIds = reorderIds(pageIds, videoIds, placement);
+			const nextIds = reorderIdsWithinGroups(
+				previous.map((video) => ({ id: video.id, group: capKindOf(video) })),
+				videoIds,
+				placement,
+			);
 			setOrderedData(
 				nextIds.flatMap((id) => {
 					const video = byId.get(id as Video.VideoId);
@@ -293,8 +305,10 @@ export const SharedCaps = ({
 	const handleReorderDragOver = (
 		event: DragEvent<HTMLFieldSetElement>,
 		id: Video.VideoId,
+		kind: CapKind,
 	) => {
 		if (!event.dataTransfer.types.includes(CAP_DRAG_TYPE)) return;
+		if (draggedKind.current !== null && draggedKind.current !== kind) return;
 		event.preventDefault();
 		event.dataTransfer.dropEffect = "move";
 		const rect = event.currentTarget.getBoundingClientRect();
@@ -308,15 +322,15 @@ export const SharedCaps = ({
 	const handleReorderKeyDown = (
 		event: KeyboardEvent<HTMLFieldSetElement>,
 		id: Video.VideoId,
-		index: number,
+		position: { first: boolean; last: boolean },
 	) => {
 		const direction = reorderShortcutDirection(event);
 		if (direction === "earlier") {
-			if (page === 1 && index === 0) return;
+			if (page === 1 && position.first) return;
 			event.preventDefault();
 			void reorderTo([id], { type: "earlier" });
 		} else if (direction === "later") {
-			if (page >= totalPages && index === orderedData.length - 1) return;
+			if (page >= totalPages && position.last) return;
 			event.preventDefault();
 			void reorderTo([id], { type: "later" });
 		}
@@ -639,8 +653,9 @@ export const SharedCaps = ({
 									}
 								/>
 								<div className="grid grid-cols-1 gap-x-5 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-									{group.caps.map((cap) => {
-										const index = orderedData.indexOf(cap);
+									{group.caps.map((cap, index) => {
+										const first = index === 0;
+										const last = index === group.caps.length - 1;
 										const card = (
 											<SharedCapCard
 												key={cap.id}
@@ -679,22 +694,21 @@ export const SharedCaps = ({
 													canReorder
 														? {
 																onMoveToStart:
-																	page === 1 && index === 0
+																	page === 1 && first
 																		? undefined
 																		: () =>
 																				void reorderTo([cap.id], {
 																					type: "start",
 																				}),
 																onMoveEarlier:
-																	page === 1 && index === 0
+																	page === 1 && first
 																		? undefined
 																		: () =>
 																				void reorderTo([cap.id], {
 																					type: "earlier",
 																				}),
 																onMoveLater:
-																	page >= totalPages &&
-																	index === orderedData.length - 1
+																	page >= totalPages && last
 																		? undefined
 																		: () =>
 																				void reorderTo([cap.id], {
@@ -719,12 +733,15 @@ export const SharedCaps = ({
 													damping: 42,
 												}}
 												className="relative min-w-0"
+												onDragStart={() => {
+													draggedKind.current = group.kind;
+												}}
 												onDragOver={(event) =>
-													handleReorderDragOver(event, cap.id)
+													handleReorderDragOver(event, cap.id, group.kind)
 												}
 												onDrop={(event) => handleReorderDrop(event, cap.id)}
 												onKeyDown={(event) =>
-													handleReorderKeyDown(event, cap.id, index)
+													handleReorderKeyDown(event, cap.id, { first, last })
 												}
 											>
 												{card}

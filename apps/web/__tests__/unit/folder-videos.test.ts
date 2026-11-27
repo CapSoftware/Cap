@@ -1,11 +1,12 @@
 import { Database, ImageUploads } from "@cap/web-backend";
-import { Folder, Organisation, Space } from "@cap/web-domain";
+import { CurrentUser, Folder, Organisation, Space } from "@cap/web-domain";
 import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getVideosByFolderId } from "@/lib/folder";
 import { readDistinctVideoIds } from "../fixtures/distinct-video-ids";
 
 const mocks = vi.hoisted(() => ({ query: vi.fn() }));
+const viewer = { id: "viewer" } as CurrentUser["Type"];
 
 vi.mock("server-only", () => ({}));
 vi.mock("@cap/web-backend", async () => {
@@ -76,6 +77,7 @@ describe.each([
 			).pipe(
 				Effect.provide(Database.Default),
 				Effect.provide(ImageUploads.Default),
+				Effect.provideService(CurrentUser, viewer),
 				Effect.runPromise,
 			);
 
@@ -103,6 +105,7 @@ describe.each([
 		await getVideosByFolderId(Folder.FolderId.make("folder-1"), root).pipe(
 			Effect.provide(Database.Default),
 			Effect.provide(ImageUploads.Default),
+			Effect.provideService(CurrentUser, viewer),
 			Effect.runPromise,
 		);
 		const queries = mocks.query.mock.calls.map(([query]) => String(query));

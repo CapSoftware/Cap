@@ -33,7 +33,7 @@ import { and, desc, eq, inArray, isNull, or, type SQL, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { capKindCountsFromTotals } from "@/lib/cap-kind";
+import { capKindCountsFromTotals, visibleNoteExcerpt } from "@/lib/cap-kind";
 import { resolveDashboardPageSize } from "@/lib/dashboard-page-size";
 import { parsePageParam } from "@/lib/page-param";
 import { seedThumbnailUrls } from "@/lib/seeded-thumbnails";
@@ -509,6 +509,11 @@ export default async function SharedCapsPage(props: {
 			return {
 				...videoWithoutEffectiveDate,
 				id: Video.VideoId.make(video.id),
+				noteExcerpt: visibleNoteExcerpt(
+					video,
+					user.id,
+					rules.hasInheritedPassword,
+				),
 				hasInheritedPassword: rules.hasInheritedPassword,
 				inheritedPasswordSources: rules.inheritedPasswordSources,
 				inheritedSpaceSettings: rules.inheritedSettings,
@@ -677,6 +682,11 @@ export default async function SharedCapsPage(props: {
 			return {
 				...videoWithoutEffectiveDate,
 				id: Video.VideoId.make(video.id),
+				noteExcerpt: visibleNoteExcerpt(
+					video,
+					user.id,
+					rules.hasInheritedPassword,
+				),
 				hasInheritedPassword: rules.hasInheritedPassword,
 				inheritedPasswordSources: rules.inheritedPasswordSources,
 				inheritedSpaceSettings: rules.inheritedSettings,

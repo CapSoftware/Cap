@@ -7,12 +7,13 @@ import { Space, type Video } from "@cap/web-domain";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getSpaceAccess } from "@/actions/organization/space-authorization";
+import { capKindOf } from "@/lib/cap-kind";
 import {
 	isSpaceVideoOrder,
 	MAX_REORDER_ITEMS,
 	positionChanges,
 	type ReorderPlacement,
-	reorderIds,
+	reorderIdsWithinGroups,
 	type SpaceVideoOrder,
 } from "@/lib/space-video-order";
 import { getSpaceRootVideoOrder } from "@/lib/space-video-order-query";
@@ -91,8 +92,8 @@ export async function reorderSpaceVideos(input: {
 		const current = await getSpaceRootVideoOrder(id, "custom", {
 			executor: tx,
 		});
-		const nextOrder = reorderIds(
-			current.map((row) => row.id as string),
+		const nextOrder = reorderIdsWithinGroups(
+			current.map((row) => ({ id: row.id, group: capKindOf(row) })),
 			videoIds,
 			placement,
 		);
