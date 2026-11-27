@@ -19,6 +19,9 @@ import { PLAN_LINK, PlanCard, type PlanToggle } from "./PlanCard";
 const copy = homepageCopy.pricing.commercial;
 const theme = MODE_THEME.screenshot;
 
+const amountText = (value: number) =>
+	Number.isInteger(value) ? `${value}` : value.toFixed(2);
+
 const amountFormat = (value: number) => {
 	const digits = Number.isInteger(value) ? 0 : 2;
 	return { minimumFractionDigits: digits, maximumFractionDigits: digits };
@@ -113,7 +116,7 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 			name={copy.title}
 			tag="Local only"
 			theme={theme}
-			summary={`${symbol}${copy.pricing.yearly} per license, per year`}
+			summary={`${symbol}${amountText(offer ? copy.pricing.yearly / 2 : copy.pricing.yearly)} per license, per year`}
 			collapsed={collapsed}
 			onToggle={onToggle}
 			blurb="A commercial license for the Cap desktop app. Unlimited local recording and editing, no cloud subscription required."
