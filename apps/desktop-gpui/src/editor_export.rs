@@ -1158,12 +1158,26 @@ impl EditorWindow {
                 .await;
             let started = std::time::Instant::now();
             let result = gpui_tokio::Tokio::spawn(cx, async move {
-                match instance {
+                let preview = match instance {
                     Some(instance) => {
                         render_preview_with_editor(&instance, project, time, settings).await
                     }
                     None => render_preview_with_config(path, project, time, settings, force).await,
-                }
+                }?;
+                // A full-resolution preview took 25 ms to decode at 4K, which
+                // stalled the main thread when it ran inside `update_in`.
+                let (preview, image) = tokio::task::spawn_blocking(move || {
+                    let image = base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        preview.jpeg_base64.as_bytes(),
+                    )
+                    .ok()
+                    .as_deref()
+                    .and_then(decode_jpeg_bytes);
+                    (preview, image)
+                })
+                .await?;
+                Ok::<_, cap_export::ExportError>((preview, image))
             })
             .await
             .ok();
@@ -1176,13 +1190,8 @@ impl EditorWindow {
                     return;
                 };
                 let updated = ui.update_preview(&request, |ui| match result {
-                    Some(Ok(preview)) => {
-                        let bytes = base64::Engine::decode(
-                            &base64::engine::general_purpose::STANDARD,
-                            preview.jpeg_base64.as_bytes(),
-                        )
-                        .ok();
-                        if let Some(image) = bytes.as_deref().and_then(decode_jpeg_bytes)
+                    Some(Ok((preview, image))) => {
+                        if let Some(image) = image
                             && let Some(old) = ui.preview.replace(image)
                         {
                             let _ = window.drop_image(old);
