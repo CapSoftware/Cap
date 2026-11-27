@@ -432,8 +432,10 @@ mod tests {
         let mut segment = ShapeSegment::default();
         segment.from.x = f64::NAN;
         assert!(!segment.is_renderable());
-        let mut segment = ShapeSegment::default();
-        segment.stroke_width = f32::INFINITY;
+        let segment = ShapeSegment {
+            stroke_width: f32::INFINITY,
+            ..Default::default()
+        };
         assert!(!segment.is_renderable());
     }
 
