@@ -26,7 +26,7 @@ OUT = Path(sys.argv[3]).resolve()
 FLOWS = (sys.argv[4] if len(sys.argv) > 4 else "all").split(",")
 SHOTS = OUT / "shots"
 WORK = Path(tempfile.mkdtemp(prefix="rc064-"))
-SIDES = [s for s in ("v062", "base", "head") if (APPS / s / "bin").exists()]
+SIDES = [s for s in os.environ["GATE_SIDES"].split(",")] if os.environ.get("GATE_SIDES") else [s for s in ("v062", "base", "head") if (APPS / s / "bin").exists()]
 RESULTS = {"os": OS, "flows": {}}
 EXE = ".exe" if OS == "Windows" else ""
 API_KEY = None
