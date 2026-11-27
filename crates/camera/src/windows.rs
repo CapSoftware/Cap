@@ -64,12 +64,18 @@ impl ModelID {
 #[derive(Debug)]
 pub struct NativeCapturedFrame(cap_camera_windows::Frame);
 
+impl NativeCapturedFrame {
+    pub(crate) fn from_frame(frame: cap_camera_windows::Frame) -> Self {
+        Self(frame)
+    }
+}
+
 pub type NativeCaptureHandle = WindowsCaptureHandle;
 
 pub(super) fn start_capturing_impl(
     camera: &CameraInfo,
     format: Format,
-    mut callback: impl FnMut(CapturedFrame) + 'static,
+    mut callback: impl FnMut(CapturedFrame) + Send + 'static,
 ) -> Result<WindowsCaptureHandle, StartCapturingError> {
     let device = find_device(camera)?.ok_or(StartCapturingError::DeviceNotFound)?;
 
@@ -90,6 +96,10 @@ pub struct WindowsCaptureHandle {
 }
 
 impl WindowsCaptureHandle {
+    pub fn dropped_samples(&self) -> u64 {
+        self.inner.dropped_samples()
+    }
+
     pub fn stop_capturing(self) -> Result<(), String> {
         self.inner.stop_capturing().map_err(|e| e.to_string())
     }

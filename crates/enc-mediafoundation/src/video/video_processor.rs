@@ -218,6 +218,10 @@ impl VideoProcessor {
         &self.video_output_texture
     }
 
+    pub fn input_texture(&self) -> &ID3D11Texture2D {
+        &self.video_input_texture
+    }
+
     pub fn process_texture(
         &mut self,
         input_texture: &ID3D11Texture2D,
@@ -226,18 +230,23 @@ impl VideoProcessor {
         // texture that matches the input size we were initialized with.
 
         unsafe {
-            // Copy the texture to the video input texture
             self.d3d_context
                 .CopyResource(&self.video_input_texture, input_texture);
+        }
 
-            // Convert to NV12
-            let video_stream = D3D11_VIDEO_PROCESSOR_STREAM {
-                Enable: true.into(),
-                OutputIndex: 0,
-                InputFrameOrField: 0,
-                pInputSurface: ManuallyDrop::new(Some(self.video_input.clone())),
-                ..Default::default()
-            };
+        self.process_input_texture()
+    }
+
+    pub fn process_input_texture(&mut self) -> windows::core::Result<()> {
+        let video_stream = D3D11_VIDEO_PROCESSOR_STREAM {
+            Enable: true.into(),
+            OutputIndex: 0,
+            InputFrameOrField: 0,
+            pInputSurface: ManuallyDrop::new(Some(self.video_input.clone())),
+            ..Default::default()
+        };
+
+        unsafe {
             self.video_context.VideoProcessorBlt(
                 &self.video_processor,
                 &self.video_output,
