@@ -1,0 +1,115 @@
+name: Scratch stop-time vs length
+
+on:
+  push:
+    branches: ["ci/stoptime-len"]
+
+concurrency:
+  group: scratch-stoptime-len
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: cp -R ci-stoptime "$RUNNER_TEMP/rig"
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: ./.github/actions/install-desktop-deps
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Disable Spotlight indexing
+        run: sudo mdutil -a -i off || true
+      - name: Build main and 0.6.2
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+        run: |
+          set -e
+          for ref in $(cat "$RUNNER_TEMP/rig/refs.txt"); do
+            name=${ref%%=*}; rev=${ref#*=}
+            git checkout -q -f "$rev"
+            node scripts/setup.js > "$RUNNER_TEMP/setup-$name.log" 2>&1 || { tail -20 "$RUNNER_TEMP/setup-$name.log"; exit 1; }
+            cargo build --release -p cap --bin cap
+            mkdir -p "$RUNNER_TEMP/bins/$name/bin"
+            cp target/release/cap "$RUNNER_TEMP/bins/$name/bin/cap"
+            FW=$(find target -maxdepth 3 -type d -name Spacedrive.framework | head -1)
+            mkdir -p "$RUNNER_TEMP/bins/$name/Frameworks"; cp -R "$FW" "$RUNNER_TEMP/bins/$name/Frameworks/"
+          done
+      - name: Stimulus deps
+        run: python3 -m pip install pygame psutil av
+      - name: Length runs
+        run: |
+          B="$RUNNER_TEMP/bins"; R="$RUNNER_TEMP/rig"
+          S=$("$B/main/bin/cap" targets screens --format json | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
+          for d in 60 300 1800; do
+            python3 "$R/run.py" --stim "$R/stim.py" --screen "$S" --out "$RUNNER_TEMP/len$d" --dur $d --reps 1 --keep \
+              --arm "c062=$B/c062/bin/cap" --arm "main=$B/main/bin/cap"
+            find "$RUNNER_TEMP/len$d" -name '*.mp4' -size +1M -delete
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: len-macos
+          path: |
+            ${{ runner.temp }}/len*/results.jsonl
+            ${{ runner.temp }}/len*/*/stderr.log
+            ${{ runner.temp }}/setup-*.log
+
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - shell: bash
+        run: cp -R ci-stoptime "$RUNNER_TEMP/rig"
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-pc-windows-msvc
+          tier: fast
+      - name: Build main and 0.6.2
+        shell: bash
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+        run: |
+          set -e
+          for ref in $(cat "$RUNNER_TEMP/rig/refs.txt"); do
+            name=${ref%%=*}; rev=${ref#*=}
+            git checkout -q -f "$rev"
+            cargo build --release -p cap --bin cap
+            mkdir -p "$RUNNER_TEMP/bins/$name"
+            cp target/release/cap.exe "$RUNNER_TEMP/bins/$name/cap.exe"
+          done
+      - name: Stimulus deps
+        shell: bash
+        run: python -m pip install pygame psutil av
+      - name: Length runs
+        shell: bash
+        run: |
+          B="$RUNNER_TEMP/bins"; R="$RUNNER_TEMP/rig"
+          S=$("$B/main/cap.exe" targets screens --format json | python -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
+          for d in 60 300 1800; do
+            python "$R/run.py" --stim "$R/stim.py" --screen "$S" --out "$RUNNER_TEMP/len$d" --dur $d --reps 1 --keep \
+              --arm "c062=$B/c062/cap.exe" --arm "main=$B/main/cap.exe"
+            find "$RUNNER_TEMP/len$d" -name '*.mp4' -size +1M -delete
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: len-windows
+          path: |
+            ${{ runner.temp }}/len*/results.jsonl
+            ${{ runner.temp }}/len*/*/stderr.log
