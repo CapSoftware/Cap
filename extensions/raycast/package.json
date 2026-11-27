@@ -1,0 +1,201 @@
+{
+	"$schema": "https://www.raycast.com/schemas/extension.json",
+	"name": "cap",
+	"title": "Cap",
+	"description": "Start and stop screen recordings with Cap, search your recordings, and open your dashboard.",
+	"icon": "icon.png",
+	"author": "CapSoftware",
+	"categories": [
+		"Productivity",
+		"Media"
+	],
+	"license": "MIT",
+	"platforms": [
+		"macOS",
+		"Windows"
+	],
+	"preferences": [
+		{
+			"name": "serverUrl",
+			"type": "textfield",
+			"required": false,
+			"title": "Cap Server URL",
+			"description": "Custom or self-hosted Cap server URL (defaults to Cap Desktop's configured server or https://cap.so).",
+			"placeholder": "https://cap.so",
+			"default": ""
+		},
+		{
+			"name": "defaultMode",
+			"type": "dropdown",
+			"required": false,
+			"title": "Default Recording Mode",
+			"description": "Recording mode used by Start Recording when no mode argument is selected.",
+			"default": "default",
+			"data": [
+				{
+					"title": "Saved in Cap Desktop",
+					"value": "default"
+				},
+				{
+					"title": "Instant Mode",
+					"value": "instant"
+				},
+				{
+					"title": "Studio Mode",
+					"value": "studio"
+				}
+			]
+		},
+		{
+			"name": "defaultScreen",
+			"type": "textfield",
+			"required": false,
+			"title": "Default Screen Name Override",
+			"description": "Optional exact display name to capture (leave empty to use Cap Desktop's saved target or the active display).",
+			"placeholder": "Built-in Retina Display",
+			"default": ""
+		},
+		{
+			"name": "cameraDeviceId",
+			"type": "textfield",
+			"required": false,
+			"title": "Camera Device ID Override",
+			"description": "Optional camera DeviceID override (leave empty to preserve the camera selected in Cap Desktop).",
+			"placeholder": "",
+			"default": ""
+		},
+		{
+			"name": "micLabel",
+			"type": "textfield",
+			"required": false,
+			"title": "Microphone Name Override",
+			"description": "Optional microphone label override (leave empty to preserve the microphone selected in Cap Desktop).",
+			"placeholder": "",
+			"default": ""
+		},
+		{
+			"name": "systemAudio",
+			"type": "dropdown",
+			"required": false,
+			"title": "Capture System Audio",
+			"description": "Whether to capture system audio when starting a recording from Raycast.",
+			"default": "default",
+			"data": [
+				{
+					"title": "Saved in Cap Desktop",
+					"value": "default"
+				},
+				{
+					"title": "Enabled",
+					"value": "enabled"
+				},
+				{
+					"title": "Disabled",
+					"value": "disabled"
+				}
+			]
+		},
+		{
+			"name": "recordingsDirectory",
+			"type": "textfield",
+			"required": false,
+			"title": "Recordings Directory",
+			"description": "Optional custom local directory containing .cap recording bundles (defaults to Cap Desktop's configured recordings folder).",
+			"placeholder": "",
+			"default": ""
+		},
+		{
+			"name": "apiKey",
+			"type": "password",
+			"required": false,
+			"title": "Cap API Key / Token",
+			"description": "Optional Cap CLI API key for searching cloud Caps (falls back to CAP_AGENT_TOKEN, CAP_API_KEY, or Cap Desktop login)."
+		}
+	],
+	"commands": [
+		{
+			"name": "start-recording",
+			"title": "Start Recording",
+			"subtitle": "Cap",
+			"description": "Start a Cap screen recording using your saved Cap Desktop defaults or custom overrides.",
+			"mode": "no-view",
+			"arguments": [
+				{
+					"name": "mode",
+					"type": "dropdown",
+					"placeholder": "Recording Mode",
+					"required": false,
+					"data": [
+						{
+							"title": "Default (Saved in Cap)",
+							"value": "default"
+						},
+						{
+							"title": "Instant Mode",
+							"value": "instant"
+						},
+						{
+							"title": "Studio Mode",
+							"value": "studio"
+						}
+					]
+				},
+				{
+					"name": "screen",
+					"type": "textfield",
+					"placeholder": "Screen Name (optional)",
+					"required": false
+				}
+			]
+		},
+		{
+			"name": "stop-recording",
+			"title": "Stop Recording",
+			"subtitle": "Cap",
+			"description": "Stop the active Cap recording (Cap copies the shareable link to the clipboard automatically for Instant recordings).",
+			"mode": "no-view"
+		},
+		{
+			"name": "open-dashboard",
+			"title": "Open Dashboard",
+			"subtitle": "Cap",
+			"description": "Open your Cap web dashboard in the default browser.",
+			"mode": "no-view"
+		},
+		{
+			"name": "search-caps",
+			"title": "Search Caps",
+			"subtitle": "Cap",
+			"description": "Search and browse your recent local and cloud Cap recordings, copy shareable links, or open them in Cap Editor.",
+			"mode": "view"
+		},
+		{
+			"name": "open-settings",
+			"title": "Open Cap Settings",
+			"subtitle": "Cap",
+			"description": "Open the Cap Desktop settings window.",
+			"mode": "no-view"
+		}
+	],
+	"dependencies": {
+		"@raycast/api": "^1.104.25",
+		"@raycast/utils": "^1.19.1",
+		"react": "^19.0.0"
+	},
+	"devDependencies": {
+		"@raycast/eslint-config": "^1.0.11",
+		"@types/node": "22.19.17",
+		"@types/react": "19.0.10",
+		"eslint": "^8.57.0",
+		"typescript": "^5.8.2",
+		"vitest": "^3.0.7"
+	},
+	"scripts": {
+		"build": "ray build -e dist",
+		"dev": "ray develop",
+		"fix-lint": "ray lint --fix",
+		"lint": "ray lint",
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit"
+	}
+}
