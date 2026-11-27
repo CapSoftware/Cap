@@ -240,8 +240,8 @@ export const getVideosByFolderId = Effect.fn(function* (
 				duration: videos.duration,
 				settings: videos.settings,
 				orgId: videos.orgId,
-				totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
-				totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
+				totalComments: sql<number>`(SELECT COUNT(*) FROM ${comments} WHERE ${comments.videoId} = ${videos.id} AND ${comments.type} = 'text')`,
+				totalReactions: sql<number>`(SELECT COUNT(*) FROM ${comments} WHERE ${comments.videoId} = ${videos.id} AND ${comments.type} = 'emoji')`,
 				sharedOrganizations: sql<
 					{
 						id: string;
@@ -271,7 +271,6 @@ export const getVideosByFolderId = Effect.fn(function* (
 			})
 			.from(videos)
 			.innerJoin(folderVideosPage, eq(videos.id, folderVideosPage.id))
-			.leftJoin(comments, eq(videos.id, comments.videoId))
 			.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 			.leftJoin(
 				organizations,
