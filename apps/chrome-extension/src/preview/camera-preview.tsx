@@ -125,16 +125,10 @@ const disconnectCameraPreview = (sessionId: string | null) => {
 	}).catch(() => undefined);
 };
 
-const isSameWebcamSettings = (
+const isSameCameraSource = (
 	current: WebcamSettings | null,
 	next: WebcamSettings,
-) =>
-	current?.enabled === next.enabled &&
-	current.deviceId === next.deviceId &&
-	current.position === next.position &&
-	current.size === next.size &&
-	current.shape === next.shape &&
-	current.mirror === next.mirror;
+) => current?.enabled === next.enabled && current.deviceId === next.deviceId;
 
 const getCameraErrorDetails = (
 	error: unknown,
@@ -179,6 +173,7 @@ const publishCameraDevices = async () => {
 
 function App() {
 	const [settings, setSettings] = useState<WebcamSettings | null>(null);
+	const [mirrored, setMirrored] = useState(false);
 	const [isInPictureInPicture, setIsInPictureInPicture] = useState(false);
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const streamRef = useRef<MediaStream | null>(null);
@@ -335,8 +330,9 @@ function App() {
 
 			if (message.type === "settings") {
 				const nextSettings = message.settings;
+				setMirrored(nextSettings.mirror);
 				setSettings((current) =>
-					isSameWebcamSettings(current, nextSettings) ? current : nextSettings,
+					isSameCameraSource(current, nextSettings) ? current : nextSettings,
 				);
 				window.setTimeout(publishPreviewFrame, 0);
 				return false;
@@ -653,7 +649,7 @@ function App() {
 				disablePictureInPicture={false}
 				controlsList="nodownload nofullscreen noremoteplayback"
 				data-pip={isInPictureInPicture ? "true" : "false"}
-				data-mirror={settings?.mirror ? "true" : "false"}
+				data-mirror={mirrored ? "true" : "false"}
 				onLoadedMetadata={() => {
 					const currentVideo = videoRef.current;
 					if (!currentVideo) return;
