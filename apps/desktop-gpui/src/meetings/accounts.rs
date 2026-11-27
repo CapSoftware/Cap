@@ -432,11 +432,16 @@ fn refresh_token(dir: &Path, id: &str) -> Option<String> {
         .filter(|token| !token.is_empty())
 }
 
-// Expiry is kept on the wall clock: `Instant` stops while macOS and Linux
-// are asleep, so after a night closed it would still trust a token the
-// provider expired hours ago.
-fn access_tokens() -> &'static Mutex<HashMap<String, (String, SystemTime)>> {
-    static TOKENS: std::sync::OnceLock<Mutex<HashMap<String, (String, SystemTime)>>> =
+// A cached token is reused only while both clocks say it is fresh: `Instant`
+// stops while macOS and Linux are asleep, and the wall clock can be set back.
+struct CachedToken {
+    token: String,
+    until: Instant,
+    until_wall: SystemTime,
+}
+
+fn access_tokens() -> &'static Mutex<HashMap<String, CachedToken>> {
+    static TOKENS: std::sync::OnceLock<Mutex<HashMap<String, CachedToken>>> =
         std::sync::OnceLock::new();
     TOKENS.get_or_init(Default::default)
 }
@@ -555,8 +560,8 @@ fn cached_access_token(id: &str) -> Option<String> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(id)
-        .filter(|(_, expires)| *expires > SystemTime::now())
-        .map(|(token, _)| token.clone())
+        .filter(|cached| cached.until > Instant::now() && cached.until_wall > SystemTime::now())
+        .map(|cached| cached.token.clone())
 }
 
 /// Saves what a refresh returned, unless the account was removed while it
@@ -573,15 +578,20 @@ fn keep_refreshed(dir: &Path, id: &str, refresh: &str, tokens: &oauth::Tokens) -
             tracing::warn!(%error, "could not save the rotated calendar token");
         }
     }
-    let lifetime = Duration::from_secs(tokens.expires_in.unwrap_or(600));
-    let now = SystemTime::now();
-    let expires = now
-        .checked_add(lifetime.saturating_sub(TOKEN_MARGIN))
-        .unwrap_or(now);
+    let lifetime =
+        Duration::from_secs(tokens.expires_in.unwrap_or(600)).saturating_sub(TOKEN_MARGIN);
+    let (now, wall) = (Instant::now(), SystemTime::now());
     access_tokens()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(id.to_string(), (tokens.access_token.clone(), expires));
+        .insert(
+            id.to_string(),
+            CachedToken {
+                token: tokens.access_token.clone(),
+                until: now.checked_add(lifetime).unwrap_or(now),
+                until_wall: wall.checked_add(lifetime).unwrap_or(wall),
+            },
+        );
     true
 }
 
@@ -1150,15 +1160,31 @@ mod tests {
         ));
         assert_eq!(cached_access_token(id).as_deref(), Some("access"));
 
-        let hour_ago = SystemTime::now() - Duration::from_secs(3600);
-        access_tokens()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id.to_string(), ("access".to_string(), hour_ago));
+        let cache = |until: Instant, until_wall: SystemTime| {
+            access_tokens()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(
+                    id.to_string(),
+                    CachedToken {
+                        token: "access".to_string(),
+                        until,
+                        until_wall,
+                    },
+                );
+        };
+        let hour = Duration::from_secs(3600);
+        cache(Instant::now() + hour, SystemTime::now() - hour);
         assert_eq!(
             cached_access_token(id),
             None,
             "a token past its expiry is refreshed, however long the computer was asleep"
+        );
+        cache(Instant::now(), SystemTime::now() + hour);
+        assert_eq!(
+            cached_access_token(id),
+            None,
+            "setting the clock back does not extend a token"
         );
 
         let endless = oauth::Tokens {
@@ -1166,6 +1192,7 @@ mod tests {
             ..refreshed("endless", None)
         };
         assert!(keep_refreshed(dir.path(), id, "refresh", &endless));
+        assert_eq!(cached_access_token(id), None);
         forget(dir.path(), id);
     }
 
