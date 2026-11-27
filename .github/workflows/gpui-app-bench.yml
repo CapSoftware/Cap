@@ -110,29 +110,25 @@ jobs:
           fi
           echo "Head $(git rev-parse --short HEAD), base patch stack from $(git rev-parse --short "$base")" | tee -a "$GITHUB_STEP_SUMMARY"
           git worktree add --detach "$RUNNER_TEMP/base/cap" "$base"
-          (cd "$RUNNER_TEMP/base/cap" && ./scripts/prepare-gpui-dependency.sh)
+          (cd "$RUNNER_TEMP/base/cap" && node scripts/sync-desktop-versions.mjs && ./scripts/prepare-gpui-dependency.sh)
 
       - name: Build head and base
         shell: bash
         run: |
           set -euo pipefail
-          zed="$(cd .. && pwd)/zed-cap"
           bin_dir="$GITHUB_WORKSPACE/apps/desktop-gpui/target/$TARGET/debug"
+          # Each side builds its own app source against its own patch stack
+          # (the base worktree's ../zed-cap), so a head that calls a GPUI API
+          # its patches add still has a base to compare with. One target dir
+          # keeps the shared crates.io dependencies built once.
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/apps/desktop-gpui/target"
           build() {
-            # The app patches gpui to ../zed-cap, so each build swaps the
-            # checkout in. Cargo decides freshness of path dependencies by
-            # mtime, so touch the swapped-in sources to force a rebuild.
-            find "$zed/crates" -type f -name '*.rs' -exec touch {} +
-            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked \
+            cargo +1.95.0 build --manifest-path "$1/apps/desktop-gpui/Cargo.toml" --locked \
               --target "$TARGET" --bin cap-gpui
-            cp "$bin_dir/cap-gpui" "$bin_dir/cap-gpui-$1"
+            cp "$bin_dir/cap-gpui" "$bin_dir/cap-gpui-$2"
           }
-          build head
-          mv "$zed" "$zed-head"
-          mv "$RUNNER_TEMP/base/zed-cap" "$zed"
-          build base
-          mv "$zed" "$RUNNER_TEMP/base/zed-cap"
-          mv "$zed-head" "$zed"
+          build "$GITHUB_WORKSPACE" head
+          build "$RUNNER_TEMP/base/cap" base
           for frameworks in "$bin_dir/Frameworks" "$GITHUB_WORKSPACE/apps/desktop-gpui/target/$TARGET/Frameworks"; do
             mkdir -p "$frameworks"
             ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
