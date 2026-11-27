@@ -235,6 +235,10 @@ export const authOptions = (
 							prompt: "select_account",
 						},
 					},
+					// Lets people who first signed up with an email code use Google
+					// with the same address. Gated on Google's `email_verified` in the
+					// signIn callback, like OIDC.
+					allowDangerousEmailAccountLinking: true,
 				}),
 				...(serverEnv().GOOGLE_CLIENT_ID && serverEnv().GOOGLE_CLIENT_SECRET
 					? [GoogleOneTapProvider()]
@@ -434,6 +438,12 @@ export const authOptions = (
 					const claims = profile as OidcClaims | undefined;
 					if (!claims?.email || claims.email_verified !== true) {
 						return "/login?error=OidcEmailUnverified";
+					}
+				}
+				if (account?.provider === "google") {
+					const claims = profile as { email_verified?: boolean } | undefined;
+					if (claims?.email_verified !== true) {
+						return "/login?error=GoogleEmailUnverified";
 					}
 				}
 				if (account?.provider === "workos") {
