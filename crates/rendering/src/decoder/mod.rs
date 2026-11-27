@@ -794,9 +794,6 @@ pub enum VideoDecoderMessage {
     GetFrame(f32, u32, tokio::sync::oneshot::Sender<DecodedFrame>),
 }
 
-/// The source's Y'CbCr matrix from its colour tag, for decoders that do not
-/// see FFmpeg frames (Media Foundation), and whether its chroma is 4:2:0.
-/// BT.601 and unknown chroma when the file cannot be read.
 #[cfg(target_os = "windows")]
 pub(crate) fn probe_yuv_layout(path: &std::path::Path) -> (YuvMatrix, Option<bool>) {
     ::ffmpeg::format::input(path)
@@ -806,7 +803,7 @@ pub(crate) fn probe_yuv_layout(path: &std::path::Path) -> (YuvMatrix, Option<boo
             let context = ::ffmpeg::codec::Context::from_parameters(stream.parameters()).ok()?;
             let video = context.decoder().video().ok()?;
             Some((
-                YuvMatrix::from_color_space(video.color_space()),
+                YuvMatrix::from_color_space(video.color_space(), video.height()),
                 cap_video_decode::ffmpeg::chroma_is_420(video.format(), unsafe {
                     &*stream.parameters().as_ptr()
                 }),

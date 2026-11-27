@@ -710,7 +710,7 @@ impl AVAssetReaderDecoder {
             Ok((
                 video.width(),
                 video.height(),
-                YuvMatrix::from_color_space(video.color_space()),
+                YuvMatrix::from_color_space(video.color_space(), video.height()),
             ))
         })();
         let (width, height, matrix) = match dimensions {

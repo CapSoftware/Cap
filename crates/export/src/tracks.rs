@@ -636,11 +636,6 @@ const SWS_CS_ITU709: i32 = 1;
 const SWS_CS_ITU601: i32 = 5;
 
 impl Nv12Converter {
-    /// Writes `decoded` into `target`, NV12 at the track's size, in BT.709
-    /// because that is how the encoder tags every track. A BT.709 frame of
-    /// the same size is a plane copy; anything else (a BT.601 or untagged
-    /// source, which the renderer also reads as BT.601, or a camera swapped
-    /// mid-recording) goes through swscale with the source's matrix.
     fn fill(&mut self, decoded: &DecodedFrame, target: &mut frame::Video) -> Result<(), String> {
         let (width, height) = (decoded.width(), decoded.height());
         if width == 0 || height == 0 {

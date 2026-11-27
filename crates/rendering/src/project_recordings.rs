@@ -55,7 +55,7 @@ pub(crate) fn header_video_metadata(path: &Path) -> Option<HeaderVideoMetadata> 
     Some(HeaderVideoMetadata {
         width: video.width(),
         height: video.height(),
-        matrix: crate::cpu_yuv::YuvMatrix::from_color_space(color_space),
+        matrix: crate::cpu_yuv::YuvMatrix::from_color_space(color_space, video.height()),
         chroma_is_420,
     })
 }
@@ -951,7 +951,7 @@ mod ordinary_media_access_tests {
                 .unwrap()
                 .color_space();
             assert_eq!(
-                YuvMatrix::from_color_space(probed),
+                YuvMatrix::from_color_space(probed, 48),
                 expected,
                 "{name} full probe"
             );
