@@ -478,7 +478,7 @@ pub struct RecordingSession {
     paused_since: Option<Instant>,
     storage_monitor: Option<Task<()>>,
     limit_monitor: Option<Task<()>>,
-    limit_started_at: i64,
+    limit_owner: LimitOwner,
     failure_monitor: Option<Task<()>>,
     recording_generation: u64,
     countdown_remaining: Option<u32>,
@@ -544,7 +544,7 @@ impl RecordingSession {
             paused_since: None,
             storage_monitor: None,
             limit_monitor: None,
-            limit_started_at: 0,
+            limit_owner: LimitOwner::default(),
             failure_monitor: None,
             recording_generation: 0,
             countdown_remaining: None,
@@ -1098,13 +1098,19 @@ impl RecordingSession {
         if self.mode() == Some(recording::RecordingMode::Studio) {
             crate::app_windows::prewarm_shared_wgpu_device(cx);
         }
-        if let Some(limit) = self
+        if self
             .active
             .as_ref()
             .and_then(ActiveRecording::recording_limit)
+            .is_some()
         {
-            self.limit_started_at = chrono::Utc::now().timestamp();
-            self.monitor_recording_limit(limit, project_dir.clone(), cx);
+            let auth = crate::store::auth_snapshot();
+            self.limit_owner = LimitOwner {
+                started_at: chrono::Utc::now().timestamp(),
+                server_url: auth.server_url,
+                token: auth.token,
+            };
+            self.monitor_recording_limit(project_dir.clone(), Duration::ZERO, cx);
         }
         self.monitor_storage(project_dir, cx);
         self.monitor_recording_failure(done, cx);
@@ -1187,23 +1193,46 @@ impl RecordingSession {
     /// `None` when it has no limit or a plan fetched since it started is Pro.
     pub fn recording_time_left(&self) -> Option<Duration> {
         let limit = self.active.as_ref()?.recording_limit()?;
-        if upgrade_lifts_limit(&crate::store::auth_snapshot(), self.limit_started_at) {
+        if upgrade_lifts_limit(&crate::store::auth_snapshot(), &self.limit_owner) {
             return None;
         }
         Some(limit.saturating_sub(self.elapsed()))
     }
 
+    /// A stop or discard that capture did not confirm leaves the recording
+    /// running, so its limit applies again. The first check waits a little so
+    /// a stop that keeps failing is not retried in a tight loop.
+    fn resume_recording_limit(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.phase, Phase::Recording { .. }) {
+            return;
+        }
+        let Some(project_dir) = self
+            .active
+            .as_ref()
+            .filter(|active| active.recording_limit().is_some())
+            .map(|active| active.project_dir.clone())
+        else {
+            return;
+        };
+        self.monitor_recording_limit(project_dir, LIMIT_CHECK_AFTER_FAILED_STOP, cx);
+    }
+
     fn monitor_recording_limit(
         &mut self,
-        limit: Duration,
         project_dir: std::path::PathBuf,
+        first_check_after: Duration,
         cx: &mut Context<Self>,
     ) {
         self.limit_monitor = None;
+        let Some(left) = self.recording_time_left() else {
+            return;
+        };
         let generation = self.recording_generation;
         let task = cx.spawn(async move |this, cx| {
             let mut plan_checked = false;
-            let mut wait = limit.saturating_sub(PLAN_CHECK_BEFORE_LIMIT);
+            let mut wait = left
+                .saturating_sub(PLAN_CHECK_BEFORE_LIMIT)
+                .max(first_check_after);
             loop {
                 cx.background_executor()
                     .timer(wait.max(Duration::from_millis(50)))
@@ -1578,6 +1607,7 @@ impl RecordingSession {
                     {
                         this.monitor_storage(active.project_dir.clone(), cx);
                     }
+                    this.resume_recording_limit(cx);
                     #[cfg(windows)]
                     let message = if this.mode() == Some(recording::RecordingMode::Studio) {
                         format!("{error}. Studio shutdown remains unconfirmed; recording and files retained.")
@@ -2189,6 +2219,7 @@ impl RecordingSession {
                         if matches!(this.phase, Phase::Recording { .. }) {
                             this.monitor_storage(directory.clone(), cx);
                         }
+                        this.resume_recording_limit(cx);
                         this.error = Some(match result {
                             Ok((_, Err(error))) => format!(
                                 "{error:#}; discard/restart stopped, local recording retained"
@@ -2252,6 +2283,7 @@ impl RecordingSession {
                     result => {
                         this.phase = Phase::Recording { paused: false };
                         this.clean_control.uncertain = true;
+                        this.resume_recording_limit(cx);
                         this.error = Some(match result {
                             Ok((_, Err(error))) => format!("{error:#}. Cleanup is unconfirmed; retry Stop."),
                             Err(error) => format!("Cancel task failed: {error}. Cleanup is unconfirmed; retry Stop."),
@@ -3217,26 +3249,47 @@ mod studio_editor_presentation_tests {
     }
 }
 
-/// How long before the recording limit the plan is fetched again.
 const PLAN_CHECK_BEFORE_LIMIT: Duration = Duration::from_secs(15);
+const LIMIT_CHECK_AFTER_FAILED_STOP: Duration = Duration::from_secs(10);
+
+/// The account a limited recording started under, and when (Unix seconds).
+#[derive(Default)]
+struct LimitOwner {
+    started_at: i64,
+    server_url: String,
+    token: Option<String>,
+}
 
 /// The server only sets a recording limit for a free account, so a Pro plan
 /// saved before the recording started is out of date. Only a plan fetched
-/// after it started can lift the limit.
-fn upgrade_lifts_limit(auth: &crate::store::AuthSnapshot, started_at: i64) -> bool {
+/// after it started, for the account it started under, can lift the limit.
+fn upgrade_lifts_limit(auth: &crate::store::AuthSnapshot, owner: &LimitOwner) -> bool {
     auth.plan_upgraded
+        && auth.token.is_some()
+        && auth.token == owner.token
+        && auth.server_url == owner.server_url
         && auth
             .plan_checked_at
-            .is_some_and(|checked_at| checked_at > started_at)
+            .is_some_and(|checked_at| checked_at > owner.started_at)
 }
 
 #[cfg(test)]
 mod recording_limit_tests {
-    use super::upgrade_lifts_limit;
+    use super::{LimitOwner, upgrade_lifts_limit};
     use crate::store::AuthSnapshot;
+
+    fn owner() -> LimitOwner {
+        LimitOwner {
+            started_at: 1_000,
+            server_url: "https://cap.so".into(),
+            token: Some("free-account".into()),
+        }
+    }
 
     fn plan(upgraded: bool, checked_at: Option<i64>) -> AuthSnapshot {
         AuthSnapshot {
+            server_url: "https://cap.so".into(),
+            token: Some("free-account".into()),
             plan_upgraded: upgraded,
             plan_checked_at: checked_at,
             ..AuthSnapshot::default()
@@ -3245,15 +3298,35 @@ mod recording_limit_tests {
 
     #[test]
     fn only_a_pro_plan_fetched_after_the_start_lifts_the_limit() {
-        let started = 1_000;
-        assert!(!upgrade_lifts_limit(&plan(true, Some(900)), started));
-        assert!(!upgrade_lifts_limit(&plan(true, None), started));
-        assert!(!upgrade_lifts_limit(&plan(false, Some(1_010)), started));
-        assert!(upgrade_lifts_limit(&plan(true, Some(1_010)), started));
+        let owner = owner();
+        assert!(!upgrade_lifts_limit(&plan(true, Some(900)), &owner));
+        assert!(!upgrade_lifts_limit(&plan(true, None), &owner));
+        assert!(!upgrade_lifts_limit(&plan(false, Some(1_010)), &owner));
+        assert!(upgrade_lifts_limit(&plan(true, Some(1_010)), &owner));
         let manual = AuthSnapshot {
             plan_manual: true,
-            ..AuthSnapshot::default()
+            ..plan(false, None)
         };
-        assert!(!upgrade_lifts_limit(&manual, started));
+        assert!(!upgrade_lifts_limit(&manual, &owner));
+    }
+
+    #[test]
+    fn only_the_account_the_recording_started_under_lifts_the_limit() {
+        let owner = owner();
+        let other_account = AuthSnapshot {
+            token: Some("pro-account".into()),
+            ..plan(true, Some(1_010))
+        };
+        assert!(!upgrade_lifts_limit(&other_account, &owner));
+        let signed_out = AuthSnapshot {
+            token: None,
+            ..plan(true, Some(1_010))
+        };
+        assert!(!upgrade_lifts_limit(&signed_out, &owner));
+        let other_server = AuthSnapshot {
+            server_url: "https://cap.example.com".into(),
+            ..plan(true, Some(1_010))
+        };
+        assert!(!upgrade_lifts_limit(&other_server, &owner));
     }
 }
