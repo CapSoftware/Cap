@@ -9422,7 +9422,9 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(1_500)).await;
             sender
                 .send_async(StaticFrame {
-                    timestamp: Timestamp::Instant(request - Duration::from_millis(5)),
+                    timestamp: Timestamp::Instant(
+                        request.checked_sub(Duration::from_millis(5)).unwrap(),
+                    ),
                 })
                 .await
                 .unwrap();
@@ -9482,7 +9484,9 @@ mod tests {
             let request = cut.instant().unwrap();
             sender
                 .send_async(StaticFrame {
-                    timestamp: Timestamp::Instant(request - Duration::from_millis(5)),
+                    timestamp: Timestamp::Instant(
+                        request.checked_sub(Duration::from_millis(5)).unwrap(),
+                    ),
                 })
                 .await
                 .unwrap();
