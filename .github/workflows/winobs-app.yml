@@ -1,0 +1,108 @@
+name: winobs app build
+
+on:
+  push:
+    branches:
+      - "ci/winobs-app*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.os }} ${{ matrix.arm }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 200
+    strategy:
+      fail-fast: false
+      matrix:
+        include: [{"os": "windows", "arm": "head3", "sha": "15c741d48083d451a198fa847c7eb0d7108ee6a7", "runner": "blacksmith-8vcpu-windows-2025", "triple": "x86_64-pc-windows-msvc"}]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Select tree
+        shell: bash
+        run: |
+          git -c protocol.version=2 fetch --no-tags --depth 1 "https://github.com/${{ github.repository }}" ${{ matrix.sha }}
+          git checkout --detach ${{ matrix.sha }}
+          git rev-parse HEAD
+      - name: Allow long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+      - name: Linux deps
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-desktop-deps
+      - name: macOS deps
+        if: runner.os == 'macOS'
+        uses: ./.github/actions/install-desktop-deps
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ matrix.triple }}
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.triple }}
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.triple }}
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: |
+            . -> target
+            apps/desktop-gpui -> target
+      - name: Native dependencies
+        shell: bash
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.triple }}
+        run: node scripts/setup.js
+      - name: Build CLI
+        shell: bash
+        run: |
+          start=$(date +%s)
+          cargo +1.88.0 build --locked --release -p cap
+          echo "cli build seconds: $(( $(date +%s) - start ))"
+      - name: Build desktop
+        shell: bash
+        run: |
+          start=$(date +%s)
+          bash scripts/build-gpui-binary.sh release ${{ matrix.triple }}
+          echo "desktop build seconds: $(( $(date +%s) - start ))"
+      - name: Package
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/out/${{ matrix.os }}-${{ matrix.arm }}"
+          mkdir -p "$out"
+          bin=apps/desktop-gpui/target/${{ matrix.triple }}/release
+          git rev-parse HEAD > "$out/head.sha"
+          case "${{ runner.os }}" in
+            Windows)
+              cp "$bin/cap-gpui.exe" "$out/"
+              cp target/release/cap.exe "$out/"
+              cp target/ffmpeg/bin/*.dll "$out/"
+              cp target/native-deps/dxc/*.dll "$out/" || true
+              cp target/native-deps/onnxruntime/lib/*.dll "$out/" || true
+              cp target/native-deps/vcruntime/*.dll "$out/" || true
+              ;;
+            Linux)
+              cp "$bin/cap-gpui" "$out/"
+              cp target/release/cap "$out/"
+              mkdir -p "$out/lib"
+              cp -a target/native-deps/lib/. "$out/lib/"
+              ;;
+            macOS)
+              cp "$bin/cap-gpui" "$out/"
+              cp target/release/cap "$out/"
+              cp -a target/Frameworks "$out/Frameworks"
+              otool -l "$out/cap-gpui" | grep -A2 LC_RPATH | grep path || true
+              otool -l "$out/cap" | grep -A2 LC_RPATH | grep path || true
+              ;;
+          esac
+          ls -la "$out"
+          cd "$RUNNER_TEMP/out" && tar -czf "${{ matrix.os }}-${{ matrix.arm }}.tgz" "${{ matrix.os }}-${{ matrix.arm }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wo-${{ matrix.os }}-${{ matrix.arm }}
+          path: ${{ runner.temp }}/out/${{ matrix.os }}-${{ matrix.arm }}.tgz
+          retention-days: 3
+          compression-level: 0
