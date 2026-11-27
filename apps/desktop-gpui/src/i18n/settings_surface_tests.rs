@@ -1584,6 +1584,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         .iter()
         .filter(|key| is_settings_surface_key(key))
         .filter(|key| !EFFECT_PREFIXES.iter().any(|prefix| key.starts_with(prefix)))
+        .filter(|key| !key.starts_with("settings.integrations.drive_direct."))
         .count()
         - FORMATTED.len();
     assert_eq!(

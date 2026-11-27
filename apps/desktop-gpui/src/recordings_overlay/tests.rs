@@ -495,3 +495,202 @@ fn a_failed_export_dialog_fails_only_the_card_waiting_for_it(cx: &mut TestAppCon
         Some("File dialog unavailable")
     );
 }
+
+fn sharing(id: &str, link: &str) -> SharingMeta {
+    SharingMeta {
+        id: id.into(),
+        link: link.into(),
+        content_hash: None,
+    }
+}
+
+#[test]
+fn screenshots_always_share_through_cap() {
+    let provider = share_provider_for(MediaKind::Screenshot, ShareProvider::GoogleDrive);
+    assert_eq!(provider, ShareProvider::Cap);
+    assert_eq!(
+        share_provider_for(MediaKind::Recording, ShareProvider::GoogleDrive),
+        ShareProvider::GoogleDrive
+    );
+    assert_eq!(
+        share_provider_for(MediaKind::Recording, ShareProvider::Cap),
+        ShareProvider::Cap
+    );
+
+    let cap = sharing("shot", "https://cap.so/s/shot");
+    assert_eq!(
+        reusable_link(Some(&cap), provider).as_deref(),
+        Some("https://cap.so/s/shot")
+    );
+    assert_eq!(
+        share_plan(
+            MediaKind::Screenshot,
+            link_route(provider, true, false),
+            false,
+            None
+        ),
+        SharePlan::SignIn
+    );
+    assert_eq!(
+        share_plan(
+            MediaKind::Screenshot,
+            link_route(provider, true, true),
+            true,
+            None
+        ),
+        SharePlan::Cap
+    );
+}
+
+#[test]
+fn only_the_chosen_providers_link_is_reused() {
+    let drive = sharing(
+        "gdrive:f1",
+        "https://drive.google.com/file/d/f1/view?usp=drivesdk",
+    );
+    let cap = sharing("video", "https://cap.so/s/video");
+    assert_eq!(
+        reusable_link(Some(&drive), ShareProvider::GoogleDrive).as_deref(),
+        Some("https://drive.google.com/file/d/f1/view?usp=drivesdk")
+    );
+    assert_eq!(reusable_link(Some(&drive), ShareProvider::Cap), None);
+    assert_eq!(reusable_link(Some(&cap), ShareProvider::GoogleDrive), None);
+    assert_eq!(
+        reusable_link(Some(&cap), ShareProvider::Cap).as_deref(),
+        Some("https://cap.so/s/video")
+    );
+    assert_eq!(reusable_link(None, ShareProvider::GoogleDrive), None);
+}
+
+#[test]
+fn a_long_recording_shares_to_drive_signed_out_without_a_cap_plan() {
+    let provider = share_provider_for(MediaKind::Recording, ShareProvider::GoogleDrive);
+    let route = link_route(provider, true, false);
+    assert_eq!(
+        share_plan(MediaKind::Recording, route, false, Some(301.)),
+        SharePlan::Drive
+    );
+    assert_eq!(
+        share_plan(
+            MediaKind::Recording,
+            link_route(provider, false, true),
+            true,
+            Some(10.)
+        ),
+        SharePlan::ConnectDrive
+    );
+}
+
+#[test]
+fn the_cap_route_keeps_its_plan_checks() {
+    let cap = LinkRoute::Cap;
+    assert_eq!(
+        share_plan(MediaKind::Recording, cap, false, Some(301.)),
+        SharePlan::Upgrade
+    );
+    assert_eq!(
+        share_plan(MediaKind::Recording, cap, false, Some(299.)),
+        SharePlan::Cap
+    );
+    assert_eq!(
+        share_plan(MediaKind::Recording, cap, true, Some(301.)),
+        SharePlan::Cap
+    );
+    assert_eq!(
+        share_plan(MediaKind::Screenshot, cap, false, None),
+        SharePlan::Upgrade
+    );
+    assert_eq!(
+        share_plan(MediaKind::Recording, LinkRoute::SignInToCap, true, None),
+        SharePlan::SignIn
+    );
+}
+
+#[test]
+fn drive_failures_keep_their_written_message() {
+    for error in [
+        DriveError::Offline,
+        DriveError::StorageFull,
+        DriveError::ApiDisabled,
+        DriveError::Server {
+            status: 500,
+            reason: "backendError".into(),
+        },
+    ] {
+        let message = crate::gdrive::upload_error_message(&error);
+        assert_eq!(failure_message(ActionKind::Share, message.clone()), message);
+    }
+    let connect = tr::gdrive::connect_to_share().to_string();
+    assert_eq!(failure_message(ActionKind::Share, connect.clone()), connect);
+    let missing = tr::gdrive::error_missing_file().to_string();
+    assert_eq!(failure_message(ActionKind::Share, missing.clone()), missing);
+}
+
+fn drive_share(visibility: crate::gdrive::LinkVisibility) -> crate::gdrive::DriveShare {
+    crate::gdrive::DriveShare {
+        file_id: "f1".into(),
+        web_view_link: "https://drive.google.com/file/d/f1/view?usp=drivesdk".into(),
+        folder_id: "folder".into(),
+        visibility,
+        reused: false,
+    }
+}
+
+#[test]
+fn a_private_drive_link_is_copied_with_its_note_on_the_card() {
+    use crate::gdrive::{LinkVisibility, PrivateReason, ShareFailure, private_link_message};
+
+    let link = "https://drive.google.com/file/d/f1/view?usp=drivesdk".to_string();
+    assert_eq!(
+        drive_outcome(Ok(drive_share(LinkVisibility::Public))),
+        Ok(ShareOutcome::Link(link.clone(), None))
+    );
+    let note = private_link_message(&PrivateReason::SharingRestricted);
+    assert_eq!(
+        drive_outcome(Ok(drive_share(LinkVisibility::Private(
+            PrivateReason::SharingRestricted
+        )))),
+        Ok(ShareOutcome::Link(link, Some(note.clone())))
+    );
+    assert_eq!(
+        drive_outcome(Err(ShareFailure::Drive(DriveError::NotConfigured))),
+        Ok(ShareOutcome::ConnectDrive)
+    );
+    assert_eq!(
+        drive_outcome(Err(ShareFailure::Drive(DriveError::NotConnected))),
+        Ok(ShareOutcome::ConnectDrive)
+    );
+    assert_eq!(
+        drive_outcome(Err(ShareFailure::Drive(DriveError::Offline))),
+        Err(crate::gdrive::upload_error_message(&DriveError::Offline))
+    );
+
+    let done = ActionState::Done(ActionKind::Share);
+    assert_eq!(
+        card_message(&done, MediaKind::Recording, Some(&note)),
+        Some(note.clone())
+    );
+    assert_eq!(
+        card_message(&done, MediaKind::Recording, None),
+        done.message(MediaKind::Recording)
+    );
+    let busy = ActionState::Busy(ActionKind::Share, Stage::Uploading(0.5));
+    assert_eq!(
+        card_message(&busy, MediaKind::Recording, Some(&note)),
+        busy.message(MediaKind::Recording)
+    );
+    assert_eq!(card_visible(&done, Some(&note)), Some(FAILURE_VISIBLE));
+    assert_eq!(card_visible(&done, None), Some(DONE_VISIBLE));
+}
+
+#[test]
+fn a_second_drive_share_says_it_is_already_uploading() {
+    use crate::gdrive::ShareFailure;
+
+    let message = tr::gdrive::already_uploading().to_string();
+    assert_eq!(
+        drive_outcome(Err(ShareFailure::AlreadyUploading)),
+        Err(message.clone())
+    );
+    assert_eq!(failure_message(ActionKind::Share, message.clone()), message);
+}

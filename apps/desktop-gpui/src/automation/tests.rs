@@ -1370,3 +1370,36 @@ async fn text_recognition_is_not_run_yet() {
     assert!(host.recognize_text_to_clipboard(&ctx).await.is_err());
     assert!(!host.capabilities().contains(&Capability::RecognizeText));
 }
+
+fn screenshot_meta(sharing_id: &str) -> cap_project::RecordingMeta {
+    cap_project::RecordingMeta {
+        platform: None,
+        project_path: PathBuf::from("shot.cap"),
+        pretty_name: "Shot".into(),
+        sharing: Some(cap_project::SharingMeta {
+            id: sharing_id.into(),
+            link: "https://example.invalid/link".into(),
+            content_hash: None,
+        }),
+        inner: cap_project::RecordingMetaInner::Instant(
+            cap_project::InstantRecordingMeta::Complete {
+                fps: 30,
+                sample_rate: None,
+            },
+        ),
+        upload: None,
+    }
+}
+
+#[test]
+fn screenshot_reupload_never_reuses_a_drive_id() {
+    assert_eq!(
+        screenshot_existing_id(Some(&screenshot_meta("gdrive:f1"))),
+        None
+    );
+    assert_eq!(
+        screenshot_existing_id(Some(&screenshot_meta("cap-shot"))).as_deref(),
+        Some("cap-shot")
+    );
+    assert_eq!(screenshot_existing_id(None), None);
+}

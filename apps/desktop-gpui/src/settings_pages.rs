@@ -67,6 +67,7 @@ enum PageField {
     Feedback,
     LicenseKey,
     S3(usize),
+    DriveDirect(usize),
 }
 
 /// `useSubmission(sendFeedbackAction)`'s phases.
@@ -129,6 +130,7 @@ enum IntegrationsView {
     Index,
     S3,
     GoogleDrive,
+    DriveDirect,
 }
 
 /// One post from `apiClient.desktop.getChangelogPosts` -- the CHANGELOG
@@ -260,6 +262,40 @@ struct GDrivePage {
     poll: Option<gpui::Task<()>>,
 }
 
+struct DriveDirectPage {
+    inputs: [Entity<ui::TextInputState>; 2],
+    drafts: [String; 2],
+    importing: bool,
+    notice: Option<String>,
+    error: Option<String>,
+    shown: DriveDirectShown,
+}
+
+#[derive(Debug, Default, PartialEq)]
+struct DriveDirectShown {
+    folder: String,
+    shared_client: bool,
+}
+
+impl DriveDirectShown {
+    fn load(dir: &std::path::Path) -> Self {
+        Self {
+            folder: crate::gdrive::account::load(dir).folder.name,
+            shared_client: crate::gdrive::account::shares_client_with_calendar(dir),
+        }
+    }
+}
+
+fn drive_direct_offers_provider(
+    status: &crate::gdrive::account::DriveStatus,
+    provider: crate::gdrive::ShareProvider,
+) -> bool {
+    matches!(
+        status,
+        crate::gdrive::account::DriveStatus::Connected { .. }
+    ) || provider == crate::gdrive::ShareProvider::GoogleDrive
+}
+
 /// The per-field text inputs for one expanded rule's editor. Rebuilt whenever
 /// the rule's structure (conditions/actions lists, types) changes, because the
 /// fields are positional.
@@ -350,6 +386,7 @@ pub(crate) struct PagesState {
     storage: Option<StorageIntegrations>,
     s3: S3Page,
     gdrive: GDrivePage,
+    drive_direct: DriveDirectPage,
 
     // Automations (automations.tsx)
     automations: AutomationsStore,
@@ -377,6 +414,9 @@ impl PagesState {
             })
         });
 
+        let drive_direct_inputs =
+            std::array::from_fn(|_| cx.new(|cx| ui::TextInputState::single_line(window, cx)));
+
         let mut subscriptions = vec![
             cx.subscribe(&feedback_input, |this, input, event, cx| {
                 this.page_field_event(PageField::Feedback, input, event, cx)
@@ -388,6 +428,11 @@ impl PagesState {
         for (index, input) in s3_inputs.iter().enumerate() {
             subscriptions.push(cx.subscribe(input, move |this, input, event, cx| {
                 this.page_field_event(PageField::S3(index), input, event, cx)
+            }));
+        }
+        for (index, input) in drive_direct_inputs.iter().enumerate() {
+            subscriptions.push(cx.subscribe(input, move |this, input, event, cx| {
+                this.page_field_event(PageField::DriveDirect(index), input, event, cx)
             }));
         }
         // Keys stop arriving once the window loses focus, so a recording row
@@ -453,6 +498,14 @@ impl PagesState {
                 s3_has_config: false,
                 error: None,
                 poll: None,
+            },
+            drive_direct: DriveDirectPage {
+                inputs: drive_direct_inputs,
+                drafts: Default::default(),
+                importing: false,
+                notice: None,
+                error: None,
+                shown: DriveDirectShown::default(),
             },
             automations: AutomationsStore::default(),
             automations_loaded: false,
@@ -537,6 +590,7 @@ impl SettingsWindow {
                     PageField::Feedback => self.pages.feedback_draft = value,
                     PageField::LicenseKey => self.pages.license_draft = value,
                     PageField::S3(index) => self.pages.s3.drafts[index] = value,
+                    PageField::DriveDirect(index) => self.pages.drive_direct.drafts[index] = value,
                 }
                 cx.notify();
             }
@@ -4522,6 +4576,101 @@ impl SettingsWindow {
         cx.notify();
     }
 
+    fn drive_direct_open(&mut self, cx: &mut Context<Self>) {
+        self.pages.integrations_view = IntegrationsView::DriveDirect;
+        self.pages.drive_direct.error = None;
+        self.pages.drive_direct.notice = None;
+        let dir = crate::gdrive::account::default_dir();
+        let client = crate::gdrive::account::load(&dir)
+            .client
+            .unwrap_or_default();
+        self.drive_direct_fill(&client, cx);
+        self.pages.drive_direct.shown = DriveDirectShown::load(&dir);
+        cx.notify();
+    }
+
+    fn drive_direct_fill(
+        &mut self,
+        client: &crate::gdrive::account::StoredClient,
+        cx: &mut Context<Self>,
+    ) {
+        let values = [
+            client.client_id.clone(),
+            client.client_secret.clone().unwrap_or_default(),
+        ];
+        for (index, value) in values.into_iter().enumerate() {
+            self.pages.drive_direct.drafts[index] = value.clone();
+            self.pages.drive_direct.inputs[index].update(cx, |input, cx| input.set_text(value, cx));
+        }
+    }
+
+    fn drive_direct_save(&mut self, cx: &mut Context<Self>) {
+        let page = &mut self.pages.drive_direct;
+        page.notice = None;
+        page.error = None;
+        let [client_id, client_secret] = &page.drafts;
+        let dir = crate::gdrive::account::default_dir();
+        let saved = if client_id.trim().is_empty() && client_secret.trim().is_empty() {
+            crate::gdrive::account::clear_client(&dir)
+        } else {
+            crate::gdrive::account::save_client(&dir, client_id, Some(client_secret.as_str()))
+        };
+        if let Err(error) = saved {
+            tracing::warn!(%error, "Could not save the Google Drive client");
+            page.error = Some(tr::gdrive::error_other(error));
+        }
+        page.shown = DriveDirectShown::load(&dir);
+        cx.refresh_windows();
+        cx.notify();
+    }
+
+    fn drive_direct_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let page = &mut self.pages.drive_direct;
+        if page.importing {
+            return;
+        }
+        page.importing = true;
+        page.notice = None;
+        page.error = None;
+        cx.spawn_in(window, async move |this, cx| {
+            let picked = crate::import::pick_import_file(
+                &[(
+                    tr::settings::integrations::drive_direct::import_client(),
+                    &["json"],
+                )],
+                cx,
+            )
+            .await;
+            this.update_in(cx, |this, _window, cx| {
+                this.pages.drive_direct.importing = false;
+                if let Some(path) = picked {
+                    match crate::gdrive::account::import_client_file(
+                        &crate::gdrive::account::default_dir(),
+                        &path,
+                    ) {
+                        Ok(client) => {
+                            this.drive_direct_fill(&client, cx);
+                            this.pages.drive_direct.shown =
+                                DriveDirectShown::load(&crate::gdrive::account::default_dir());
+                            this.pages.drive_direct.notice = Some(
+                                tr::settings::integrations::drive_direct::import_done().into(),
+                            );
+                            cx.refresh_windows();
+                        }
+                        Err(error) => {
+                            this.pages.drive_direct.error =
+                                Some(crate::gdrive::account::client_file_error_message(error));
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// `getS3Config` for the S3 page: populates the form.
     fn s3_fetch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let auth = store::auth_snapshot();
@@ -5049,6 +5198,7 @@ impl SettingsWindow {
             IntegrationsView::Index => self.render_integrations_index(cx),
             IntegrationsView::S3 => self.render_s3_config(cx),
             IntegrationsView::GoogleDrive => self.render_gdrive_config(cx),
+            IntegrationsView::DriveDirect => self.render_drive_direct(cx),
         }
     }
 
@@ -5078,81 +5228,84 @@ impl SettingsWindow {
             ),
         ];
 
-        let cards =
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(12.))
-                .children(apps.into_iter().enumerate().map(
-                    |(index, (name, icon, description, view))| {
-                        let button_label = if managed.is_some() {
-                            tr::settings::integrations::managed()
-                        } else if !is_pro {
-                            tr::settings::integrations::upgrade()
-                        } else {
-                            tr::settings::integrations::configure()
-                        };
-                        let managed_here = managed.is_some();
-                        self.card(true)
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .justify_between()
-                                    .gap(px(12.))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .items_center()
-                                            .gap(px(8.))
-                                            .min_w_0()
-                                            .child(
-                                                svg()
-                                                    .path(icon)
-                                                    .size(px(16.))
-                                                    .flex_shrink_0()
-                                                    .text_color(theme.settings_text()),
-                                            )
-                                            .child(div().text_size(px(13.)).child(name)),
-                                    )
-                                    .child(self.button(
-                                        ("integration-configure", index),
-                                        (ui::ButtonVariant::Primary, None),
-                                        button_label,
-                                        managed_here,
-                                        cx,
-                                        move |this, window, cx| {
-                                            if managed_here {
-                                                return;
+        let cards = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .children(apps.into_iter().enumerate().map(
+                |(index, (name, icon, description, view))| {
+                    let button_label = if managed.is_some() {
+                        tr::settings::integrations::managed()
+                    } else if !is_pro {
+                        tr::settings::integrations::upgrade()
+                    } else {
+                        tr::settings::integrations::configure()
+                    };
+                    let managed_here = managed.is_some();
+                    self.card(true)
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .justify_between()
+                                .gap(px(12.))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap(px(8.))
+                                        .min_w_0()
+                                        .child(
+                                            svg()
+                                                .path(icon)
+                                                .size(px(16.))
+                                                .flex_shrink_0()
+                                                .text_color(theme.settings_text()),
+                                        )
+                                        .child(div().text_size(px(13.)).child(name)),
+                                )
+                                .child(self.button(
+                                    ("integration-configure", index),
+                                    (ui::ButtonVariant::Primary, None),
+                                    button_label,
+                                    managed_here,
+                                    cx,
+                                    move |this, window, cx| {
+                                        if managed_here {
+                                            return;
+                                        }
+                                        if !store::auth_snapshot().plan_upgraded {
+                                            cx.open_url(crate::auth::PRICING_URL);
+                                            return;
+                                        }
+                                        match view {
+                                            IntegrationsView::S3 => this.s3_open(window, cx),
+                                            IntegrationsView::GoogleDrive => {
+                                                this.gdrive_open(window, cx)
                                             }
-                                            if !store::auth_snapshot().plan_upgraded {
-                                                cx.open_url(crate::auth::PRICING_URL);
-                                                return;
+                                            IntegrationsView::DriveDirect => {
+                                                this.drive_direct_open(cx)
                                             }
-                                            match view {
-                                                IntegrationsView::S3 => this.s3_open(window, cx),
-                                                IntegrationsView::GoogleDrive => {
-                                                    this.gdrive_open(window, cx)
-                                                }
-                                                IntegrationsView::Index => {}
-                                            }
-                                        },
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .line_height(px(16.))
-                                    .text_color(theme.settings_muted())
-                                    .child(description),
-                            )
-                    },
-                ));
+                                            IntegrationsView::Index => {}
+                                        }
+                                    },
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .line_height(px(16.))
+                                .text_color(theme.settings_muted())
+                                .child(description),
+                        )
+                },
+            ))
+            .child(self.render_drive_direct_card(cx));
 
         vec![
             self.section(
@@ -5581,6 +5734,269 @@ impl SettingsWindow {
                 Some(tr::settings::integrations::gdrive::connection_description()),
                 None,
                 vec![self.card(true).child(card).into_any_element()],
+            )
+            .into_any_element(),
+        ]
+    }
+
+    fn render_drive_direct_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        self.card(true)
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.))
+                            .min_w_0()
+                            .child(
+                                svg()
+                                    .path("icons/google-drive.svg")
+                                    .size(px(16.))
+                                    .flex_shrink_0()
+                                    .text_color(theme.settings_text()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .child(tr::settings::integrations::drive_direct::name()),
+                            ),
+                    )
+                    .child(self.button(
+                        "integration-drive-direct",
+                        (ui::ButtonVariant::Primary, None),
+                        tr::settings::integrations::configure(),
+                        false,
+                        cx,
+                        |this, _window, cx| this.drive_direct_open(cx),
+                    )),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .text_color(theme.settings_muted())
+                    .child(tr::settings::integrations::drive_direct::description()),
+            )
+    }
+
+    fn render_drive_direct(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        use crate::gdrive::ShareProvider;
+        use crate::gdrive::account::{self, ConnectState, DriveStatus};
+
+        let theme = self.theme;
+        let page = &self.pages.drive_direct;
+        let dir = account::default_dir();
+        let status = account::status(&dir);
+        let connect = account::connect_state(cx);
+        let provider = crate::gdrive::share_provider();
+        let header = self
+            .render_config_header(tr::settings::integrations::drive_direct::name(), cx)
+            .into_any_element();
+        let muted = |text: String| {
+            div()
+                .text_size(px(12.))
+                .line_height(px(18.))
+                .text_color(theme.settings_muted())
+                .child(text)
+        };
+        let failure = |text: String| {
+            div()
+                .text_size(px(12.))
+                .line_height(px(18.))
+                .text_color(Hsla::from(theme.red_11))
+                .child(text)
+        };
+        let field = |label: &'static str, index: usize| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .child(div().text_size(px(13.)).child(label))
+                .child(self.pages_input(("drive-direct-field", index), &page.inputs[index]))
+        };
+
+        let mut client = div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(muted(
+                tr::settings::integrations::drive_direct::setup_help().into(),
+            ))
+            .child(field(
+                tr::settings::integrations::drive_direct::client_id(),
+                0,
+            ))
+            .child(field(
+                tr::settings::integrations::drive_direct::client_secret(),
+                1,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(8.))
+                    .child(self.button(
+                        "drive-direct-save",
+                        (ui::ButtonVariant::Primary, None),
+                        tr::settings::integrations::drive_direct::save_client(),
+                        page.drafts[0].trim().is_empty(),
+                        cx,
+                        |this, _window, cx| this.drive_direct_save(cx),
+                    ))
+                    .child(self.button(
+                        "drive-direct-import",
+                        (ui::ButtonVariant::Gray, Some("icons/import.svg")),
+                        tr::settings::integrations::drive_direct::import_client(),
+                        page.importing,
+                        cx,
+                        |this, window, cx| this.drive_direct_import(window, cx),
+                    )),
+            );
+        if let Some(notice) = &page.notice {
+            client = client.child(muted(notice.clone()));
+        }
+        if let Some(error) = &page.error {
+            client = client.child(failure(error.clone()));
+        }
+        if page.shown.shared_client {
+            client = client.child(failure(
+                tr::settings::integrations::drive_direct::shared_client_warning().into(),
+            ));
+        }
+
+        let busy = matches!(
+            connect,
+            ConnectState::WaitingForBrowser | ConnectState::Finishing
+        );
+        let mut connection = div().flex().flex_col().gap(px(12.));
+        if let DriveStatus::Connected { email } = &status {
+            let who = match email {
+                Some(email) => tr::settings::integrations::drive_direct::connected_as(email),
+                None => tr::settings::integrations::drive_direct::connected_unknown().into(),
+            };
+            let folder = &page.shown.folder;
+            connection = connection
+                .child(div().text_size(px(13.)).child(who))
+                .child(muted(format!(
+                    "{}: {folder}",
+                    tr::settings::integrations::drive_direct::folder()
+                )));
+        }
+        let action = if busy {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.))
+                .child(muted(
+                    tr::settings::integrations::drive_direct::connecting().into(),
+                ))
+                .child(self.button(
+                    "drive-direct-cancel",
+                    (ui::ButtonVariant::Gray, None),
+                    tr::settings::integrations::drive_direct::cancel(),
+                    false,
+                    cx,
+                    |_, _window, cx| account::cancel_connect(cx),
+                ))
+                .into_any_element()
+        } else if matches!(status, DriveStatus::Connected { .. }) {
+            self.button(
+                "drive-direct-disconnect",
+                (ui::ButtonVariant::Gray, None),
+                tr::settings::integrations::drive_direct::disconnect(),
+                false,
+                cx,
+                |_, _window, cx| account::disconnect_in_background(cx),
+            )
+            .into_any_element()
+        } else {
+            self.button(
+                "drive-direct-connect",
+                (ui::ButtonVariant::Primary, Some("icons/google-drive.svg")),
+                tr::settings::integrations::drive_direct::connect(),
+                status == DriveStatus::NotConfigured,
+                cx,
+                |_, _window, cx| account::connect(cx),
+            )
+            .into_any_element()
+        };
+        connection = connection.child(div().flex().flex_row().child(action));
+        if let ConnectState::Failed(error) = &connect {
+            connection = connection.child(failure(crate::gdrive::error_message(error)));
+        }
+
+        if drive_direct_offers_provider(&status, provider) {
+            let mut choice = |id: &'static str, label: &'static str, value: ShareProvider| {
+                let variant = if provider == value {
+                    ui::ButtonVariant::Primary
+                } else {
+                    ui::ButtonVariant::Gray
+                };
+                self.button(
+                    id,
+                    (variant, None),
+                    label,
+                    false,
+                    cx,
+                    move |_, _window, cx| {
+                        if !crate::gdrive::set_share_provider(value) {
+                            tracing::warn!(?value, "Could not save the share link provider");
+                        }
+                        cx.refresh_windows();
+                    },
+                )
+            };
+            connection = connection.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .child(tr::settings::integrations::drive_direct::share_links_with()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(8.))
+                            .child(choice(
+                                "drive-direct-provider-cap",
+                                tr::settings::integrations::drive_direct::provider_cap(),
+                                ShareProvider::Cap,
+                            ))
+                            .child(choice(
+                                "drive-direct-provider-drive",
+                                tr::settings::integrations::drive_direct::provider_drive(),
+                                ShareProvider::GoogleDrive,
+                            )),
+                    ),
+            );
+        }
+
+        vec![
+            header,
+            self.section(
+                tr::settings::integrations::drive_direct::name(),
+                Some(tr::settings::integrations::drive_direct::description()),
+                None,
+                vec![
+                    self.card(true).child(client).into_any_element(),
+                    self.card(true).child(connection).into_any_element(),
+                ],
             )
             .into_any_element(),
         ]
@@ -8391,6 +8807,51 @@ fn license_expiry_label(expiry_ms: Option<f64>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_drive_page_shows_the_folder_it_read_when_opened() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join(crate::gdrive::account::DIR);
+        assert_eq!(
+            DriveDirectShown::load(&dir),
+            DriveDirectShown {
+                folder: crate::gdrive::account::StoredFolder::default().name,
+                shared_client: false,
+            }
+        );
+        crate::gdrive::account::save_folder(
+            &dir,
+            &crate::gdrive::account::StoredFolder {
+                name: "Team videos".into(),
+                id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(DriveDirectShown::load(&dir).folder, "Team videos");
+    }
+
+    #[test]
+    fn share_links_with_shows_once_connected_or_while_drive_is_chosen() {
+        use crate::gdrive::{ShareProvider, account::DriveStatus};
+        let connected = DriveStatus::Connected { email: None };
+        assert!(drive_direct_offers_provider(&connected, ShareProvider::Cap));
+        assert!(drive_direct_offers_provider(
+            &connected,
+            ShareProvider::GoogleDrive
+        ));
+        assert!(!drive_direct_offers_provider(
+            &DriveStatus::Disconnected,
+            ShareProvider::Cap
+        ));
+        assert!(!drive_direct_offers_provider(
+            &DriveStatus::NotConfigured,
+            ShareProvider::Cap
+        ));
+        assert!(drive_direct_offers_provider(
+            &DriveStatus::Disconnected,
+            ShareProvider::GoogleDrive
+        ));
+    }
 
     #[test]
     fn lifetime_license_has_no_expiry_label() {

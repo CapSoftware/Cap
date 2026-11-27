@@ -44,6 +44,7 @@ use crate::{
     editor_canvas::{
         GuideAxis, NormRect, SNAP_PX, SnapGuide, build_snap_targets, snap_moving_rect,
     },
+    gdrive::LinkRoute,
     main_window::{Mode, TargetType},
     sign_in::SignIn,
     theme::Theme,
@@ -68,6 +69,24 @@ fn area_min_size(mode: Mode) -> f32 {
     match mode {
         Mode::Screenshot => SCREENSHOT_MIN_SIZE,
         _ => AREA_MIN_SIZE,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartGate {
+    Start,
+    SignInToCap,
+    ConnectDrive,
+}
+
+fn start_gate(mode: Mode, editor_flow: bool, route: LinkRoute) -> StartGate {
+    if mode != Mode::Instant || editor_flow {
+        return StartGate::Start;
+    }
+    match route {
+        LinkRoute::Cap | LinkRoute::Drive => StartGate::Start,
+        LinkRoute::SignInToCap => StartGate::SignInToCap,
+        LinkRoute::ConnectDrive => StartGate::ConnectDrive,
     }
 }
 
@@ -1849,10 +1868,23 @@ impl OverlayWindow {
         let Some(target) = self.target(cx) else {
             return;
         };
-        if self.needs_sign_in(self.recording_mode(cx), cx) {
+        let mode = self.recording_mode(cx);
+        let mut gate = self.start_gate(mode, cx);
+        if gate == StartGate::SignInToCap {
             self.signed_in = crate::store::auth_snapshot().signed_in();
-            if !self.signed_in {
+            gate = self.start_gate(mode, cx);
+        }
+        match gate {
+            StartGate::Start => {}
+            StartGate::SignInToCap => {
                 self.start_sign_in(cx);
+                return;
+            }
+            StartGate::ConnectDrive => {
+                cx.defer(|cx: &mut App| {
+                    app_windows::dismiss_target_overlays(cx);
+                    app_windows::open_settings(crate::settings_window::Page::Integrations, cx);
+                });
                 return;
             }
         }
@@ -1905,16 +1937,20 @@ impl OverlayWindow {
         }
     }
 
-    /// Instant mode uploads as it records, so it cannot start signed out
-    /// (`target-select-overlay.tsx`'s "Sign In To Use"). The editor's record
-    /// flow always records Studio whatever the pill says.
-    fn needs_sign_in(&self, mode: Mode, cx: &App) -> bool {
-        mode == Mode::Instant
-            && !self.signed_in
-            && crate::session::RecordingSession::global(cx)
-                .read(cx)
-                .editor_recording_target()
-                .is_none()
+    fn start_gate(&self, mode: Mode, cx: &App) -> StartGate {
+        let editor_flow = crate::session::RecordingSession::global(cx)
+            .read(cx)
+            .editor_recording_target()
+            .is_some();
+        if mode != Mode::Instant || editor_flow {
+            return StartGate::Start;
+        }
+        let route = crate::gdrive::link_route(
+            crate::gdrive::share_provider(),
+            crate::gdrive::drive_ready(),
+            self.signed_in,
+        );
+        start_gate(mode, editor_flow, route)
     }
 
     /// The overlays sit above every app, browser included, so they step aside
@@ -4994,17 +5030,20 @@ impl OverlayWindow {
         } else {
             (theme.blue_10, theme.blue_11)
         };
-        let needs_sign_in = self.needs_sign_in(mode, cx);
+        let gate = self.start_gate(mode, cx);
+        let needs_sign_in = gate == StartGate::SignInToCap;
         let fixed_mode = target
             .as_ref()
             .is_some_and(ScreenCaptureTarget::is_audio_only);
         let label = match mode {
             Mode::Screenshot => tr::overlay::start::take_screenshot(),
             _ if needs_sign_in => tr::overlay::start::sign_in(),
+            _ if gate == StartGate::ConnectDrive => tr::gdrive::connect_to_share(),
             _ => tr::overlay::start::start_recording(),
         };
         let icon = match mode {
             Mode::Instant if needs_sign_in => "icons/user-round.svg",
+            Mode::Instant if gate == StartGate::ConnectDrive => "icons/link.svg",
             Mode::Instant => "icons/instant.svg",
             Mode::Studio => "icons/film-cut.svg",
             Mode::Screenshot => "icons/camera.svg",
@@ -6036,6 +6075,41 @@ mod tests {
         assert_eq!(rects.len(), 1);
         assert!((rects[0].x - 0.8).abs() < 1e-6);
         assert!((rects[0].w - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn instant_start_follows_the_share_route() {
+        assert_eq!(
+            start_gate(Mode::Instant, false, LinkRoute::Drive),
+            StartGate::Start
+        );
+        assert_eq!(
+            start_gate(Mode::Instant, false, LinkRoute::ConnectDrive),
+            StartGate::ConnectDrive
+        );
+        assert_eq!(
+            start_gate(Mode::Instant, false, LinkRoute::Cap),
+            StartGate::Start
+        );
+        assert_eq!(
+            start_gate(Mode::Instant, false, LinkRoute::SignInToCap),
+            StartGate::SignInToCap
+        );
+    }
+
+    #[test]
+    fn studio_screenshot_and_the_editor_flow_never_gate() {
+        let routes = [
+            LinkRoute::Cap,
+            LinkRoute::SignInToCap,
+            LinkRoute::Drive,
+            LinkRoute::ConnectDrive,
+        ];
+        for route in routes {
+            assert_eq!(start_gate(Mode::Studio, false, route), StartGate::Start);
+            assert_eq!(start_gate(Mode::Screenshot, false, route), StartGate::Start);
+            assert_eq!(start_gate(Mode::Instant, true, route), StartGate::Start);
+        }
     }
 }
 

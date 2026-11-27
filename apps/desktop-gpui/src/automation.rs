@@ -1427,6 +1427,14 @@ fn ensure_no_pending_upload(project: &Path) -> Result<(), String> {
     }
 }
 
+fn screenshot_existing_id(meta: Option<&cap_project::RecordingMeta>) -> Option<String> {
+    crate::gdrive::current_sharing(
+        meta.and_then(|meta| meta.sharing.as_ref()),
+        crate::gdrive::ShareProvider::Cap,
+    )
+    .map(|sharing| sharing.id.clone())
+}
+
 async fn upload_screenshot(
     ctx: &TriggerContext,
     image_path: &Path,
@@ -1439,9 +1447,7 @@ async fn upload_screenshot(
         .or_else(|| image_path.parent().map(Path::to_path_buf))
         .ok_or("No screenshot project for upload")?;
     let meta = cap_project::RecordingMeta::load_for_project(&project).ok();
-    let existing_id = meta
-        .as_ref()
-        .and_then(|meta| meta.sharing.as_ref().map(|sharing| sharing.id.clone()));
+    let existing_id = screenshot_existing_id(meta.as_ref());
     let bytes = tokio::fs::read(image_path)
         .await
         .map_err(|error| format!("Failed to read screenshot: {error}"))?;

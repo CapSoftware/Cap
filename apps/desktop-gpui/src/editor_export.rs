@@ -27,6 +27,7 @@ use gpui::{
 };
 
 use crate::editor_window::EditorWindow;
+use crate::gdrive::{DriveError, LinkRoute, ShareFailure, ShareProvider};
 use crate::i18n::tr;
 use crate::sign_in::{SignIn, SignInEvent, SignInOrigin, SignInOutcome};
 use crate::store::{self, ExportPrefs};
@@ -424,6 +425,7 @@ pub struct ExportUi {
     sign_in_subscriptions: Option<[gpui::Subscription; 2]>,
     pub organization_id: Option<String>,
     pub share_link: Option<String>,
+    pub share_private_note: Option<String>,
     pub reuploading: bool,
     pub upload_progress: f32,
     pub copy_link_pressed: bool,
@@ -578,6 +580,7 @@ impl ExportUi {
             sign_in_subscriptions: None,
             organization_id: prefs.organization_id,
             share_link: None,
+            share_private_note: None,
             reuploading: false,
             upload_progress: 0.0,
             copy_link_pressed: false,
@@ -794,6 +797,20 @@ impl ExportUi {
         copy_link(link);
     }
 
+    fn complete_drive_share(
+        &mut self,
+        share: crate::gdrive::DriveShare,
+        copy_link: impl FnOnce(String),
+    ) {
+        self.share_private_note = match &share.visibility {
+            crate::gdrive::LinkVisibility::Private(reason) => {
+                Some(crate::gdrive::private_link_message(reason))
+            }
+            crate::gdrive::LinkVisibility::Public => None,
+        };
+        self.complete_share_export(share.web_view_link, copy_link);
+    }
+
     fn clipboard_retry_path(&self) -> Option<&Path> {
         if self.phase == ExportPhase::Failed && self.destination == ExportDestination::Clipboard {
             self.output_path.as_deref()
@@ -932,7 +949,14 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Option<Arc<RenderImage>> {
 }
 
 impl EditorWindow {
-    pub(crate) fn render_reupload_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn current_sharing(&self) -> Option<&cap_project::SharingMeta> {
+        crate::gdrive::current_sharing(self.sharing.as_ref(), crate::gdrive::share_provider())
+    }
+
+    pub(crate) fn render_reupload_button(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.current_sharing().is_none() {
+            return div().into_any_element();
+        }
         div()
             .rounded(px(8.))
             .bg(Hsla::from(self.theme.blue_3))
@@ -968,6 +992,7 @@ impl EditorWindow {
                         cx.notify();
                     })),
             )
+            .into_any_element()
     }
 
     pub(crate) fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1285,16 +1310,18 @@ impl EditorWindow {
             return;
         }
         if ui.destination == ExportDestination::Link {
+            let route = export_link_route(ui.auth_rejected);
             let sign_in = SignIn::global(cx);
-            if sign_in.read(cx).is_pending() {
-                sign_in.update(cx, |sign_in, cx| sign_in.cancel(cx));
-                return;
+            match link_cta(route, sign_in.read(cx).is_pending(), false) {
+                LinkCta::CancelSignIn => sign_in.update(cx, |sign_in, cx| sign_in.cancel(cx)),
+                LinkCta::SignIn => {
+                    sign_in.update(cx, |sign_in, cx| sign_in.start(SignInOrigin::Editor, cx))
+                }
+                LinkCta::ConnectDrive => cx.defer(open_drive_settings),
+                LinkCta::Reupload | LinkCta::CreateLink => {
+                    self.start_link_export(route, pretty_name, window, cx)
+                }
             }
-            if ui.auth_rejected || !store::auth_snapshot().signed_in() {
-                sign_in.update(cx, |sign_in, cx| sign_in.start(SignInOrigin::Editor, cx));
-                return;
-            }
-            self.start_link_export(window, cx);
             return;
         }
 
@@ -2066,7 +2093,13 @@ impl EditorWindow {
         }
     }
 
-    fn start_link_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_link_export(
+        &mut self,
+        route: LinkRoute,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let duration = self.total_duration();
         let Some(ui) = self.export.as_mut() else {
             return;
@@ -2076,10 +2109,22 @@ impl EditorWindow {
         }
 
         let upgraded = store::auth_snapshot().is_upgraded();
-        if !upgraded && duration >= 300.0 {
+        if needs_cap_upgrade(route, upgraded, duration) {
             cx.open_url(crate::auth::PRICING_URL);
             return;
         }
+        let drive = route == LinkRoute::Drive;
+        if drive && crate::gdrive::share_in_flight(&self.project_path) {
+            ui.phase = ExportPhase::Failed;
+            ui.error = Some(tr::gdrive::already_uploading().to_string());
+            cx.notify();
+            return;
+        }
+        let provider = if drive {
+            ShareProvider::GoogleDrive
+        } else {
+            ShareProvider::Cap
+        };
 
         let estimate = ui
             .estimate
@@ -2114,9 +2159,10 @@ impl EditorWindow {
         ui.cancel = Arc::new(AtomicBool::new(false));
         let cancel = ui.cancel.clone();
         ui.phase = ExportPhase::Starting;
-        ui.reuploading = self.sharing.is_some();
+        ui.reuploading = crate::gdrive::current_sharing(self.sharing.as_ref(), provider).is_some();
         ui.error = None;
         ui.share_link = None;
+        ui.share_private_note = None;
         ui.upload_progress = 0.0;
         ui.rendered = 0;
         ui.total_frames = 0;
@@ -2208,6 +2254,7 @@ impl EditorWindow {
 
             match export.await {
                 Ok(Ok(path)) => {
+                    let upload_file = path.clone();
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             ui.phase = ExportPhase::Uploading;
@@ -2221,15 +2268,32 @@ impl EditorWindow {
                     let upload_cancel = cancel.clone();
                     let upload_project = project_path.clone();
                     let upload = gpui_tokio::Tokio::spawn(cx, async move {
-                        crate::upload::upload_exported_video(
-                            upload_project,
-                            organization_id,
-                            |progress| {
-                                let _ = upload_tx.send(progress);
-                            },
-                            upload_cancel,
-                        )
-                        .await
+                        if drive {
+                            LinkUpload::Drive(
+                                crate::gdrive::share_recording(crate::gdrive::ShareRequest {
+                                    project_dir: upload_project,
+                                    file: upload_file,
+                                    title,
+                                    progress: Arc::new(move |progress| {
+                                        let _ = upload_tx.send(progress);
+                                    }),
+                                    cancel: upload_cancel,
+                                })
+                                .await,
+                            )
+                        } else {
+                            LinkUpload::Cap(
+                                crate::upload::upload_exported_video(
+                                    upload_project,
+                                    organization_id,
+                                    |progress| {
+                                        let _ = upload_tx.send(progress);
+                                    },
+                                    upload_cancel,
+                                )
+                                .await,
+                            )
+                        }
                     });
 
                     loop {
@@ -2255,7 +2319,38 @@ impl EditorWindow {
                     }
 
                     match upload.await {
-                        Ok(Ok(crate::upload::UploadResult::Success(link))) => {
+                        Ok(LinkUpload::Drive(Ok(share))) => {
+                            let _ = this.update(cx, |this, cx| {
+                                if let Ok(meta) =
+                                    RecordingMeta::load_for_project(&this.project_path)
+                                {
+                                    this.sharing = meta.sharing;
+                                }
+                                if let Some(ui) = this.export.as_mut() {
+                                    ui.complete_drive_share(share, |link| {
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                            link,
+                                        ));
+                                        crate::app_sounds::play_notification();
+                                    });
+                                }
+                                cx.notify();
+                            });
+                        }
+                        Ok(LinkUpload::Drive(Err(failure))) => {
+                            match drive_failure_message(&failure, cancel.load(Ordering::Relaxed)) {
+                                None => {
+                                    let _ = this.update(cx, |this, cx| {
+                                        if let Some(ui) = this.export.as_mut() {
+                                            ui.phase = ExportPhase::Idle;
+                                        }
+                                        cx.notify();
+                                    });
+                                }
+                                Some(message) => show_upload_failure(&this, cx, &message, true),
+                            }
+                        }
+                        Ok(LinkUpload::Cap(Ok(crate::upload::UploadResult::Success(link)))) => {
                             let _ = this.update(cx, |this, cx| {
                                 if let Ok(meta) =
                                     RecordingMeta::load_for_project(&this.project_path)
@@ -2273,7 +2368,7 @@ impl EditorWindow {
                                 cx.notify();
                             });
                         }
-                        Ok(Ok(crate::upload::UploadResult::NotAuthenticated)) => {
+                        Ok(LinkUpload::Cap(Ok(crate::upload::UploadResult::NotAuthenticated))) => {
                             let _ = this.update(cx, |this, _| {
                                 if let Some(ui) = this.export.as_mut() {
                                     ui.auth_rejected = true;
@@ -2286,7 +2381,7 @@ impl EditorWindow {
                                 true,
                             );
                         }
-                        Ok(Ok(crate::upload::UploadResult::UpgradeRequired)) => {
+                        Ok(LinkUpload::Cap(Ok(crate::upload::UploadResult::UpgradeRequired))) => {
                             let _ = this.update(cx, |this, cx| {
                                 if let Some(ui) = this.export.as_mut() {
                                     ui.phase = ExportPhase::Idle;
@@ -2301,7 +2396,7 @@ impl EditorWindow {
                                 tr::editor::export::upgrade_message(),
                             );
                         }
-                        Ok(Err(error)) => {
+                        Ok(LinkUpload::Cap(Err(error))) => {
                             if error == "Export cancelled" || cancel.load(Ordering::Relaxed) {
                                 let _ = this.update(cx, |this, cx| {
                                     if let Some(ui) = this.export.as_mut() {
@@ -2976,8 +3071,9 @@ impl EditorWindow {
     fn export_cta(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        let signed_in = !ui.auth_rejected && store::auth_snapshot().signed_in();
+        let route = export_link_route(ui.auth_rejected);
         let sign_in_pending = SignIn::global(cx).read(cx).is_pending();
+        let has_link = self.current_sharing().is_some();
         let (label, icon, primary) = match ui.destination {
             ExportDestination::File if ui.format == ExportFormatKind::Tracks => (
                 tr::editor::export::tracks::cta(),
@@ -2999,23 +3095,27 @@ impl EditorWindow {
                 Some("icons/copy.svg"),
                 true,
             ),
-            ExportDestination::Link if sign_in_pending => {
-                (tr::editor::export::cta::cancel_sign_in(), None, false)
-            }
-            ExportDestination::Link if !signed_in => (
-                tr::editor::export::cta::sign_in(),
-                Some("icons/link.svg"),
-                true,
-            ),
-            ExportDestination::Link => (
-                if self.sharing.is_some() {
-                    tr::editor::export::cta::reupload()
-                } else {
-                    tr::editor::export::cta::create_link()
-                },
-                Some("icons/link.svg"),
-                true,
-            ),
+            ExportDestination::Link => match link_cta(route, sign_in_pending, has_link) {
+                LinkCta::CancelSignIn => (tr::editor::export::cta::cancel_sign_in(), None, false),
+                LinkCta::SignIn => (
+                    tr::editor::export::cta::sign_in(),
+                    Some("icons/link.svg"),
+                    true,
+                ),
+                LinkCta::ConnectDrive => {
+                    (tr::gdrive::connect_to_share(), Some("icons/link.svg"), true)
+                }
+                LinkCta::Reupload => (
+                    tr::editor::export::cta::reupload(),
+                    Some("icons/link.svg"),
+                    true,
+                ),
+                LinkCta::CreateLink => (
+                    tr::editor::export::cta::create_link(),
+                    Some("icons/link.svg"),
+                    true,
+                ),
+            },
         };
         let busy =
             ui.phase.is_busy() || (ui.format == ExportFormatKind::Tracks && ui.tracks.is_empty());
@@ -3093,7 +3193,9 @@ impl EditorWindow {
                 ExportDestination::ALL
                     .iter()
                     .map(|dest| {
-                        let label = if *dest == ExportDestination::Link && self.sharing.is_some() {
+                        let label = if *dest == ExportDestination::Link
+                            && self.current_sharing().is_some()
+                        {
                             tr::editor::export::reupload()
                         } else {
                             dest.label()
@@ -3153,11 +3255,10 @@ impl EditorWindow {
             )
         })
         .when(
-            ui.destination == ExportDestination::Link && self.sharing.is_some(),
+            ui.destination == ExportDestination::Link && self.current_sharing().is_some(),
             |field| {
                 let link = self
-                    .sharing
-                    .as_ref()
+                    .current_sharing()
                     .map(|sharing| sharing.link.clone())
                     .unwrap_or_default();
                 field.child(
@@ -3197,7 +3298,8 @@ impl EditorWindow {
         )
         .when(
             ui.destination == ExportDestination::Link
-                && self.sharing.is_none()
+                && crate::gdrive::share_provider() == ShareProvider::Cap
+                && self.current_sharing().is_none()
                 && store::auth_snapshot().organizations.len() > 1,
             |this| {
                 let orgs = store::auth_snapshot().organizations;
@@ -4078,6 +4180,19 @@ impl EditorWindow {
                                         tr::editor::export::done::uploaded()
                                     }),
                             )
+                            .when_some(
+                                ui.share_private_note.clone(),
+                                |this, note| {
+                                    this.child(
+                                        div()
+                                            .max_w(px(360.))
+                                            .text_size(px(12.))
+                                            .text_color(Hsla::from(editor.text_2))
+                                            .text_center()
+                                            .child(note),
+                                    )
+                                },
+                            )
                         },
                     ),
             )
@@ -4406,6 +4521,54 @@ fn cancel_matching_export(current: &Arc<AtomicBool>, requested: &Arc<AtomicBool>
     if confirmed && Arc::ptr_eq(current, requested) {
         current.store(true, Ordering::Relaxed);
     }
+}
+
+enum LinkUpload {
+    Cap(Result<crate::upload::UploadResult, String>),
+    Drive(Result<crate::gdrive::DriveShare, ShareFailure>),
+}
+
+fn drive_failure_message(failure: &ShareFailure, cancelled: bool) -> Option<String> {
+    match failure {
+        ShareFailure::Drive(DriveError::Cancelled) => None,
+        ShareFailure::Drive(_) if cancelled => None,
+        _ => Some(crate::gdrive::share_failure_message(failure)),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinkCta {
+    CancelSignIn,
+    SignIn,
+    ConnectDrive,
+    Reupload,
+    CreateLink,
+}
+
+fn link_cta(route: LinkRoute, sign_in_pending: bool, has_link: bool) -> LinkCta {
+    match route {
+        LinkRoute::Cap | LinkRoute::SignInToCap if sign_in_pending => LinkCta::CancelSignIn,
+        LinkRoute::SignInToCap => LinkCta::SignIn,
+        LinkRoute::ConnectDrive => LinkCta::ConnectDrive,
+        LinkRoute::Cap | LinkRoute::Drive if has_link => LinkCta::Reupload,
+        LinkRoute::Cap | LinkRoute::Drive => LinkCta::CreateLink,
+    }
+}
+
+fn needs_cap_upgrade(route: LinkRoute, upgraded: bool, duration: f64) -> bool {
+    route != LinkRoute::Drive && !upgraded && duration >= 300.0
+}
+
+fn export_link_route(auth_rejected: bool) -> LinkRoute {
+    crate::gdrive::link_route(
+        crate::gdrive::share_provider(),
+        crate::gdrive::drive_ready(),
+        !auth_rejected && store::auth_snapshot().signed_in(),
+    )
+}
+
+fn open_drive_settings(cx: &mut gpui::App) {
+    crate::app_windows::open_settings(crate::settings_window::Page::Integrations, cx);
 }
 
 fn show_upload_failure(
@@ -5562,5 +5725,108 @@ mod tests {
         ] {
             assert!(phase.shows_progress());
         }
+    }
+
+    #[test]
+    fn the_link_cta_follows_the_share_route() {
+        use super::{LinkCta, link_cta};
+        use crate::gdrive::LinkRoute;
+
+        assert_eq!(link_cta(LinkRoute::Cap, false, false), LinkCta::CreateLink);
+        assert_eq!(link_cta(LinkRoute::Cap, false, true), LinkCta::Reupload);
+        assert_eq!(link_cta(LinkRoute::Cap, true, true), LinkCta::CancelSignIn);
+        assert_eq!(
+            link_cta(LinkRoute::SignInToCap, true, false),
+            LinkCta::CancelSignIn
+        );
+        assert_eq!(
+            link_cta(LinkRoute::SignInToCap, false, true),
+            LinkCta::SignIn
+        );
+        assert_eq!(link_cta(LinkRoute::Drive, true, false), LinkCta::CreateLink);
+        assert_eq!(link_cta(LinkRoute::Drive, false, true), LinkCta::Reupload);
+        assert_eq!(
+            link_cta(LinkRoute::ConnectDrive, true, true),
+            LinkCta::ConnectDrive
+        );
+    }
+
+    #[test]
+    fn a_long_export_signed_out_with_drive_chosen_goes_to_drive() {
+        use super::{LinkCta, link_cta, needs_cap_upgrade};
+        use crate::gdrive::{LinkRoute, ShareProvider, link_route};
+
+        let route = link_route(ShareProvider::GoogleDrive, true, false);
+        assert_eq!(route, LinkRoute::Drive);
+        assert_eq!(link_cta(route, false, false), LinkCta::CreateLink);
+        assert!(!needs_cap_upgrade(route, false, 301.0));
+
+        assert!(needs_cap_upgrade(LinkRoute::Cap, false, 301.0));
+        assert!(needs_cap_upgrade(LinkRoute::Cap, false, 300.0));
+        assert!(!needs_cap_upgrade(LinkRoute::Cap, false, 299.0));
+        assert!(!needs_cap_upgrade(LinkRoute::Cap, true, 301.0));
+    }
+
+    #[test]
+    fn a_drive_share_failure_says_why_unless_it_was_cancelled() {
+        use super::drive_failure_message;
+        use crate::gdrive::{DriveError, ShareFailure};
+        use crate::i18n::tr;
+
+        assert_eq!(
+            drive_failure_message(&ShareFailure::Drive(DriveError::Cancelled), false),
+            None
+        );
+        assert_eq!(
+            drive_failure_message(&ShareFailure::Drive(DriveError::Offline), true),
+            None
+        );
+        assert_eq!(
+            drive_failure_message(&ShareFailure::Drive(DriveError::Offline), false),
+            Some(crate::gdrive::upload_error_message(&DriveError::Offline))
+        );
+        assert_eq!(
+            drive_failure_message(&ShareFailure::AlreadyUploading, true).as_deref(),
+            Some(tr::gdrive::already_uploading())
+        );
+    }
+
+    #[test]
+    fn a_private_drive_link_is_copied_with_a_note() {
+        use crate::gdrive::{DriveShare, LinkVisibility, PrivateReason, private_link_message};
+
+        let share = |visibility| DriveShare {
+            file_id: "f1".into(),
+            web_view_link: "https://drive.google.com/file/d/f1/view?usp=drivesdk&resourcekey=k"
+                .into(),
+            folder_id: "folder".into(),
+            visibility,
+            reused: false,
+        };
+
+        let mut ui = clipboard_export();
+        ui.set_destination(ExportDestination::Link);
+        let mut copied = None;
+        ui.complete_drive_share(
+            share(LinkVisibility::Private(PrivateReason::RateLimited)),
+            |link| copied = Some(link),
+        );
+        assert_eq!(ui.phase, ExportPhase::Done);
+        assert_eq!(
+            copied.as_deref(),
+            Some("https://drive.google.com/file/d/f1/view?usp=drivesdk&resourcekey=k")
+        );
+        assert_eq!(ui.share_link, copied);
+        assert_eq!(
+            ui.share_private_note,
+            Some(private_link_message(&PrivateReason::RateLimited))
+        );
+
+        let mut ui = clipboard_export();
+        ui.set_destination(ExportDestination::Link);
+        ui.share_private_note = Some("stale".into());
+        ui.complete_drive_share(share(LinkVisibility::Public), |_| {});
+        assert_eq!(ui.phase, ExportPhase::Done);
+        assert_eq!(ui.share_private_note, None);
     }
 }

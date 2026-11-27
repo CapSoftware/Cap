@@ -55,6 +55,7 @@ mod encoder_recovery;
 mod feeds;
 mod focus_border;
 mod foreign_window;
+mod gdrive;
 #[cfg(debug_assertions)]
 mod glass_probe;
 mod hotkeys;

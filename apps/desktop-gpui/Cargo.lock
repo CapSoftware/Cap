@@ -1584,6 +1584,7 @@ dependencies = [
  "cap-editor",
  "cap-enc-ffmpeg",
  "cap-export",
+ "cap-gdrive",
  "cap-glass",
  "cap-gpui-kernels",
  "cap-i18n-build",
@@ -1832,6 +1833,20 @@ dependencies = [
  "tracing",
  "windows 0.60.0",
  "workspace-hack",
+]
+
+[[package]]
+name = "cap-gdrive"
+version = "0.1.0"
+dependencies = [
+ "cap-calendar",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
 ]
 
 [[package]]
