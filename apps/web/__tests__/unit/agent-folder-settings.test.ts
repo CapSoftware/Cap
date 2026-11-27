@@ -139,7 +139,9 @@ function makeDatabase() {
 			set: (patch: Row) => ({
 				where: async (condition: SQL | undefined) => {
 					const rows = rowsFor(table).filter((row) => matches(condition, row));
-					for (const row of rows) Object.assign(row, patch);
+					for (const row of rows)
+						for (const [key, value] of Object.entries(patch))
+							row[key] = applyWrite(row[key], value);
 					return [{ affectedRows: rows.length }];
 				},
 			}),
@@ -150,16 +152,32 @@ function makeDatabase() {
 	return { client, rowsFor };
 }
 
+function mergePatch(target: unknown, patch: unknown): unknown {
+	if (!patch || typeof patch !== "object" || Array.isArray(patch)) return patch;
+	const result: Row =
+		target && typeof target === "object" && !Array.isArray(target)
+			? { ...(target as Row) }
+			: {};
+	for (const [key, value] of Object.entries(patch as Row)) {
+		if (value === null) delete result[key];
+		else result[key] = mergePatch(result[key], value);
+	}
+	return result;
+}
+
 // The settings column is written either as a plain value or as a
-// JSON_MERGE_PATCH expression; return the JSON the write would apply.
-function writtenSettings(value: unknown) {
+// JSON_MERGE_PATCH expression; apply it the way MySQL would.
+function applyWrite(existing: unknown, value: unknown) {
 	if (!is(value, SQL)) return value;
-	const { params } = dialect.sqlToQuery(value);
+	const { sql: text, params } = dialect.sqlToQuery(value);
+	if (!/^JSON_MERGE_PATCH\(COALESCE\(`\w+`\.`settings`, '\{\}'\)/.test(text))
+		throw new Error(`Unexpected SQL write: ${text}`);
 	const json = params.find(
 		(param): param is string =>
 			typeof param === "string" && param.startsWith("{"),
 	);
-	return json ? JSON.parse(json) : undefined;
+	if (!json) throw new Error("JSON_MERGE_PATCH without a JSON patch");
+	return mergePatch(existing ?? {}, JSON.parse(json));
 }
 
 const otherKey = "user_other/vid_other/result.mp4";
@@ -276,7 +294,14 @@ describe("agent folder logo storage keys", () => {
 	});
 
 	it("never stores a client supplied logo key on PATCH", async () => {
-		seedFolder({ publicPage: { logoMode: "custom", logoUrl: ownLogoKey } });
+		seedFolder({
+			publicPage: {
+				logoMode: "custom",
+				logoUrl: ownLogoKey,
+				subtitle: "Kept",
+				gridColumns: 3,
+			},
+		});
 		const response = await PATCH(
 			new Request("http://localhost/api/v1/folders/fold_one", {
 				method: "PATCH",
@@ -291,11 +316,14 @@ describe("agent folder logo storage keys", () => {
 		);
 		expect(response.status).toBe(200);
 		const [folder] = database.rowsFor(Db.folders);
-		expect(JSON.stringify(writtenSettings(folder?.settings))).not.toContain(
-			"logoUrl",
-		);
-		expect(writtenSettings(folder?.settings)).toEqual({
-			publicPage: { logoMode: "custom", title: "Hi" },
+		expect(folder?.settings).toEqual({
+			publicPage: {
+				logoMode: "custom",
+				logoUrl: ownLogoKey,
+				subtitle: "Kept",
+				gridColumns: 3,
+				title: "Hi",
+			},
 		});
 		expect(s3Requests).toEqual([]);
 	});
