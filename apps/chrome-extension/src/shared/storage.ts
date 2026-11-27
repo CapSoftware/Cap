@@ -19,6 +19,7 @@ export { RECORDING_STATE_KEY, SHARED_UI_STATE_KEY };
 export const SETTINGS_KEY = "cap-extension-settings";
 export const AUTH_KEY = "cap-extension-auth";
 const PENDING_AUTH_KEY = "cap-extension-pending-auth";
+const PENDING_REVOCATIONS_KEY = "cap-extension-pending-revocations";
 const BOOTSTRAP_CACHE_KEY = "cap-extension-bootstrap-cache";
 export const OVERLAY_UI_STATE_KEY = "cap-extension-overlay-ui-state";
 export const WEBCAM_PREVIEW_DISMISSED_KEY =
@@ -163,7 +164,37 @@ const removeSession = (keys: string[] | string) =>
 		chrome.storage.session.remove(keys, storageCallback(resolve, reject));
 	});
 
-export const loadSettings = async () => {
+// Admins can pin the Cap URL through Chrome enterprise policy (MDM), which
+// Chrome exposes read-only via chrome.storage.managed using the schema in
+// public/managed_schema.json. The managed area is absent outside Chrome and
+// errors when no policy is installed, so both resolve to "not managed".
+export const loadManagedApiBaseUrl = async (): Promise<string | null> => {
+	const managed =
+		typeof chrome === "undefined" ? undefined : chrome.storage?.managed;
+	if (!managed) return null;
+	const items = await new Promise<Record<string, unknown>>((resolve) => {
+		try {
+			managed.get(["apiBaseUrl"], (result) => {
+				resolve(chrome.runtime?.lastError ? {} : (result ?? {}));
+			});
+		} catch {
+			resolve({});
+		}
+	});
+	const value = items.apiBaseUrl;
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim().replace(/\/+$/, "");
+	try {
+		const url = new URL(trimmed);
+		return url.protocol === "https:" || url.protocol === "http:"
+			? trimmed
+			: null;
+	} catch {
+		return null;
+	}
+};
+
+const loadUserSettings = async (): Promise<ExtensionSettings> => {
 	const result = await getLocal([SETTINGS_KEY]);
 	const saved = result[SETTINGS_KEY];
 	if (!isSettings(saved)) return defaultSettings;
@@ -191,16 +222,159 @@ export const loadSettings = async () => {
 	};
 };
 
-export const saveSettings = (settings: ExtensionSettings) =>
-	setLocal({ [SETTINGS_KEY]: settings });
+export const loadSettings = async (): Promise<ExtensionSettings> => {
+	const [settings, managedApiBaseUrl] = await Promise.all([
+		loadUserSettings(),
+		loadManagedApiBaseUrl(),
+	]);
+	return managedApiBaseUrl
+		? { ...settings, apiBaseUrl: managedApiBaseUrl }
+		: settings;
+};
 
-export const loadAuth = async () => {
-	const result = await getLocal([AUTH_KEY]);
+const storedApiBaseUrl = (saved: unknown) =>
+	isSettings(saved) ? saved.apiBaseUrl : defaultSettings.apiBaseUrl;
+
+// Only saveApiBaseUrl() changes the user's own Cap URL. Settings handed back
+// by a page carry whatever URL that page last loaded: the policy URL while one
+// is set, and possibly still that URL after the policy is lifted if the page
+// has not reloaded. Persisting it would replace the user's own Cap URL, so the
+// stored URL is always kept.
+export const saveSettings = (settings: ExtensionSettings) =>
+	withKeyLock(SETTINGS_KEY, async () => {
+		const saved = (await getLocal([SETTINGS_KEY]))[SETTINGS_KEY];
+		await setLocal({
+			[SETTINGS_KEY]: { ...settings, apiBaseUrl: storedApiBaseUrl(saved) },
+		});
+	});
+
+// Changes the user's own Cap URL, from the Options page only. Throws while a
+// policy sets it, so the page can say so instead of reporting a silent no-op.
+// The comparison uses the URL as loadUserSettings() resolves it (development
+// maps cap.so to localhost), the same view loadStoredAuth() attributes keys by.
+export const saveApiBaseUrl = (apiBaseUrl: string) =>
+	withKeyLock(SETTINGS_KEY, async () => {
+		const current = (await loadUserSettings()).apiBaseUrl;
+		if (current === apiBaseUrl) return;
+		if (await loadManagedApiBaseUrl()) {
+			throw new Error(
+				"The Cap URL is set by your organization's administrator.",
+			);
+		}
+		// Normally already done by bindLegacyAuth() on update; kept so a key
+		// saved before apiOrigin existed can never follow the user to the new
+		// server.
+		await bindLegacyAuth(current);
+		const saved = (await getLocal([SETTINGS_KEY]))[SETTINGS_KEY];
+		await setLocal({
+			[SETTINGS_KEY]: {
+				...(isSettings(saved) ? saved : defaultSettings),
+				apiBaseUrl,
+			},
+		});
+	});
+
+// Auth saved before apiOrigin was recorded was issued against the user's own
+// Cap URL at the time. Binding it once, from the service worker right after
+// the update, keeps that attribution from shifting if the URL changes later.
+export const bindLegacyAuth = (apiBaseUrl?: string) =>
+	withKeyLock(AUTH_KEY, async () => {
+		const saved = (await getLocal([AUTH_KEY]))[AUTH_KEY];
+		if (!isStoredAuth(saved) || saved.apiOrigin !== undefined) return;
+		const apiOrigin = originOf(
+			apiBaseUrl ?? (await loadUserSettings()).apiBaseUrl,
+		);
+		if (!apiOrigin) return;
+		await setLocal({ [AUTH_KEY]: { ...saved, apiOrigin } });
+	});
+
+const originOf = (url: string) => {
+	try {
+		return new URL(url).origin;
+	} catch {
+		return null;
+	}
+};
+
+// The stored key together with the origin of the Cap server that minted it,
+// whether or not that is still the effective Cap URL. Only for revoking the
+// key against its own server; requests must go through loadAuth(). Auth saved
+// before apiOrigin was recorded was issued against the user's own Cap URL,
+// since a policy URL could not be set back then.
+export const loadStoredAuth = async (): Promise<ExtensionAuth | null> => {
+	const [result, userSettings] = await Promise.all([
+		getLocal([AUTH_KEY]),
+		loadUserSettings(),
+	]);
 	const saved = result[AUTH_KEY];
-	return isAuth(saved) ? saved : null;
+	if (!isStoredAuth(saved)) return null;
+	const apiOrigin = saved.apiOrigin ?? originOf(userSettings.apiBaseUrl);
+	if (!apiOrigin) return null;
+	return { authApiKey: saved.authApiKey, userId: saved.userId, apiOrigin };
+};
+
+// An API key is only valid on the Cap server that minted it. When the
+// effective Cap URL moves to another origin (an MDM policy being pushed or
+// lifted, or the user changing their own Cap URL), the key is not handed out
+// for requests and the user is signed out there. The key stays stored:
+// server-minted keys never expire, so the next sign-in or sign-out must still
+// be able to revoke it on its own server. Requests also check the key against
+// the URL they actually use (authTokenFor in api.ts), since settings and auth
+// are read separately and a policy can change between the two reads.
+export const loadAuth = async (): Promise<ExtensionAuth | null> => {
+	const [stored, userSettings, managedApiBaseUrl] = await Promise.all([
+		loadStoredAuth(),
+		loadUserSettings(),
+		loadManagedApiBaseUrl(),
+	]);
+	if (!stored) return null;
+	const currentOrigin = originOf(managedApiBaseUrl ?? userSettings.apiBaseUrl);
+	if (stored.apiOrigin === currentOrigin) return stored;
+	await withKeyLock(AUTH_KEY, async () => {
+		const current = (await getLocal([AUTH_KEY]))[AUTH_KEY];
+		if (isStoredAuth(current) && current.authApiKey === stored.authApiKey) {
+			await removeLocal(BOOTSTRAP_CACHE_KEY);
+		}
+	});
+	return null;
 };
 
 export const saveAuth = (auth: ExtensionAuth) => setLocal({ [AUTH_KEY]: auth });
+
+// Keys replaced by a new sign-in whose revocation did not get a definite
+// answer from their server (offline, timeout, 5xx, or a server only reachable
+// on another network). They are retried on later sign-ins and sign-outs until
+// their server answers, so no key is forgotten while it may still be live.
+const MAX_PENDING_REVOCATIONS = 20;
+
+export const loadPendingRevocations = async (): Promise<ExtensionAuth[]> => {
+	const saved = (await getLocal([PENDING_REVOCATIONS_KEY]))[
+		PENDING_REVOCATIONS_KEY
+	];
+	return Array.isArray(saved) ? saved.filter(isBoundAuth) : [];
+};
+
+export const addPendingRevocation = (auth: ExtensionAuth) =>
+	withKeyLock(PENDING_REVOCATIONS_KEY, async () => {
+		const pending = (await loadPendingRevocations()).filter(
+			(entry) => entry.authApiKey !== auth.authApiKey,
+		);
+		await setLocal({
+			[PENDING_REVOCATIONS_KEY]: [...pending, auth].slice(
+				-MAX_PENDING_REVOCATIONS,
+			),
+		});
+	});
+
+export const removePendingRevocation = (authApiKey: string) =>
+	withKeyLock(PENDING_REVOCATIONS_KEY, async () => {
+		const pending = await loadPendingRevocations();
+		await setLocal({
+			[PENDING_REVOCATIONS_KEY]: pending.filter(
+				(entry) => entry.authApiKey !== authApiKey,
+			),
+		});
+	});
 
 export const clearAuth = () => removeLocal(AUTH_KEY);
 
@@ -839,12 +1013,19 @@ const normalizeOverlayUiState = (value: unknown): OverlayUiState => {
 	};
 };
 
-const isAuth = (value: unknown): value is ExtensionAuth => {
+type StoredAuth = Omit<ExtensionAuth, "apiOrigin"> & { apiOrigin?: string };
+
+const isBoundAuth = (value: unknown): value is ExtensionAuth =>
+	isStoredAuth(value) && typeof value.apiOrigin === "string";
+
+const isStoredAuth = (value: unknown): value is StoredAuth => {
 	if (!value || typeof value !== "object") return false;
 	const candidate = value as Partial<ExtensionAuth>;
 	return (
 		typeof candidate.authApiKey === "string" &&
-		typeof candidate.userId === "string"
+		typeof candidate.userId === "string" &&
+		(candidate.apiOrigin === undefined ||
+			typeof candidate.apiOrigin === "string")
 	);
 };
 

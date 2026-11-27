@@ -15,9 +15,11 @@ import {
 	type FailedRecording,
 	loadAuth,
 	loadFailedRecordings,
+	loadManagedApiBaseUrl,
 	loadSettings,
 	loadSharedRecordingState,
 	removeFailedRecording,
+	saveApiBaseUrl,
 	saveSettings,
 } from "../shared/storage";
 import type { ExtensionAuth, ExtensionSettings } from "../shared/types";
@@ -310,24 +312,45 @@ const DoodleCheckbox = ({
 function App() {
 	const [settings, setSettings] = useState<ExtensionSettings>(defaultSettings);
 	const [auth, setAuth] = useState<ExtensionAuth | null>(null);
+	const [apiBaseUrlManaged, setApiBaseUrlManaged] = useState(false);
 	const [saved, setSaved] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
 		let disposed = false;
-		Promise.all([loadSettings(), loadAuth()])
-			.then(([nextSettings, nextAuth]) => {
+		Promise.all([loadSettings(), loadAuth(), loadManagedApiBaseUrl()])
+			.then(([nextSettings, nextAuth, managedApiBaseUrl]) => {
 				if (disposed) return;
 				setSettings(nextSettings);
 				setAuth(nextAuth);
+				setApiBaseUrlManaged(managedApiBaseUrl !== null);
 			})
 			.catch((err: unknown) => {
 				if (!disposed) {
 					setError(err instanceof Error ? err.message : String(err));
 				}
 			});
+		const handleStorageChange = (
+			_changes: Record<string, chrome.storage.StorageChange>,
+			areaName: string,
+		) => {
+			if (areaName !== "managed") return;
+			Promise.all([loadSettings(), loadAuth(), loadManagedApiBaseUrl()])
+				.then(([nextSettings, nextAuth, managedApiBaseUrl]) => {
+					if (disposed) return;
+					setSettings((current) => ({
+						...current,
+						apiBaseUrl: nextSettings.apiBaseUrl,
+					}));
+					setAuth(nextAuth);
+					setApiBaseUrlManaged(managedApiBaseUrl !== null);
+				})
+				.catch(() => undefined);
+		};
+		chrome.storage.onChanged.addListener(handleStorageChange);
 		return () => {
 			disposed = true;
+			chrome.storage.onChanged.removeListener(handleStorageChange);
 		};
 	}, []);
 
@@ -336,12 +359,17 @@ function App() {
 		setSaved(false);
 		try {
 			new URL(settings.apiBaseUrl);
+			if (!apiBaseUrlManaged) {
+				await saveApiBaseUrl(settings.apiBaseUrl);
+			}
 			await saveSettings(settings);
 			await sendServiceWorkerMessage({
 				target: "service-worker",
 				type: "settings-updated",
 				settings,
 			}).catch(() => undefined);
+			// A new Cap URL signs the user out of the old server.
+			setAuth(await loadAuth());
 			setSaved(true);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
@@ -420,6 +448,7 @@ function App() {
 							<input
 								type="url"
 								value={settings.apiBaseUrl}
+								disabled={apiBaseUrlManaged}
 								onChange={(event) =>
 									setSettings({
 										...settings,
@@ -427,6 +456,11 @@ function App() {
 									})
 								}
 							/>
+							{apiBaseUrlManaged ? (
+								<small className="field-note">
+									Set by your organization's administrator.
+								</small>
+							) : null}
 						</label>
 					</section>
 
