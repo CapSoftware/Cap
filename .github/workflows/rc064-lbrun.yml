@@ -171,10 +171,10 @@ jobs:
       - name: Drive both builds
         if: steps.gate.outputs.go == 'true'
         shell: bash
-        env:
-          GATE_SIDES: ${{ 'base,l4332,l4398,l4421,l4439,l4513,head' }}
         timeout-minutes: 110
         env:
+          GATE_SIDES: base,l4332,l4398,l4421,l4439,l4513,head
+          GATE_EXPORT_ROUNDS: "3"
           RC064_CLICK: ${{ runner.temp }}/rc064-click
         run: |
           set -uo pipefail
