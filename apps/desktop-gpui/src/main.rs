@@ -106,6 +106,7 @@ mod screenshot;
 mod screenshot_annotations;
 mod screenshot_crop;
 mod screenshot_editor;
+mod screenshot_ocr;
 mod screenshot_export;
 mod script_text;
 mod session;

@@ -1871,8 +1871,10 @@ reorder_hint = "Drag to reorder • Top = front"
 title = "Layers"
 
 [screenshot_editor.menu]
+copy_text = "Copy Text"
 delete = "Delete"
 open_folder = "Open Folder"
+select_all_text = "Select All Text"
 
 [screenshot_editor.share]
 create_link = "Create shareable link"
@@ -1898,6 +1900,7 @@ width = "Width"
 copied = "Screenshot copied to clipboard!"
 link_copied = "Share link copied to clipboard"
 saved = "Screenshot saved!"
+text_copied = "Text copied to clipboard"
 
 [screenshot_editor.tool]
 arrow = "Arrow"
