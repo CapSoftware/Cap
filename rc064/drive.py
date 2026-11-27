@@ -1473,9 +1473,10 @@ def flow_playab():
                 e["hover"] = tail_file(view, "hover analysis")
                 record("playab", side, e)
                 log("playab", side, rnd, "warm" if warm else "cold", g_cpu(e))
-            idle = editor_idle(side, view, dest)
-            idle["round"] = rnd
-            record("editor_idle", side, idle)
+            if os.environ.get("GATE_PLAY_IDLE", "1") == "1":
+                idle = editor_idle(side, view, dest)
+                idle["round"] = rnd
+                record("editor_idle", side, idle)
 
 
 EXPORT_1080 = {"format": "Mp4", "fps": 60, "export_to": "file", "resolution": "1080p", "compression": "Maximum", "custom_bpp": None}
