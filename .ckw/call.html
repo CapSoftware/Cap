@@ -1,0 +1,66 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>bs call</title></head>
+<body>
+<p id="state">starting</p>
+<audio id="call" autoplay></audio>
+<audio id="call2" autoplay></audio>
+<audio id="tone" autoplay></audio>
+<script>
+// A stand-in browser call (scratch, never ships). It holds the microphone like a call does and
+// plays the call's other side from a remote WebRTC track (others.wav sent through a loopback pair
+// of RTCPeerConnections), as Meet plays it.
+//   ?sink=default        the default output
+//   ?sink=communications the default communications device, followed as it changes (as Teams does)
+//   ?sink=<regex>        the output whose label matches
+//   &also=<sink>         the same call on a second output too
+//   &tone=<sink>         a 440 Hz tone from this page (the browser's own audio service) on that output
+const q = new URLSearchParams(location.search);
+const log = t => fetch("/log?" + encodeURIComponent(t)).catch(() => {});
+async function sinkFor(want) {
+  if (!want || want === "default") return "";
+  const outs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "audiooutput");
+  log("outputs: " + outs.map(o => o.deviceId.slice(0, 14) + "=" + o.label).join(" | "));
+  if (want === "communications") return outs.some(o => o.deviceId === "communications") ? "communications" : "";
+  const d = outs.find(o => new RegExp(want, "i").test(o.label));
+  return d ? d.deviceId : "";
+}
+async function start() {
+  // Held for the whole call, as a call app holds it (a dropped stream closes the microphone).
+  try { window.mic = await navigator.mediaDevices.getUserMedia({ audio: true }); log("mic on"); } catch (e) { log("no mic: " + e.name); }
+  try {
+    const ctx = new AudioContext();
+    const buf = await ctx.decodeAudioData(await (await fetch("others.wav")).arrayBuffer());
+    const src = ctx.createBufferSource(); src.buffer = buf; src.loop = true;
+    const dest = ctx.createMediaStreamDestination(); src.connect(dest);
+    const a = new RTCPeerConnection(), b = new RTCPeerConnection();
+    a.onicecandidate = e => e.candidate && b.addIceCandidate(e.candidate);
+    b.onicecandidate = e => e.candidate && a.addIceCandidate(e.candidate);
+    const got = new Promise(r => { b.ontrack = e => r(e.streams[0] || new MediaStream([e.track])); });
+    dest.stream.getTracks().forEach(t => a.addTrack(t, dest.stream));
+    await a.setLocalDescription(await a.createOffer()); await b.setRemoteDescription(a.localDescription);
+    await b.setLocalDescription(await b.createAnswer()); await a.setRemoteDescription(b.localDescription);
+    const remote = await got;
+    const els = [[document.getElementById("call"), q.get("sink") || "default"]];
+    if (q.get("also")) els.push([document.getElementById("call2"), q.get("also")]);
+    for (const [el, want] of els) {
+      el.srcObject = remote;
+      const id = await sinkFor(want);
+      if (id) await el.setSinkId(id);
+      await el.play();
+      log("sink " + want + " -> " + (id ? id.slice(0, 14) : "default"));
+    }
+    if (q.get("tone")) {
+      const osc = ctx.createOscillator(); osc.frequency.value = 440;
+      const gain = ctx.createGain(); gain.gain.value = 0.3;
+      const toneDest = ctx.createMediaStreamDestination(); osc.connect(gain); gain.connect(toneDest); osc.start();
+      const el = document.getElementById("tone"); el.srcObject = toneDest.stream;
+      const id = await sinkFor(q.get("tone")); if (id) await el.setSinkId(id); await el.play();
+      log("tone " + q.get("tone") + " -> " + (id ? id.slice(0, 14) : "default"));
+    }
+    src.start();
+    log("call playing");
+  } catch (e) { log("error " + e); }
+}
+start();
+</script>
+</body></html>
