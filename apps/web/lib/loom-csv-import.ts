@@ -1,6 +1,7 @@
 import "server-only";
 
 import { db } from "@cap/database";
+import { isEmailShape } from "@cap/database/auth/domain-utils";
 import { nanoId } from "@cap/database/helpers";
 import {
 	folders,
@@ -667,7 +668,7 @@ export function getSpaceNameCacheKey(spaceName: string) {
 }
 
 export function isValidImportEmail(email: string) {
-	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+	return isEmailShape(email);
 }
 
 export function isValidImportSpaceName(spaceName: string) {

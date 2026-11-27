@@ -202,6 +202,10 @@ jobs:
       - name: Timestamp pipeline unit + property tests
         if: contains(format(',{0},', matrix.parts), ',timestamp,')
         shell: bash
+        # Lets the Windows input recorder tests in cap-recording send real
+        # input into the runner's session (they send none without it).
+        env:
+          CAP_REQUIRE_INPUT_INJECTION: "1"
         run: |
           cargo test --locked -p cap-timestamp -p cap-enc-ffmpeg -p ffmpeg-hw-device
           cargo test --locked -p cap-camera-effects --lib

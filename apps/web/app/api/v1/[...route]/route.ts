@@ -1,5 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
+import { isEmailShape } from "@cap/database/auth/domain-utils";
 import { revokeAllCredentials } from "@cap/database/auth/revoke-credentials";
 import {
 	decrypt,
@@ -2465,11 +2466,7 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 			return yield* badRequest(input.requestId, "Loom URL is invalid");
 		}
 		const ownerEmail = input.payload.ownerEmail?.trim().toLowerCase();
-		if (
-			ownerEmail &&
-			(ownerEmail.length > 255 ||
-				!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail))
-		) {
+		if (ownerEmail && (ownerEmail.length > 255 || !isEmailShape(ownerEmail))) {
 			return yield* badRequest(input.requestId, "Owner email is invalid");
 		}
 		const spaceName = input.payload.spaceName?.trim().replace(/\s+/g, " ");
@@ -5507,10 +5504,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const email = payload.email.trim().toLowerCase();
 						const role = payload.role ?? "member";
 						const shouldSendEmail = payload.sendEmail ?? true;
-						if (
-							email.length > 255 ||
-							!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-						) {
+						if (email.length > 255 || !isEmailShape(email)) {
 							return yield* badRequest(requestId, "Invite email is invalid");
 						}
 						const idempotencyKey = yield* requestIdempotencyKey;

@@ -3,7 +3,13 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { VideoMetadata } from "../../lib/job-manager";
-import { encodeLengthLimit } from "../../lib/media-common";
+import {
+	capOutputSeconds,
+	encodeCapForRequestedLength,
+	encodeLengthLimit,
+	exceedsRequestedLength,
+	runsPastRequestedLength,
+} from "../../lib/media-common";
 import { probeVideoFile } from "../../lib/media-probe";
 import { stopProbeWorkers } from "../../lib/media-probe-pool";
 import { processVideo } from "../../lib/media-video";
@@ -157,7 +163,8 @@ describe("the encode length limit never cuts a real file short", () => {
 			},
 		);
 		try {
-			expect(await lengthOf(output.path)).toBeGreaterThanOrEqual(SECONDS - 0.2);
+			const length = await lengthOf(output.path);
+			expect(length).toBeGreaterThanOrEqual(SECONDS - 0.2);
 		} finally {
 			await output.cleanup();
 		}
@@ -168,5 +175,105 @@ describe("the encode length limit never cuts a real file short", () => {
 		expect(encodeLengthLimit({ duration: 10, timestampSpan: null })).toBeNull();
 		expect(encodeLengthLimit({ duration: 2, timestampSpan: 10 })).toBe(12);
 		expect(encodeLengthLimit({ duration: 10, timestampSpan: 2 })).toBe(12);
+	});
+});
+
+describe("a requested length limit", () => {
+	test.each([
+		["recording.mp4", "an MP4 with an honest header"],
+		["no-duration.webm", "a WebM with no Duration element"],
+		["short-duration.webm", "a WebM whose Duration says less than it plays"],
+		["short-mvhd.mp4", "an MP4 whose movie header says less than its tracks"],
+	])("measures %s (%s) by how long it really plays", async (name) => {
+		const metadata = await probeVideoFile(join(dir, name));
+		expect(exceedsRequestedLength(metadata, SECONDS - 4)).toBe(true);
+		expect(exceedsRequestedLength(metadata, SECONDS + 1)).toBe(false);
+		expect(exceedsRequestedLength(metadata, undefined)).toBe(false);
+	});
+
+	test("caps the encode even when the probe trusted a short header", async () => {
+		const path = join(dir, "short-duration.webm");
+		const metadata: VideoMetadata = {
+			...(await probeVideoFile(path)),
+			duration: 2,
+			timestampSpan: null,
+		};
+		const output = await processVideo(path, metadata, {
+			maxOutputSeconds: encodeCapForRequestedLength(2),
+		});
+		try {
+			const length = await lengthOf(output.path);
+			expect(length).toBeGreaterThan(3);
+			expect(length).toBeLessThanOrEqual(4.2);
+			expect(runsPastRequestedLength(length, 2)).toBe(true);
+		} finally {
+			await output.cleanup();
+		}
+	});
+
+	test("keeps a source that fits the requested length whole and allowed", async () => {
+		const path = join(dir, "recording.mp4");
+		const output = await processVideo(path, await probeVideoFile(path), {
+			maxOutputSeconds: encodeCapForRequestedLength(SECONDS),
+		});
+		try {
+			const length = await lengthOf(output.path);
+			expect(length).toBeGreaterThanOrEqual(SECONDS - 0.2);
+			expect(runsPastRequestedLength(length, SECONDS)).toBe(false);
+		} finally {
+			await output.cleanup();
+		}
+	});
+
+	test("caps a recovery encode too", async () => {
+		const path = join(dir, "short-duration.webm");
+		const output = await processVideo(
+			path,
+			await probeVideoFile(path),
+			{ maxOutputSeconds: 4 },
+			undefined,
+			undefined,
+			{ genPts: true },
+		);
+		try {
+			expect(await lengthOf(output.path)).toBeLessThanOrEqual(4.2);
+		} finally {
+			await output.cleanup();
+		}
+	});
+
+	test("leaves a source under the limit whole", async () => {
+		const path = join(dir, "recording.mp4");
+		const output = await processVideo(path, await probeVideoFile(path), {
+			maxOutputSeconds: SECONDS + 20,
+		});
+		try {
+			expect(await lengthOf(output.path)).toBeGreaterThanOrEqual(SECONDS - 0.2);
+		} finally {
+			await output.cleanup();
+		}
+	});
+
+	test("takes the tighter of the probed and requested limits", () => {
+		expect(capOutputSeconds(null, undefined)).toBeNull();
+		expect(capOutputSeconds(12, undefined)).toBe(12);
+		expect(capOutputSeconds(null, 330)).toBe(330);
+		expect(capOutputSeconds(12, 330)).toBe(12);
+		expect(capOutputSeconds(400, 330)).toBe(330);
+		expect(capOutputSeconds(12, 0)).toBe(12);
+		expect(capOutputSeconds(12, Number.NaN)).toBe(12);
+	});
+
+	test("counts the longer of the header and the timestamps", () => {
+		expect(
+			exceedsRequestedLength({ duration: 200, timestampSpan: 400 }, 330),
+		).toBe(true);
+		expect(
+			exceedsRequestedLength({ duration: 400, timestampSpan: null }, 330),
+		).toBe(true);
+		expect(
+			exceedsRequestedLength({ duration: 330, timestampSpan: 329 }, 330),
+		).toBe(false);
+		expect(exceedsRequestedLength({ duration: 3_600 }, 0)).toBe(false);
 	});
 });

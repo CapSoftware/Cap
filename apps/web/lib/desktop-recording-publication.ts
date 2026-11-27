@@ -31,6 +31,8 @@ import {
 	recordingSourceProofSchema,
 	recordingVerificationSchema,
 } from "@/lib/desktop-recording-verification";
+import { measuredMediaSeconds } from "@/lib/free-plan-duration";
+import { recordFreePlanLength } from "@/lib/free-plan-measure";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota-cache";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -564,6 +566,11 @@ export async function applyDesktopRecordingProgress(input: unknown): Promise<{
 		return true;
 	});
 	if (!published) return { handled: true, status: 503 };
+	const publishedSeconds = measuredMediaSeconds(completion.metadata);
+	if (publishedSeconds !== null)
+		await recordFreePlanLength(videoId, outputKey, publishedSeconds, {
+			anyAge: true,
+		});
 	await invalidateGoogleDriveStorageQuotaCache(
 		video.storageIntegrationId,
 	).catch(() => undefined);
