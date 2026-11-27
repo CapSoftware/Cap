@@ -1,0 +1,139 @@
+name: CLI frozen export (scratch)
+
+on:
+  push:
+    branches:
+      - ci/cli-frozen
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  BASE_SHA: d56f001a317ae1ce74b9c08979be64696730a321
+
+jobs:
+  macos:
+    name: macOS APFS
+    runs-on: macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: fast
+      - name: Build head and base
+        run: bash .github/cli-disk/build.sh ""
+      - name: Small APFS volume, stimulus, permissions
+        run: |
+          set -euo pipefail
+          hdiutil create -size 4g -fs APFS -volname capsmall "$RUNNER_TEMP/capsmall.dmg"
+          hdiutil attach -nobrowse "$RUNNER_TEMP/capsmall.dmg"
+          mount | grep " on /Volumes/capsmall "
+          df -k /Volumes/capsmall
+          brew install ffmpeg >/dev/null
+          python3 -m pip install --user --break-system-packages psutil >/dev/null 2>&1 || python3 -m pip install --user psutil >/dev/null 2>&1 || true
+          sudo mdutil -a -i off || true
+          for client in "$PWD/target/ci-verify/cap-head" "$PWD/target/ci-verify/cap-base"; do
+            row="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('kTCCServiceScreenCapture','$client',1,2,4,1,'UNUSED',0,$(date +%s));"
+            sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "$row" || true
+          done
+      - name: Cases
+        run: |
+          ffplay -loglevel error -f lavfi -i "color=c=gray:s=960x540:r=60,noise=alls=100:allf=t+u" -fs -an -window_title capnoise > /dev/null 2>&1 &
+          sleep 3
+          bash .github/cli-disk/run-frozen.sh "$RUNNER_TEMP/roomy" "$RUNNER_TEMP/out" "$PWD/target/ci-verify/cap-head" "$PWD/target/ci-verify/cap-base"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cli-frozen-macos
+          path: ${{ runner.temp }}/out
+          retention-days: 3
+
+  linux:
+    name: Linux ext4
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-unknown-linux-gnu
+          tier: fast
+      - name: Build head and base
+        run: bash .github/cli-disk/build.sh ""
+      - name: Small ext4 volume, display, stimulus
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq xvfb openbox ffmpeg dbus python3-psutil >/dev/null
+          truncate -s 4G "$RUNNER_TEMP/capsmall.img"
+          mkfs.ext4 -q -m 0 "$RUNNER_TEMP/capsmall.img"
+          sudo mkdir -p /mnt/capsmall
+          sudo mount -o loop "$RUNNER_TEMP/capsmall.img" /mnt/capsmall
+          sudo chown "$USER" /mnt/capsmall
+          mount | grep " on /mnt/capsmall "
+          df -k /mnt/capsmall
+      - name: Cases
+        run: |
+          unset WAYLAND_DISPLAY
+          export DISPLAY=:78 XDG_SESSION_TYPE=x11
+          Xvfb :78 -screen 0 1920x1080x24 -noreset >/dev/null 2>&1 &
+          sleep 1
+          openbox >/dev/null 2>&1 &
+          sleep 1
+          ffplay -loglevel error -f lavfi -i "color=c=gray:s=960x540:r=60,noise=alls=100:allf=t+u" -x 1920 -y 1080 -left 0 -top 0 -noborder -an -window_title capnoise > /dev/null 2>&1 &
+          sleep 2
+          dbus-run-session -- bash .github/cli-disk/run-frozen.sh "$RUNNER_TEMP/roomy" "$RUNNER_TEMP/out" "$PWD/target/ci-verify/cap-head" "$PWD/target/ci-verify/cap-base"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cli-frozen-linux
+          path: ${{ runner.temp }}/out
+          retention-days: 3
+
+  windows:
+    name: Windows NTFS
+    runs-on: windows-2022
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup
+        id: setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-pc-windows-msvc
+          tier: fast
+      - name: Build head and base
+        shell: bash
+        run: bash .github/cli-disk/build.sh .exe
+      - name: Small NTFS volume and stimulus tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          vhd="$(cygpath -w "$RUNNER_TEMP")\\capsmall.vhdx"
+          printf 'create vdisk file="%s" maximum=4096 type=expandable\nselect vdisk file="%s"\nattach vdisk\ncreate partition primary\nformat fs=ntfs quick label=capsmall\nassign letter=S\n' "$vhd" "$vhd" > dp.txt
+          MSYS_NO_PATHCONV=1 diskpart /s dp.txt
+          df -k /s || true
+          curl -sSL -o ff.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip
+          mkdir -p "$RUNNER_TEMP/ff" && unzip -q ff.zip -d "$RUNNER_TEMP/ff"
+          echo "$(cygpath -w "$(ls -d "$RUNNER_TEMP"/ff/*/bin)")" >> "$GITHUB_PATH"
+          python -m pip install psutil >/dev/null
+      - name: Cases
+        shell: bash
+        env:
+          PY: python
+        run: |
+          ffplay -loglevel error -f lavfi -i "color=c=gray:s=960x540:r=60,noise=alls=100:allf=t+u" -fs -an -window_title capnoise > /dev/null 2>&1 &
+          sleep 3
+          ws="$(cygpath -m "$GITHUB_WORKSPACE")"
+          tmp="$(cygpath -m "$RUNNER_TEMP")"
+          bash .github/cli-disk/run-frozen.sh "$tmp/roomy" "$tmp/out" "$ws/target/ci-verify/cap-head.exe" "$ws/target/ci-verify/cap-base.exe"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cli-frozen-windows
+          path: ${{ runner.temp }}/out
+          retention-days: 3
