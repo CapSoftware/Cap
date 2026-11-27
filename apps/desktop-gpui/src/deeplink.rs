@@ -449,7 +449,6 @@ impl DeepLinkAction {
                 .detach();
                 Ok(())
             }
-
             DeepLinkAction::StopRecording => {
                 let main = cx.global::<app_windows::AppWindows>().main;
                 let _ = main.update(cx, |view, _, cx| {
