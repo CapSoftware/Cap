@@ -1253,11 +1253,12 @@ impl SilenceNet {
 
 /// Windows: only the default output's capture, exactly as before (no
 /// followed output, no screen reader left out): in a remote desktop session,
-/// whose audio is redirected, and for the rest of a meeting once a process
+/// whose audio is redirected; without the call output watch, which the
+/// silence net needs (`netted`); and for the rest of a meeting once a process
 /// loopback went silent while what it reads played.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn plain_only(remote: bool, gone_silent: bool) -> bool {
-    remote || gone_silent
+fn plain_only(remote: bool, netted: bool, gone_silent: bool) -> bool {
+    remote || !netted || gone_silent
 }
 
 /// The meeting runs in a remote desktop session. Test builds:
@@ -1425,7 +1426,7 @@ impl SystemPlatform {
 
         let (target_tx, target_rx) = flume::unbounded::<Option<String>>();
         let watch = cap_meeting_platform::CallOutputWatch::start(Duration::from_secs(2), target_tx)
-            .inspect_err(|error| tracing::warn!(%error, "could not look for a call's output"))
+            .inspect_err(|error| tracing::warn!(%error, "could not look for a call's output; computer audio is read from the default output as before"))
             .ok();
         // The first look decides where a meeting that starts mid-call reads
         // from; it takes a few milliseconds.
@@ -1473,7 +1474,7 @@ impl SystemPlatform {
         let mut call_only_refused: Option<((u32, u32), Instant)> = None;
         let mut call_only_told = false;
         if first.is_none()
-            && !remote
+            && !plain_only(remote, watch.is_some(), false)
             && let Some(reader) = cap_meeting_platform::running_reader()
         {
             match reader_free(
@@ -1608,7 +1609,7 @@ impl SystemPlatform {
                             gone_silent = true;
                             tracing::warn!("computer audio stayed silent while the meeting played; the default output is read as before for the rest of the meeting");
                         }
-                        let plain = plain_only(remote, gone_silent);
+                        let plain = plain_only(remote, watching, gone_silent);
                         if refused
                             .as_ref()
                             .is_some_and(|(id, at)| Some(id) != target.as_ref() || at.elapsed() >= REFUSED_RETRY)
@@ -2499,11 +2500,13 @@ mod tests {
     }
 
     #[test]
-    fn a_remote_session_or_a_silent_loopback_reads_only_the_default_output() {
-        assert!(!plain_only(false, false));
-        assert!(plain_only(true, false));
-        assert!(plain_only(false, true));
-        assert!(plain_only(true, true));
+    fn a_remote_session_no_watch_or_a_silent_loopback_reads_only_the_default_output() {
+        // (remote, the call output watch runs, gone silent)
+        assert!(!plain_only(false, true, false));
+        assert!(plain_only(true, true, false));
+        assert!(plain_only(false, false, false));
+        assert!(plain_only(false, true, true));
+        assert!(plain_only(true, false, true));
     }
 
     fn shared(
