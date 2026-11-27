@@ -86,6 +86,7 @@ struct Args {
     queue: usize,
     ring: usize,
     adapter: Option<u32>,
+    map_mode: String,
 }
 
 fn parse_args() -> Args {
@@ -103,6 +104,7 @@ fn parse_args() -> Args {
         queue: 240,
         ring: 8,
         adapter: None,
+        map_mode: "sync".into(),
     };
     let v: Vec<String> = std::env::args().collect();
     let mut i = 1;
@@ -122,6 +124,7 @@ fn parse_args() -> Args {
             "--queue" => a.queue = val.parse().unwrap(),
             "--ring" => a.ring = val.parse().unwrap(),
             "--adapter" => a.adapter = Some(val.parse().unwrap()),
+            "--map" => a.map_mode = val,
             _ => panic!("unknown arg {k}"),
         }
         i += 2;
@@ -139,7 +142,15 @@ struct Code {
 }
 
 fn load_code(stim: &str) -> Code {
-    let text = std::fs::read_to_string(format!("{stim}/stimulus.json")).expect("stimulus.json");
+    let path = format!("{stim}/stimulus.json");
+    for _ in 0..200 {
+        if std::fs::metadata(&path).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    let text = std::fs::read_to_string(&path).expect("stimulus.json");
     let j: serde_json::Value = serde_json::from_str(&text).unwrap();
     let c = &j["code"];
     let cell = c["cell"].as_f64().unwrap() as u32;
@@ -369,9 +380,65 @@ struct FullReader {
     code: Code,
     fmt: DXGI_FORMAT,
     work: Duration,
+    map_mode: String,
+    pipe: VecDeque<(ID3D11Texture2D, Rec, Option<Direct3D11CaptureFrame>)>,
+    pipe_free: Vec<ID3D11Texture2D>,
 }
 
 impl FullReader {
+    fn read_pipe(&mut self, tex: &ID3D11Texture2D, rec: Rec, frame: Option<Direct3D11CaptureFrame>, sink: &Sink) {
+        let mut d = D3D11_TEXTURE2D_DESC::default();
+        unsafe { tex.GetDesc(&mut d) };
+        if self.pipe.is_empty() && self.pipe_free.is_empty() {
+            for _ in 0..4 {
+                self.pipe_free.push(staging(&self.device, d.Width, d.Height, self.fmt).unwrap());
+            }
+        }
+        if self.pipe_free.is_empty() {
+            self.drain_one(sink, d.Width, d.Height);
+        }
+        let st = self.pipe_free.pop().unwrap();
+        unsafe { self.ctx.CopyResource(&st, tex) };
+        unsafe { self.ctx.Flush() };
+        self.pipe.push_back((st, rec, frame));
+        while self.pipe.len() > 2 {
+            self.drain_one(sink, d.Width, d.Height);
+        }
+    }
+
+    fn drain_one(&mut self, sink: &Sink, w: u32, h: u32) {
+        let Some((st, mut rec, frame)) = self.pipe.pop_front() else { return };
+        let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+        if unsafe { self.ctx.Map(&st, 0, D3D11_MAP_READ, 0, Some(&mut m)) }.is_ok() {
+            let pitch = m.RowPitch as usize;
+            let data = unsafe { std::slice::from_raw_parts(m.pData as *const u8, pitch * h as usize) };
+            let row = w as usize * 4;
+            self.buf.resize(row * h as usize, 0);
+            for y in 0..h as usize {
+                self.buf[y * row..(y + 1) * row].copy_from_slice(&data[y * pitch..y * pitch + row]);
+            }
+            rec.idx = decode(data, pitch, self.code.rx as usize, self.code.ry as usize, self.code.cell as usize)
+                .map(i64::from)
+                .unwrap_or(-1);
+            unsafe { self.ctx.Unmap(&st, 0) };
+        }
+        drop(frame);
+        if !self.work.is_zero() {
+            std::thread::sleep(self.work);
+        }
+        rec.done_ns = qpc_ns();
+        sink.put(rec);
+        self.pipe_free.push(st);
+    }
+
+    fn flush(&mut self, sink: &Sink) {
+        while let Some((st, _, _)) = self.pipe.front() {
+            let mut d = D3D11_TEXTURE2D_DESC::default();
+            unsafe { st.GetDesc(&mut d) };
+            self.drain_one(sink, d.Width, d.Height);
+        }
+    }
+
     fn read(&mut self, tex: &ID3D11Texture2D, mut rec: Rec, sink: &Sink) {
         let mut d = D3D11_TEXTURE2D_DESC::default();
         unsafe { tex.GetDesc(&mut d) };
@@ -381,7 +448,24 @@ impl FullReader {
         let st = self.stage.as_ref().unwrap().0.clone();
         unsafe { self.ctx.CopyResource(&st, tex) };
         let mut m = D3D11_MAPPED_SUBRESOURCE::default();
-        if unsafe { self.ctx.Map(&st, 0, D3D11_MAP_READ, 0, Some(&mut m)) }.is_ok() {
+        let mapped = if self.map_mode == "poll" {
+            unsafe { self.ctx.Flush() };
+            let mut ok = false;
+            for _ in 0..400 {
+                match unsafe { self.ctx.Map(&st, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32, Some(&mut m)) } {
+                    Ok(()) => {
+                        ok = true;
+                        break;
+                    }
+                    Err(e) if e.code() == DXGI_ERROR_WAS_STILL_DRAWING => std::thread::sleep(Duration::from_micros(500)),
+                    Err(_) => break,
+                }
+            }
+            ok
+        } else {
+            unsafe { self.ctx.Map(&st, 0, D3D11_MAP_READ, 0, Some(&mut m)) }.is_ok()
+        };
+        if mapped {
             let pitch = m.RowPitch as usize;
             let len = pitch * d.Height as usize;
             let data = unsafe { std::slice::from_raw_parts(m.pData as *const u8, len) };
@@ -547,18 +631,26 @@ pub fn run() -> anyhow_lite::R {
                 code,
                 fmt,
                 work: Duration::from_micros(a.work_us),
+                map_mode: a.map_mode.clone(),
+                pipe: VecDeque::new(),
+                pipe_free: Vec::new(),
             };
             let sink = sink.clone();
             let free = free.clone();
             let is_ring = a.release == "ring";
             Some(std::thread::spawn(move || {
                 while let Ok((frame, tex, rec)) = rx.recv() {
+                    if fr.map_mode == "pipe" && !is_ring {
+                        fr.read_pipe(&tex, rec, frame, &sink);
+                        continue;
+                    }
                     fr.read(&tex, rec, &sink);
                     drop(frame);
                     if is_ring {
                         free.lock().unwrap().push(tex);
                     }
                 }
+                fr.flush(&sink);
             }))
         };
         let reader = Arc::new(Mutex::new(CodeReader::new(&device, &ctx, code, fmt)?));
