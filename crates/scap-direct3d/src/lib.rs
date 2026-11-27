@@ -361,6 +361,7 @@ fn create_copy_texture(
 #[derive(Default)]
 struct TrimPool {
     free: Mutex<Vec<(ID3D11Texture2D, u32, u32)>>,
+    outstanding: AtomicUsize,
 }
 
 /// Enough for frames waiting on the encoder; more are dropped when returned.
@@ -382,6 +383,7 @@ impl TrimPool {
             free.retain(|(_, w, h)| (*w, *h) == (width, height));
             free.pop()
         };
+        self.outstanding.fetch_add(1, Ordering::Relaxed);
         match reused {
             Some((texture, _, _)) => Ok(texture),
             None => create_copy_texture(d3d_device, width, height, pixel_format),
@@ -389,11 +391,12 @@ impl TrimPool {
     }
 
     fn give(&self, texture: ID3D11Texture2D, width: u32, height: u32) {
+        self.outstanding.fetch_sub(1, Ordering::Relaxed);
         let mut free = self
             .free
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if free.len() < TRIM_POOL_SIZE {
+        if free.len() < TRIM_POOL_SIZE.max(early_release_limit()) {
             free.push((texture, width, height));
         }
     }
@@ -580,10 +583,16 @@ impl Capturer {
         })()
         .map_err(NewCapturerError::Direct3DDevice)?;
 
-        let frame_pool_size = settings
-            .fps
-            .map(|fps| ((fps as f32 / 30.0 * 2.0).ceil() as i32).clamp(2, 4))
-            .unwrap_or(2);
+        let frame_pool_size = std::env::var("CAP_WGC_POOL")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or_else(|| {
+                settings
+                    .fps
+                    .map(|fps| ((fps as f32 / 30.0 * 2.0).ceil() as i32).clamp(2, 4))
+                    .unwrap_or(2)
+            });
+        tracing::info!(frame_pool_size, early_release = early_release_limit(), "wintrace: WGC pool");
 
         let item_size = item.Size().map_err(NewCapturerError::ItemSize)?;
 
@@ -629,6 +638,7 @@ impl Capturer {
             let (width, height) = (crop.right - crop.left, crop.bottom - crop.top);
             let texture = create_copy_texture(&d3d_device, width, height, settings.pixel_format)
                 .map_err(NewCapturerError::CropTexture)?;
+            trim.outstanding.fetch_add(1, Ordering::Relaxed);
             trim.give(texture, width, height);
         }
 
@@ -657,6 +667,7 @@ impl Capturer {
                         };
 
                         let frame = frame_pool.TryGetNextFrame()?;
+                        let system_relative_time = frame.SystemRelativeTime()?;
 
                         let size = frame.ContentSize()?;
 
@@ -764,7 +775,8 @@ impl Capturer {
                                 width,
                                 height,
                                 pixel_format: settings.pixel_format,
-                                inner: frame,
+                                inner: Some(frame),
+                                system_relative_time,
                                 texture: cropped_texture,
                                 d3d_context: d3d_context.clone(),
                                 d3d_device: d3d_device.clone(),
@@ -790,12 +802,37 @@ impl Capturer {
                                 return Ok(());
                             }
 
-                            if (width, height) == (surface_desc.Width, surface_desc.Height) {
+                            let limit = early_release_limit();
+                            if limit > 0
+                                && (width, height) == (surface_desc.Width, surface_desc.Height)
+                            {
+                                if trim.outstanding.load(Ordering::Relaxed) >= limit {
+                                    EARLY_RELEASE_DROPS.fetch_add(1, Ordering::Relaxed);
+                                    return Ok(());
+                                }
+                                let copy = trim.take(&d3d_device, width, height, pixel_format)?;
+                                unsafe { d3d_context.CopyResource(&copy, &texture) };
+                                drop(texture);
+                                drop(frame);
                                 Frame {
                                     width,
                                     height,
                                     pixel_format: settings.pixel_format,
-                                    inner: frame,
+                                    inner: None,
+                                    system_relative_time,
+                                    texture: copy,
+                                    d3d_context: d3d_context.clone(),
+                                    d3d_device: d3d_device.clone(),
+                                    staging_pool: staging_pool.clone(),
+                                    recycle: Some(trim.clone()),
+                                }
+                            } else if (width, height) == (surface_desc.Width, surface_desc.Height) {
+                                Frame {
+                                    width,
+                                    height,
+                                    pixel_format: settings.pixel_format,
+                                    inner: Some(frame),
+                                system_relative_time,
                                     texture,
                                     d3d_context: d3d_context.clone(),
                                     d3d_device: d3d_device.clone(),
@@ -830,7 +867,8 @@ impl Capturer {
                                     width,
                                     height,
                                     pixel_format: settings.pixel_format,
-                                    inner: frame,
+                                    inner: Some(frame),
+                                system_relative_time,
                                     texture: trimmed_texture,
                                     d3d_context: d3d_context.clone(),
                                     d3d_device: d3d_device.clone(),
@@ -927,11 +965,24 @@ impl Drop for Capturer {
     }
 }
 
+pub static EARLY_RELEASE_DROPS: AtomicUsize = AtomicUsize::new(0);
+
+fn early_release_limit() -> usize {
+    static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        std::env::var("CAP_WGC_EARLY_RELEASE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    })
+}
+
 pub struct Frame {
     width: u32,
     height: u32,
     pixel_format: PixelFormat,
-    inner: Direct3D11CaptureFrame,
+    inner: Option<Direct3D11CaptureFrame>,
+    system_relative_time: windows::Foundation::TimeSpan,
     texture: ID3D11Texture2D,
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
@@ -972,7 +1023,11 @@ impl Frame {
     }
 
     pub fn inner(&self) -> &Direct3D11CaptureFrame {
-        &self.inner
+        self.inner.as_ref().expect("wintrace: frame released early")
+    }
+
+    pub fn system_relative_time(&self) -> windows::Foundation::TimeSpan {
+        self.system_relative_time
     }
 
     pub fn texture(&self) -> &ID3D11Texture2D {

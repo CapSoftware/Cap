@@ -1309,6 +1309,7 @@ impl H264Encoder {
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
 
+        let trace_t0 = std::time::Instant::now();
         let frame_to_send = if let Some(converter) = &mut self.converter {
             let pts = frame.pts();
             let converted = self.converted_frame_pool.as_mut().unwrap();
@@ -1319,14 +1320,24 @@ impl H264Encoder {
         } else {
             &frame
         };
+        let trace_t1 = std::time::Instant::now();
         let frame_to_send = self
             .hw_upload
             .frame(frame_to_send)
             .map_err(QueueFrameError::Encode)?;
+        let trace_t2 = std::time::Instant::now();
 
         self.base
             .send_frame(frame_to_send, output, &mut self.encoder)
             .map_err(QueueFrameError::Encode)?;
+        let trace_t3 = std::time::Instant::now();
+        trace_times::LAST.with(|c| {
+            c.set([
+                trace_t1.saturating_duration_since(trace_t0).as_micros() as u64,
+                trace_t2.saturating_duration_since(trace_t1).as_micros() as u64,
+                trace_t3.saturating_duration_since(trace_t2).as_micros() as u64,
+            ])
+        });
 
         Ok(())
     }
@@ -2985,5 +2996,15 @@ mod video_bitrate_tests {
                 encoder.bit_rate()
             );
         }
+    }
+}
+
+pub mod trace_times {
+    thread_local! {
+        pub static LAST: std::cell::Cell<[u64; 3]> = const { std::cell::Cell::new([0; 3]) };
+    }
+
+    pub fn last() -> [u64; 3] {
+        LAST.with(|c| c.get())
     }
 }

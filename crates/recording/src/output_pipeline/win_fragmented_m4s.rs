@@ -574,23 +574,39 @@ impl WindowsFragmentedM4SMuxer {
                     }
 
                     let convert_start = std::time::Instant::now();
+                    let mut trace_kind = "F";
+                    let mut trace_wait_us = 0u64;
+                    let mut trace_asff_us = 0u64;
+                    let mut trace_idx = -3i64;
 
                     let (ffmpeg_frame, timestamp) = match pacer.next(&video_rx, &pause_flag) {
-                        Paced::Frame(frame, ts) => match frame.as_ffmpeg() {
+                        Paced::Frame(frame, ts) => {
+                            trace_wait_us = convert_start.elapsed().as_micros() as u64;
+                            let asff_start = std::time::Instant::now();
+                            let converted = frame.as_ffmpeg();
+                            trace_asff_us = asff_start.elapsed().as_micros() as u64;
+                            match converted {
                             Ok(f) => {
+                                if crate::wintrace::enabled() {
+                                    trace_idx = crate::wintrace::decode_rgba(f.data(0), f.stride(0));
+                                }
                                 last_ffmpeg_frame = Some(reference_video_frame(&f));
                                 (Some(f), ts)
                             }
                             Err(e) => {
                                 warn!("Failed to convert D3D11 frame: {e:?}");
+                                trace_kind = "E";
                                 duplicated_frames += 1;
                                 (last_ffmpeg_frame.as_ref().map(reference_video_frame), ts)
                             }
-                        },
+                            }
+                        }
                         Paced::Repeat(ts) => {
                             let Some(f) = &last_ffmpeg_frame else {
                                 continue;
                             };
+                            trace_kind = "R";
+                            trace_wait_us = convert_start.elapsed().as_micros() as u64;
                             duplicated_frames += 1;
                             (Some(reference_video_frame(f)), ts)
                         }
@@ -654,6 +670,7 @@ impl WindowsFragmentedM4SMuxer {
                     }
 
                     let normalized_ts = normalize_timestamp(timestamp, &mut first_timestamp);
+                    let trace_enc_start = std::time::Instant::now();
                     if let Err(e) = encode_frame_fn(
                         ffmpeg_frame,
                         normalized_ts,
@@ -664,7 +681,36 @@ impl WindowsFragmentedM4SMuxer {
                         error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
                         return Err(e);
                     }
+                    if crate::wintrace::enabled() {
+                        let enc_us = trace_enc_start.elapsed().as_micros();
+                        let [conv_us, up_us, send_us] = cap_enc_ffmpeg::h264::trace_times::last();
+                        crate::wintrace::line(format_args!(
+                            "enc,{},{},{},{},{},{},{},{},{},{},{}",
+                            crate::wintrace::qpc_ns(),
+                            trace_kind,
+                            timestamp.as_micros(),
+                            trace_wait_us,
+                            trace_asff_us,
+                            scap_ffmpeg::last_as_buffer_us(),
+                            enc_us,
+                            conv_us,
+                            up_us,
+                            send_us,
+                            trace_idx
+                        ));
+                        if total_frames.is_multiple_of(120) {
+                            crate::wintrace::flush();
+                        }
+                    }
                 }
+                crate::wintrace::line(format_args!(
+                    "end,{},{},{},early_drops={}",
+                    crate::wintrace::qpc_ns(),
+                    total_frames,
+                    duplicated_frames,
+                    scap_direct3d::EARLY_RELEASE_DROPS.load(std::sync::atomic::Ordering::Relaxed)
+                ));
+                crate::wintrace::flush();
 
                 if total_frames > 0 {
                     debug!(

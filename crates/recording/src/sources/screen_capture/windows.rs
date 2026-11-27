@@ -598,7 +598,8 @@ fn create_d3d_capturer(
             let first_frame = params.first_frame.clone();
             move |frame| {
                 let result = (|| {
-                let capture_time = frame.inner().SystemRelativeTime()?;
+                let capture_time = frame.system_relative_time();
+                let trace_cb_ns = if crate::wintrace::enabled() { crate::wintrace::qpc_ns() } else { 0 };
                 if frame.width() == 0 || frame.height() == 0 {
                     return Err(windows::core::Error::new(windows::Win32::Foundation::E_INVALIDARG, "Empty screen frame"));
                 }
@@ -611,6 +612,9 @@ fn create_d3d_capturer(
                     && !gate.admit(capture_time.Duration)
                 {
                     video_decimated_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                    if trace_cb_ns != 0 {
+                        crate::wintrace::line(format_args!("cb,{},{},{},{},dec,0", trace_cb_ns, capture_time.Duration * 100, frame.width(), frame.height()));
+                    }
                     return Ok(());
                 }
 
@@ -667,7 +671,9 @@ fn create_d3d_capturer(
                         ScreenFrame::Captured(frame)
                     };
 
-                match output_pipeline::send_with_stall_budget_futures(
+                let (trace_w, trace_h) = (frame_width, frame_height);
+                let trace_send_start = std::time::Instant::now();
+                let trace_outcome = match output_pipeline::send_with_stall_budget_futures(
                     &mut tx,
                     VideoFrame {
                         frame: screen_frame,
@@ -679,11 +685,16 @@ fn create_d3d_capturer(
                     output_pipeline::StallSendOutcome::Sent => {
                         video_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
                         first_frame.complete(Ok(()));
+                        "sent"
                     }
                     output_pipeline::StallSendOutcome::StalledAndDropped { .. }
                     | output_pipeline::StallSendOutcome::Disconnected => {
                         video_drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                        "drop"
                     }
+                };
+                if trace_cb_ns != 0 {
+                    crate::wintrace::line(format_args!("cb,{},{},{},{},{},{}", trace_cb_ns, capture_time.Duration * 100, trace_w, trace_h, trace_outcome, trace_send_start.elapsed().as_micros()));
                 }
                 Ok(())
                 })();
@@ -1327,7 +1338,9 @@ fn create_system_audio_capturer(
                     *guard = Some(timestamp);
                 }
 
-                match output_pipeline::send_with_stall_budget_futures(
+                let (trace_w, trace_h) = (frame_width, frame_height);
+                let trace_send_start = std::time::Instant::now();
+                let trace_outcome = match output_pipeline::send_with_stall_budget_futures(
                     &mut tx,
                     frame,
                     "screen-system-audio",
@@ -1476,7 +1489,9 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                             ts = ts + chunk_duration;
                             let silence = create_silence_frame(&audio_info, silence_chunk_samples);
                             let frame = AudioFrame::new(silence, ts);
-                            match output_pipeline::send_with_stall_budget_futures(
+                            let (trace_w, trace_h) = (frame_width, frame_height);
+                let trace_send_start = std::time::Instant::now();
+                let trace_outcome = match output_pipeline::send_with_stall_budget_futures(
                                 &mut watcher_tx,
                                 frame,
                                 "screen-system-audio:silence-fill",

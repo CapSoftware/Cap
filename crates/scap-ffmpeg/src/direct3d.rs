@@ -105,9 +105,19 @@ fn pooled_frame(format: Pixel, width: u32, height: u32) -> ffmpeg::frame::Video 
     })
 }
 
+thread_local! {
+    pub static LAST_AS_BUFFER_US: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+pub fn last_as_buffer_us() -> u64 {
+    LAST_AS_BUFFER_US.with(|c| c.get())
+}
+
 impl super::AsFFmpeg for scap_direct3d::Frame {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
+        let trace_start = std::time::Instant::now();
         let buffer = self.as_buffer()?;
+        LAST_AS_BUFFER_US.with(|c| c.set(trace_start.elapsed().as_micros() as u64));
 
         let width = self.width() as usize;
         let height = self.height() as usize;
