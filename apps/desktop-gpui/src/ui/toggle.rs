@@ -63,6 +63,9 @@ pub struct Toggle {
     thumb: Hsla,
     disabled: bool,
     label: Option<SharedString>,
+    /// Drawn only: the row around it is the switch screen readers see and
+    /// press, because that row is what takes the click.
+    presentational: bool,
     on_click: Option<crate::ui::button::ClickHandler>,
 }
 
@@ -78,6 +81,7 @@ impl Toggle {
             thumb: gpui::white(),
             disabled: false,
             label: None,
+            presentational: false,
             on_click: None,
         }
     }
@@ -130,6 +134,13 @@ impl Toggle {
         self
     }
 
+    /// For a switch drawn inside a clickable row: the row carries the role,
+    /// name and state instead (see [`Self::presentational`]'s field).
+    pub fn presentational(mut self) -> Self {
+        self.presentational = true;
+        self
+    }
+
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -150,6 +161,7 @@ impl RenderOnce for Toggle {
             thumb,
             disabled,
             label,
+            presentational,
             on_click,
         } = self;
         let (width, height, padding) = size.track();
@@ -160,13 +172,15 @@ impl RenderOnce for Toggle {
                 keyboard_nav::active(window, cx) && !disabled,
                 keyboard_nav::stop,
             )
-            .role(gpui::Role::Switch)
-            .aria_toggled(if checked {
-                gpui::Toggled::True
-            } else {
-                gpui::Toggled::False
+            .when(!presentational, |this| {
+                this.role(gpui::Role::Switch)
+                    .aria_toggled(if checked {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .when_some(label, |this, label| this.aria_label(label))
             })
-            .when_some(label, |this, label| this.aria_label(label))
             .w(width)
             .h(height)
             .p(padding)

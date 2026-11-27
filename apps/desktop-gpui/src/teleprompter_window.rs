@@ -1092,6 +1092,13 @@ impl TeleprompterWindow {
 
         div()
             .id(SharedString::from(id))
+            .role(gpui::Role::Switch)
+            .aria_label(label)
+            .aria_toggled(if checked {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
             .flex()
             .flex_row()
             .items_center()
@@ -1119,7 +1126,7 @@ impl TeleprompterWindow {
             // `<Toggle size="sm">` on bare glass.
             .child(
                 ui::Toggle::glass(&theme, SharedString::from(format!("{id}-toggle")), checked)
-                    .label(label),
+                    .presentational(),
             )
             .on_click(on_click)
     }

@@ -2166,6 +2166,14 @@ fn clip_menu_toggle_row(
 ) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
+        .role(gpui::Role::Switch)
+        .aria_label(label)
+        .aria_description(description)
+        .aria_toggled(if checked {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
         .h(px(40.))
         .w_full()
         .flex()
@@ -2207,7 +2215,7 @@ fn clip_menu_toggle_row(
         )
         .child(
             ui::Toggle::plain(theme, SharedString::from(format!("{id}-toggle")), checked)
-                .label(label),
+                .presentational(),
         )
 }
 
