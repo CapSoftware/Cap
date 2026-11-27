@@ -418,6 +418,28 @@ describe("buildAskPrompt", () => {
 		expect(youInText.system).not.toContain("is them");
 	});
 
+	it("forbids placeholder sign-offs on every Ask without naming who asks", () => {
+		for (const overrides of [
+			{ transcript: "Sam: Send the recap?\nAlex: I'll send it." },
+			{ transcript: "Sam: Send the recap?\nYou: I'll send it." },
+			{
+				transcript: "Sam: Send the recap?\nAlex: I'll send it.",
+				selfName: "Alex",
+			},
+		]) {
+			const { system } = prompts.buildAskPrompt({
+				...askInput(overrides),
+				boundary: B,
+			});
+			expect(system).toContain('Never leave a placeholder to fill in, such as "[Name]"');
+		}
+		const { system } = prompts.buildAskPrompt({
+			...askInput({ transcript: "Sam: Send the recap?\nAlex: I'll send it." }),
+			boundary: B,
+		});
+		expect(system).not.toContain("is them");
+	});
+
 	it("sends the whole transcript up to the request maximum", () => {
 		const transcript = Array.from(
 			{ length: 300 },
