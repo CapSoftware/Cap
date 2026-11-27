@@ -632,6 +632,23 @@ fn the_ask_body_keeps_the_latest_history() {
     )
     .unwrap();
     assert_eq!(with["vocabulary"], serde_json::json!(["Cap"]));
+    assert!(body.get("selfName").is_none(), "no name sends nothing new");
+    let named = generate::ask_body(
+        "20261113T101500123Z-abc123",
+        "Sync",
+        &transcript,
+        "",
+        "Draft a follow-up email",
+        &[],
+        Some(" Alex "),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(named["selfName"], "Alex");
+    assert!(
+        named["transcript"].as_str().unwrap().starts_with("Alex: "),
+        "the name matches the label on the user's lines"
+    );
     let kept = body["history"].as_array().unwrap();
     assert_eq!(kept.len(), 20);
     assert_eq!(kept[0]["content"], "turn 10");
@@ -946,6 +963,30 @@ fn notes_without_a_calendar_list_name_the_voices_the_transcript_heard() {
     assert_eq!(b["participants"][0]["isSelf"], true);
     assert_eq!(b["participants"][1]["name"], "Dana");
     assert_eq!(b["participants"].as_array().unwrap().len(), 2);
+
+    // A plain list of names still marks the user.
+    if let Some(meeting) = meta.meeting.as_mut() {
+        meeting.participants = vec!["Dana".into(), "ada".into()];
+    }
+    let body = generate::notes_body(generate::NotesInput {
+        meta: &meta,
+        transcript: &transcript,
+        user_notes_markdown: String::new(),
+        template: &templates[0],
+        vocabulary: &[],
+        summary_language: None,
+        previous_markdown: None,
+        instruction: None,
+        time_zone: None,
+        self_name: Some("Ada"),
+    })
+    .unwrap();
+    let listed = &body.body["participants"];
+    assert_eq!(listed[0], serde_json::json!({ "name": "Dana" }));
+    assert_eq!(
+        listed[1],
+        serde_json::json!({ "name": "ada", "isSelf": true })
+    );
 }
 
 #[test]

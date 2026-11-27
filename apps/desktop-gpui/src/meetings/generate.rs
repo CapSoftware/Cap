@@ -334,7 +334,16 @@ fn attendee_values(meeting: &MeetingDetails, heard: &[(String, bool)]) -> Vec<Va
             .participants
             .iter()
             .take(100)
-            .map(|name| json!({ "name": clip_chars(name, 200) }))
+            .map(|name| {
+                let mut value = json!({ "name": clip_chars(name, 200) });
+                if heard
+                    .iter()
+                    .any(|(heard, user)| *user && heard.eq_ignore_ascii_case(name.trim()))
+                {
+                    value["isSelf"] = json!(true);
+                }
+                value
+            })
             .collect();
     }
     heard
@@ -396,6 +405,11 @@ pub fn ask_body(
     });
     if !title.trim().is_empty() {
         body["title"] = json!(clip_chars(title.trim(), 300));
+    }
+    // The label the transcript gives the user's lines, so Ask knows which
+    // speaker is asking. Without a name those lines say "You".
+    if let Some(name) = self_name.map(str::trim).filter(|n| !n.is_empty()) {
+        body["selfName"] = json!(clip_chars(name, 200));
     }
     if !vocabulary.is_empty() {
         body["vocabulary"] = json!(
