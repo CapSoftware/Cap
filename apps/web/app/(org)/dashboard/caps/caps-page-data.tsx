@@ -214,8 +214,8 @@ export async function CapsPageView({
 			isScreenshot: videos.isScreenshot,
 			duration: videos.duration,
 			public: videos.public,
-			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
-			totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
+			totalComments: sql<number>`(SELECT COUNT(*) FROM ${comments} WHERE ${comments.videoId} = ${videos.id} AND ${comments.type} = 'text')`,
+			totalReactions: sql<number>`(SELECT COUNT(*) FROM ${comments} WHERE ${comments.videoId} = ${videos.id} AND ${comments.type} = 'emoji')`,
 			sharedOrganizations: sql<
 				{
 					id: string;
@@ -246,7 +246,6 @@ export async function CapsPageView({
 		})
 		.from(videos)
 		.innerJoin(capsPage, eq(videos.id, capsPage.id))
-		.leftJoin(comments, eq(videos.id, comments.videoId))
 		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 		.leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
 		.leftJoin(users, eq(videos.ownerId, users.id))

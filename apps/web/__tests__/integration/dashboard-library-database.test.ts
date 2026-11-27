@@ -233,6 +233,58 @@ describe.runIf(Boolean(databaseUrl))(
 			).toEqual({ [unshared]: [], [shared]: [orgId] });
 		});
 
+		it("counts comments and lists each shared organization once on My Caps", async () => {
+			const { CapsPageView } = await import(
+				"@/app/(org)/dashboard/caps/caps-page-data"
+			);
+			const { orgId, ownerId } = await createOrg();
+			const videoId = await createVideo(ownerId, orgId);
+			await database()
+				.insert(Db.sharedVideos)
+				.values({
+					id: id(),
+					videoId,
+					organizationId: orgId as never,
+					sharedByUserId: ownerId as never,
+				});
+			await database()
+				.insert(Db.comments)
+				.values(
+					(["text", "text", "text", "emoji", "emoji"] as const).map((type) => ({
+						id: id() as never,
+						type,
+						content: "hi",
+						authorId: ownerId as never,
+						videoId,
+					})),
+				);
+			fixture.sessionUserId = ownerId;
+
+			const page = await CapsPageView({ searchParams: {}, view: "library" });
+			const caps: {
+				id: string;
+				totalComments: number;
+				totalReactions: number;
+				sharedOrganizations: { id: string }[];
+			}[] = page.props.data;
+
+			expect(
+				caps.map((cap) => ({
+					id: cap.id,
+					totalComments: Number(cap.totalComments),
+					totalReactions: Number(cap.totalReactions),
+					sharedOrganizations: cap.sharedOrganizations.map((org) => org.id),
+				})),
+			).toEqual([
+				{
+					id: videoId,
+					totalComments: 3,
+					totalReactions: 2,
+					sharedOrganizations: [orgId],
+				},
+			]);
+		});
+
 		it("persists a custom space order for everyone and only lets managers change it", async () => {
 			const { reorderSpaceVideos, setSpaceVideoOrder } = await import(
 				"@/actions/spaces/video-order"
