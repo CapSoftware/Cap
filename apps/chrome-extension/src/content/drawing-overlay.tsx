@@ -109,16 +109,78 @@ export function DrawingOverlay({ active, onClose }: DrawingOverlayProps) {
 	const sizeRef = useRef(size);
 	const autoFadeRef = useRef(autoFade);
 	const dprRef = useRef(1);
+	const isLoopRunningRef = useRef(false);
+	const frameRef = useRef(0);
+
+	const renderFrame = useCallback((now: number): boolean => {
+		const canvas = canvasRef.current;
+		const ctx = canvas?.getContext("2d");
+		if (!canvas || !ctx) return false;
+
+		const dpr = dprRef.current;
+		ctx.setTransform(1, 0, 0, 1, 0, 0);
+		ctx.clearRect(0, 0, canvas.width, canvas.height);
+		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+		const fade = autoFadeRef.current;
+		const strokes = strokesRef.current;
+		let hasFadingStrokes = false;
+
+		for (const stroke of strokes) {
+			const opacity = strokeOpacity(stroke, now, fade);
+			if (opacity > 0) {
+				paintStroke(ctx, stroke, opacity);
+			}
+			if (fade && stroke.completedAt !== null) {
+				const age = now - stroke.completedAt;
+				if (age < FADE_DELAY_MS + FADE_DURATION_MS) {
+					hasFadingStrokes = true;
+				}
+			}
+		}
+
+		if (fade) {
+			strokesRef.current = strokes.filter(
+				(stroke) =>
+					stroke.completedAt === null ||
+					strokeOpacity(stroke, now, true) > 0,
+			);
+		}
+
+		const isDrawing = activeStrokeRef.current !== null;
+		// Keep looping only if currently drawing or if any stroke is still actively fading
+		return isDrawing || (fade && hasFadingStrokes);
+	}, []);
+
+	const requestRender = useCallback(() => {
+		if (!active) return;
+		if (isLoopRunningRef.current) return;
+		isLoopRunningRef.current = true;
+
+		const loop = (now: number) => {
+			const shouldContinue = renderFrame(now);
+			if (shouldContinue) {
+				frameRef.current = window.requestAnimationFrame(loop);
+			} else {
+				isLoopRunningRef.current = false;
+				frameRef.current = 0;
+			}
+		};
+		frameRef.current = window.requestAnimationFrame(loop);
+	}, [active, renderFrame]);
 
 	useEffect(() => {
 		colorRef.current = color;
-	}, [color]);
+		requestRender();
+	}, [color, requestRender]);
 	useEffect(() => {
 		sizeRef.current = size;
-	}, [size]);
+		requestRender();
+	}, [size, requestRender]);
 	useEffect(() => {
 		autoFadeRef.current = autoFade;
-	}, [autoFade]);
+		requestRender();
+	}, [autoFade, requestRender]);
 
 	// Leaving draw mode wipes the ink so re-entering starts on a clean canvas
 	// and no stale strokes linger over the page.
@@ -126,6 +188,11 @@ export function DrawingOverlay({ active, onClose }: DrawingOverlayProps) {
 		if (active) return;
 		strokesRef.current = [];
 		activeStrokeRef.current = null;
+		if (frameRef.current) {
+			window.cancelAnimationFrame(frameRef.current);
+			frameRef.current = 0;
+		}
+		isLoopRunningRef.current = false;
 	}, [active]);
 
 	// Match the canvas backing store to the viewport at device resolution so
@@ -142,45 +209,26 @@ export function DrawingOverlay({ active, onClose }: DrawingOverlayProps) {
 			canvas.height = Math.round(window.innerHeight * dpr);
 			canvas.style.width = `${window.innerWidth}px`;
 			canvas.style.height = `${window.innerHeight}px`;
+			requestRender();
 		};
 		resize();
 		window.addEventListener("resize", resize);
 		return () => window.removeEventListener("resize", resize);
-	}, [active]);
+	}, [active, requestRender]);
 
-	// One rAF loop owns all painting: it reads the mutable stroke buffer (kept
-	// out of React state so a fast scribble never triggers re-renders), applies
-	// the current fade, and drops strokes once they have fully faded.
+	// Adaptive rAF loop: paints when drawing, continues during stroke fadeout,
+	// and goes dormant when idle to minimize CPU usage while recording.
 	useEffect(() => {
 		if (!active) return;
-		let frame = 0;
-		const loop = (now: number) => {
-			const canvas = canvasRef.current;
-			const ctx = canvas?.getContext("2d");
-			if (canvas && ctx) {
-				const dpr = dprRef.current;
-				ctx.setTransform(1, 0, 0, 1, 0, 0);
-				ctx.clearRect(0, 0, canvas.width, canvas.height);
-				ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-				const fade = autoFadeRef.current;
-				const strokes = strokesRef.current;
-				for (const stroke of strokes) {
-					const opacity = strokeOpacity(stroke, now, fade);
-					if (opacity > 0) paintStroke(ctx, stroke, opacity);
-				}
-				if (fade) {
-					strokesRef.current = strokes.filter(
-						(stroke) =>
-							stroke.completedAt === null ||
-							strokeOpacity(stroke, now, true) > 0,
-					);
-				}
+		requestRender();
+		return () => {
+			if (frameRef.current) {
+				window.cancelAnimationFrame(frameRef.current);
+				frameRef.current = 0;
 			}
-			frame = window.requestAnimationFrame(loop);
+			isLoopRunningRef.current = false;
 		};
-		frame = window.requestAnimationFrame(loop);
-		return () => window.cancelAnimationFrame(frame);
-	}, [active]);
+	}, [active, requestRender]);
 
 	const handlePointerDown = useCallback(
 		(event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -194,27 +242,40 @@ export function DrawingOverlay({ active, onClose }: DrawingOverlayProps) {
 			};
 			activeStrokeRef.current = stroke;
 			strokesRef.current = [...strokesRef.current, stroke];
+			requestRender();
 		},
-		[],
+		[requestRender],
 	);
 
 	const handlePointerMove = useCallback(
 		(event: ReactPointerEvent<HTMLCanvasElement>) => {
 			const stroke = activeStrokeRef.current;
 			if (!stroke) return;
+			const addPoint = (x: number, y: number) => {
+				const lastPoint = stroke.points[stroke.points.length - 1];
+				// Skip redundant micro-drift samples within half a pixel to reduce buffer bloat
+				if (
+					!lastPoint ||
+					Math.abs(lastPoint.x - x) >= 0.5 ||
+					Math.abs(lastPoint.y - y) >= 0.5
+				) {
+					stroke.points.push({ x, y });
+				}
+			};
 			// Coalesced events recover the sub-frame pointer samples the browser
 			// batched, so quick strokes stay smooth instead of polygonal.
 			const native = event.nativeEvent;
 			const coalesced = native.getCoalescedEvents?.() ?? [];
 			if (coalesced.length > 0) {
 				for (const sample of coalesced) {
-					stroke.points.push({ x: sample.clientX, y: sample.clientY });
+					addPoint(sample.clientX, sample.clientY);
 				}
 			} else {
-				stroke.points.push({ x: event.clientX, y: event.clientY });
+				addPoint(event.clientX, event.clientY);
 			}
+			requestRender();
 		},
-		[],
+		[requestRender],
 	);
 
 	const handlePointerUp = useCallback(() => {
@@ -222,11 +283,23 @@ export function DrawingOverlay({ active, onClose }: DrawingOverlayProps) {
 		if (!stroke) return;
 		stroke.completedAt = window.performance.now();
 		activeStrokeRef.current = null;
-	}, []);
+		requestRender();
+	}, [requestRender]);
 
 	const clear = useCallback(() => {
 		strokesRef.current = [];
 		activeStrokeRef.current = null;
+		const canvas = canvasRef.current;
+		const ctx = canvas?.getContext("2d");
+		if (canvas && ctx) {
+			ctx.setTransform(1, 0, 0, 1, 0, 0);
+			ctx.clearRect(0, 0, canvas.width, canvas.height);
+		}
+		if (frameRef.current) {
+			window.cancelAnimationFrame(frameRef.current);
+			frameRef.current = 0;
+		}
+		isLoopRunningRef.current = false;
 	}, []);
 
 	const toggleAutoFade = useCallback(() => {
@@ -240,9 +313,10 @@ export function DrawingOverlay({ active, onClose }: DrawingOverlayProps) {
 					if (stroke.completedAt !== null) stroke.completedAt = now;
 				}
 			}
+			requestRender();
 			return next;
 		});
-	}, []);
+	}, [requestRender]);
 
 	if (!active) return null;
 

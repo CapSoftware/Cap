@@ -265,6 +265,27 @@ describe("RecordingSpool", () => {
 		expect(await blobToText(blob as Blob)).toBe("chunk-1chunk-2");
 	});
 
+	it("clears pending in-memory buffer chunks to prevent memory retention", async () => {
+		const backend = new MemoryRecordingSpoolBackend({ failureAtIndex: 1 });
+		const spool = await RecordingSpool.create(
+			{
+				mimeType: "video/webm",
+				sessionId: "session-clear-pending",
+			},
+			backend,
+		);
+
+		await spool.appendChunk(new Blob(["chunk-1"], { type: "video/webm" }));
+		await expect(
+			spool.appendChunk(new Blob(["chunk-2"], { type: "video/webm" })),
+		).rejects.toThrow("Failed to persist chunk 1");
+
+		expect(await spool.recoverBlob()).not.toBeNull();
+		spool.clearPendingChunks();
+		const afterClear = await spool.recoverBlob();
+		expect(await blobToText(afterClear as Blob)).toBe("chunk-1");
+	});
+
 	it("keeps queued in-memory chunks available after a write failure", async () => {
 		const backend = new MemoryRecordingSpoolBackend({ failureAtIndex: 1 });
 		const spool = await RecordingSpool.create(
