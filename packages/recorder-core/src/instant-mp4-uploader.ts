@@ -65,7 +65,7 @@ interface UploadedPartPayload {
 }
 
 interface MultipartCompletePayload {
-	durationSeconds: number;
+	durationSeconds?: number;
 	width?: number;
 	height?: number;
 	fps?: number;

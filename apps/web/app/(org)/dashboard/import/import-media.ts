@@ -1,10 +1,14 @@
 "use client";
 
+import {
+	InstantRecordingUploader,
+	initiateMultipartUpload,
+	MultipartCompletionUncertainError,
+} from "@cap/recorder-core/instant-mp4-uploader";
 import type { Folder, Organisation, Video } from "@cap/web-domain";
 import { Option } from "effect";
 import { toast } from "sonner";
 import { createVideoForServerProcessing } from "@/actions/video/create-for-processing";
-import { triggerVideoProcessing } from "@/actions/video/trigger-processing";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { sendProgressUpdate } from "@/app/(org)/dashboard/caps/components/sendProgressUpdate";
 import type { UploadStatus } from "@/app/(org)/dashboard/caps/UploadingContext";
@@ -17,6 +21,10 @@ import {
 } from "./media-file-types";
 
 export { isSupportedMediaFile } from "./media-file-types";
+
+// Must match the key createVideoForServerProcessing records as rawFileKey.
+const RAW_UPLOAD_SUBPATH = "raw-upload.mp4";
+const RAW_UPLOAD_CONTENT_TYPE = "video/mp4";
 
 export async function importMediaFile({
 	file,
@@ -245,42 +253,68 @@ async function uploadVideoForServerProcessing(
 			};
 
 			const getTotal = () => uploadState.total;
-			const didFinishSending = () =>
-				uploadState.total > 0 && uploadState.uploaded >= uploadState.total;
 
-			return { scheduleProgressUpdate, cleanup, getTotal, didFinishSending };
+			return { scheduleProgressUpdate, cleanup, getTotal };
 		};
 
 		const progressTracker = createProgressTracker();
 
+		let uploader: InstantRecordingUploader;
 		try {
-			await uploadWithTarget({
-				target: videoData.uploadTarget,
-				body: file,
-				fileName: file.name || "pasted-video.mp4",
-				onProgress: ({ loaded, total }) => {
-					const percent = (loaded / total) * 100;
+			const session = await initiateMultipartUpload({
+				videoId: uploadId,
+				contentType: RAW_UPLOAD_CONTENT_TYPE,
+				subpath: RAW_UPLOAD_SUBPATH,
+			});
+			uploader = new InstantRecordingUploader({
+				videoId: uploadId,
+				uploadId: session.uploadId,
+				provider: session.provider,
+				mimeType: RAW_UPLOAD_CONTENT_TYPE,
+				subpath: RAW_UPLOAD_SUBPATH,
+				// The uploader reports only finished parts; follow the bytes in flight.
+				setUploadStatus: () => {},
+				sendProgressUpdate: async () => {},
+				onChunkStateChange: (chunks) => {
+					// cancel() clears the chunk list; that is not progress.
+					if (chunks.length === 0) return;
+					const loaded = chunks.reduce(
+						(sent, chunk) => sent + chunk.uploadedBytes,
+						0,
+					);
 					setUploadStatus({
 						status: "uploadingVideo",
 						capId: uploadId,
-						progress: percent,
+						progress: (loaded / file.size) * 100,
 						thumbnailUrl: undefined,
 					});
-
-					progressTracker.scheduleProgressUpdate(loaded, total);
+					progressTracker.scheduleProgressUpdate(loaded, file.size);
 				},
 			});
-		} catch (uploadError) {
-			if (!progressTracker.didFinishSending()) {
-				progressTracker.cleanup();
-				await deleteFailedImport(uploadId);
-				throw uploadError;
-			}
+		} catch (initiateError) {
+			await deleteFailedImport(uploadId);
+			throw initiateError;
+		}
 
-			console.warn(
-				"Upload request failed after all bytes were sent; verifying object before processing:",
-				uploadError,
-			);
+		try {
+			await uploader.finalize({
+				finalBlob: file,
+				durationSeconds: duration,
+				subpath: RAW_UPLOAD_SUBPATH,
+			});
+		} catch (uploadError) {
+			progressTracker.cleanup();
+			if (uploadError instanceof MultipartCompletionUncertainError) {
+				console.error("Upload confirmation was interrupted", uploadError);
+				toast.error(
+					"Upload confirmation was interrupted. Check your videos before uploading again.",
+				);
+				setUploadStatus(undefined);
+				return false;
+			}
+			await uploader.cancel();
+			await deleteFailedImport(uploadId);
+			throw uploadError;
 		}
 		progressTracker.cleanup();
 		const total = progressTracker.getTotal() || file.size || 1;
@@ -291,14 +325,7 @@ async function uploadVideoForServerProcessing(
 			capId: uploadId,
 		});
 
-		try {
-			await triggerVideoProcessing({
-				videoId: uploadId,
-				rawFileKey: videoData.rawFileKey,
-				bucketId: videoData.bucketId,
-			});
-		} catch (triggerError) {
-			console.error("Failed to trigger processing:", triggerError);
+		if (!uploader.getProcessingStarted()) {
 			toast.error("Failed to start video processing. Please try again.");
 			setUploadStatus(undefined);
 			return false;
