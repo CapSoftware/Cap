@@ -1315,6 +1315,7 @@ impl H264Encoder {
             super::convert_or_scale(&frame, converted, converter)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
+            converted.set_kind(frame.kind());
             converted as &frame::Video
         } else {
             &frame
@@ -1686,6 +1687,15 @@ fn export_encoder_priority_override(
 
 pub const DEFAULT_KEYFRAME_INTERVAL_SECS: u32 = 2;
 
+pub(crate) fn keyframe_interval_frames(config: &VideoInfo) -> i32 {
+    let denominator = config.frame_rate.denominator();
+    let frames_per_sec = config.frame_rate.numerator() as f64
+        / if denominator == 0 { 1 } else { denominator } as f64;
+    (DEFAULT_KEYFRAME_INTERVAL_SECS as f64 * frames_per_sec)
+        .round()
+        .max(1.0) as i32
+}
+
 fn get_codec_and_options(
     config: &VideoInfo,
     preset: H264Preset,
@@ -1693,14 +1703,7 @@ fn get_codec_and_options(
     is_export: bool,
     crf: Option<u8>,
 ) -> Vec<(Codec, Dictionary<'static>)> {
-    let keyframe_interval_secs = DEFAULT_KEYFRAME_INTERVAL_SECS;
-    let denominator = config.frame_rate.denominator();
-    let frames_per_sec = config.frame_rate.numerator() as f64
-        / if denominator == 0 { 1 } else { denominator } as f64;
-    let keyframe_interval = (keyframe_interval_secs as f64 * frames_per_sec)
-        .round()
-        .max(1.0) as i32;
-    let keyframe_interval_str = keyframe_interval.to_string();
+    let keyframe_interval_str = keyframe_interval_frames(config).to_string();
 
     let encoder_priority = if crf.is_some() {
         &["libx264"] as &[&str]

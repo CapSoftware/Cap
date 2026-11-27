@@ -345,6 +345,7 @@ struct FrameDropTracker {
     total_drops: u64,
     total_frames: u64,
     last_check: std::time::Instant,
+    refresh_requests: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 impl FrameDropTracker {
@@ -355,6 +356,7 @@ impl FrameDropTracker {
             total_drops: 0,
             total_frames: 0,
             last_check: std::time::Instant::now(),
+            refresh_requests: None,
         }
     }
 
@@ -367,6 +369,9 @@ impl FrameDropTracker {
     fn record_drop(&mut self) {
         self.drops_in_window += 1;
         self.total_drops += 1;
+        if let Some(requests) = &self.refresh_requests {
+            requests.fetch_add(1, std::sync::atomic::Ordering::Release);
+        }
         self.check_drop_rate();
     }
 
@@ -566,6 +571,10 @@ impl Muxer for SegmentedVideoMuxer {
         {
             trace!("Segmented encoder channel already closed during stop: {e}");
         }
+    }
+
+    fn set_video_refresh_requests(&mut self, requests: Arc<std::sync::atomic::AtomicU64>) {
+        self.frame_drops.refresh_requests = Some(requests);
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
@@ -826,7 +835,24 @@ impl VideoMuxer for SegmentedVideoMuxer {
         let Some(adjusted_timestamp) = self.pause.adjust(timestamp)? else {
             return Ok(());
         };
+        self.queue_video_frame(frame, adjusted_timestamp)
+    }
 
+    fn send_video_tail_frame(
+        &mut self,
+        frame: Self::VideoFrame,
+        timestamp: Duration,
+    ) -> anyhow::Result<()> {
+        self.queue_video_frame(frame, timestamp.saturating_sub(self.pause.offset()))
+    }
+}
+
+impl SegmentedVideoMuxer {
+    fn queue_video_frame(
+        &mut self,
+        frame: FFmpegVideoFrame,
+        timestamp: Duration,
+    ) -> anyhow::Result<()> {
         if !self.started {
             self.start_encoder()?;
         }
@@ -834,7 +860,7 @@ impl VideoMuxer for SegmentedVideoMuxer {
         if let Some(state) = &self.state {
             send_segmented_frame(
                 &state.video_tx,
-                Some((frame.inner, adjusted_timestamp)),
+                Some((frame.inner, timestamp)),
                 &mut self.frame_drops,
             )?;
         }
@@ -1055,6 +1081,65 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
         assert_eq!(drops.total_frames, 0);
         assert_eq!(drops.total_drops, 1);
+    }
+
+    #[test]
+    fn a_frame_dropped_at_the_encoder_queue_asks_the_source_to_send_it_again() {
+        let (sender, _receiver) = flume::bounded(1);
+        sender.send(1).unwrap();
+        let requests = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let mut drops = FrameDropTracker::new();
+        drops.refresh_requests = Some(requests.clone());
+
+        send_segmented_frame(&sender, 2, &mut drops).unwrap();
+        assert_eq!(drops.total_drops, 1);
+        assert_eq!(requests.load(std::sync::atomic::Ordering::Acquire), 1);
+
+        drop(_receiver);
+        let (sender, receiver) = flume::bounded(1);
+        send_segmented_frame(&sender, 3, &mut drops).unwrap();
+        assert_eq!(receiver.recv().unwrap(), 3);
+        assert_eq!(requests.load(std::sync::atomic::Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn a_tail_frame_reaches_the_encoder_while_paused() {
+        use super::{SegmentedVideoMuxer, SegmentedVideoMuxerConfig};
+        use crate::{Muxer, TaskPool, output_pipeline::VideoMuxer};
+        use std::time::Duration;
+
+        let directory = tempfile::tempdir().unwrap();
+        let paused = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let mut muxer = SegmentedVideoMuxer::setup(
+            SegmentedVideoMuxerConfig::default(),
+            directory.path().join("display"),
+            Some(cap_media_info::VideoInfo::from_raw_ffmpeg(
+                ffmpeg::format::Pixel::BGRA,
+                64,
+                64,
+                30,
+            )),
+            None,
+            paused,
+            &mut TaskPool::default(),
+        )
+        .await
+        .unwrap();
+        let frame = || FFmpegVideoFrame {
+            inner: ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 64, 64),
+            timestamp: Timestamp::Instant(Instant::now()),
+        };
+
+        muxer
+            .send_video_frame(frame(), Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(muxer.frame_drops.total_frames, 0);
+
+        muxer
+            .send_video_tail_frame(frame(), Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(muxer.frame_drops.total_frames, 1);
+        muxer.finish(Duration::from_secs(1)).unwrap().unwrap();
     }
 
     #[test]

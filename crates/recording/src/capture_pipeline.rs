@@ -435,13 +435,18 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
         start_gate: Option<RecordingStartGate>,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
+        let segment_duration = std::time::Duration::from_secs(2);
+        let frame_interval =
+            std::time::Duration::from_secs_f64(1.0 / f64::from(screen_capture.video_info().fps()));
         OutputPipeline::builder(segments_dir)
-            .with_video::<screen_capture::VideoSource>(screen_capture)
+            .with_video::<screen_capture::VideoSource>(
+                screen_capture.with_refresh_interval(segment_duration + frame_interval),
+            )
             .with_timestamps(start_time)
             .with_start_gate(start_gate.clone())
             .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
                 timed_fragments: false,
-                segment_duration: std::time::Duration::from_secs(2),
+                segment_duration,
                 preset: H264Preset::Ultrafast,
                 video_bitrate: None,
                 output_size: Some(output_size),

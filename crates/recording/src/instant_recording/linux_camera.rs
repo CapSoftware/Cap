@@ -753,9 +753,13 @@ impl VideoSource for CameraCompositeSource {
             validate_camera_frame(&first_camera, Instant::now())?;
         }
         let (screen_tx, screen_rx) = mpsc::channel(SCREEN_CHANNEL_CAPACITY);
-        let inner = screen_capture::VideoSource::setup(config.screen_capture, screen_tx, ctx)
-            .await
-            .context("screen source setup for camera compositor")?;
+        let inner = screen_capture::VideoSource::setup(
+            config.screen_capture.with_every_frame(),
+            screen_tx,
+            ctx,
+        )
+        .await
+        .context("screen source setup for camera compositor")?;
         let health_tx = ctx.health_tx().clone();
         let runtime = tokio::runtime::Handle::current();
         ctx.tasks()
