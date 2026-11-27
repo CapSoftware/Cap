@@ -32,6 +32,7 @@ use crate::output_pipeline::{
     WindowsFragmentedM4SCameraMuxerConfig,
 };
 use anyhow::{Context as _, anyhow, bail};
+use cap_enc_ffmpeg::h264::VideoEncoderChoice;
 use cap_media_info::VideoInfo;
 use cap_project::{
     CursorEvents, KeyboardEvents, MultipleSegment, MultipleSegments, Platform, RecordingMeta,
@@ -2760,6 +2761,7 @@ pub struct ActorBuilder {
     use_oop_muxer: bool,
     max_fps: u32,
     quality: crate::StudioQuality,
+    video_encoder: VideoEncoderChoice,
     video_bitrate: Option<u32>,
     #[cfg(target_os = "macos")]
     excluded_windows: Vec<scap_targets::WindowId>,
@@ -2787,6 +2789,7 @@ impl ActorBuilder {
             use_oop_muxer: false,
             max_fps: 60,
             quality: crate::StudioQuality::Balanced,
+            video_encoder: VideoEncoderChoice::Automatic,
             video_bitrate: None,
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
@@ -2851,6 +2854,11 @@ impl ActorBuilder {
 
     pub fn with_quality(mut self, quality: crate::StudioQuality) -> Self {
         self.quality = quality;
+        self
+    }
+
+    pub fn with_video_encoder(mut self, video_encoder: VideoEncoderChoice) -> Self {
+        self.video_encoder = video_encoder;
         self
     }
 
@@ -2919,6 +2927,7 @@ impl ActorBuilder {
             self.use_oop_muxer && !audio_only,
             self.max_fps,
             self.quality,
+            self.video_encoder,
             self.video_bitrate,
             self.pretty_name,
         );
@@ -2980,6 +2989,7 @@ async fn spawn_studio_recording_actor(
     use_oop_muxer: bool,
     max_fps: u32,
     quality: crate::StudioQuality,
+    video_encoder: VideoEncoderChoice,
     video_bitrate: Option<u32>,
     pretty_name: Option<String>,
 ) -> anyhow::Result<ActorHandle> {
@@ -3063,6 +3073,7 @@ async fn spawn_studio_recording_actor(
         video_bitrate,
         completion_tx.clone(),
     );
+    segment_pipeline_factory.video_encoder = video_encoder;
 
     if fragmented || cfg!(any(target_os = "linux", windows)) {
         write_in_progress_meta_for(
@@ -3749,6 +3760,7 @@ struct SegmentPipelineFactory {
     use_oop_muxer: bool,
     max_fps: u32,
     quality: crate::StudioQuality,
+    video_encoder: VideoEncoderChoice,
     video_bitrate: Option<u32>,
     index: u32,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
@@ -3793,6 +3805,7 @@ impl SegmentPipelineFactory {
             use_oop_muxer,
             max_fps,
             quality,
+            video_encoder: VideoEncoderChoice::Automatic,
             video_bitrate,
             index: 0,
             completion_tx,
@@ -3841,6 +3854,7 @@ impl SegmentPipelineFactory {
             self.use_oop_muxer,
             self.max_fps,
             self.quality,
+            self.video_encoder,
             self.video_bitrate,
             segment_start_time,
             #[cfg(windows)]
@@ -3884,6 +3898,7 @@ impl SegmentPipelineFactory {
                 self.use_oop_muxer,
                 self.max_fps,
                 self.quality,
+                self.video_encoder,
                 self.video_bitrate,
                 Timestamps::now(),
                 #[cfg(windows)]
@@ -4037,6 +4052,7 @@ async fn create_segment_pipeline(
     use_oop_muxer: bool,
     max_fps: u32,
     quality: crate::StudioQuality,
+    video_encoder: VideoEncoderChoice,
     video_bitrate: Option<u32>,
     start_time: Timestamps,
     #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
@@ -4237,6 +4253,12 @@ async fn create_segment_pipeline(
             start_time = Timestamps::now();
         }
         #[cfg(target_os = "macos")]
+        let video_encoder = if screen_frames.switched_to_software() {
+            VideoEncoderChoice::Automatic
+        } else {
+            video_encoder
+        };
+        #[cfg(target_os = "macos")]
         screen_frames.register(capture_source.frame_accounting());
 
         let screen = ScreenCaptureMethod::make_studio_mode_pipeline(
@@ -4249,6 +4271,7 @@ async fn create_segment_pipeline(
             shared_pause_state.clone(),
             output_size,
             quality,
+            video_encoder,
             video_bitrate,
             #[cfg(windows)]
             encoder_preferences.clone(),
