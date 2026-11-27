@@ -84,6 +84,7 @@ async function fetchWithRetry(
 			return response;
 		} catch (err) {
 			lastError = err instanceof Error ? err : new Error(String(err));
+			if (options.signal?.aborted) break;
 			if (attempt < maxRetries) {
 				const delay = INITIAL_RETRY_DELAY_MS * 2 ** attempt;
 				console.log(
@@ -176,6 +177,46 @@ export async function extractAudioViaMediaServer(
 
 	const arrayBuffer = await response.arrayBuffer();
 	return Buffer.from(arrayBuffer);
+}
+
+export type MediaServerAudioStream =
+	| { status: "ok"; body: ReadableStream<Uint8Array> }
+	| { status: "no-audio" };
+
+export async function streamAudioViaMediaServer(
+	videoUrl: string,
+	signal?: AbortSignal,
+): Promise<MediaServerAudioStream> {
+	const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
+
+	const response = await fetchWithRetry(
+		`${mediaServerUrl}/audio/extract`,
+		{
+			method: "POST",
+			headers: getMediaServerHeaders(mediaServerSecret),
+			body: JSON.stringify({ videoUrl, stream: true }),
+			signal,
+		},
+		{ maxRetries: 2 },
+	);
+
+	if (response.ok && response.body) {
+		return { status: "ok", body: response.body };
+	}
+
+	const errorData = (await response
+		.json()
+		.catch(() => null)) as MediaServerError | null;
+
+	if (errorData?.code === "NO_AUDIO_TRACK") {
+		return { status: "no-audio" };
+	}
+
+	throw new Error(
+		errorData?.details ||
+			errorData?.error ||
+			`Audio extraction failed: ${response.status} ${response.statusText}`,
+	);
 }
 
 export interface MediaServerProbeResult {
