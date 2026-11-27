@@ -618,7 +618,7 @@ fn main() {
                 failure.emit_json();
             }
             eprintln!("error: {}", failure.describe());
-            std::process::exit(1);
+            std::process::exit(record::failure_exit_code());
         }
         Err(_) => {
             eprintln!("error: CLI runtime thread panicked");

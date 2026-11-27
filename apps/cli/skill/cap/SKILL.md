@@ -28,7 +28,8 @@ cap guide --json
 ```
 
 Use `--json` for machine-readable output. Treat stdout as authoritative, stderr as diagnostics, exit code
-`1` as a runtime failure, and exit code `2` as invalid usage. Do not guess output schemas that are available
+`1` as a runtime failure, exit code `2` as invalid usage, and exit code `3` as a recording refused or stopped
+early because the drive is almost full (a `stopped` event with `"reason":"lowStorage"` means it was saved). Do not guess output schemas that are available
 from `cap guide --json` or `cap <command> --help`.
 
 ## Cap library
