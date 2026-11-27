@@ -28,6 +28,11 @@ import { HowItWorksPanel } from "./HowItWorksPanel";
 import { InProgressRecordingBar } from "./InProgressRecordingBar";
 import { MicrophoneSelector } from "./MicrophoneSelector";
 import { MicrophoneUnavailablePrompt } from "./MicrophoneUnavailablePrompt";
+import { NoMicrophonePrompt } from "./NoMicrophonePrompt";
+import {
+	rememberNoMicrophoneConfirmed,
+	shouldConfirmNoMicrophone,
+} from "./no-microphone-confirm";
 import { RecordingButton } from "./RecordingButton";
 import {
 	type RecordingMode,
@@ -39,6 +44,7 @@ import { SystemAudioToggle } from "./SystemAudioToggle";
 import { useCameraDevices } from "./useCameraDevices";
 import { useDevicePreferences } from "./useDevicePreferences";
 import { useDialogInteractions } from "./useDialogInteractions";
+import { useMediaPermission } from "./useMediaPermission";
 import { useMicrophoneDevices } from "./useMicrophoneDevices";
 import { useWebRecorder } from "./useWebRecorder";
 import {
@@ -74,6 +80,8 @@ export const WebRecorderDialog = ({
 		useState<RecordingMode>("fullscreen");
 	const [cameraSelectOpen, setCameraSelectOpen] = useState(false);
 	const [micSelectOpen, setMicSelectOpen] = useState(false);
+	const [noMicPromptOpen, setNoMicPromptOpen] = useState(false);
+	const [requestingMic, setRequestingMic] = useState(false);
 	const dialogContentRef = useRef<HTMLDivElement>(null);
 	const startSoundRef = useRef<HTMLAudioElement | null>(null);
 	const stopSoundRef = useRef<HTMLAudioElement | null>(null);
@@ -131,6 +139,7 @@ export const WebRecorderDialog = ({
 		selectedMicId,
 		systemAudioEnabled,
 		setSelectedCameraId,
+		isMicExplicitlyOff,
 		handleCameraChange,
 		handleMicChange,
 		handleSystemAudioChange,
@@ -142,6 +151,14 @@ export const WebRecorderDialog = ({
 	});
 
 	const micEnabled = selectedMicId !== null;
+	const { requestPermission: requestMicPermission } = useMediaPermission(
+		"microphone",
+		open,
+	);
+
+	useEffect(() => {
+		if (micEnabled) setNoMicPromptOpen(false);
+	}, [micEnabled]);
 
 	useEffect(() => {
 		if (
@@ -240,6 +257,7 @@ export const WebRecorderDialog = ({
 			setRecordingMode("fullscreen");
 			setSettingsOpen(false);
 			setHowItWorksOpen(false);
+			setNoMicPromptOpen(false);
 		}
 		setOpen(next);
 	};
@@ -250,7 +268,7 @@ export const WebRecorderDialog = ({
 		});
 	};
 
-	const handleStartClick = useCallback(async () => {
+	const beginRecording = useCallback(async () => {
 		if (recordingMode === "camera") {
 			cameraPreviewRef.current?.stopStream();
 			await waitForNextFrame();
@@ -258,6 +276,43 @@ export const WebRecorderDialog = ({
 
 		await startRecording();
 	}, [recordingMode, startRecording]);
+
+	const handleStartClick = useCallback(async () => {
+		if (
+			shouldConfirmNoMicrophone({
+				micEnabled,
+				micExplicitlyOff: isMicExplicitlyOff(),
+			})
+		) {
+			setNoMicPromptOpen(true);
+			return;
+		}
+
+		await beginRecording();
+	}, [micEnabled, isMicExplicitlyOff, beginRecording]);
+
+	const handleRecordWithoutMicrophone = () => {
+		rememberNoMicrophoneConfirmed();
+		setNoMicPromptOpen(false);
+		void beginRecording();
+	};
+
+	const handleTurnOnMicrophone = async () => {
+		setRequestingMic(true);
+		try {
+			if (await requestMicPermission()) {
+				await refreshMics();
+				setNoMicPromptOpen(false);
+			}
+		} catch (error) {
+			console.error("Microphone permission request failed", error);
+			toast.error(
+				"Unable to access your microphone. Check browser permissions.",
+			);
+		} finally {
+			setRequestingMic(false);
+		}
+	};
 
 	const handleClose = () => {
 		if (!isBusy) {
@@ -384,6 +439,12 @@ export const WebRecorderDialog = ({
 								{isMicrophoneUnavailable ? (
 									<MicrophoneUnavailablePrompt
 										onRespond={respondToMicrophoneFailure}
+									/>
+								) : noMicPromptOpen ? (
+									<NoMicrophonePrompt
+										isRequesting={requestingMic}
+										onTurnOnMicrophone={handleTurnOnMicrophone}
+										onRecordWithout={handleRecordWithoutMicrophone}
 									/>
 								) : (
 									<RecordingButton
