@@ -689,6 +689,7 @@ struct ProgramStage {
     naga_stage: naga::ShaderStage,
     shader_id: ShaderId,
     entry_point: String,
+    constants: alloc::collections::BTreeMap<String, u64>,
     zero_initialize_workgroup_memory: bool,
 }
 
@@ -723,6 +724,13 @@ unsafe impl Send for RenderPipeline {}
 #[derive(Debug)]
 pub struct ComputePipeline {
     inner: Arc<PipelineInner>,
+}
+
+impl ComputePipeline {
+    /// The program is shared by cached pipelines; callers must not modify or delete it.
+    pub fn raw_program(&self) -> glow::Program {
+        self.inner.program
+    }
 }
 
 impl crate::DynComputePipeline for ComputePipeline {}
