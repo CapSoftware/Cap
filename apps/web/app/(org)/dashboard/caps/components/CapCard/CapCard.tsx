@@ -38,7 +38,13 @@ import { FolderInput } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type PropsWithChildren, useEffect, useRef, useState } from "react";
+import {
+	memo,
+	type PropsWithChildren,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
@@ -145,11 +151,14 @@ export interface CapCardProps extends PropsWithChildren {
 	};
 	analytics: number;
 	isLoadingAnalytics: boolean;
-	onDelete?: () => void;
+	onDelete?: (capId: Video.VideoId) => void;
 	userId?: string;
 	sharedCapCard?: boolean;
 	isSelected?: boolean;
-	onSelectToggle?: (options?: { shiftKey?: boolean }) => void;
+	onSelectToggle?: (
+		capId: Video.VideoId,
+		options?: { shiftKey?: boolean },
+	) => void;
 	selectedIds?: Video.VideoId[];
 	hideSharedStatus?: boolean;
 	anyCapSelected?: boolean;
@@ -162,7 +171,7 @@ export interface CapCardProps extends PropsWithChildren {
 	currentFolderId?: Folder.FolderId | null;
 	href?: string;
 	isArchived?: boolean;
-	onArchiveToggle?: () => void;
+	onArchiveToggle?: (capId: Video.VideoId) => void;
 	reorder?: CapCardReorderActions;
 }
 
@@ -172,7 +181,7 @@ export type CapCardReorderActions = {
 	onMoveLater?: () => void;
 };
 
-export const CapCard = ({
+export const CapCard = memo(function CapCard({
 	cap,
 	analytics,
 	children,
@@ -194,7 +203,7 @@ export const CapCard = ({
 	isArchived = false,
 	onArchiveToggle,
 	reorder,
-}: CapCardProps) => {
+}: CapCardProps) {
 	const { activeOrganization } = useDashboardContext();
 
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
@@ -235,7 +244,7 @@ export const CapCard = ({
 
 	const deleteMutation = useMutation({
 		mutationFn: async () => {
-			await onDelete?.();
+			await onDelete?.(cap.id);
 		},
 		onError: (error) => {
 			console.error("Error deleting cap:", error);
@@ -375,7 +384,7 @@ export const CapCard = ({
 		e.preventDefault();
 		e.stopPropagation();
 		if (onSelectToggle) {
-			onSelectToggle({ shiftKey: e.shiftKey });
+			onSelectToggle(cap.id, { shiftKey: e.shiftKey });
 		}
 	};
 
@@ -706,7 +715,7 @@ export const CapCard = ({
 										<DropdownMenuItem
 											onClick={(e) => {
 												e.stopPropagation();
-												onArchiveToggle();
+												onArchiveToggle(cap.id);
 											}}
 											className="flex gap-2 items-center rounded-lg"
 										>
@@ -985,4 +994,4 @@ export const CapCard = ({
 			</fieldset>
 		</>
 	);
-};
+});

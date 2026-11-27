@@ -59,7 +59,10 @@ interface SharedCapCardProps {
 	currentFolderId?: Folder.FolderId | null;
 	isSelected?: boolean;
 	anyCapSelected?: boolean;
-	onSelectToggle?: (options?: { shiftKey?: boolean }) => void;
+	onSelectToggle?: (
+		capId: Video.VideoId,
+		options?: { shiftKey?: boolean },
+	) => void;
 	selectedIds?: Video.VideoId[];
 	href?: string;
 	reorder?: CapCardReorderActions;

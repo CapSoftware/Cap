@@ -643,7 +643,7 @@ export const SharedCaps = ({
 										}
 										onSelectToggle={
 											canManageCurrentSharedCollection
-												? (options) => selection.toggle(cap.id, options)
+												? selection.toggle
 												: undefined
 										}
 										selectedIds={selectedCaps}
