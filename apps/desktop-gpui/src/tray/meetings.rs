@@ -159,6 +159,7 @@ pub fn changed(cx: &mut App) {
 fn tick(cx: &mut App) {
     let now = Utc::now();
     let settings = live::settings(cx);
+    super::set_notes_recording(live::recording(cx), cx);
     let enabled = settings.as_ref().is_some_and(|settings| settings.enabled);
     let show = settings
         .as_ref()

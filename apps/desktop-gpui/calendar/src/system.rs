@@ -100,4 +100,5 @@ pub fn from_system_event(event: &SystemEvent, local_zone: Tz) -> CalendarEvent {
         web_url: None,
         free: event.free,
     }
+    .bounded()
 }

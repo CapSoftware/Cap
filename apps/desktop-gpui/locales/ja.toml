@@ -3434,6 +3434,12 @@ title = "マーカー"
 [ui]
 coming_soon = "近日公開"
 
+[ui.caption]
+close = "閉じる"
+maximize = "最大化"
+minimize = "最小化"
+restore = "元に戻す (縮小)"
+
 [ui.selection]
 audio = { other = "{count}個の音声セグメントを選択中" }
 caption = { other = "{count}個の字幕セグメントを選択中" }
@@ -3582,6 +3588,7 @@ stop = "停止"
 keep_recording = "録音を続ける"
 resume = "再開"
 still_there = "まだいますか？"
+resumed = "スリープ後に再開"
 untitled = "会議"
 open_notes = "メモを開く"
 call_ended = "通話が終了しました"
@@ -3602,6 +3609,7 @@ disk_full = "ディスクの空きがわずかです"
 sign_in = "サインインして文字起こしを仕上げる"
 offline = "オフライン、音声は保存済み"
 cloud_local = "このコンピュータで文字起こし中"
+cloud_limit = "今日のクラウド文字起こしの上限に達しました"
 words_missing = "一部の言葉が抜けている可能性"
 
 [meeting.shortcuts]
@@ -3799,6 +3807,7 @@ choose_calendars = { other = "{count}件のカレンダーから選択" }
 waiting_for_access = "カレンダーへのアクセスを待っています..."
 retry = "再試行"
 remove = "削除"
+disconnect = "接続を解除"
 open_settings = "システム設定を開く"
 allow_access = "アクセスを許可"
 access_needed = "これらのカレンダーを読み取るには許可が必要です。"
@@ -4198,6 +4207,8 @@ call_ended = "通話が終了しました。{time}後に停止します"
 inactive = "しばらく誰も話していません。{time}後に停止します"
 keep_recording = "録音を続ける"
 stopped_quiet = "静かな時間が続いたため停止しました"
+stopped_asleep = "コンピュータのスリープ中に停止しました"
+resumed_asleep = "コンピュータのスリープ後に再開しました"
 record_more = "続けて録音"
 set_up = "設定する"
 error_start = "録音を開始できませんでした。"
@@ -4224,6 +4235,8 @@ disk_full = "ディスクの空きがほとんどありません。Capがこの�
 sign_in_again = "文字起こしを仕上げるには、もう一度サインインしてください。音声はCapが保持しています。"
 offline_catching_up = "オフラインです。Capは音声を保存しており、接続が戻ると文字起こしを仕上げます。"
 cloud_local = "Cap Cloudが応答しないため、当面はこのコンピュータで文字起こしします。"
+cloud_limit_waiting = "今日のクラウド文字起こしの上限に達しました。Capは音声を保存しており、リセット後に文字起こしを仕上げます。"
+cloud_limit_local = "今日のクラウド文字起こしの上限に達したため、リセットまではこのコンピュータで文字起こしします。"
 words_missing = "この会議の一部を文字起こしできなかったため、一部の言葉が抜けている可能性があります。"
 
 [documents.ask]
@@ -4249,6 +4262,8 @@ connect = "接続"
 cancel = "キャンセル"
 try_again = "もう一度試す"
 connected = "接続済み"
+disconnected = "このコンピュータでの接続を解除しました。"
+google_remove_access = "GoogleアカウントからCapを削除"
 waiting = "ブラウザでサインインを完了してください..."
 finishing = "完了しています..."
 error_not_configured = "このビルドではサインインを利用できません。"
@@ -4261,7 +4276,12 @@ error_rejected = "サインインが完了しませんでした。もう一度�
 engine = "文字起こし"
 setup = "セットアップ"
 setup_description = "権限、文字起こし、カレンダーをもう一度設定します。"
+[documents.a11y]
+collapsed = "折りたたみ"
+expanded = "展開"
+
 [documents.home]
+clear_search = "検索をクリア"
 trash_count = "ゴミ箱・{count}"
 recording_now = "録音中"
 notes = "メモ"

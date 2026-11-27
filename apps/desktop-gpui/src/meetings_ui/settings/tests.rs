@@ -444,6 +444,66 @@ fn calendar_links_are_added_rejected_and_removed(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn disconnecting_an_account_says_where_it_ends_and_keeps_the_grant(cx: &mut TestAppContext) {
+    use crate::meetings::accounts::Provider;
+    use crate::meetings_ui::settings::accounts as rows;
+
+    let (settings, meetings, mut cx, fixture) = open(cx, MeetingSettings::default());
+    let accounts_file = fixture._dir.path().join("calendar-accounts.json");
+    let (link, google) = meetings.update(&mut cx, |m, cx| {
+        let link = m.add_calendar_feed("https://127.0.0.1:9/team.ics", Some("Team".into()), cx);
+        let google = m.add_calendar_account_for_tests(Provider::Google, "Work@Example.com");
+        (link.unwrap(), google)
+    });
+    let sources = meetings.read_with(&mut cx, |m, _| m.calendar_sources().to_vec());
+    assert_eq!(
+        rows::source_provider(&sources, &google),
+        Some(Provider::Google)
+    );
+    assert_eq!(rows::source_provider(&sources, &link), None);
+    assert_eq!(rows::source_provider(&sources, "missing"), None);
+    assert_eq!(
+        rows::remove_access_url(Provider::Google),
+        Some("https://myaccount.google.com/connections")
+    );
+    assert_eq!(rows::remove_access_url(Provider::Microsoft), None);
+    let stored = |path: &std::path::Path| std::fs::read_to_string(path).unwrap_or_default();
+    assert!(stored(&accounts_file).contains(&google));
+
+    // A link is removed quietly.
+    settings.update(&mut cx, |s, cx| s.meetings_remove_calendar(&link, cx));
+    assert_eq!(
+        settings.read_with(&mut cx, |s, _| s.pages.meetings.disconnected),
+        None
+    );
+
+    // An account is disconnected here: its sign-in is gone from disk, nothing
+    // is sent to the provider, and the row says so.
+    settings.update(&mut cx, |s, cx| s.meetings_remove_calendar(&google, cx));
+    assert!(meetings.read_with(&mut cx, |m, _| m.calendar_sources().is_empty()));
+    assert!(!stored(&accounts_file).contains(&google));
+    assert_eq!(
+        settings.read_with(&mut cx, |s, _| s.pages.meetings.disconnected),
+        Some(Provider::Google)
+    );
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear();
+    });
+
+    // A second removal of the same id changes nothing.
+    settings.update(&mut cx, |s, cx| {
+        s.pages.meetings.disconnected = None;
+        s.meetings_remove_calendar(&google, cx);
+    });
+    assert_eq!(
+        settings.read_with(&mut cx, |s, _| s.pages.meetings.disconnected),
+        None
+    );
+}
+
+#[gpui::test]
 fn leaving_the_page_holds_no_timers(cx: &mut TestAppContext) {
     let (settings, _meetings, mut cx, _dir) = open(cx, MeetingSettings::default());
     cx.run_until_parked();

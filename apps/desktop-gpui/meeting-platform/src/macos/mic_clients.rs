@@ -301,17 +301,24 @@ impl Reader {
             .filter(|responsible| *responsible > 0 && *responsible != pid)
             .and_then(bundle_id_for_pid);
 
-        let device_uid = process
+        let device_uids: Vec<String> = process
             .prop_vec::<Device>(&PropSelector::PROCESS_DEVICES.input_addr())
-            .ok()
-            .and_then(|devices| devices.first().and_then(|device| device.uid().ok()))
-            .map(|uid| uid.to_string());
+            .map(|devices| {
+                devices
+                    .iter()
+                    .filter_map(|device| device.uid().ok())
+                    .map(|uid| uid.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let device_uid = device_uids.first().cloned();
 
         MicClient {
             id: responsible_id.unwrap_or_else(|| raw_id.clone()),
             raw_id,
             pid: pid as u32,
             device_uid,
+            device_uids,
         }
     }
 }

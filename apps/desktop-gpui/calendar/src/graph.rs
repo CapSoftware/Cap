@@ -321,7 +321,7 @@ fn map_event(e: MEvent, calendar_id: &str, opts: &GraphOptions) -> Option<Calend
         .and_then(|d| non_empty(Some(&d)))
         .or_else(|| non_empty(e.body_preview.as_deref()));
 
-    Some(CalendarEvent {
+    let event = CalendarEvent {
         id,
         series_id: non_empty(e.series_master_id.as_deref()),
         calendar_id: calendar_id.to_string(),
@@ -339,7 +339,8 @@ fn map_event(e: MEvent, calendar_id: &str, opts: &GraphOptions) -> Option<Calend
         status,
         web_url: non_empty(e.web_link.as_deref()),
         free: e.show_as.as_deref() == Some("free"),
-    })
+    };
+    Some(event.bounded())
 }
 
 fn next_link(value: &Value) -> Option<String> {

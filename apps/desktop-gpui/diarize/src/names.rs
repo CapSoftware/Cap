@@ -227,6 +227,47 @@ impl SpeakerNames {
         set(&mut self.kept_in, &before.kept_in, &after.kept_in);
     }
 
+    /// Takes in every voice that has a line in the transcript right now. A
+    /// numbered voice with no line left (a partial line first heard as one
+    /// voice, whose final words went to another) gives its number back, so
+    /// the next new voice takes it and the numbers shown stay 1, 2, 3 from
+    /// the live view to the notes. A voice the person named or made a choice
+    /// about keeps its number.
+    pub fn observe_speaking(&mut self, speakers: &[SpeakerInfo]) {
+        self.observe_speaking_keeping(speakers, &[]);
+    }
+
+    /// As [`observe_speaking`](Self::observe_speaking), keeping the numbers
+    /// of `with_lines` too: voices whose lines are still in the note. A
+    /// meeting resumed after a sleep starts a new capture that knows only its
+    /// own voices.
+    pub fn observe_speaking_keeping(&mut self, speakers: &[SpeakerInfo], with_lines: &[u32]) {
+        let silent: Vec<SpeakerId> = self
+            .numbers
+            .keys()
+            .copied()
+            .filter(|id| {
+                !speakers.iter().any(|s| s.id == *id)
+                    && !with_lines.contains(&id.0)
+                    && !self.renames.contains_key(id)
+                    && !self.not_user.contains(id)
+                    && !self.left_out.contains(id)
+                    && !self.kept_in.contains(id)
+            })
+            .collect();
+        for id in silent {
+            self.numbers.remove(&id);
+            self.known.retain(|k| *k != id);
+        }
+        self.observe(speakers);
+    }
+
+    fn free_number(&self) -> u32 {
+        (1..)
+            .find(|n| !self.numbers.values().any(|v| v == n))
+            .unwrap_or(1)
+    }
+
     /// Takes in the live speaker list. Speakers already seen keep their
     /// labels; new ones are numbered in order of first speech.
     pub fn observe(&mut self, speakers: &[SpeakerInfo]) {
@@ -243,15 +284,23 @@ impl SpeakerNames {
             // The microphone's user moved to a clearly louder voice: the
             // voice shown as the user until now takes the number the new
             // user had, so no one else is renumbered.
-            if let Some(before) = self.user.replace(user.id)
-                && self.known.contains(&before)
-                && !self.numbers.contains_key(&before)
-            {
-                let next = match self.numbers.remove(&user.id) {
-                    Some(freed) => freed,
-                    None => self.numbers.values().max().copied().unwrap_or(0) + 1,
-                };
-                self.numbers.insert(before, next);
+            match self.user.replace(user.id) {
+                Some(before)
+                    if self.known.contains(&before) && !self.numbers.contains_key(&before) =>
+                {
+                    let next = match self.numbers.remove(&user.id) {
+                        Some(freed) => freed,
+                        None => self.numbers.values().max().copied().unwrap_or(0) + 1,
+                    };
+                    self.numbers.insert(before, next);
+                }
+                // The first voice taken for the user: a number it was given
+                // before it was known as the user is never shown, so it is
+                // free for the next person.
+                None => {
+                    self.numbers.remove(&user.id);
+                }
+                _ => {}
             }
         }
         for speaker in fresh {
@@ -267,7 +316,7 @@ impl SpeakerNames {
                 self.attendee_voice = Some(speaker.id);
                 continue;
             }
-            let next = self.numbers.values().max().copied().unwrap_or(0) + 1;
+            let next = self.free_number();
             self.numbers.insert(speaker.id, next);
         }
     }

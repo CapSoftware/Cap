@@ -132,6 +132,8 @@ pub struct Button {
     dim_disabled: bool,
     on_click: Option<ClickHandler>,
     on_open: Option<OpenHandler>,
+    /// Shown to screen readers as a button named by its label.
+    exposed: bool,
 }
 
 impl Button {
@@ -160,6 +162,7 @@ impl Button {
             dim_disabled: false,
             on_click: None,
             on_open: None,
+            exposed: false,
         }
     }
 
@@ -316,6 +319,12 @@ impl Button {
         self
     }
 
+    /// Screen readers see a button named by the label, which they can press.
+    pub fn exposed(mut self) -> Self {
+        self.exposed = true;
+        self
+    }
+
     pub fn height(mut self, height: Pixels) -> Self {
         self.height = Some(height);
         self
@@ -443,12 +452,17 @@ impl RenderOnce for Button {
             height,
             on_click,
             on_open,
+            exposed,
         } = self;
 
         let icon_color = paint.text;
 
         div()
             .id(id)
+            .when(exposed, |this| {
+                this.role(gpui::Role::Button)
+                    .when_some(label.clone(), |this, label| this.aria_label(label))
+            })
             .tab_index(0)
             .tab_stop(!disabled)
             .when(keyboard_nav::active(window, cx), keyboard_nav::ring)

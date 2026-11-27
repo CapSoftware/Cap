@@ -737,10 +737,8 @@ impl LibraryWindow {
 
     /// Two workers only: audio decodes are long and the window must stay
     /// responsive while a first open works through a big library.
+    /// Runs with no jobs too: the cache pass forgets what was deleted.
     fn load_visuals(&mut self, jobs: Vec<visuals::Job>, cx: &mut Context<Self>) {
-        if jobs.is_empty() {
-            return;
-        }
         let keep: Vec<ItemKey> = jobs.iter().map(|j| j.key.clone()).collect();
         let dir = visuals::cache_dir();
         self.visuals_task = Some(cx.spawn(async move |this, cx| {

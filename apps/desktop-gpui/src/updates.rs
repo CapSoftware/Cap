@@ -220,6 +220,7 @@ pub(crate) fn work_in_flight(cx: &mut App) -> bool {
         || crate::import::imports_in_flight(cx)
         || crate::transcription::work_in_flight()
         || crate::recordings_overlay::work_in_flight(cx)
+        || crate::meetings::Meetings::try_global(cx).is_some_and(|m| m.read(cx).is_recording())
 }
 
 pub(crate) fn status(cx: &App) -> UpdateStatus {
@@ -740,6 +741,12 @@ fn start_download(release: Release, cx: &mut App) {
 
 fn update_failed(message: &str, cx: &mut App) {
     set_status(UpdateStatus::Idle, cx);
+    // The alert is modal and brings Cap forward, so it never interrupts a
+    // recording or a meeting; the next scheduled check tries again.
+    if work_in_flight(cx) {
+        tracing::warn!("update failed while Cap was busy; not interrupting: {message}");
+        return;
+    }
     let message = tr::dialog::update::failed(message);
     cx.spawn(async move |_| {
         crate::platform::activate_app();

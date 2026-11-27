@@ -1306,6 +1306,8 @@ mod mac {
         previous: Vec<PreviousItem>,
         previous_generation: u64,
         recording: bool,
+        /// A Notes meeting is recording: the icon shows it, as for Studio.
+        notes_recording: bool,
     }
 
     impl Global for Tray {}
@@ -1383,6 +1385,7 @@ mod mac {
             previous: Vec::new(),
             previous_generation: 0,
             recording: false,
+            notes_recording: false,
         };
         set_button_image(&tray, mode_icon(mode));
         let button = tray.status_item.button(mtm);
@@ -2017,10 +2020,31 @@ mod mac {
                 unsafe { button.setTarget(None) };
             }
             tray.status_item.setMenu(tray.menu.as_deref());
-            set_button_image(tray, mode_icon(tray.mode));
+            set_button_image(tray, idle_icon(tray));
             set_meeting_title(super::meetings::current_title(cx).as_deref(), cx);
         }
         tracing::info!(recording, "tray recording state");
+    }
+
+    /// The icon while no Studio recording owns it.
+    fn idle_icon(tray: &Tray) -> &'static [u8] {
+        if tray.notes_recording {
+            STOP_ICON
+        } else {
+            mode_icon(tray.mode)
+        }
+    }
+
+    /// Shows a Notes recording on the icon (the menu stays as it is).
+    pub fn set_notes_recording(on: bool, cx: &mut App) {
+        if !cx.has_global::<Tray>() || cx.global::<Tray>().notes_recording == on {
+            return;
+        }
+        cx.global_mut::<Tray>().notes_recording = on;
+        let tray = cx.global::<Tray>();
+        if !tray.recording {
+            set_button_image(tray, idle_icon(tray));
+        }
     }
 
     /// `update_tray_icon_for_mode` + `refresh_tray_menu`: the icon follows the
@@ -2039,7 +2063,7 @@ mod mac {
         cx.global_mut::<Tray>().mode = mode;
         if !cx.global::<Tray>().recording {
             let tray = cx.global::<Tray>();
-            set_button_image(tray, mode_icon(mode));
+            set_button_image(tray, idle_icon(tray));
         }
         rebuild(cx);
     }
@@ -2142,6 +2166,7 @@ mod stub {
 
     pub fn init(_cx: &mut App) {}
     pub fn set_recording(_recording: bool, _cx: &mut App) {}
+    pub fn set_notes_recording(_on: bool, _cx: &mut App) {}
     pub fn mode_changed(_mode: crate::main_window::Mode, _cx: &mut App) {}
     pub fn refresh_previous(_cx: &mut App) {}
     pub fn refresh_menu(_cx: &mut App) {}

@@ -380,6 +380,8 @@ fn active(state: crate::meetings::ActiveState) -> crate::meetings::ActiveMeeting
         engine: Default::default(),
         warning: None,
         resume_offer_until: None,
+        slept: false,
+        resumed_after_sleep: false,
         app_name: None,
         event_id: None,
         health: Vec::new(),
@@ -387,6 +389,34 @@ fn active(state: crate::meetings::ActiveState) -> crate::meetings::ActiveMeeting
         audio_failed: false,
         low_disk: false,
     }
+}
+
+#[test]
+fn the_resumed_after_sleep_line_ending_refreshes_the_indicator() {
+    let mut live = active(crate::meetings::ActiveState::Recording);
+    live.resumed_after_sleep = true;
+    let shown = super::ActiveKey::of(&live);
+    live.resumed_after_sleep = false;
+    assert_ne!(shown, super::ActiveKey::of(&live));
+}
+
+#[test]
+fn the_indicator_says_a_meeting_resumed_after_a_sleep_with_stop_at_hand() {
+    use super::indicator::{Banner, banner, banner_title, countdown_until};
+    use crate::meetings::{ActiveState, MeetingWarning};
+    let mut live = active(ActiveState::Recording);
+    assert_eq!(banner(&live), None);
+    live.resumed_after_sleep = true;
+    assert_eq!(banner(&live), Some(Banner::Resumed));
+    assert_eq!(countdown_until(&live), None);
+    assert!(!banner_title(Banner::Resumed).is_empty());
+    live.warning = Some(MeetingWarning::Inactivity {
+        stop_at: std::time::Instant::now(),
+    });
+    assert_eq!(banner(&live), Some(Banner::Inactivity));
+    let mut starting = active(ActiveState::Starting);
+    starting.resumed_after_sleep = true;
+    assert_eq!(banner(&starting), None);
 }
 
 #[test]

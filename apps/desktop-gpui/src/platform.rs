@@ -2204,6 +2204,101 @@ mod mac {
         rerun_occlusion_handler_after_show(&native.0);
     }
 
+    /// [`show_native`] without making the window key: it comes to the front
+    /// (out of the Dock if it was there) and the app in use keeps the keyboard.
+    pub fn show_native_quietly(native: &NativeWindow) {
+        use objc2::msg_send;
+        unsafe {
+            let miniaturized: bool = msg_send![&*native.0, isMiniaturized];
+            if miniaturized {
+                let _: () = msg_send![&*native.0, deminiaturize: std::ptr::null_mut::<AnyObject>()];
+            }
+        }
+        native.0.orderFrontRegardless();
+        rerun_occlusion_handler_after_show(&native.0);
+    }
+
+    const KEY_ON_CLICK: &str = "so.cap.key-on-click";
+
+    type CanBecomeKey = unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> objc2::runtime::Bool;
+
+    static PANEL_CAN_BECOME_KEY: std::sync::OnceLock<CanBecomeKey> = std::sync::OnceLock::new();
+
+    /// Let `window`, a non-activating panel, become key only from a click
+    /// inside it. A key non-activating panel takes the keyboard from the app
+    /// in use without Cap becoming active, and AppKit hands key status to one
+    /// whenever Cap has no other key window (a window shown without focus,
+    /// another Cap window hiding).
+    pub fn take_key_only_on_click(window: &Window) {
+        use objc2::msg_send;
+        let Some(ns_window) = ns_window(window) else {
+            return;
+        };
+        if !install_key_on_click_shim() {
+            return;
+        }
+        let identifier = NSString::from_str(KEY_ON_CLICK);
+        unsafe {
+            let _: () = msg_send![&*ns_window, setIdentifier: &*identifier];
+        }
+    }
+
+    /// `canBecomeKeyWindow` for gpui's panel class: unchanged for every panel
+    /// except those [`take_key_only_on_click`] tagged, which say yes only
+    /// while AppKit handles a mouse-down inside them.
+    unsafe extern "C-unwind" fn panel_can_become_key(
+        this: *mut AnyObject,
+        selector: Sel,
+    ) -> objc2::runtime::Bool {
+        use objc2::{class, msg_send, runtime::Bool};
+        let identifier: Option<Retained<NSString>> = unsafe { msg_send![this, identifier] };
+        if identifier.is_none_or(|identifier| identifier.to_string() != KEY_ON_CLICK) {
+            return match PANEL_CAN_BECOME_KEY.get() {
+                Some(original) => unsafe { original(this, selector) },
+                None => Bool::YES,
+            };
+        }
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            let event: *mut AnyObject = msg_send![app, currentEvent];
+            if event.is_null() {
+                return Bool::NO;
+            }
+            let kind: usize = msg_send![event, type];
+            let target: *mut AnyObject = msg_send![event, window];
+            // NSEventTypeLeftMouseDown, RightMouseDown, OtherMouseDown
+            Bool::new(matches!(kind, 1 | 3 | 25) && target == this)
+        }
+    }
+
+    fn install_key_on_click_shim() -> bool {
+        use objc2::{ffi, runtime::AnyClass, sel};
+        static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *INSTALLED.get_or_init(|| {
+            let Some(class) = AnyClass::get(c"GPUIPanel") else {
+                return false;
+            };
+            let method = unsafe { ffi::class_getInstanceMethod(class, sel!(canBecomeKeyWindow)) };
+            if method.is_null() {
+                return false;
+            }
+            let Some(current) = (unsafe { ffi::method_getImplementation(method) }) else {
+                return false;
+            };
+            let original =
+                unsafe { std::mem::transmute::<objc2::runtime::Imp, CanBecomeKey>(current) };
+            if PANEL_CAN_BECOME_KEY.set(original).is_err() {
+                return false;
+            }
+            let shim = unsafe {
+                std::mem::transmute::<CanBecomeKey, objc2::runtime::Imp>(panel_can_become_key)
+            };
+            let _ = unsafe { ffi::method_setImplementation(method, shim) };
+            tracing::info!("installed key-on-click shim on GPUIPanel");
+            true
+        })
+    }
+
     /// Start an AppKit file drag of `path` from the mouse-down being handled
     /// right now (`NSApp.currentEvent`): what Finder hands System Settings,
     /// which adds a dropped `.app` to a privacy list. Called from a gpui
@@ -3492,6 +3587,7 @@ mod stub {
     ) {
     }
     pub fn kick_display_link(_window: &Window) {}
+    pub fn take_key_only_on_click(_window: &Window) {}
     pub fn apply_panel_behavior(window: &Window, behavior: PanelBehavior) {
         let _ = (behavior.level, behavior.join_all_spaces, behavior.shadow);
         apply_always_on_top(window);
@@ -3578,6 +3674,7 @@ mod stub {
         false
     }
     pub fn show_native(_native: &NativeWindow) {}
+    pub fn show_native_quietly(_native: &NativeWindow) {}
 
     #[cfg(target_os = "linux")]
     pub fn remove_x11_window_decorations(window: &Window) -> anyhow::Result<()> {

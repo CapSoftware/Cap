@@ -1634,6 +1634,7 @@ dependencies = [
  "objc2-user-notifications",
  "ort",
  "parakeet-rs",
+ "pipewire",
  "raw-window-handle",
  "reqwest 0.12.28",
  "resvg 0.45.1",
@@ -1922,6 +1923,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "windows 0.61.3",
+ "windows-core 0.61.2",
  "windows-sys 0.59.0",
 ]
 

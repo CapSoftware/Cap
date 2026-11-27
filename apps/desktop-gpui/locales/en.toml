@@ -3436,6 +3436,12 @@ title = "Markers"
 [ui]
 coming_soon = "Coming Soon"
 
+[ui.caption]
+close = "Close"
+maximize = "Maximize"
+minimize = "Minimize"
+restore = "Restore Down"
+
 [ui.selection]
 audio = { one = "{count} audio segment selected", other = "{count} audio segments selected" }
 caption = { one = "{count} caption segment selected", other = "{count} caption segments selected" }
@@ -3584,6 +3590,7 @@ stop = "Stop"
 keep_recording = "Keep recording"
 resume = "Resume"
 still_there = "Still there?"
+resumed = "Resumed after sleep"
 untitled = { text = "Meeting", context = "Fallback title for a meeting without one." }
 open_notes = "Open notes"
 call_ended = { text = "Call ended", context = "Floating indicator after the call ends; the countdown to the automatic stop shows beside it." }
@@ -3604,6 +3611,7 @@ disk_full = "Disk almost full"
 sign_in = "Sign in to finish the transcript"
 offline = "Offline, the audio is saved"
 cloud_local = "Transcribing on this computer"
+cloud_limit = "Today's cloud transcription is used up"
 words_missing = "Some words may be missing"
 
 [meeting.shortcuts]
@@ -3801,6 +3809,7 @@ choose_calendars = { one = "{count} calendar", other = "Choose from {count} cale
 waiting_for_access = "Waiting for calendar access..."
 retry = "Retry"
 remove = "Remove"
+disconnect = "Disconnect"
 open_settings = "Open System Settings"
 allow_access = "Allow access"
 access_needed = "Cap needs your permission to read these calendars."
@@ -4200,6 +4209,8 @@ call_ended = { text = "Call ended. Stopping in {time}", context = "{time} is a c
 inactive = { text = "No one has spoken for a while. Stopping in {time}", context = "{time} is a countdown such as 0:45." }
 keep_recording = "Keep recording"
 stopped_quiet = "Stopped after a quiet spell"
+stopped_asleep = "Stopped while the computer was asleep"
+resumed_asleep = "Resumed after the computer slept"
 record_more = "Record more"
 set_up = "Set up"
 error_start = "Recording couldn't start."
@@ -4226,6 +4237,8 @@ disk_full = "Your disk is almost full. Free some space so Cap can keep saving th
 sign_in_again = "Sign in again to finish the transcript. Cap is keeping the audio."
 offline_catching_up = "You're offline. Cap is saving the audio and will finish the transcript when you're back."
 cloud_local = "Cap Cloud isn't answering, so this computer is transcribing for now."
+cloud_limit_waiting = "You've used today's cloud transcription. Cap is saving the audio and will finish the transcript when it resets."
+cloud_limit_local = "You've used today's cloud transcription, so this computer is transcribing until it resets."
 words_missing = { text = "Cap couldn't transcribe part of this meeting, so some words may be missing.", context = "Shown while recording when words were lost and the meeting keeps no audio to recover them from." }
 
 [documents.ask]
@@ -4251,6 +4264,8 @@ connect = "Connect"
 cancel = "Cancel"
 try_again = "Try again"
 connected = "Connected"
+disconnected = "Disconnected from this computer."
+google_remove_access = "Remove Cap from your Google Account"
 waiting = "Finish signing in in your browser..."
 finishing = "Finishing..."
 error_not_configured = "Signing in is not available in this build."
@@ -4263,7 +4278,12 @@ error_rejected = "The sign-in did not go through. Try again."
 engine = "Transcribe"
 setup = "Setup"
 setup_description = "Go through permissions, transcription and calendars again."
+[documents.a11y]
+collapsed = "Collapsed"
+expanded = "Expanded"
+
 [documents.home]
+clear_search = "Clear search"
 trash_count = { text = "Trash · {count}", context = "Link at the bottom of the notes list. {count} is how many notes are in the trash." }
 recording_now = "Recording"
 notes = "Notes"

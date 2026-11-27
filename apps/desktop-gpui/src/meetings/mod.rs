@@ -88,6 +88,19 @@ pub fn listening_cue(
         && now.saturating_duration_since(line_at.unwrap_or(started)) >= CUE_AFTER
 }
 const RESUME_GAP_MS: u64 = 1_000;
+/// After a wake that offers Resume, when to look whether the meeting's call
+/// app is still on the microphone (each wait after the last look), all
+/// inside the session's `WAKE_CALL_WINDOW_MS`.
+const WAKE_LOOKS: [Duration; 6] = [
+    Duration::from_millis(250),
+    Duration::from_millis(750),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(2),
+    Duration::from_secs(2),
+];
+/// How long "Resumed after the computer slept" shows.
+const RESUMED_LINE: Duration = Duration::from_secs(20);
 /// Quitting waits this long for a stopped meeting's last words; what is left
 /// stays in its ledger and is finished at the next launch.
 const QUIT_DRAIN: Duration = Duration::from_secs(10);
@@ -187,6 +200,11 @@ pub struct ActiveMeeting {
     pub engine: EngineStatus,
     pub warning: Option<MeetingWarning>,
     pub resume_offer_until: Option<Instant>,
+    /// The Resume offer follows a system sleep (not a quiet spell).
+    pub slept: bool,
+    /// The call went on through a sleep and the meeting resumed by itself
+    /// (said for a moment once it records again).
+    pub resumed_after_sleep: bool,
     pub app_name: Option<String>,
     pub event_id: Option<String>,
     /// What is worth saying about this meeting's health now, most urgent
@@ -580,6 +598,14 @@ pub struct Meetings {
     probing: HashSet<String>,
     /// Reads who the meeting app shows as speaking while a call records.
     speaking_watch: Option<Task<()>>,
+    /// Looks for the meeting's call app on the microphone just after a wake.
+    wake_look: Option<Task<()>>,
+    /// The next capture is the meeting resuming by itself after a sleep.
+    resuming_after_sleep: bool,
+    resumed_line: Option<Task<()>>,
+    /// A note a sleep stopped before anything was heard, kept out of Trash
+    /// as long as its Resume may still come.
+    sleep_kept: Option<String>,
     calendar: calendar::CalendarState,
     calendar_active: bool,
     calendar_next: Option<Millis>,
@@ -684,9 +710,54 @@ fn system_audio_grant() -> health::AudioGrant {
     }
 }
 
+/// Another app is playing sound right now (macOS: Core Audio's per-process
+/// output state). Walking every audio process takes a millisecond or more,
+/// and now and then far longer, so it never runs here on the UI thread: a
+/// short-lived thread refreshes the answer at most every 5 s while the
+/// watchdog asks, and the watchdog reads the last one. Elsewhere a capture
+/// going quiet is normal, so never.
+#[cfg(target_os = "macos")]
+fn others_playing() -> bool {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    static PLAYING: AtomicBool = AtomicBool::new(false);
+    static ASKING: AtomicBool = AtomicBool::new(false);
+    // Milliseconds since the first ask, plus one; 0 is "never asked".
+    static ASKED: AtomicU64 = AtomicU64::new(0);
+    static ORIGIN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let now = ORIGIN.get_or_init(Instant::now).elapsed().as_millis() as u64;
+    let asked = ASKED.load(Ordering::Relaxed);
+    let stale = asked == 0 || now.saturating_sub(asked - 1) >= 5_000;
+    if stale && !ASKING.swap(true, Ordering::AcqRel) {
+        ASKED.store(now + 1, Ordering::Relaxed);
+        let spawned = std::thread::Builder::new()
+            .name("cap-others-playing".into())
+            .spawn(|| {
+                let playing = cap_meeting_platform::others_playing().unwrap_or(false);
+                PLAYING.store(playing, Ordering::Relaxed);
+                ASKING.store(false, Ordering::Release);
+            });
+        if spawned.is_err() {
+            ASKING.store(false, Ordering::Release);
+        }
+    }
+    PLAYING.load(Ordering::Relaxed)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn others_playing() -> bool {
+    false
+}
+
 #[cfg(not(target_os = "macos"))]
 fn system_audio_grant() -> health::AudioGrant {
     health::AudioGrant::Granted
+}
+
+/// Windows refuses to open a microphone with E_ACCESSDENIED while
+/// microphone access is off in Privacy settings (an open stream ends as if
+/// the device were unplugged).
+fn mic_access_denied(error: &str) -> bool {
+    error.contains("0x80070005")
 }
 
 /// Linux records the speakers through `parec`; without it there is nothing
@@ -751,14 +822,18 @@ fn local_mode(local: Option<&LocalModel>) -> EngineMode {
     }
 }
 
+/// Which account (server, sign-in and plan) cached answers belong to. The
+/// sign-in enters as a hash, never as itself.
 fn auth_key() -> String {
+    use std::hash::{Hash, Hasher};
+
     let auth = crate::store::auth_snapshot();
-    format!(
-        "{}|{}|{}",
-        auth.server_url,
-        auth.token.as_deref().map_or(0, str::len),
-        auth.is_upgraded()
-    )
+    let token = auth.token.as_deref().map(|token| {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        token.hash(&mut hasher);
+        hasher.finish()
+    });
+    format!("{}|{:?}|{}", auth.server_url, token, auth.is_upgraded())
 }
 
 impl Meetings {
@@ -768,6 +843,15 @@ impl Meetings {
             return;
         }
         let settings = persist::load_settings();
+        // The meeting's tap looks for a running screen reader before it
+        // starts; the first such look in a process is slow, so it is made
+        // here, off the main thread.
+        #[cfg(target_os = "macos")]
+        if settings.enabled {
+            cx.background_executor()
+                .spawn(async { cap_meeting_platform::warm_screen_reader_lookup() })
+                .detach();
+        }
         let entity = cx.new(|cx| {
             let mut this = Self::new(settings);
             this.start_recovery(cx);
@@ -781,6 +865,16 @@ impl Meetings {
                 })
                 .detach();
             this.resume_unwritten(cx);
+            // Notes another account left unwritten wait for that account's
+            // sign-in, not for the next launch.
+            if let Some(sign_in) = crate::sign_in::SignIn::try_global(cx) {
+                cx.subscribe(&sign_in, |this, _, event, cx| {
+                    if *event == crate::sign_in::SignInEvent::AccountRefreshed {
+                        this.resume_unwritten(cx);
+                    }
+                })
+                .detach();
+            }
             this.apply_lifecycle(cx);
             this
         });
@@ -822,6 +916,10 @@ impl Meetings {
             latest_snapshot: None,
             probing: HashSet::new(),
             speaking_watch: None,
+            wake_look: None,
+            resuming_after_sleep: false,
+            resumed_line: None,
+            sleep_kept: None,
             calendar: calendar::CalendarState::default(),
             calendar_active: false,
             calendar_next: None,
@@ -880,6 +978,18 @@ impl Meetings {
 
     fn instant_at(&self, at: Millis) -> Instant {
         self.origin + Duration::from_millis(at.0)
+    }
+
+    /// A wall-clock time on the session's clock, as of now. That clock does
+    /// not count time asleep on every platform, so after a sleep this is
+    /// worked out again.
+    fn millis_at(&self, at: DateTime<Utc>) -> Millis {
+        let delta = (at - Utc::now()).num_milliseconds();
+        if delta > 0 {
+            self.now().plus(delta as u64)
+        } else {
+            Millis(self.now().0.saturating_sub(delta.unsigned_abs()))
+        }
     }
 
     fn detect_config(&self) -> DetectConfig {
@@ -991,6 +1101,18 @@ impl Meetings {
         entity
     }
 
+    #[cfg(test)]
+    pub(crate) fn add_calendar_account_for_tests(
+        &mut self,
+        provider: accounts::Provider,
+        email: &str,
+    ) -> String {
+        self.calendar.ensure_loaded();
+        self.calendar
+            .add_account(provider, email, "refresh-for-tests")
+            .unwrap()
+    }
+
     #[cfg(debug_assertions)]
     pub(crate) fn enable_in_memory(&mut self, cx: &mut Context<Self>) {
         self.persist_settings = false;
@@ -1089,6 +1211,7 @@ impl Meetings {
                 platform_id: c.id.clone(),
                 pid: c.pid,
                 device_uid: c.device_uid.clone(),
+                device_uids: c.device_uids.clone(),
             })
             .collect();
         self.latest_snapshot = Some(snapshot);
@@ -1479,13 +1602,7 @@ impl Meetings {
         self.pending_start = Some(origin.clone());
         let actions = self.session.start(self.now(), origin.app_id.clone());
         if let Some(end) = event_end {
-            let delta = (end - Utc::now()).num_milliseconds();
-            let at = if delta > 0 {
-                self.now().plus(delta as u64)
-            } else {
-                Millis(self.now().0.saturating_sub(delta.unsigned_abs()))
-            };
-            self.session.set_linked_event_end(Some(at));
+            self.session.set_linked_event_end(Some(self.millis_at(end)));
         }
         self.apply_session_actions(actions, cx);
         self.pending_start = None;
@@ -1527,6 +1644,7 @@ impl Meetings {
             self.mark_active(cx);
         }
         self.apply_session_actions(actions, cx);
+        self.settle_sleep_kept(cx);
         self.rearm(cx);
     }
 
@@ -1567,9 +1685,11 @@ impl Meetings {
                 }
                 SessionAction::OfferResume { until } => {
                     let until = self.instant_at(until);
+                    let slept = self.session.last_stop_reason() == Some(StopReason::Sleep);
                     if let Some(active) = self.active.as_mut() {
                         active.state = ActiveState::ResumeOffered;
                         active.resume_offer_until = Some(until);
+                        active.slept = slept;
                     }
                     self.mark_active(cx);
                     cx.emit(MeetingEvent::WantsAttention {
@@ -1917,7 +2037,11 @@ impl Meetings {
         let stalled = self.active.as_ref().is_some_and(|active| {
             matches!(
                 active.mic.health,
-                SourceHealth::Error(HealthIssue::NoCallbacks | HealthIssue::NoInputDevice)
+                SourceHealth::Error(
+                    HealthIssue::NoCallbacks
+                        | HealthIssue::NoInputDevice
+                        | HealthIssue::MissingPermission
+                )
             )
         });
         let current = crate::feeds::Feeds::global(cx).read(cx).microphone.clone();
@@ -2127,23 +2251,44 @@ impl Meetings {
                     return;
                 };
                 let settings = crate::store::RecordingDeviceSettings::for_microphone(&name);
-                gpui_tokio::Tokio::spawn(cx, async move {
-                    match actor
+                let reopen = gpui_tokio::Tokio::spawn(cx, async move {
+                    let error = match actor
                         .ask(cap_recording::feeds::microphone::SetInput {
                             label: name,
                             settings,
                         })
                         .await
                     {
-                        Ok(ready) => {
-                            if let Err(error) = ready.await {
-                                tracing::warn!(%error, "the meeting microphone did not reopen");
-                            }
-                        }
-                        Err(error) => {
-                            tracing::warn!(%error, "the meeting microphone did not reopen")
-                        }
+                        Ok(ready) => ready.await.err().map(|error| error.to_string()),
+                        Err(error) => Some(error.to_string()),
+                    };
+                    if let Some(error) = &error {
+                        tracing::warn!(%error, "the meeting microphone did not reopen");
                     }
+                    error
+                });
+                let doc_id = doc_id.to_string();
+                cx.spawn(async move |this, cx| {
+                    let Ok(Some(error)) = reopen.await else {
+                        return;
+                    };
+                    if !(cfg!(windows) && mic_access_denied(&error)) {
+                        return;
+                    }
+                    this.update(cx, |this, cx| {
+                        if this.recording.as_ref().is_none_or(|r| r.doc_id != doc_id) {
+                            return;
+                        }
+                        let denied = SourceHealth::Error(HealthIssue::MissingPermission);
+                        if let Some(active) = this.active.as_mut()
+                            && active.mic.health != denied
+                        {
+                            tracing::info!("microphone access is off for the meeting");
+                            active.mic.health = denied;
+                            this.mark_active(cx);
+                        }
+                    })
+                    .ok();
                 })
                 .detach();
             }
@@ -2311,6 +2456,8 @@ impl Meetings {
     }
 
     fn begin_capture(&mut self, resume: bool, cx: &mut Context<Self>) {
+        let after_sleep = std::mem::take(&mut self.resuming_after_sleep) && resume;
+        self.resumed_line = None;
         let mut origin = self.pending_start.take().unwrap_or_default();
         if resume && origin.resume_doc.is_none() {
             origin.resume_doc = self.resume_doc.clone();
@@ -2537,6 +2684,8 @@ impl Meetings {
             engine: EngineStatus::default(),
             warning: None,
             resume_offer_until: None,
+            slept: false,
+            resumed_after_sleep: after_sleep,
             app_name: origin.app_name.clone(),
             event_id: origin.event_id.clone(),
             health: Vec::new(),
@@ -2592,6 +2741,23 @@ impl Meetings {
         });
         self.resume_doc = Some(doc_id.clone());
         self.session_doc = Some(doc_id.clone());
+        if self.sleep_kept.as_deref() == Some(doc_id.as_str()) {
+            self.sleep_kept = None;
+        }
+        if after_sleep {
+            tracing::info!(doc_id, "the meeting resumed by itself after the sleep");
+            let shown = doc_id.clone();
+            self.resumed_line = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(RESUMED_LINE).await;
+                this.update(cx, |this, cx| {
+                    if let Some(active) = this.active.as_mut().filter(|a| a.doc_id == shown) {
+                        active.resumed_after_sleep = false;
+                        this.mark_active(cx);
+                    }
+                })
+                .ok();
+            }));
+        }
         let actions = self.session.on_capture_started(self.now());
         self.apply_session_actions(actions, cx);
         let actions = self.planner.set_recording(
@@ -2881,6 +3047,10 @@ impl Meetings {
             since_sound: stats.system.map(|s| since(s.sound_at_ms)),
             remote_speaking,
             gave_up: stats.tap.is_some_and(|t| t.gave_up),
+            playing_elsewhere: stats.system.is_some_and(|s| {
+                since(s.real_at_ms) >= health::NO_AUDIO_RESTART
+            }) && system_audio_grant() == health::AudioGrant::Granted
+                && others_playing(),
         };
         let verdict = recording.watchdog.check(now, view);
         if verdict.restart {
@@ -3139,7 +3309,13 @@ impl Meetings {
             }
             drop(lock);
             let again = self.recording.as_ref().is_some_and(|r| r.doc_id == doc_id);
-            if !again && false_start(&library, &meta, chars) {
+            // A sleep's note waits for its Resume: one the call went on
+            // through resumes into it even if nobody had spoken yet.
+            let resumable = self.session.last_stop_reason() == Some(StopReason::Sleep)
+                && self.session.resume_may_follow();
+            if resumable && !again && false_start(&library, &meta, chars) {
+                self.sleep_kept = Some(doc_id.clone());
+            } else if !again && false_start(&library, &meta, chars) {
                 // A false start: nothing heard, nothing typed. Trash keeps it
                 // restorable while home stays clean.
                 heard_nothing = true;
@@ -3864,7 +4040,7 @@ impl Meetings {
         let mut names = before
             .clone()
             .unwrap_or_else(|| cap_diarize::SpeakerNames::new(voices.attendee.clone()));
-        names.observe(&heard);
+        names.observe_speaking_keeping(&heard, &speaking);
         if before.as_ref() != Some(&names) {
             self.edit_voices(doc_id, vec![LogLine::SpeakerNames { names }], cx);
         }
@@ -4188,6 +4364,7 @@ impl Meetings {
             self.active = None;
             self.mark_active(cx);
         }
+        self.settle_sleep_kept(cx);
         if self.calendar_next.is_some_and(|at| at <= now) {
             self.calendar_next = None;
             self.refresh_calendar(cx);
@@ -4201,6 +4378,8 @@ impl Meetings {
     pub fn system_will_sleep(cx: &mut App) {
         if let Some(this) = Self::try_global(cx) {
             this.update(cx, |this, cx| {
+                this.wake_look = None;
+                this.resuming_after_sleep = false;
                 let actions = this.session.on_sleep(this.now());
                 this.apply_session_actions(actions, cx);
                 this.rearm(cx);
@@ -4211,14 +4390,121 @@ impl Meetings {
     pub fn system_did_wake(cx: &mut App) {
         if let Some(this) = Self::try_global(cx) {
             this.update(cx, |this, cx| {
+                if this.session.offers_resume_on_wake()
+                    && let Some(end) = this.offered_event_end()
+                {
+                    this.session.set_linked_event_end(Some(this.millis_at(end)));
+                }
                 let actions = this.session.on_wake(this.now());
                 this.apply_session_actions(actions, cx);
+                this.look_for_call_after_wake(cx);
                 if this.settings.enabled {
                     this.refresh_calendar(cx);
                 }
                 this.rearm(cx);
             });
         }
+    }
+
+    /// A note kept for a sleep's Resume that did not come goes to Trash as
+    /// any note that heard nothing does.
+    fn settle_sleep_kept(&mut self, cx: &mut Context<Self>) {
+        if self.session.resume_may_follow() || self.recording.is_some() {
+            return;
+        }
+        let Some(doc_id) = self.sleep_kept.take() else {
+            return;
+        };
+        let Some(library) = self.library().cloned() else {
+            return;
+        };
+        let (lock, meta) = (lock_meta(), library.load(&doc_id));
+        drop(lock);
+        let Ok(meta) = meta else {
+            return;
+        };
+        let chars = meta
+            .meeting
+            .as_ref()
+            .map_or(0, |m| m.transcript_chars as usize);
+        if false_start(&library, &meta, chars) {
+            match library.trash(&doc_id, Utc::now()) {
+                Ok(_) => tracing::info!(doc_id, "a meeting note that heard nothing went to Trash"),
+                Err(error) => tracing::warn!(%error, "could not trash an empty meeting note"),
+            }
+            cx.emit(MeetingEvent::LibraryChanged);
+        }
+    }
+
+    /// When the calendar event of the meeting a sleep stopped ends.
+    fn offered_event_end(&mut self) -> Option<DateTime<Utc>> {
+        let (doc_id, event_id) = self
+            .active
+            .as_ref()
+            .map(|a| (a.doc_id.clone(), a.event_id.clone()))?;
+        let id = event_id.or_else(|| {
+            let meta = self.library()?.load(&doc_id).ok()?;
+            meta.meeting?.event.map(|event| event.id)
+        })?;
+        self.calendar.find(&id).map(|event| event.end)
+    }
+
+    /// A sleep stopped the meeting while its call was on: a few looks at
+    /// the microphone just after the wake tell whether the call went on.
+    fn look_for_call_after_wake(&mut self, cx: &mut Context<Self>) {
+        self.wake_look = None;
+        let Some(app_id) = self
+            .session
+            .call_to_look_for_after_wake(self.now())
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        self.wake_look = Some(cx.spawn(async move |this, cx| {
+            for wait in WAKE_LOOKS {
+                cx.background_executor().timer(wait).await;
+                let snapshot = cx
+                    .background_executor()
+                    .spawn(async { cap_meeting_platform::snapshot_now() })
+                    .await;
+                match this.update(cx, |this, cx| this.on_wake_look(&app_id, &snapshot, cx)) {
+                    Ok(false) => {}
+                    _ => return,
+                }
+            }
+            tracing::info!(app_id, "the meeting's call was not on the microphone after the wake");
+        }));
+    }
+
+    /// One look after a wake; true once there is nothing left to look for.
+    fn on_wake_look(
+        &mut self,
+        app_id: &str,
+        snapshot: &MicSnapshot,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.session.call_to_look_for_after_wake(self.now()) != Some(app_id) {
+            return true;
+        }
+        let clients: Vec<MicClient> = snapshot
+            .clients
+            .iter()
+            .map(|c| MicClient {
+                platform_id: c.id.clone(),
+                pid: c.pid,
+                device_uid: c.device_uid.clone(),
+                device_uids: c.device_uids.clone(),
+            })
+            .collect();
+        if !snapshot.attributed || !self.detector.holds_mic(app_id, &clients) {
+            return false;
+        }
+        tracing::info!(app_id, "the call went on through the sleep: resuming the meeting");
+        self.resuming_after_sleep = true;
+        let actions = self.session.call_still_on_after_wake(self.now());
+        self.apply_session_actions(actions, cx);
+        self.rearm(cx);
+        true
     }
 
     fn on_quit(&mut self, cx: &mut Context<Self>) {

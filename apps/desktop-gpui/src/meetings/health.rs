@@ -30,6 +30,10 @@ pub enum Concern {
     CloudCatchingUp,
     /// The cloud isn't answering; this computer transcribes meanwhile.
     CloudLocal,
+    /// The day's cloud audio is used up; the audio waits for the reset.
+    CloudLimitWaiting,
+    /// The day's cloud audio is used up; this computer transcribes.
+    CloudLimitLocal,
     /// Words did not land and the meeting keeps no audio to find them in.
     WordsMissing,
     /// The microphone sends nothing but digital silence.
@@ -61,10 +65,12 @@ impl Concern {
             Concern::SignIn => 7,
             Concern::CloudCatchingUp => 8,
             Concern::CloudLocal => 9,
-            Concern::WordsMissing => 10,
-            Concern::MicSilent => 11,
-            Concern::NoModel => 12,
-            Concern::TapUnsupported => 13,
+            Concern::CloudLimitWaiting => 10,
+            Concern::CloudLimitLocal => 11,
+            Concern::WordsMissing => 12,
+            Concern::MicSilent => 13,
+            Concern::NoModel => 14,
+            Concern::TapUnsupported => 15,
         }
     }
 
@@ -172,6 +178,8 @@ pub fn concerns_with(active: &ActiveMeeting, audio_missed: bool) -> Vec<Concern>
         CloudState::SignIn { .. } => out.push(Concern::SignIn),
         CloudState::Down { local: false } => out.push(Concern::CloudCatchingUp),
         CloudState::Down { local: true } => out.push(Concern::CloudLocal),
+        CloudState::DailyLimit { local: false } => out.push(Concern::CloudLimitWaiting),
+        CloudState::DailyLimit { local: true } => out.push(Concern::CloudLimitLocal),
         CloudState::Ok => {}
     }
     if active.engine.unrepairable > 0 || audio_missed {
@@ -246,6 +254,10 @@ pub struct TapView {
     pub remote_speaking: bool,
     /// The capture gave up rebuilding itself.
     pub gave_up: bool,
+    /// Another app is playing sound while this capture, which has its
+    /// grant, hands over nothing: it stopped (a macOS tap; asked only once
+    /// audio has been missing long enough to matter).
+    pub playing_elsewhere: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -264,7 +276,7 @@ const RESTART_MAX_GAP: Duration = Duration::from_secs(120);
 const NO_AUDIO_WARN: Duration = Duration::from_secs(10);
 /// No audio at all during a call is a dead capture: started again at once.
 /// With nothing arriving there is nothing a restart could cut off.
-const NO_AUDIO_RESTART: Duration = Duration::from_secs(5);
+pub const NO_AUDIO_RESTART: Duration = Duration::from_secs(5);
 /// Digital silence may be a quiet call: given longer.
 const SILENCE_RESTART: Duration = Duration::from_secs(60);
 const SPEAKING_BUT_QUIET: Duration = Duration::from_secs(30);
@@ -290,8 +302,11 @@ impl Watchdog {
         let (Some(since_real), Some(since_sound)) = (view.since_real, view.since_sound) else {
             return Verdict::default();
         };
-        // A capture that gave up is dead whether or not a call is on.
-        if !view.call && !view.gave_up {
+        // A capture that gave up, or one that stopped handing over audio
+        // where a working one always does, is dead whether or not a call is
+        // on.
+        let stopped = view.playing_elsewhere && since_real >= NO_AUDIO_RESTART;
+        if !view.call && !view.gave_up && !stopped {
             return Verdict::default();
         }
         if !view.call {
@@ -548,6 +563,19 @@ mod tests {
         let dead = TapView { call: false, gave_up: true, ..calling(30, 30) };
         assert_eq!(w.check(t0, dead), Verdict { not_hearing: false, restart: true });
         assert!(!w.check(t0 + secs(5), dead).restart, "not again at once");
+    }
+
+    #[test]
+    fn a_capture_that_hears_nothing_while_another_app_plays_restarts_without_a_call() {
+        let t0 = Instant::now();
+        let mut w = Watchdog::default();
+        let tap = |real| TapView { call: false, playing_elsewhere: true, ..calling(real, real) };
+        assert_eq!(w.check(t0, tap(3)), Verdict::default(), "a moment's gap is fine");
+        assert_eq!(w.check(t0, tap(6)), Verdict { not_hearing: false, restart: true });
+        assert!(!w.check(t0 + secs(5), tap(11)).restart, "the next restart waits 10 s");
+        assert!(w.check(t0 + secs(10), tap(16)).restart);
+        let quiet = TapView { call: false, ..calling(600, 600) };
+        assert_eq!(w.check(t0 + secs(600), quiet), Verdict::default(), "nothing playing is a quiet room");
     }
 
     #[test]

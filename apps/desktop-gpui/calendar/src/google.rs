@@ -241,7 +241,7 @@ fn map_event(
         None,
     );
     let self_response = derive_self_response(organizer.as_ref(), &attendees, Response::Unknown);
-    Some(CalendarEvent {
+    let event = CalendarEvent {
         id,
         series_id: non_empty(e.recurring_event_id.as_deref()),
         calendar_id: calendar_id.to_string(),
@@ -259,7 +259,8 @@ fn map_event(
         status,
         web_url: non_empty(e.html_link.as_deref()),
         free: e.transparency.as_deref() == Some("transparent"),
-    })
+    };
+    Some(event.bounded())
 }
 
 pub(crate) fn array_field<'a>(value: &'a Value, name: &str) -> Result<&'a [Value], Error> {

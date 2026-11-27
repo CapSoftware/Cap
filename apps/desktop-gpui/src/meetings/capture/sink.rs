@@ -122,9 +122,31 @@ pub fn reader_on_monitor(
     Some(*name == format!("{output}.monitor"))
 }
 
+/// The `parec --device` that reads `sink`'s monitor, or the default
+/// output's (`default`, from `pactl info`) when no sink is followed.
+/// PipeWire's Pulse server before 1.0 (Debian 12) does not know
+/// `@DEFAULT_MONITOR@` and records the default microphone instead, so the
+/// default output is named whenever pactl says which it is.
+pub fn monitor_device(sink: Option<&str>, default: Option<&str>) -> String {
+    match sink.or(default) {
+        Some(name) => format!("{name}.monitor"),
+        None => "@DEFAULT_MONITOR@".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_default_output_is_read_by_name_when_pactl_names_it() {
+        assert_eq!(
+            monitor_device(Some("headset"), Some("room")),
+            "headset.monitor"
+        );
+        assert_eq!(monitor_device(None, Some("room")), "room.monitor");
+        assert_eq!(monitor_device(None, None), "@DEFAULT_MONITOR@");
+    }
 
     const SINK_INPUTS: &str = "Sink Input #12\n\tDriver: protocol-native.c\n\tSink: 1\n\tCorked: no\n\tProperties:\n\t\tapplication.name = \"Chromium\"\n\t\tapplication.process.id = \"4100\"\n\nSink Input #13\n\tSink: 0\n\tCorked: no\n\tProperties:\n\t\tapplication.name = \"Spotify\"\n\t\tapplication.process.id = \"5200\"\n";
     const SOURCE_OUTPUTS: &str = "Source Output #7\n\tSource: 3\n\tCorked: no\n\tProperties:\n\t\tapplication.name = \"Chromium\"\n\t\tapplication.process.id = \"4100\"\n\nSource Output #8\n\tSource: 2\n\tCorked: no\n\tProperties:\n\t\tapplication.name = \"Cap\"\n\t\tapplication.process.id = \"900\"\n";

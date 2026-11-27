@@ -244,16 +244,22 @@ pub fn render_card(
         )
         .when(kind != CardKind::Unavailable, |el| {
             el.child(
-                style::icon_button(&palette, "cap-ai-card-not-now", "icons/x.svg", 28.)
-                    .flex_shrink_0()
-                    .tooltip(|_, cx| {
-                        crate::ui::Tooltip::new(
-                            &crate::theme::Theme::new(crate::theme::Appearance::Dark),
-                            tr::cap_ai::card::not_now(),
-                        )
-                        .view(cx)
-                    })
-                    .on_click(not_now),
+                style::icon_button(
+                    &palette,
+                    "cap-ai-card-not-now",
+                    "icons/x.svg",
+                    28.,
+                    tr::cap_ai::card::not_now(),
+                )
+                .flex_shrink_0()
+                .tooltip(|_, cx| {
+                    crate::ui::Tooltip::new(
+                        &crate::theme::Theme::new(crate::theme::Appearance::Dark),
+                        tr::cap_ai::card::not_now(),
+                    )
+                    .view(cx)
+                })
+                .on_click(not_now),
             )
         });
     let actions = offer.action.map(|action| {

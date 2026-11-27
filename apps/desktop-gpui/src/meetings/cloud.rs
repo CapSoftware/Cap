@@ -40,6 +40,8 @@ pub enum CloudError {
     NotSignedIn,
     UpgradeRequired,
     RateLimited { retry_after_secs: u64 },
+    /// The account's cloud audio for the day is used up until the reset.
+    DailyLimit { retry_after_secs: u64 },
     NotConfigured,
     Offline(String),
     Failed(String),
@@ -62,6 +64,7 @@ impl CloudError {
             CloudError::RateLimited { retry_after_secs } => {
                 format!("Cloud transcription is busy, retrying in {retry_after_secs}s")
             }
+            CloudError::DailyLimit { .. } => "Today's cloud transcription is used up".into(),
             CloudError::NotConfigured => "Cloud transcription is not available right now".into(),
             CloudError::Offline(reason) => format!("Could not reach Cap: {reason}"),
             CloudError::Failed(reason) => format!("Cloud transcription failed: {reason}"),
@@ -82,13 +85,22 @@ pub fn classify_status(status: u16, body: &str, retry_header: Option<u64>) -> Cl
     match status {
         401 => CloudError::NotSignedIn,
         402 => CloudError::UpgradeRequired,
-        429 => CloudError::RateLimited {
-            retry_after_secs: parsed
+        429 => {
+            let retry = parsed
+                .as_ref()
                 .and_then(|b| b.retry_after_seconds)
                 .or(retry_header)
-                .unwrap_or(30)
-                .clamp(1, 3_600),
-        },
+                .unwrap_or(30);
+            if parsed.is_some_and(|b| b.error == "daily_audio_limit") {
+                CloudError::DailyLimit {
+                    retry_after_secs: retry.clamp(1, 86_400),
+                }
+            } else {
+                CloudError::RateLimited {
+                    retry_after_secs: retry.clamp(1, 3_600),
+                }
+            }
+        }
         // The meeting endpoints never answer 404 themselves: it means this server doesn't have them yet.
         404 => CloudError::NotConfigured,
         // Cap's own switch says the feature is off. Any other 503 is a
@@ -425,6 +437,19 @@ mod tests {
     fn only_a_refused_account_or_a_missing_route_is_final() {
         assert_eq!(classify_status(401, "", None), CloudError::NotSignedIn);
         assert_eq!(classify_status(402, "", None), CloudError::UpgradeRequired);
+        assert_eq!(
+            classify_status(429, r#"{"error":"daily_audio_limit","retryAfterSeconds":43200}"#, None),
+            CloudError::DailyLimit {
+                retry_after_secs: 43_200
+            }
+        );
+        assert_eq!(
+            classify_status(429, r#"{"error":"rate_limited","retryAfterSeconds":43200}"#, None),
+            CloudError::RateLimited {
+                retry_after_secs: 3_600
+            }
+        );
+        assert!(!classify_status(429, r#"{"error":"daily_audio_limit"}"#, Some(60)).is_final());
         assert_eq!(classify_status(404, "", None), CloudError::NotConfigured);
         assert_eq!(
             classify_status(503, r#"{"error":"not_configured"}"#, None),

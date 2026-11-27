@@ -123,6 +123,11 @@ impl Sim {
         self.record(a)
     }
 
+    fn call_still_on(&mut self) -> &mut Self {
+        let a = self.session.call_still_on_after_wake(self.m());
+        self.record(a)
+    }
+
     fn error(&mut self) -> &mut Self {
         let a = self.session.on_capture_error(self.m());
         self.record(a)
@@ -472,10 +477,10 @@ fn sleep_stops_and_wake_offers_resume_before_the_notes() {
     assert_eq!(s.session.next_deadline(), None);
     s.at(60 * MIN)
         .wake()
-        .expect(&[(3_600_000, "offer 3630000")]);
+        .expect(&[(3_600_000, "offer 3900000")]);
     s.wake().quiet();
-    s.at(60 * MIN + 30_000).expect(&[(3_630_000, "notes")]);
-    s.resume().expect(&[(3_630_000, "resume")]);
+    s.at(65 * MIN).expect(&[(3_900_000, "notes")]);
+    s.resume().expect(&[(3_900_000, "resume")]);
 }
 
 #[test]
@@ -486,7 +491,7 @@ fn resume_after_wake_continues_the_same_meeting() {
     s.stopped(5_000).quiet();
     s.at(30 * MIN)
         .wake()
-        .expect(&[(1_800_000, "offer 1830000")]);
+        .expect(&[(1_800_000, "offer 2100000")]);
     s.at(30 * MIN + 5_000)
         .resume()
         .expect(&[(1_805_000, "resume")]);
@@ -514,9 +519,9 @@ fn sleep_before_stop_confirmed_defers_until_both() {
     s.at(MIN).sleep().take();
     s.at(30 * MIN)
         .wake()
-        .expect(&[(1_800_000, "offer 1830000")]);
+        .expect(&[(1_800_000, "offer 2100000")]);
     s.stopped(5_000).quiet();
-    s.at(30 * MIN + 30_000).expect(&[(1_830_000, "notes")]);
+    s.at(35 * MIN).expect(&[(2_100_000, "notes")]);
 }
 
 #[test]
@@ -550,13 +555,13 @@ fn a_second_sleep_while_resume_is_offered_offers_it_again() {
     s.recording(None);
     s.at(MIN).sleep().take();
     s.stopped(5_000).quiet();
-    s.at(10 * MIN).wake().expect(&[(600_000, "offer 630000")]);
+    s.at(10 * MIN).wake().expect(&[(600_000, "offer 900000")]);
     s.at(10 * MIN + 10_000).sleep().quiet();
     assert_eq!(s.session.next_deadline(), None);
     s.at(50 * MIN)
         .wake()
-        .expect(&[(3_000_000, "offer 3030000")]);
-    s.at(50 * MIN + 30_000).expect(&[(3_030_000, "notes")]);
+        .expect(&[(3_000_000, "offer 3300000")]);
+    s.at(55 * MIN).expect(&[(3_300_000, "notes")]);
 }
 
 #[test]
@@ -570,6 +575,176 @@ fn sleep_during_an_inactivity_offer_offers_it_again_on_wake() {
         .wake()
         .expect(&[(2_400_000, "offer 2430000")]);
     s.at(41 * MIN).expect(&[(2_430_000, "notes")]);
+}
+
+#[test]
+fn a_call_still_on_after_the_wake_resumes_the_same_meeting_by_itself() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.at(5 * MIN).sleep().take();
+    s.stopped(5_000).quiet();
+    s.at(20 * MIN)
+        .wake()
+        .expect(&[(1_200_000, "offer 1500000")]);
+    assert_eq!(
+        s.session
+            .call_to_look_for_after_wake(Millis(20 * MIN + 1_000)),
+        Some("zoom")
+    );
+    s.at(20 * MIN + 1_000)
+        .call_still_on()
+        .expect(&[(1_201_000, "resume")]);
+    s.call_still_on().quiet();
+    s.captured();
+    assert_eq!(s.session.resume_offer_until(), None);
+    s.at(30 * MIN).stop(StopReason::User).stopped(9_000);
+    s.expect(&[(1_800_000, "stop User"), (1_800_000, "notes")]);
+}
+
+#[test]
+fn a_resume_may_follow_a_sleep_until_its_offer_ends() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    assert!(!s.session.resume_may_follow());
+    s.at(5 * MIN).sleep().take();
+    assert!(s.session.resume_may_follow(), "the wake will offer it");
+    s.stopped(5_000).quiet();
+    s.at(20 * MIN).wake().take();
+    assert!(s.session.resume_may_follow(), "offered");
+    s.at(25 * MIN).expect(&[(1_500_000, "notes")]);
+    assert!(!s.session.resume_may_follow(), "the offer ended");
+
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.at(5 * MIN).sleep().take();
+    s.at(20 * MIN).wake().take();
+    s.at(20 * MIN + 500).call_still_on().quiet();
+    assert!(
+        s.session.resume_may_follow(),
+        "asked for before the capture stopped"
+    );
+
+    let mut s = Sim::new();
+    s.recording(None);
+    s.at(MIN).stop(StopReason::User).stopped(0);
+    assert!(!s.session.resume_may_follow());
+}
+
+#[test]
+fn a_call_on_the_microphone_long_after_the_wake_does_not_resume() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.at(5 * MIN).sleep().take();
+    s.stopped(5_000).quiet();
+    s.at(20 * MIN).wake().take();
+    let late = 20 * MIN + WAKE_CALL_WINDOW_MS + 1;
+    s.at(late).call_still_on().quiet();
+    assert_eq!(s.session.call_to_look_for_after_wake(Millis(late)), None);
+    s.at(26 * MIN).expect(&[(1_500_000, "notes")]);
+}
+
+#[test]
+fn a_call_still_on_resumes_once_the_stopped_capture_has_finished() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.at(5 * MIN).sleep().take();
+    s.at(20 * MIN).wake().take();
+    s.at(20 * MIN + 500).call_still_on().quiet();
+    s.stopped(5_000).expect(&[(1_200_500, "resume")]);
+}
+
+#[test]
+fn without_a_call_app_the_wake_only_offers() {
+    let mut s = Sim::new();
+    s.recording(None);
+    s.at(5 * MIN).sleep().take();
+    s.stopped(5_000).quiet();
+    s.at(20 * MIN).wake().take();
+    assert_eq!(
+        s.session.call_to_look_for_after_wake(Millis(20 * MIN)),
+        None
+    );
+    s.call_still_on().quiet();
+    s.at(25 * MIN).expect(&[(1_500_000, "notes")]);
+}
+
+#[test]
+fn a_meeting_already_stopped_for_a_quiet_spell_never_resumes_by_itself() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.at(12 * MIN).take();
+    s.stopped(2_000).quiet();
+    s.at(12 * MIN + 5_000).sleep().quiet();
+    s.at(40 * MIN)
+        .wake()
+        .expect(&[(2_400_000, "offer 2430000")]);
+    assert_eq!(
+        s.session.call_to_look_for_after_wake(Millis(40 * MIN)),
+        None
+    );
+    s.call_still_on().quiet();
+    s.at(41 * MIN).expect(&[(2_430_000, "notes")]);
+}
+
+#[test]
+fn a_meeting_stopped_before_the_sleep_never_resumes_by_itself() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.at(5 * MIN).stop(StopReason::User).take();
+    s.stopped(5_000).expect(&[(300_000, "notes")]);
+    s.sleep().quiet();
+    s.at(20 * MIN).wake().quiet();
+    s.call_still_on().quiet();
+    assert_eq!(s.session.next_deadline(), None);
+}
+
+#[test]
+fn a_call_that_ended_keeps_resume_until_the_calendar_event_ends() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.session.set_linked_event_end(Some(Millis(60 * MIN)));
+    s.at(10 * MIN).sleep().take();
+    s.stopped(5_000).quiet();
+    s.at(20 * MIN)
+        .wake()
+        .expect(&[(1_200_000, "offer 3600000")]);
+    s.at(50 * MIN).resume().expect(&[(3_000_000, "resume")]);
+
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.session.set_linked_event_end(Some(Millis(60 * MIN)));
+    s.at(10 * MIN).sleep().take();
+    s.stopped(5_000).quiet();
+    s.at(20 * MIN).wake().take();
+    s.at(59 * MIN).quiet();
+    s.at(60 * MIN).expect(&[(3_600_000, "notes")]);
+}
+
+#[test]
+fn a_long_calendar_event_keeps_resume_an_hour_at_most() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.session.set_linked_event_end(Some(Millis(8 * 60 * MIN)));
+    s.at(10 * MIN).sleep().take();
+    s.stopped(5_000).quiet();
+    s.at(20 * MIN)
+        .wake()
+        .expect(&[(1_200_000, "offer 4800000")]);
+    s.at(79 * MIN).quiet();
+    s.at(80 * MIN).expect(&[(4_800_000, "notes")]);
+}
+
+#[test]
+fn an_event_about_to_end_still_gets_the_usual_offer() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.session
+        .set_linked_event_end(Some(Millis(20 * MIN + 10_000)));
+    s.at(10 * MIN).sleep().take();
+    s.stopped(5_000).quiet();
+    s.at(20 * MIN)
+        .wake()
+        .expect(&[(1_200_000, "offer 1230000")]);
 }
 
 #[test]
@@ -737,7 +912,7 @@ fn randomised_invariants() {
                 now += rng.below(90_000);
             }
             let t = Millis(now);
-            let input = rng.below(14);
+            let input = rng.below(15);
             let was_starting = session.state() == SessionState::Starting;
             if input == 2 && session.state() == SessionState::Stopping {
                 stopping = false;
@@ -760,10 +935,17 @@ fn randomised_invariants() {
                 6 => session.on_call_started(t, "zoom"),
                 7 => session.keep_recording(t),
                 8 => session.on_sleep(t),
-                9 => session.on_wake(t),
+                9 => {
+                    let mut actions = session.on_wake(t);
+                    if rng.chance(50) {
+                        actions.extend(session.call_still_on_after_wake(t));
+                    }
+                    actions
+                }
                 10 => session.resume(t),
                 11 => session.on_capture_error(t),
                 12 => session.decline_resume(t),
+                13 => session.call_still_on_after_wake(t),
                 _ => match session.next_deadline() {
                     Some(due) if rng.chance(85) => {
                         now = now.max(due.0);

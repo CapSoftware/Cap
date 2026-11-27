@@ -66,6 +66,12 @@ pub fn lock_for(access: AiAccess, has_notes: bool, in_call: bool) -> Option<Lock
 
 /// What a refused question shows: while free meetings remain and this one's
 /// notes are not written yet, it waits for them rather than offering Cap Pro.
+/// A free meeting whose questions are used up: the app let the question go
+/// and the server still asked for Cap Pro.
+fn questions_used(access: AiAccess, has_notes: bool, in_call: bool) -> bool {
+    access != AiAccess::Ready && lock_for(access, has_notes, in_call).is_none()
+}
+
 pub fn upgrade_refused(access: AiAccess, has_notes: bool, in_call: bool) -> Lock {
     match lock_for(access, has_notes, in_call) {
         Some(Lock::NotesFirst) => Lock::NotesFirst,
@@ -84,6 +90,8 @@ struct Exchange {
     answer: String,
     error: Option<NotesError>,
     locked: Option<Lock>,
+    /// Refused because this free meeting's questions are used up.
+    used_up: bool,
     done: bool,
     /// Which lines were left out of what the answer was given.
     left_out: String,
@@ -412,6 +420,7 @@ impl AskPanel {
                 answer: String::new(),
                 error: None,
                 locked: Some(lock),
+                used_up: false,
                 done: true,
                 left_out: String::new(),
             });
@@ -425,6 +434,7 @@ impl AskPanel {
             answer: String::new(),
             error: None,
             locked: None,
+            used_up: false,
             done: false,
             left_out: String::new(),
         });
@@ -447,6 +457,8 @@ impl AskPanel {
                         Err(NotesError::UpgradeRequired) => {
                             last.locked =
                                 Some(upgrade_refused(this.access, this.has_notes, this.in_call));
+                            last.used_up =
+                                questions_used(this.access, this.has_notes, this.in_call);
                         }
                         Err(NotesError::NotSignedIn) => last.locked = Some(Lock::SignIn),
                         Err(error) => {
@@ -663,8 +675,19 @@ impl AskPanel {
     /// What a held question says, and its button. A refusal while this free
     /// meeting's notes are still to come waits for them, never offering Cap
     /// Pro.
-    fn locked_copy(&self, locked: Option<Lock>) -> (Lock, &'static str, Option<&'static str>) {
+    fn locked_copy(
+        &self,
+        locked: Option<Lock>,
+        used_up: bool,
+    ) -> (Lock, &'static str, Option<&'static str>) {
         let current = self.lock();
+        if used_up && self.access != AiAccess::Ready {
+            return (
+                Lock::Upgrade,
+                tr::cap_ai::ask::locked_upgrade(),
+                Some(tr::cap_ai::card::get_pro()),
+            );
+        }
         let lock = match locked {
             Some(Lock::SignIn) => Lock::SignIn,
             _ if current == Some(Lock::NotesFirst) => Lock::NotesFirst,
@@ -700,8 +723,9 @@ impl AskPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette;
-        let now_open = self.lock().is_none();
-        let (lock, text, label) = self.locked_copy(exchange.locked);
+        let (lock, text, label) = self.locked_copy(exchange.locked, exchange.used_up);
+        let now_open =
+            self.lock().is_none() && !(exchange.used_up && self.access != AiAccess::Ready);
         let question = exchange.question.clone();
         div()
             .flex()
@@ -711,6 +735,7 @@ impl AskPanel {
             .children(label.map(|label| {
                 div().flex().child(
                     super::style::ink_pill(&palette, ("ask-locked", index))
+                        .aria_label(label)
                         .h(px(28.))
                         .px(px(13.))
                         .text_size(px(12.5))
@@ -865,6 +890,7 @@ impl AskPanel {
                 .gap(px(8.))
                 .children(suggestions().into_iter().enumerate().map(|(i, text)| {
                     glass::chip(&palette, ("ask-sheet-suggestion", i), &self.chip_focus[i])
+                        .aria_label(text)
                         .h(px(30.))
                         .px(px(14.))
                         .text_size(px(13.))
@@ -888,15 +914,21 @@ impl AskPanel {
                     .items_center()
                     .justify_end()
                     .child(
-                        super::style::icon_button(&palette, "ask-sheet-close", "icons/x.svg", 28.)
-                            .tooltip(|_, cx| {
-                                crate::ui::Tooltip::new(
-                                    &Theme::new(Appearance::Dark),
-                                    tr::common::close(),
-                                )
-                                .view(cx)
-                            })
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(AskEvent::CloseSheet))),
+                        super::style::icon_button(
+                            &palette,
+                            "ask-sheet-close",
+                            "icons/x.svg",
+                            28.,
+                            tr::common::close(),
+                        )
+                        .tooltip(|_, cx| {
+                            crate::ui::Tooltip::new(
+                                &Theme::new(Appearance::Dark),
+                                tr::common::close(),
+                            )
+                            .view(cx)
+                        })
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(AskEvent::CloseSheet))),
                     ),
             )
             .children(live)
@@ -948,6 +980,9 @@ impl AskPanel {
                             .child(
                                 div()
                                     .id("ask-sheet-send")
+                                    .role(gpui::Role::Button)
+                                    .when(palette.keyboard, crate::ui::keyboard_nav::stop)
+                                    .aria_label(tr::cap_ai::ask::send_now())
                                     .size(px(34.))
                                     .flex()
                                     .flex_shrink_0()
@@ -973,6 +1008,7 @@ impl AskPanel {
 
 impl Render for AskPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
         let palette = self.palette;
         let theme = Theme::new(if palette.dark {
             Appearance::Dark
@@ -1022,6 +1058,9 @@ impl Render for AskPanel {
                             div().absolute().top(px(6.)).right(px(6.)).child(
                                 div()
                                     .id("ask-close")
+                                    .role(gpui::Role::Button)
+                                    .when(palette.keyboard, crate::ui::keyboard_nav::stop)
+                                    .aria_label(tr::common::close())
                                     .size(px(22.))
                                     .flex()
                                     .items_center()
@@ -1106,6 +1145,7 @@ impl Render for AskPanel {
                 })
                 .children(suggestions().into_iter().enumerate().map(|(i, text)| {
                     glass::chip(&palette, ("ask-suggestion", i), &self.chip_focus[i])
+                        .aria_label(text)
                         .child(text)
                         .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                             window.prevent_default()
@@ -1142,6 +1182,7 @@ impl Render for AskPanel {
                     .children(chip.map(|chip| {
                         match chip {
                             AskChip::WriteNotes => super::style::ink_pill(&palette, "ask-chip")
+                                .aria_label(tr::documents::bar::write_notes())
                                 .flex_shrink_0()
                                 .h(px(32.))
                                 .px(px(14.))
@@ -1159,6 +1200,9 @@ impl Render for AskPanel {
                     .child(
                         div()
                             .id("ask-send")
+                            .role(gpui::Role::Button)
+                            .when(palette.keyboard, crate::ui::keyboard_nav::stop)
+                            .aria_label(tr::cap_ai::ask::send_now())
                             .size(px(34.))
                             .flex()
                             .flex_shrink_0()
@@ -1189,7 +1233,7 @@ impl AskPanel {
             .iter()
             .filter(|e| e.locked.is_some())
             .map(|e| {
-                let (_, text, label) = self.locked_copy(e.locked);
+                let (_, text, label) = self.locked_copy(e.locked, e.used_up);
                 (text, label)
             })
             .collect()
@@ -1203,6 +1247,7 @@ impl AskPanel {
             answer: String::new(),
             error: None,
             locked: Some(upgrade_refused(self.access, self.has_notes, self.in_call)),
+            used_up: questions_used(self.access, self.has_notes, self.in_call),
             done: true,
             left_out: String::new(),
         });
@@ -1230,6 +1275,7 @@ impl AskPanel {
             answer: answer.to_string(),
             error: None,
             locked: None,
+            used_up: false,
             done: true,
             left_out: String::new(),
         }];
@@ -1243,6 +1289,7 @@ impl AskPanel {
             answer: "### Action items\n\n- Ana: share the onboarding designs by Thursday\n- Ben: follow up with legal about the contract\n- You: write down the pricing decision".into(),
             error: None,
             locked: None,
+            used_up: false,
             done: true,
             left_out: String::new(),
         }];

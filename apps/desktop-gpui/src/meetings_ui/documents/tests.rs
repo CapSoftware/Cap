@@ -755,6 +755,8 @@ fn active(state: crate::meetings::ActiveState) -> crate::meetings::ActiveMeeting
         engine: crate::meetings::EngineStatus::default(),
         warning: None,
         resume_offer_until: None,
+        slept: false,
+        resumed_after_sleep: false,
         app_name: None,
         event_id: None,
         health: Vec::new(),
@@ -792,11 +794,40 @@ fn the_banner_raises_one_problem_at_a_time_most_urgent_first() {
         banner_for(Some(&live), &none, None, now),
         Some(Banner::Inactive(29 | 30))
     ));
-    let offered = active(ActiveState::ResumeOffered);
+    let mut offered = active(ActiveState::ResumeOffered);
     assert_eq!(
         banner_for(Some(&offered), &none, None, now),
-        Some(Banner::ResumeOffer)
+        Some(Banner::ResumeOffer { slept: false })
     );
+    offered.slept = true;
+    assert_eq!(
+        banner_for(Some(&offered), &none, None, now),
+        Some(Banner::ResumeOffer { slept: true })
+    );
+}
+
+#[test]
+fn a_meeting_that_resumed_after_a_sleep_says_so_until_a_warning_matters_more() {
+    use crate::meetings::{ActiveState, MeetingWarning, StopReason};
+    let now = std::time::Instant::now();
+    let none = HashSet::new();
+    let mut live = active(ActiveState::Recording);
+    live.resumed_after_sleep = true;
+    assert_eq!(
+        banner_for(Some(&live), &none, Some("permission"), now),
+        Some(Banner::ResumedAfterSleep)
+    );
+    live.warning = Some(MeetingWarning::Ending {
+        stop_at: now + std::time::Duration::from_secs(10),
+        reason: StopReason::CallEnded,
+    });
+    assert!(matches!(
+        banner_for(Some(&live), &none, None, now),
+        Some(Banner::Ending(_))
+    ));
+    live.warning = None;
+    live.resumed_after_sleep = false;
+    assert_eq!(banner_for(Some(&live), &none, None, now), None);
 }
 
 #[test]
@@ -1551,6 +1582,35 @@ fn a_question_mid_call_on_a_paid_plan_is_not_held(cx: &mut TestAppContext) {
             Some(crate::i18n::tr::cap_ai::ask::send_now())
         )],
         "nothing holds a paid question"
+    );
+}
+
+#[gpui::test]
+fn a_free_meeting_out_of_questions_offers_pro_not_ask_now(cx: &mut TestAppContext) {
+    use crate::{i18n::tr, meetings::AiAccess};
+    let (ask, cx) = ask_panel(cx);
+    let upgrade = (
+        tr::cap_ai::ask::locked_upgrade(),
+        Some(tr::cap_ai::card::get_pro()),
+    );
+    for access in [AiAccess::Trial { remaining: 2 }, AiAccess::NeedsUpgrade] {
+        ask.update(cx, |a, cx| {
+            a.set_doc(Some(format!("doc-{access:?}")), cx);
+            a.set_access(access, true, false, cx);
+            a.refused_by_server("Who takes the Friday call?");
+        });
+        assert_eq!(
+            ask.read_with(cx, |a, _| a.held_copy()),
+            vec![upgrade],
+            "{access:?}: notes written and still refused, so the free questions are used"
+        );
+    }
+
+    ask.update(cx, |a, cx| a.set_access(AiAccess::Ready, true, false, cx));
+    assert_eq!(
+        ask.read_with(cx, |a, _| a.held_copy()),
+        vec![(tr::cap_ai::ask::ready(), Some(tr::cap_ai::ask::send_now()))],
+        "after Cap Pro the question can be sent"
     );
 }
 
@@ -2616,4 +2676,28 @@ fn transcript_rows_carry_the_voice_choices() {
     transcript.set_names(names);
     let rows = turns(&transcript);
     assert!(!rows[0].you && rows[0].disowned);
+}
+
+/// macOS answers a notification permission request only once the person has
+/// answered its prompt. A failed start does not wait on it for long.
+#[gpui::test]
+async fn an_unanswered_notification_request_does_not_hold_a_failed_start(cx: &mut TestAppContext) {
+    let (tx, rx) = flume::bounded::<bool>(1);
+    let waiting = cx.spawn(|cx| async move { super::permission_answer(rx, &cx).await });
+    cx.executor().advance_clock(super::PERMISSION_WAIT / 2);
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(super::PERMISSION_WAIT / 2 + std::time::Duration::from_millis(1));
+    assert_eq!(waiting.await, None);
+    drop(tx);
+
+    let (tx, rx) = flume::bounded::<bool>(1);
+    tx.send(true).unwrap();
+    let answered = cx.spawn(|cx| async move { super::permission_answer(rx, &cx).await });
+    assert_eq!(answered.await, Some(true));
+
+    let (tx, rx) = flume::bounded::<bool>(1);
+    drop(tx);
+    let gone = cx.spawn(|cx| async move { super::permission_answer(rx, &cx).await });
+    assert_eq!(gone.await, Some(false));
 }

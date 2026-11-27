@@ -237,6 +237,10 @@ impl StartButton {
             };
             div()
                 .id((self.id, index))
+                .role(gpui::Role::MenuItem)
+                .when(palette.keyboard, crate::ui::keyboard_nav::stop)
+                .aria_label(title.clone())
+                .aria_description(about.clone())
                 .px(px(10.))
                 .py(px(8.))
                 .rounded(px(7.))
@@ -310,7 +314,8 @@ impl StartButton {
 }
 
 impl Render for StartButton {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
         let palette = self.palette;
         let choice = current(cx);
         let live = recording(cx);
@@ -336,6 +341,12 @@ impl Render for StartButton {
                 label(choice).to_string(),
             ),
         };
+        // The visible label counts the seconds; the accessible name stays put so a screen reader
+        // is not told about a change every second.
+        let accessible_label = match &live {
+            Some(_) => tr::documents::sidebar::recording().to_string(),
+            None => main_label.clone(),
+        };
         let open_doc = live.map(|(doc, _)| doc);
         div()
             .id(self.id)
@@ -353,6 +364,9 @@ impl Render for StartButton {
             .child(
                 div()
                     .id((self.id, 10usize))
+                    .role(gpui::Role::Button)
+                    .when(palette.keyboard, crate::ui::keyboard_nav::stop)
+                    .aria_label(accessible_label)
                     .h_full()
                     .when(wide, |el| el.flex_1().min_w_0())
                     .pl(px(if wide { 14. } else { 15. }))
@@ -382,6 +396,14 @@ impl Render for StartButton {
             .child(
                 div()
                     .id((self.id, 11usize))
+                    .role(gpui::Role::Button)
+                    .when(palette.keyboard, crate::ui::keyboard_nav::stop)
+                    .aria_label(tr::documents::start::more())
+                    .aria_description(if self.menu.is_some() {
+                        tr::documents::a11y::expanded()
+                    } else {
+                        tr::documents::a11y::collapsed()
+                    })
                     .h_full()
                     .pl(px(8.))
                     .pr(px(11.))

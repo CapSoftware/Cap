@@ -37,6 +37,9 @@ pub struct Paper {
     pub red: Hsla,
     pub green: Hsla,
     pub track: Hsla,
+    /// Keyboard mode (Tab was pressed): buttons drawn from this paper are
+    /// tab stops with a focus ring. Off for the mouse.
+    pub keyboard: bool,
 }
 
 impl Paper {
@@ -51,6 +54,7 @@ impl Paper {
                 red: rgb(0xff6369).into(),
                 green: rgb(0x3dd68c).into(),
                 track: rgb(0x3a3a40).into(),
+                keyboard: false,
             }
         } else {
             Self {
@@ -62,6 +66,7 @@ impl Paper {
                 red: rgb(0xe5484d).into(),
                 green: rgb(0x2f9e69).into(),
                 track: rgb(0xdcdcd4).into(),
+                keyboard: false,
             }
         }
     }
@@ -974,9 +979,13 @@ pub(crate) fn primary_pill(
     icon: &'static str,
     disabled: bool,
 ) -> gpui::Stateful<Div> {
+    let label: SharedString = label.into();
     div()
         .id(id.into())
         .tab_index(0)
+        .when(paper.keyboard, crate::ui::keyboard_nav::ring)
+        .role(gpui::Role::Button)
+        .aria_label(label.clone())
         .h(px(46.))
         .px(px(26.))
         .rounded_full()
@@ -999,7 +1008,7 @@ pub(crate) fn primary_pill(
             div()
                 .text_size(px(14.))
                 .font_weight(FontWeight::MEDIUM)
-                .child(label.into()),
+                .child(label),
         )
         .child(
             gpui::svg()
@@ -1015,6 +1024,8 @@ pub(crate) fn close_dot(id: &'static str) -> gpui::Stateful<Div> {
         .id(id)
         .group(id)
         .tab_index(0)
+        .role(gpui::Role::Button)
+        .aria_label(tr::common::close())
         .size(px(14.))
         .ml(px(12.))
         .rounded_full()

@@ -200,6 +200,67 @@ fn prompt_budget_keeps_most_recent_text() {
 }
 
 #[test]
+fn a_meeting_too_long_for_the_prompt_keeps_its_start_and_end() {
+    let mut t = Transcript::new();
+    for i in 0..1_000u64 {
+        t.upsert(utt(
+            &format!("u{i}"),
+            if i % 2 == 0 {
+                Source::Mic
+            } else {
+                Source::System
+            },
+            i * 10_000,
+            i * 10_000 + 1_000,
+            &format!("line number {i} with some words"),
+            true,
+        ));
+    }
+    let full = t.labelled_for_prompt(usize::MAX, None);
+    let budget = full.text.chars().count() / 3;
+    let cut = t.labelled_for_prompt(budget, None);
+    assert!(cut.truncated);
+    assert!(cut.text.chars().count() <= budget);
+    let lines: Vec<&str> = cut.text.lines().collect();
+    assert_eq!(lines[0], "You: line number 0 with some words");
+    assert_eq!(
+        *lines.last().unwrap(),
+        "Others: line number 999 with some words"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| **l == super::MIDDLE_LEFT_OUT)
+            .count(),
+        1
+    );
+    let marker = lines
+        .iter()
+        .position(|l| *l == super::MIDDLE_LEFT_OUT)
+        .unwrap();
+    // Whole lines on both sides, about half the room each.
+    assert!(lines.iter().all(|l| *l == super::MIDDLE_LEFT_OUT
+        || l.starts_with("You: line number ")
+        || l.starts_with("Others: line number ")));
+    let start: usize = lines[..marker].iter().map(|l| l.len() + 1).sum();
+    let end: usize = lines[marker + 1..].iter().map(|l| l.len() + 1).sum();
+    assert!(start.abs_diff(end) < 100, "start {start} end {end}");
+    assert!(!cut.text.contains("line number 500 "));
+
+    // Just over the budget: still whole lines, nothing invented.
+    let near = t.labelled_for_prompt(full.text.chars().count() - 1, None);
+    assert!(near.truncated);
+    assert!(near.text.contains(super::MIDDLE_LEFT_OUT));
+    assert!(near.text.starts_with("You: line number 0 "));
+    assert!(near.text.ends_with("line number 999 with some words"));
+
+    // Within the budget nothing changes.
+    let exact = t.labelled_for_prompt(full.text.chars().count(), None);
+    assert!(!exact.truncated);
+    assert_eq!(exact.text, full.text);
+}
+
+#[test]
 fn search_is_case_insensitive_with_snippets() {
     let mut t = Transcript::new();
     t.upsert(utt(

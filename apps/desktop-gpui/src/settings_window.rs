@@ -2180,6 +2180,8 @@ impl SettingsWindow {
             .px(px(4.))
             .py(px(6.))
             .rounded(px(8.))
+            .role(gpui::Role::Button)
+            .aria_label(account_name(signed_in, self.user_profile.as_ref()))
             .cursor_pointer()
             .hover(move |style| style.bg(theme.settings_hover()))
             .active(move |style| style.bg(theme.settings_selection()))
@@ -2337,6 +2339,8 @@ impl SettingsWindow {
             .child(
                 div()
                     .id("settings-previous-versions")
+                    .role(gpui::Role::Link)
+                    .aria_label(tr::settings::sidebar::previous_versions())
                     .child(tr::settings::sidebar::previous_versions())
                     .hover(|style| style.text_color(theme.settings_text()))
                     .on_click(|_, _, cx| cx.open_url("https://cap.so/download/versions")),
@@ -2344,6 +2348,8 @@ impl SettingsWindow {
             .child(
                 div()
                     .id("settings-check-updates")
+                    .role(gpui::Role::Button)
+                    .aria_label(update_label.clone())
                     .max_w_full()
                     .truncate()
                     .cursor_pointer()
@@ -2395,6 +2401,7 @@ impl SettingsWindow {
                 )
                 .full_width()
                 .height(px(34.))
+                .exposed()
             })
     }
 

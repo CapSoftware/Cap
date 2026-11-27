@@ -9,7 +9,7 @@ use super::shared;
 use crate::{
     i18n::tr,
     meetings::{
-        Meetings,
+        CalendarSource, Meetings,
         accounts::{self, ConnectError, ConnectState, Provider},
     },
 };
@@ -44,6 +44,33 @@ fn kind(provider: Provider) -> SourceKind {
     match provider {
         Provider::Google => SourceKind::Google,
         Provider::Microsoft => SourceKind::Microsoft,
+    }
+}
+
+/// The account a calendar source signs in to; `None` for links and the
+/// calendars on this computer.
+pub(crate) fn provider_of(kind: SourceKind) -> Option<Provider> {
+    PROVIDERS
+        .into_iter()
+        .find(|provider| self::kind(*provider) == kind)
+}
+
+pub(crate) fn source_provider(sources: &[CalendarSource], id: &str) -> Option<Provider> {
+    sources
+        .iter()
+        .find(|source| source.id == id)
+        .and_then(|source| provider_of(source.config.kind()))
+}
+
+/// Where the person removes Cap's access from the account itself. Disconnect
+/// only forgets the sign-in on this computer: Google ends the grant on every
+/// computer at once, so that stays the person's choice, made on Google's own
+/// page. Microsoft has one page for personal accounts and another for work
+/// ones, and Cap cannot tell which it holds, so it links neither.
+pub(crate) fn remove_access_url(provider: Provider) -> Option<&'static str> {
+    match provider {
+        Provider::Google => Some("https://myaccount.google.com/connections"),
+        Provider::Microsoft => None,
     }
 }
 

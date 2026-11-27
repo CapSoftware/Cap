@@ -303,6 +303,7 @@ pub struct SetupWindow {
     pub(crate) step_revision: usize,
     pub(crate) direction: f32,
     pub(crate) active: bool,
+    pub(crate) keyboard: bool,
     advance: Option<Task<()>>,
     recheck: Option<Task<()>>,
     request: Option<Task<()>>,
@@ -401,6 +402,7 @@ impl SetupWindow {
                 cx.notify();
             }),
         ];
+        subscriptions.push(crate::ui::keyboard_nav::install(window, cx, |_, _| false));
         subscriptions.shrink_to_fit();
         let step = step.unwrap_or_else(|| resume_step(&settings, saved_step()));
         let (audio, accessibility, calendar) = shared::sweep_permissions();
@@ -439,6 +441,7 @@ impl SetupWindow {
             step_revision: 0,
             direction: 1.,
             active: window.is_window_active(),
+            keyboard: false,
             advance: None,
             recheck: None,
             request: None,

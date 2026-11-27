@@ -216,8 +216,14 @@ pub fn render_sheet(
         .when(closable && framed, |el| {
             el.child(
                 div().absolute().top(px(12.)).right(px(12.)).child(
-                    style::icon_button(&palette, "cap-ai-close", "icons/x.svg", 28.)
-                        .on_click(|_, _, cx| with_cap_ai(cx, |c, cx| c.close(cx))),
+                    style::icon_button(
+                        &palette,
+                        "cap-ai-close",
+                        "icons/x.svg",
+                        28.,
+                        tr::common::close(),
+                    )
+                    .on_click(|_, _, cx| with_cap_ai(cx, |c, cx| c.close(cx))),
                 ),
             )
         })

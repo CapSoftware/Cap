@@ -308,6 +308,13 @@ pub struct TranscriptView {
     debug_live: bool,
     /// Under a live transcript on a computer too slow for live captions.
     cue: Entity<ListeningCue>,
+    /// A screen reader is reading this window, the window has focus and the
+    /// transcript is open: finished live lines are announced through
+    /// `announcer`. Nothing is gathered for it otherwise, and nothing is read
+    /// while the window is in the background.
+    a11y: bool,
+    announcer: super::announce::Announcer,
+    announce_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -604,6 +611,9 @@ impl TranscriptView {
             #[cfg(debug_assertions)]
             debug_live: false,
             cue,
+            a11y: false,
+            announcer: Default::default(),
+            announce_task: None,
             _subscriptions: subscriptions,
         }
     }
@@ -713,12 +723,38 @@ impl TranscriptView {
         self.meta.as_ref().and_then(export::self_name)
     }
 
+    /// Reads the waiting live lines once their turn comes (see `Announcer`).
+    fn schedule_announcement(&mut self, cx: &mut Context<Self>) {
+        let now = std::time::Instant::now();
+        let Some(wait) = self.announcer.due(now) else {
+            return;
+        };
+        if wait.is_zero() {
+            if self.announcer.flush(now) {
+                cx.notify();
+            }
+            return;
+        }
+        if self.announce_task.is_some() {
+            return;
+        }
+        self.announce_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            this.update(cx, |this, cx| {
+                this.announce_task = None;
+                this.schedule_announcement(cx);
+            })
+            .ok();
+        }));
+    }
+
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.doc_id.clone() else {
             return;
         };
         let started_at = self.started_at();
         let self_name = self.self_name();
+        let announce = self.a11y;
         let live_rows = Meetings::try_global(cx).and_then(|meetings| {
             meetings.update(cx, |m, _| {
                 if !m.is_finishing(&id) {
@@ -731,13 +767,26 @@ impl TranscriptView {
                     self_name.as_deref(),
                     &self.hidden,
                 );
-                Some(rows)
+                let finals: Option<Vec<(String, String)>> = announce.then(|| {
+                    transcript
+                        .utterances()
+                        .iter()
+                        .filter(|u| u.is_final)
+                        .map(|u| (u.id.clone(), u.text.clone()))
+                        .collect()
+                });
+                Some((rows, finals))
             })
         });
         let recording = Meetings::try_global(cx)
             .and_then(|m| m.read(cx).active().map(|a| a.doc_id == id))
             .unwrap_or(false);
-        if let Some(rows) = live_rows {
+        if let Some((rows, finals)) = live_rows {
+            if let Some(finals) = finals
+                && self.announcer.observe(&id, &rows, &finals)
+            {
+                self.schedule_announcement(cx);
+            }
             if recording != self.live {
                 self.live = recording;
                 self.list
@@ -2849,7 +2898,22 @@ impl Element for PageScroll {
 }
 
 impl Render for TranscriptView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
+        // The window redraws when it gains or loses focus; lines finished
+        // while it was in the background (or the transcript was collapsed)
+        // are not read on return. What is there on return is noted right
+        // away, so the next line to finish is the first one read.
+        let reader = window.is_a11y_active();
+        let a11y = reader && window.is_window_active() && !self.collapsed();
+        if a11y != self.a11y {
+            self.a11y = a11y;
+            self.announcer.pause();
+            self.announce_task = None;
+            if a11y {
+                cx.defer_in(window, |this, _, cx| this.refresh(cx));
+            }
+        }
         let palette = self.palette;
         let entity = cx.entity();
         let empty = self.loaded && !self.has_transcript();
@@ -3021,6 +3085,37 @@ impl Render for TranscriptView {
             .child(body)
             .when(self.is_live() && following && !self.collapsed(), |el| {
                 el.child(self.cue.clone())
+            })
+            .when(reader && self.is_live(), |el| {
+                // Polite: read after whatever is being spoken, never over it.
+                // It stays while the window is in the background (a screen
+                // reader ignores a region that leaves and comes back), and is
+                // new for each note.
+                el.child(
+                    div()
+                        .id(ElementId::Name(
+                            format!(
+                                "transcript-announce-{}",
+                                self.doc_id.as_deref().unwrap_or_default()
+                            )
+                            .into(),
+                        ))
+                        .role(gpui::Role::Status)
+                        .aria_live(gpui::Live::Polite)
+                        // VoiceOver hears a live region's value; Narrator and
+                        // Orca hear its name.
+                        .when(cfg!(target_os = "macos"), |el| {
+                            el.aria_value(self.announcer.text.clone())
+                        })
+                        .when(!cfg!(target_os = "macos"), |el| {
+                            el.aria_label(self.announcer.text.clone())
+                        })
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size(px(1.))
+                        .overflow_hidden(),
+                )
             })
             .children(self.render_player(cx))
             .children(self.render_selection_bar(cx))

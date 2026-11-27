@@ -6,9 +6,9 @@ use std::{
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
     InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Point, Render,
-    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Task, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, point,
-    prelude::FluentBuilder, px, size,
+    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Task,
+    WeakEntity, Window, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div,
+    point, prelude::FluentBuilder, px, size,
 };
 use serde_json::{Value, json};
 
@@ -59,6 +59,16 @@ pub struct Toast {
     on_expire: Option<ToastExpire>,
 }
 
+/// Something that went wrong while the window was not in front, such as an
+/// automatic start that failed. It stays, in its own space under the page's
+/// toolbar, until the person dismisses it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Notice {
+    pub message: SharedString,
+    /// A second, quieter line: why, when Cap can tell.
+    pub detail: Option<SharedString>,
+}
+
 pub struct DocumentsWindow {
     focus: FocusHandle,
     pub theme: Theme,
@@ -71,6 +81,7 @@ pub struct DocumentsWindow {
     sidebar_choice: Option<bool>,
     narrow: bool,
     toast: Option<Toast>,
+    notice: Option<Notice>,
     toast_serial: u64,
     toast_task: Option<Task<()>>,
     frame_task: Option<Task<()>>,
@@ -131,15 +142,22 @@ fn placement(cx: &App) -> Bounds<Pixels> {
 }
 
 pub fn open(doc_id: Option<String>, cx: &mut App) {
-    open_with(doc_id, false, cx);
+    open_with(doc_id, false, true, cx);
 }
 
 /// `open` for a meeting just started: the cursor lands in its notes.
 pub fn open_to_type(doc_id: String, cx: &mut App) {
-    open_with(Some(doc_id), true, cx);
+    open_with(Some(doc_id), true, true, cx);
 }
 
-fn open_with(doc_id: Option<String>, type_into: bool, cx: &mut App) {
+/// `open` for a meeting that needs the person while they may be typing in
+/// the call (it started on its own, or is about to stop): the window comes
+/// up in front without taking the keyboard from the app in use.
+pub fn open_quietly(cx: &mut App) {
+    open_with(None, false, false, cx);
+}
+
+fn open_with(doc_id: Option<String>, type_into: bool, activate: bool, cx: &mut App) {
     crate::app_windows::hide_main_for_meeting_window(cx);
     if let Some(handle) = MeetingWindows::get(cx).documents {
         let revealed = handle.update(cx, |root, window, cx| {
@@ -152,41 +170,130 @@ fn open_with(doc_id: Option<String>, type_into: bool, cx: &mut App) {
                     root.reveal(doc_id.clone(), cx);
                 });
             }
-            window.activate_window();
+            if activate {
+                window.activate_window();
+            }
             platform::native_window(window)
         });
         match revealed {
-            Ok(Some(native)) => cx
+            Ok(Some(native)) if activate => cx
                 .spawn(async move |_| platform::show_native(&native))
+                .detach(),
+            Ok(Some(native)) => cx
+                .spawn(async move |_| platform::show_native_quietly(&native))
                 .detach(),
             // Off macOS there is no native handle to raise: the open window
             // is already revealed and activated, and is the only one.
             Ok(None) => {}
             Err(_) => {
                 MeetingWindows::get(cx).documents = None;
-                open_new(doc_id, type_into, cx);
+                open_new(doc_id, type_into, activate, cx);
             }
         }
         return;
     }
-    open_new(doc_id, type_into, cx);
+    open_new(doc_id, type_into, activate, cx);
 }
 
 /// Open the notes window and say `message` there, for something that went
 /// wrong where no window was showing (a start from the tray or a hotkey).
-pub fn open_with_message(message: impl Into<SharedString>, cx: &mut App) {
+/// Open the notes window to say something went wrong elsewhere. The window
+/// may open while the person looks at something else, so the message stays
+/// (see [`Notice`]) instead of fading after a few seconds.
+pub fn open_with_message(
+    message: impl Into<SharedString>,
+    detail: Option<SharedString>,
+    cx: &mut App,
+) {
     open(None, cx);
     let Some(handle) = MeetingWindows::get(cx).documents else {
         return;
     };
-    let message = message.into();
+    let notice = Notice {
+        message: message.into(),
+        detail: detail.filter(|detail| !detail.is_empty()),
+    };
     handle
         .update(cx, |root, _, cx| {
             if let Ok(root) = root.downcast::<DocumentsWindow>() {
-                root.update(cx, |root, cx| root.show_toast(message, None, None, cx));
+                root.update(cx, |root, cx| root.show_notice(notice, cx));
             }
         })
         .ok();
+}
+
+/// The window's [`Notice`], laid out in the page under its toolbar so it
+/// never covers what is on the page. `None` when there is nothing to say.
+pub(super) fn notice_bar(
+    root: &WeakEntity<DocumentsWindow>,
+    palette: &Palette,
+    cx: &App,
+) -> Option<AnyElement> {
+    let notice = root.upgrade()?.read(cx).notice.clone()?;
+    let root = root.clone();
+    let palette = *palette;
+    let dismiss = tr::common::dismiss();
+    Some(
+        div()
+            .w_full()
+            .flex_shrink_0()
+            .px(px(16.))
+            .pb(px(8.))
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .id("documents-notice")
+                    .w_full()
+                    .max_w(px(style::COLUMN_WIDTH))
+                    .flex()
+                    .items_start()
+                    .gap(px(10.))
+                    .py(px(8.))
+                    .pl(px(14.))
+                    .pr(px(8.))
+                    .rounded(px(12.))
+                    .bg(palette.capsule)
+                    .border_1()
+                    .border_color(palette.capsule_border)
+                    .text_size(px(13.))
+                    .line_height(px(18.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .py(px(3.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_color(palette.text)
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(notice.message),
+                            )
+                            .children(
+                                notice
+                                    .detail
+                                    .map(|detail| div().text_color(palette.muted).child(detail)),
+                            ),
+                    )
+                    .child(
+                        crate::ui::keyboard_nav::stop(style::icon_button(
+                            &palette,
+                            "documents-notice-dismiss",
+                            "icons/x.svg",
+                            24.,
+                            dismiss,
+                        ))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(move |_, _, cx| {
+                            root.update(cx, |root, cx| root.dismiss_notice(cx)).ok();
+                        }),
+                    ),
+            )
+            .into_any_element(),
+    )
 }
 
 /// Open the notes window on a new, plain note: no recording, no setup.
@@ -205,7 +312,7 @@ pub fn new_note(cx: &mut App) {
         .ok();
 }
 
-fn open_new(doc_id: Option<String>, type_into: bool, cx: &mut App) {
+fn open_new(doc_id: Option<String>, type_into: bool, activate: bool, cx: &mut App) {
     let typed_doc = doc_id.clone().filter(|_| type_into);
     let opened_at = Instant::now();
     let bounds = placement(cx);
@@ -220,7 +327,7 @@ fn open_new(doc_id: Option<String>, type_into: bool, cx: &mut App) {
                 traffic_light_position: Some(TRAFFIC_LIGHTS),
             }),
             kind: WindowKind::Normal,
-            focus: true,
+            focus: activate,
             show: true,
             is_resizable: true,
             is_minimizable: true,
@@ -250,6 +357,9 @@ fn open_new(doc_id: Option<String>, type_into: bool, cx: &mut App) {
         })
         .ok()
         .flatten();
+    if !activate && let Some(native) = &native {
+        platform::show_native_quietly(native);
+    }
     cx.spawn(async move |cx| {
         if let Some(native) = &native {
             let kind = platform::install_window_material(native, style::MATERIAL_RADIUS);
@@ -292,7 +402,19 @@ impl DocumentsWindow {
         let sidebar_choice = saved_sidebar_choice();
         let sidebar_open = sidebar_default(sidebar_choice);
         pane.update(cx, |pane, cx| pane.set_leading_inset(!sidebar_open, cx));
+        let keyboard_nav = crate::ui::keyboard_nav::install_keeping(
+            window,
+            cx,
+            |_, _, _| false,
+            // The notes editors use Tab for list indent; Ctrl-Tab moves on.
+            |this: &Self, window, cx| {
+                let pane = this.pane.read(cx);
+                pane.notes.focus_handle(cx).contains_focused(window, cx)
+                    || pane.enhanced.focus_handle(cx).contains_focused(window, cx)
+            },
+        );
         let subscriptions = vec![
+            keyboard_nav,
             cx.subscribe_in(&sidebar, window, Self::on_sidebar_event),
             cx.subscribe_in(&home, window, Self::on_home_event),
             cx.subscribe_in(&store, window, |this, _, event: &StoreEvent, window, cx| {
@@ -363,6 +485,7 @@ impl DocumentsWindow {
             sidebar_choice,
             narrow: false,
             toast: None,
+            notice: None,
             toast_serial: 0,
             toast_task: None,
             frame_task: None,
@@ -509,6 +632,27 @@ impl DocumentsWindow {
         }
     }
 
+    /// Shows `notice` under the page's toolbar until it is dismissed or
+    /// replaced.
+    pub fn show_notice(&mut self, notice: Notice, cx: &mut Context<Self>) {
+        self.notice = Some(notice);
+        self.refresh_pages(cx);
+    }
+
+    pub fn dismiss_notice(&mut self, cx: &mut Context<Self>) {
+        if self.notice.take().is_some() {
+            self.refresh_pages(cx);
+        }
+    }
+
+    /// The page views are cached, so a change to the notice they draw has to
+    /// reach them.
+    fn refresh_pages(&mut self, cx: &mut Context<Self>) {
+        self.home.update(cx, |_, cx| cx.notify());
+        self.pane.update(cx, |_, cx| cx.notify());
+        cx.notify();
+    }
+
     pub fn dismiss_toast(&mut self, cx: &mut Context<Self>) {
         if let Some(toast) = self.toast.take() {
             if let Some(expire) = toast.on_expire {
@@ -640,6 +784,8 @@ impl DocumentsWindow {
             || self.home.update(cx, |home, cx| home.dismiss(window, cx));
         if !handled && self.toast.is_some() {
             self.dismiss_toast(cx);
+        } else if !handled && self.notice.is_some() {
+            self.dismiss_notice(cx);
         }
     }
 
@@ -796,6 +942,7 @@ impl Focusable for DocumentsWindow {
 
 impl Render for DocumentsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
         crate::keylat::frame_started();
         self.sync_theme(window, cx);
         style::set_reduce_motion(cx.reduce_motion());
@@ -933,6 +1080,7 @@ impl Render for DocumentsWindow {
                 )),
         );
         shell
+            .child(crate::ui::keyboard_nav::pointer_watcher())
             .child(body)
             .child(self.render_leading_controls(cx))
             .children(self.render_toast(cx))
@@ -980,23 +1128,75 @@ mod tests {
         assert_eq!(cx.update(|cx| MeetingWindows::get(cx).documents), first);
     }
 
-    /// A start that fails from the tray or a hotkey, with no window showing,
-    /// opens the notes window and says so instead of doing nothing.
+    /// A start that fails from the tray, a hotkey or by itself, with no
+    /// window showing, opens the notes window and says so and why. The
+    /// window may open while the person looks elsewhere, so the message
+    /// stays until they dismiss it.
     #[gpui::test]
     fn a_failed_start_from_outside_the_window_says_so(cx: &mut TestAppContext) {
         assert_eq!(notes_windows(cx), 0);
-        cx.update(|cx| super::open_with_message("Recording couldn't start.", cx));
+        cx.update(|cx| {
+            super::open_with_message(
+                "Recording couldn't start.",
+                Some("Check the free space on your disk and try again.".into()),
+                cx,
+            )
+        });
         cx.run_until_parked();
         assert_eq!(notes_windows(cx), 1);
         let handle = cx.update(|cx| MeetingWindows::get(cx).documents).unwrap();
-        let shown = handle
+        let shown = |cx: &mut TestAppContext| {
+            handle
+                .update(cx, |root, _, cx| {
+                    root.downcast::<super::DocumentsWindow>()
+                        .ok()
+                        .and_then(|root| root.read(cx).notice.clone())
+                })
+                .unwrap()
+        };
+        let expected = Some(super::Notice {
+            message: "Recording couldn't start.".into(),
+            detail: Some("Check the free space on your disk and try again.".into()),
+        });
+        assert_eq!(shown(cx), expected);
+        cx.executor().advance_clock(super::TOAST_FOR * 10);
+        cx.run_until_parked();
+        assert_eq!(shown(cx), expected);
+        // An everyday message does not replace it, and fades on its own.
+        handle
             .update(cx, |root, _, cx| {
-                root.downcast::<super::DocumentsWindow>()
-                    .ok()
-                    .and_then(|root| root.read(cx).toast.as_ref().map(|t| t.message.clone()))
+                if let Ok(root) = root.downcast::<super::DocumentsWindow>() {
+                    root.update(cx, |root, cx| root.show_toast("Copied", None, None, cx));
+                }
             })
             .unwrap();
-        assert_eq!(shown.as_deref(), Some("Recording couldn't start."));
+        cx.executor().advance_clock(super::TOAST_FOR * 2);
+        cx.run_until_parked();
+        assert_eq!(shown(cx), expected);
+        let toast = handle
+            .update(cx, |root, _, cx| {
+                root.downcast::<super::DocumentsWindow>()
+                    .is_ok_and(|root| root.read(cx).toast.is_some())
+            })
+            .unwrap();
+        assert!(!toast);
+        // Escape dismisses it.
+        cx.update(|cx| {
+            handle
+                .update(cx, |root, window, cx| {
+                    let focus = root
+                        .downcast::<super::DocumentsWindow>()
+                        .unwrap()
+                        .read(cx)
+                        .focus
+                        .clone();
+                    window.focus(&focus, cx);
+                    window.dispatch_action(Box::new(super::super::Dismiss), cx)
+                })
+                .unwrap()
+        });
+        cx.run_until_parked();
+        assert_eq!(shown(cx), None);
     }
 
     /// A notes window that goes away clears only its own slot, so a newer

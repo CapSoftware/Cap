@@ -3434,6 +3434,12 @@ title = "标记"
 [ui]
 coming_soon = "即将推出"
 
+[ui.caption]
+close = "关闭"
+maximize = "最大化"
+minimize = "最小化"
+restore = "向下还原"
+
 [ui.selection]
 audio = { other = "已选择 {count} 个音频分段" }
 caption = { other = "已选择 {count} 个字幕分段" }
@@ -3582,6 +3588,7 @@ stop = "停止"
 keep_recording = "继续录制"
 resume = "继续"
 still_there = "还在吗？"
+resumed = "睡眠后已继续"
 untitled = "会议"
 open_notes = "打开笔记"
 call_ended = "通话已结束"
@@ -3602,6 +3609,7 @@ disk_full = "磁盘快满了"
 sign_in = "登录以完成转写"
 offline = "已离线，音频已保存"
 cloud_local = "正在这台电脑上转写"
+cloud_limit = "今天的云端转写额度已用完"
 words_missing = "可能缺少部分内容"
 
 [meeting.shortcuts]
@@ -3799,6 +3807,7 @@ choose_calendars = { other = "从 {count} 个日历中选择" }
 waiting_for_access = "正在等待日历访问权限..."
 retry = "重试"
 remove = "移除"
+disconnect = "断开连接"
 open_settings = "打开系统设置"
 allow_access = "允许访问"
 access_needed = "Cap 需要你的许可才能读取这些日历。"
@@ -4198,6 +4207,8 @@ call_ended = "通话已结束。将在 {time} 后停止"
 inactive = "已有一段时间没人说话。将在 {time} 后停止"
 keep_recording = "继续录制"
 stopped_quiet = "安静一段时间后已停止"
+stopped_asleep = "电脑睡眠时已停止"
+resumed_asleep = "电脑睡眠后已继续"
 record_more = "继续录制"
 set_up = "设置"
 error_start = "无法开始录制。"
@@ -4224,6 +4235,8 @@ disk_full = "磁盘快满了。请释放一些空间，以便 Cap 继续保存�
 sign_in_again = "请重新登录以完成转写。Cap 会保留音频。"
 offline_catching_up = "你已离线。Cap 正在保存音频，恢复联网后会完成转写。"
 cloud_local = "Cap Cloud 暂无响应，目前由这台电脑进行转写。"
+cloud_limit_waiting = "你今天的云端转写额度已用完。Cap 正在保存音频，额度重置后会完成转写。"
+cloud_limit_local = "你今天的云端转写额度已用完，额度重置前由这台电脑进行转写。"
 words_missing = "Cap 未能转写这场会议的一部分，可能缺少一些内容。"
 
 [documents.ask]
@@ -4249,6 +4262,8 @@ connect = "连接"
 cancel = "取消"
 try_again = "重试"
 connected = "已连接"
+disconnected = "已在这台电脑上断开连接。"
+google_remove_access = "从你的 Google 账户中移除 Cap"
 waiting = "请在浏览器中完成登录..."
 finishing = "正在完成..."
 error_not_configured = "此版本无法登录。"
@@ -4261,7 +4276,12 @@ error_rejected = "登录没有完成。请重试。"
 engine = "转写"
 setup = "设置向导"
 setup_description = "重新设置权限、转写和日历。"
+[documents.a11y]
+collapsed = "已折叠"
+expanded = "已展开"
+
 [documents.home]
+clear_search = "清除搜索"
 trash_count = "废纸篓 · {count}"
 recording_now = "正在录制"
 notes = "笔记"

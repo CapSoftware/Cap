@@ -43,6 +43,14 @@ pub struct Person {
 }
 
 impl Person {
+    fn bound(&mut self) {
+        if let Some(name) = self.name.as_mut() {
+            clean_line(name);
+        }
+        clip_opt(&mut self.name, MAX_PERSON_BYTES);
+        clip_opt(&mut self.email, MAX_PERSON_BYTES);
+    }
+
     pub fn display_name(&self) -> Option<&str> {
         self.name
             .as_deref()
@@ -73,7 +81,68 @@ pub struct CalendarEvent {
     pub free: bool,
 }
 
+/// Most a title keeps, in bytes.
+pub const MAX_TITLE_BYTES: usize = 1024;
+/// Most a place or description keeps, in bytes. Descriptions are only read for
+/// a meeting link, which is found before they are cut.
+pub const MAX_TEXT_BYTES: usize = 4096;
+/// Most a person's name or email keeps, in bytes.
+pub const MAX_PERSON_BYTES: usize = 320;
+/// Most people kept on one event, besides the user.
+pub const MAX_ATTENDEES: usize = 1000;
+/// Longer event ids are replaced by a hash of themselves.
+pub const MAX_ID_BYTES: usize = 512;
+
 impl CalendarEvent {
+    /// The event with every field held to the limits above, and its title,
+    /// place and names on one line without control or direction-override
+    /// characters. A feed can repeat one huge field on every occurrence of a
+    /// series.
+    pub fn bounded(mut self) -> Self {
+        clean_line(&mut self.title);
+        clip(&mut self.title, MAX_TITLE_BYTES);
+        if let Some(location) = self.location.as_mut() {
+            clean_line(location);
+        }
+        clip_opt(&mut self.location, MAX_TEXT_BYTES);
+        clip_opt(&mut self.description, MAX_TEXT_BYTES);
+        clip_opt(&mut self.web_url, MAX_TEXT_BYTES);
+        if let Some(organizer) = self.organizer.as_mut() {
+            organizer.bound();
+        }
+        if self.attendees.len() > MAX_ATTENDEES {
+            let mut others = 0;
+            self.attendees.retain(|person| {
+                others += usize::from(!person.is_self);
+                person.is_self || others <= MAX_ATTENDEES
+            });
+        }
+        for person in &mut self.attendees {
+            person.bound();
+        }
+        self.id = bound_id(std::mem::take(&mut self.id));
+        self.series_id = self.series_id.take().map(bound_id);
+        self
+    }
+
+    pub fn approx_bytes(&self) -> usize {
+        let text = |s: &Option<String>| s.as_ref().map_or(0, String::len);
+        let person = |p: &Person| text(&p.name) + text(&p.email) + 48;
+        256 + self.id.len()
+            + text(&self.series_id)
+            + self.calendar_id.len()
+            + self.title.len()
+            + text(&self.location)
+            + text(&self.description)
+            + text(&self.web_url)
+            + self
+                .link
+                .as_ref()
+                .map_or(0, |l| l.url.len() + text(&l.meeting_id))
+            + self.organizer.as_ref().map_or(0, person)
+            + self.attendees.iter().map(person).sum::<usize>()
+    }
+
     pub fn is_cancelled(&self) -> bool {
         self.status == EventStatus::Cancelled
     }
@@ -181,4 +250,47 @@ pub(crate) fn derive_self_response(
         .iter()
         .find(|p| p.is_self)
         .map_or(Response::Unknown, |p| p.response)
+}
+
+/// Line breaks and tabs become spaces; other control characters and the
+/// left-to-right and right-to-left override marks, which show as boxes or
+/// reverse what follows them, are dropped.
+fn clean_line(text: &mut String) {
+    let unwanted = |c: char| c.is_control() || matches!(c, '\u{202D}' | '\u{202E}');
+    if text.chars().any(unwanted) {
+        *text = text
+            .chars()
+            .filter_map(|c| match c {
+                '\t' | '\n' | '\r' => Some(' '),
+                c if unwanted(c) => None,
+                c => Some(c),
+            })
+            .collect();
+    }
+}
+
+fn clip(text: &mut String, max: usize) {
+    if text.len() > max {
+        let mut end = max;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+}
+
+fn clip_opt(text: &mut Option<String>, max: usize) {
+    if let Some(text) = text.as_mut() {
+        clip(text, max);
+    }
+}
+
+fn bound_id(id: String) -> String {
+    use sha2::{Digest, Sha256};
+    if id.len() <= MAX_ID_BYTES {
+        return id;
+    }
+    let digest = Sha256::digest(id.as_bytes());
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    format!("sha256-{hex}")
 }

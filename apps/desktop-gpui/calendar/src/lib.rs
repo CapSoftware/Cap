@@ -19,4 +19,7 @@ pub use link::{
     ConferenceEntry, ConferenceKind, MeetingLink, Provider, classify_url, event_meeting_link,
     find_meeting_link,
 };
-pub use model::{CalendarEvent, CalendarInfo, EventStatus, Page, Person, Response, SourceKind};
+pub use model::{
+    CalendarEvent, CalendarInfo, EventStatus, MAX_ATTENDEES, MAX_TEXT_BYTES, MAX_TITLE_BYTES, Page,
+    Person, Response, SourceKind,
+};
