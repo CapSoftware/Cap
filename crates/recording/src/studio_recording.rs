@@ -5686,6 +5686,139 @@ mod tests {
         );
     }
 
+    /// A real Studio segment, built by the recording's factory, records its
+    /// input under the recording's stop cut: once the user asks to stop, its
+    /// input recorder ends on its own, before any Stop reaches the segment,
+    /// with no move, click or key press past the request plus one poll.
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn late_stop_cut_reaches_the_input_recorder_of_a_real_segment() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = crate::cursor::test_input::Injector::start();
+        let (completion_tx, _completion_rx) = watch::channel(None);
+        let mut factory = SegmentPipelineFactory::new(
+            temp.path().join("content/segments"),
+            temp.path().join("content/cursors"),
+            RecordingBaseInputs {
+                capture_target: screen_capture::ScreenCaptureTarget::Display {
+                    id: scap_targets::Display::primary().id(),
+                },
+                window_only: false,
+                capture_system_audio: false,
+                mic_feed: None,
+                camera_feed: None,
+                start_gate: None,
+            },
+            true,
+            true,
+            true,
+            false,
+            30,
+            crate::StudioQuality::Balanced,
+            None,
+            completion_tx,
+        );
+        let pipeline = factory
+            .create_next(Default::default(), 0)
+            .await
+            .expect("a real display segment");
+        let epoch = pipeline.epoch().instant();
+        let recorder = pipeline
+            .cursor
+            .as_ref()
+            .expect("the segment records input")
+            .actor
+            .rx
+            .clone();
+
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let shown = crate::cursor::test_input::cursor_shown();
+        let cut = factory.encoder_preferences.stop_cut();
+        assert!(cut.mark());
+        let request = cut.instant().unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(5), recorder)
+            .await
+            .expect(
+                "the segment's input recorder kept running after the stop request: it was not \
+                 built under the recording's stop cut",
+            )
+            .unwrap();
+        let ended = request.elapsed();
+        let sent = input.stop();
+
+        let limit = request.checked_add(Duration::from_millis(16)).unwrap();
+        let limit_ms = limit.saturating_duration_since(epoch).as_secs_f64() * 1000.0;
+        crate::cursor::test_input::assert_response_recorded_by(&response, limit_ms);
+        eprintln!(
+            "segment input recorder: ended {ended:?} after the request at {:.1} ms; {}; {sent} \
+             inputs sent; cursor shown {shown}",
+            request.saturating_duration_since(epoch).as_secs_f64() * 1000.0,
+            crate::cursor::test_input::summary(&response),
+        );
+        if shown {
+            assert!(
+                !response.moves.is_empty() && !response.keyboard_presses.is_empty(),
+                "input sent before the request must be recorded ({sent} inputs sent)"
+            );
+        }
+        pipeline.stop().await.ok();
+    }
+
+    /// Stop while paused, with the Stop reaching the recording late: a
+    /// Studio pause already ended the segment, so nothing captured after the
+    /// pause, and so nothing after the request, is saved.
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn late_stop_cut_while_paused_saves_nothing_after_the_pause() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("recording.cap");
+        let path = project.as_path();
+        let before_recording = Instant::now();
+        let (handle, release, screen_tx, sent) = studio_with_slow_screen_finish(path).await;
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        screen_tx
+            .send_async(TestVideoFrame {
+                timestamp: Timestamp::Instant(Instant::now()),
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // The paused segment's finish returns at once.
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(30), handle.pause())
+            .await
+            .expect("pause must finish the segment")
+            .unwrap();
+        let paused = Instant::now();
+        assert!(handle.is_paused().await.unwrap());
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        screen_tx
+            .send_async(TestVideoFrame {
+                timestamp: Timestamp::Instant(Instant::now()),
+            })
+            .await
+            .ok();
+        handle.mark_stop_requested();
+        let request = handle.terminal.stop_cut.instant().unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let outcome = tokio::time::timeout(Duration::from_secs(30), handle.stop_with_outcome())
+            .await
+            .expect("Stop while paused has no track left to wait for");
+        assert!(outcome.finishing.is_none());
+        assert!(paused < request);
+
+        let muxed = sent.lock().unwrap().clone();
+        assert!(!muxed.is_empty(), "the frames before the pause are kept");
+        let limit = paused.duration_since(before_recording);
+        assert!(
+            muxed.iter().all(|timestamp| *timestamp <= limit),
+            "nothing past the pause ({limit:?}): {muxed:?}"
+        );
+    }
+
     #[cfg(target_os = "macos")]
     fn prior_unconfirmed_optional_stop_handle(path: &Path) -> ActorHandle {
         let (completion_tx, completion_rx) = watch::channel(None);
