@@ -459,10 +459,8 @@ pub async fn update_auth_plan() -> Result<(), AuthApiError> {
             stale = true;
             return false;
         }
-        if let Some(plan) = plan
-            && !superseded(auth.get("plan"), &plan)
-        {
-            auth.insert("plan".into(), plan);
+        if let Some(plan) = plan {
+            save_plan(auth, plan);
         }
         let now = json!(chrono::Utc::now().timestamp() as i32);
         if let Some(orgs) = organizations {
@@ -489,6 +487,32 @@ pub async fn update_auth_plan() -> Result<(), AuthApiError> {
 
 /// Plan fetches can finish out of order: `update_auth_plan` saves only after
 /// the organizations request, so its plan can be older than one saved since.
+/// `last_checked` is in seconds, so fetches made by this run are also ordered
+/// by when they returned.
+fn save_plan(auth: &mut serde_json::Map<String, Value>, fetched: FetchedPlan) {
+    if superseded(auth.get("plan"), &fetched.plan)
+        || SAVED_PLAN_FETCH.fetch_max(fetched.order, Ordering::SeqCst) > fetched.order
+    {
+        return;
+    }
+    auth.insert("plan".into(), fetched.plan);
+}
+
+static PLAN_FETCHES: AtomicU64 = AtomicU64::new(0);
+static SAVED_PLAN_FETCH: AtomicU64 = AtomicU64::new(0);
+
+struct FetchedPlan {
+    plan: Value,
+    order: u64,
+}
+
+fn fetched_plan(plan: Value) -> FetchedPlan {
+    FetchedPlan {
+        plan,
+        order: PLAN_FETCHES.fetch_add(1, Ordering::SeqCst) + 1,
+    }
+}
+
 fn superseded(saved: Option<&Value>, fetched: &Value) -> bool {
     let checked_at = |plan: &Value| plan.get("last_checked").and_then(Value::as_i64);
     match (saved.and_then(checked_at), checked_at(fetched)) {
@@ -497,16 +521,16 @@ fn superseded(saved: Option<&Value>, fetched: &Value) -> bool {
     }
 }
 
-async fn fetch_plan() -> Option<Value> {
+async fn fetch_plan() -> Option<FetchedPlan> {
     match authed_request(reqwest::Method::GET, "/api/desktop/plan", None).await {
         Ok(response) if response.status().is_success() => {
             let body = response.json::<Value>().await.ok()?;
             let upgraded = body.get("upgraded").and_then(Value::as_bool)?;
-            Some(json!({
+            Some(fetched_plan(json!({
                 "upgraded": upgraded,
                 "manual": false,
                 "last_checked": chrono::Utc::now().timestamp() as i32,
-            }))
+            })))
         }
         Ok(response) => {
             tracing::warn!("Plan fetch returned {}", response.status());
@@ -539,9 +563,7 @@ pub async fn update_plan_only() -> Result<(), AuthApiError> {
             stale = true;
             return false;
         }
-        if !superseded(auth.get("plan"), &plan) {
-            auth.insert("plan".into(), plan);
-        }
+        save_plan(auth, plan);
         true
     });
     if stale {
@@ -754,6 +776,20 @@ mod server_change_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plan_fetched_earlier_in_the_same_second_never_replaces_a_later_one() {
+        let plan =
+            |upgraded: bool| json!({"upgraded": upgraded, "manual": false, "last_checked": 10});
+        let free = fetched_plan(plan(false));
+        let pro = fetched_plan(plan(true));
+        let mut auth = serde_json::Map::new();
+        save_plan(&mut auth, pro);
+        save_plan(&mut auth, free);
+        assert_eq!(auth["plan"]["upgraded"], json!(true));
+        save_plan(&mut auth, fetched_plan(plan(false)));
+        assert_eq!(auth["plan"]["upgraded"], json!(false));
+    }
 
     #[test]
     fn an_older_plan_never_replaces_a_newer_one() {
