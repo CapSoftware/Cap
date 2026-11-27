@@ -141,6 +141,11 @@ impl AiState {
         AutoDecision::Skip
     }
 
+    /// Automatic notes were started for this meeting in this run.
+    pub fn started(&self, doc_id: &str) -> bool {
+        self.started.contains(doc_id)
+    }
+
     pub fn waiting_ids(&self) -> &[String] {
         &self.waiting
     }
@@ -342,7 +347,10 @@ impl Meetings {
         if !path.exists() {
             return;
         }
-        let (ids, kept) = split_unwritten(read_unwritten(&path), current_account().as_deref());
+        let (ids, kept) =
+            split_unwritten(read_unwritten(&path), current_account().as_deref(), |id| {
+                self.ai.started(id)
+            });
         if let Err(error) = write_unwritten(&path, &kept) {
             tracing::warn!(%error, "could not update the meetings waiting for notes");
         }
@@ -409,14 +417,22 @@ fn current_account() -> Option<String> {
 }
 
 /// The ids to write now (left by `account`, or by nobody in particular),
-/// and the entries to keep for another account's next sign-in.
-fn split_unwritten(all: Vec<Unwritten>, account: Option<&str>) -> (Vec<String>, Vec<Unwritten>) {
-    let (mine, kept): (Vec<_>, Vec<_>) = all.into_iter().partition(|entry| match entry {
-        Unwritten::Owned {
-            account: Some(owner),
-            ..
-        } => Some(owner.as_str()) == account,
-        _ => true,
+/// and the entries to keep: another account's, for its next sign-in, and
+/// those whose notes this run already `started`, for the next launch.
+fn split_unwritten(
+    all: Vec<Unwritten>,
+    account: Option<&str>,
+    started: impl Fn(&str) -> bool,
+) -> (Vec<String>, Vec<Unwritten>) {
+    let (mine, kept): (Vec<_>, Vec<_>) = all.into_iter().partition(|entry| {
+        let owned = match entry {
+            Unwritten::Owned {
+                account: Some(owner),
+                ..
+            } => Some(owner.as_str()) == account,
+            _ => true,
+        };
+        owned && !started(entry.id())
     });
     (
         mine.iter().map(|entry| entry.id().to_string()).collect(),
@@ -469,13 +485,22 @@ mod tests {
         let all = read_unwritten(&path);
         assert_eq!(all.len(), 4);
 
-        let (now, kept) = split_unwritten(all.clone(), Some("user-b"));
+        let (now, kept) = split_unwritten(all.clone(), Some("user-b"), |_| false);
         assert_eq!(now, ["old", "b1", "anon"]);
         assert_eq!(kept.iter().map(Unwritten::id).collect::<Vec<_>>(), ["a1"]);
 
-        let (now, kept) = split_unwritten(all, None);
+        let (now, kept) = split_unwritten(all.clone(), None, |_| false);
         assert_eq!(now, ["old", "anon"]);
         assert_eq!(kept.len(), 2);
+
+        // A sign-in later in the same run: notes this run already started
+        // (written, or failed after their retries) stay for the next launch.
+        let (now, kept) = split_unwritten(all, Some("user-b"), |id| id == "b1");
+        assert_eq!(now, ["old", "anon"]);
+        assert_eq!(
+            kept.iter().map(Unwritten::id).collect::<Vec<_>>(),
+            ["a1", "b1"]
+        );
 
         write_unwritten(&path, &[]).unwrap();
         assert!(!path.exists());
