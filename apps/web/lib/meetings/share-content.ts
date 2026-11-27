@@ -2,6 +2,9 @@ export const NOTE_TITLE_COLUMN_CHARS = 255;
 export const NOTE_EXCERPT_CHARS = 360;
 const UNTITLED_NOTE = "Untitled note";
 
+export const transferredNoteDocumentId = (videoId: string) =>
+	`transferred-${videoId}`;
+
 const firstCharacters = (value: string, max: number) =>
 	Array.from(value).slice(0, max).join("");
 

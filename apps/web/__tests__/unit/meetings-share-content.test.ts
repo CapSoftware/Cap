@@ -4,7 +4,9 @@ import {
 	NOTE_TITLE_COLUMN_CHARS,
 	noteExcerpt,
 	noteTitle,
+	transferredNoteDocumentId,
 } from "@/lib/meetings/share-content";
+import { meetingShareDocumentIdSchema } from "@/lib/meetings/schemas";
 
 describe("note title", () => {
 	it("keeps a title as written, on one line", () => {
@@ -59,5 +61,15 @@ describe("note excerpt", () => {
 		const excerpt = noteExcerpt("🙂".repeat(500));
 
 		expect(Array.from(excerpt)).toHaveLength(NOTE_EXCERPT_CHARS);
+	});
+});
+
+describe("note document id after a transfer", () => {
+	it("is a valid document id that belongs to that cap alone", () => {
+		const id = transferredNoteDocumentId("0123456789abcde");
+
+		expect(id).toBe("transferred-0123456789abcde");
+		expect(meetingShareDocumentIdSchema.safeParse(id).success).toBe(true);
+		expect(transferredNoteDocumentId("edcba9876543210")).not.toBe(id);
 	});
 });

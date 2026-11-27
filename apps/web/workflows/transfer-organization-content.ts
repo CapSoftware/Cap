@@ -25,6 +25,7 @@ import {
 	MAX_CONTENT_TRANSFER_VIDEOS,
 	moveContentTransferSourceKeys,
 } from "@/lib/content-transfer";
+import { transferredNoteDocumentId } from "@/lib/meetings/share-content";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -808,7 +809,10 @@ export async function transferOneVideo(
 		if (item.sourceOwnerId !== payload.targetUserId) {
 			await tx
 				.update(Db.videoNotes)
-				.set({ ownerId: targetUserId })
+				.set({
+					ownerId: targetUserId,
+					documentId: transferredNoteDocumentId(videoId),
+				})
 				.where(eq(Db.videoNotes.videoId, videoId));
 			await tx
 				.update(Db.videoUploads)
