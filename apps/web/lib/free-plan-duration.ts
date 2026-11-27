@@ -3,12 +3,13 @@ import {
 	importedVideos,
 	organizations,
 	users,
+	videos,
 	videoUploads,
 } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import { getPublishedRecordingOutputKey } from "@cap/web-backend/src/Storage/recording-output";
 import { type Organisation, type User, Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 // Clients stop at the cap and then finalize, and encoders round, so honest
 // recordings can land slightly past the limit.
@@ -119,6 +120,27 @@ export async function getFreePlanRecordingLimit(
 	if (!buildEnv.NEXT_PUBLIC_IS_CAP) return null;
 	if (await ownerOrOrganizationHasPro(ownerId, orgId)) return null;
 	return Video.FREE_PLAN_MAX_RECORDING_SECONDS;
+}
+
+// Whether the recording limit the desktop was given for one of the user's
+// recordings still applies, so an upgrade of its owner or organization during
+// the recording lifts it. Undefined for a recording that isn't the user's.
+export async function recordingLimitStillApplies(
+	userId: User.UserId,
+	videoId: string,
+): Promise<boolean | undefined> {
+	const [video] = await db()
+		.select({ ownerId: videos.ownerId, orgId: videos.orgId })
+		.from(videos)
+		.where(
+			and(
+				eq(videos.id, Video.VideoId.make(videoId)),
+				eq(videos.ownerId, userId),
+			),
+		)
+		.limit(1);
+	if (!video) return undefined;
+	return (await getFreePlanRecordingLimit(video.ownerId, video.orgId)) !== null;
 }
 
 // Recordings published by the desktop recording pipeline are only held once

@@ -4,6 +4,7 @@ import { isDisposableEmailSignup } from "@cap/database/auth/disposable-signup";
 import {
 	isEmailAllowedForSignup,
 	isEmailBlockedFromSignup,
+	isEmailShape,
 	normalizeSignInEmail,
 } from "@cap/database/auth/domain-utils";
 import { revokeAllCredentials } from "@cap/database/auth/revoke-credentials";
@@ -179,7 +180,6 @@ type MobileNotificationPreferences =
 type MobileNotificationPreferencesInput =
 	(typeof Mobile.MobileNotificationPreferencesInput)["Type"];
 
-const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const emailCodePattern = /^\d{6}$/;
 const emailCodeTtlMs = 10 * 60 * 1000;
 const mobileImageMaxBytes = 1024 * 1024;
@@ -507,7 +507,7 @@ const ensureNotTorExit = Effect.fn("Mobile.ensureNotTorExit")(function* (
 
 const ensureEmailSignInAllowed = Effect.fn("Mobile.ensureEmailSignInAllowed")(
 	function* (email: string) {
-		if (!emailPattern.test(email)) {
+		if (!isEmailShape(email)) {
 			return yield* Effect.fail(new HttpApiError.BadRequest());
 		}
 
@@ -652,7 +652,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	const email = normalizeSignInEmail(rawEmail);
 	const code = rawCode.trim();
 
-	if (!email || !emailPattern.test(email) || !emailCodePattern.test(code)) {
+	if (!email || !isEmailShape(email) || !emailCodePattern.test(code)) {
 		return yield* Effect.fail(new HttpApiError.BadRequest());
 	}
 
@@ -1383,9 +1383,7 @@ const normalizeAllowedEmailDomain = (value: string | null) => {
 	if (value.length > 255) return undefined;
 	const entries = value.split(",").map((entry) => entry.trim().toLowerCase());
 	if (
-		entries.some(
-			(entry) => !emailPattern.test(entry) && !domainPattern.test(entry),
-		)
+		entries.some((entry) => !isEmailShape(entry) && !domainPattern.test(entry))
 	) {
 		return undefined;
 	}

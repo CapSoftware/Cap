@@ -50,6 +50,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     app_windows,
     feeds::{Feeds, SelectedCamera},
+    i18n::tr,
     library, recording,
     session::{Phase, RecordingSession},
     settings_window::Page,
@@ -339,6 +340,7 @@ impl DeepLinkAction {
             } => {
                 // The name -> target resolution, verbatim from
                 // `deeplink_actions.rs:200-231`.
+                let target_label = capture_mode_label(&capture_mode);
                 let capture_target: ScreenCaptureTarget = match capture_mode {
                     CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
                         .into_iter()
@@ -393,64 +395,58 @@ impl DeepLinkAction {
                     let _ = main.update(cx, |view, _, _| view.finish_deep_link_start(&permit));
                     return Err("Recording preparation is no longer current".into());
                 }
-                Feeds::global(cx).update(cx, |feeds, cx| {
-                    feeds.set_camera(selection, cx);
-                    feeds.set_microphone(mic_label.clone(), cx);
-                });
 
-                // Deferred behind `set_camera`'s own deferred
-                // `open_camera_window`, so a studio start finds the bubble
-                // already open and excludes it from capture
-                // (`begin_recording`'s `camera_window_number` read). gpui
-                // flushes deferred callbacks in FIFO order.
-                cx.defer(move |cx| {
-                    if !permit.is_current(cx) {
-                        let _ = main.update(cx, |view, _, _| view.finish_deep_link_start(&permit));
-                        return;
-                    }
-                    let (camera_feed, mic_feed, mic_meter, input_readiness, device_settings) = {
-                        let feeds = Feeds::global(cx);
-                        feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
-                        let feeds = feeds.read(cx);
-                        (
-                            feeds.camera_actor(),
-                            feeds.mic_actor(),
-                            feeds.mic_meter(),
-                            feeds.input_readiness(),
-                            feeds.requested_device_settings(),
-                        )
-                    };
-                    if main
-                        .update(cx, |view, _, cx| {
-                            view.start_recording_config_with_permit(
-                                recording::StartConfig {
-                                    mode,
-                                    target: capture_target,
-                                    device_settings,
-                                    input_readiness,
-                                    microphone: mic_label,
-                                    camera,
-                                    camera_picture: None,
-                                    system_audio: capture_system_audio,
-                                    excluded_windows: Vec::new(),
-                                    camera_feed,
-                                    mic_feed,
-                                    mic_meter,
-                                    #[cfg(target_os = "linux")]
-                                    linux_instant_camera: None,
-                                    #[cfg(target_os = "linux")]
-                                    linux_instant_picture: None,
-                                    start_gate: None,
-                                },
-                                permit.clone(),
-                                cx,
-                            )
-                        })
-                        .is_err()
-                    {
-                        permit.cancel();
-                    }
+                let detail = start_confirmation_detail(
+                    mode,
+                    &target_label,
+                    mic_label.as_deref(),
+                    selection.as_ref().map(|camera| camera.label.as_str()),
+                    capture_system_audio,
+                );
+                app_windows::show_main_window(cx);
+                cx.activate(true);
+                let answer = main.update(cx, |_, window, cx| {
+                    window.prompt(
+                        gpui::PromptLevel::Info,
+                        tr::main::link_start::title(),
+                        Some(&detail),
+                        &[
+                            gpui::PromptButton::ok(tr::main::link_start::start()),
+                            gpui::PromptButton::cancel(tr::common::cancel()),
+                        ],
+                        cx,
+                    )
                 });
+                let Ok(answer) = answer else {
+                    let _ = main.update(cx, |view, _, _| view.finish_deep_link_start(&permit));
+                    return Err("The recording window is unavailable".into());
+                };
+                cx.spawn(async move |cx| {
+                    let confirmed = answer.await == Ok(0);
+                    cx.update(|cx| {
+                        if !confirmed || !permit.is_current(cx) {
+                            let _ = main.update(cx, |view, _, cx| {
+                                view.finish_deep_link_start(&permit);
+                                cx.notify();
+                            });
+                            return;
+                        }
+                        start_confirmed_link_recording(
+                            main,
+                            permit,
+                            StartRequest {
+                                mode,
+                                target: capture_target,
+                                camera,
+                                selection,
+                                mic_label,
+                                capture_system_audio,
+                            },
+                            cx,
+                        );
+                    });
+                })
+                .detach();
                 Ok(())
             }
             DeepLinkAction::StopRecording => {
@@ -558,6 +554,11 @@ impl DeepLinkAction {
             DeepLinkAction::OpenEditor { project_path } => {
                 use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingStatus};
 
+                #[cfg(windows)]
+                if !project_path.to_str().is_some_and(is_local_drive_path) {
+                    return Err("Links can only open recordings on a local drive".to_string());
+                }
+
                 if crate::library::is_screenshot_bundle(&project_path) {
                     cx.defer(move |cx| app_windows::open_screenshot_editor(project_path, cx));
                     return Ok(());
@@ -605,6 +606,132 @@ impl DeepLinkAction {
     }
 }
 
+struct StartRequest {
+    mode: recording::RecordingMode,
+    target: ScreenCaptureTarget,
+    camera: Option<DeviceOrModelID>,
+    selection: Option<SelectedCamera>,
+    mic_label: Option<String>,
+    capture_system_audio: bool,
+}
+
+fn start_confirmed_link_recording(
+    main: gpui::WindowHandle<crate::main_window::MainWindow>,
+    permit: crate::main_window::RecordingStartPermit,
+    request: StartRequest,
+    cx: &mut App,
+) {
+    let StartRequest {
+        mode,
+        target,
+        camera,
+        selection,
+        mic_label,
+        capture_system_audio,
+    } = request;
+    Feeds::global(cx).update(cx, |feeds, cx| {
+        feeds.set_camera(selection, cx);
+        feeds.set_microphone(mic_label.clone(), cx);
+    });
+
+    // Deferred behind `set_camera`'s own deferred `open_camera_window`, so a
+    // studio start finds the bubble already open and excludes it from
+    // capture (`begin_recording`'s `camera_window_number` read). gpui flushes
+    // deferred callbacks in FIFO order.
+    cx.defer(move |cx| {
+        if !permit.is_current(cx) {
+            let _ = main.update(cx, |view, _, _| view.finish_deep_link_start(&permit));
+            return;
+        }
+        let (camera_feed, mic_feed, mic_meter, input_readiness, device_settings) = {
+            let feeds = Feeds::global(cx);
+            feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
+            let feeds = feeds.read(cx);
+            (
+                feeds.camera_actor(),
+                feeds.mic_actor(),
+                feeds.mic_meter(),
+                feeds.input_readiness(),
+                feeds.requested_device_settings(),
+            )
+        };
+        if main
+            .update(cx, |view, _, cx| {
+                view.start_recording_config_with_permit(
+                    recording::StartConfig {
+                        mode,
+                        target,
+                        device_settings,
+                        input_readiness,
+                        microphone: mic_label,
+                        camera,
+                        camera_picture: None,
+                        system_audio: capture_system_audio,
+                        excluded_windows: Vec::new(),
+                        camera_feed,
+                        mic_feed,
+                        mic_meter,
+                        #[cfg(target_os = "linux")]
+                        linux_instant_camera: None,
+                        #[cfg(target_os = "linux")]
+                        linux_instant_picture: None,
+                        start_gate: None,
+                    },
+                    permit.clone(),
+                    cx,
+                )
+            })
+            .is_err()
+        {
+            permit.cancel();
+        }
+    });
+}
+
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn is_local_drive_path(path: &str) -> bool {
+    let path = path.replace('/', "\\");
+    let rest = path.strip_prefix("\\\\?\\").unwrap_or(&path);
+    let bytes = rest.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+fn capture_mode_label(mode: &CaptureMode) -> String {
+    match mode {
+        CaptureMode::Screen(name) | CaptureMode::Window(name) => name.clone(),
+        #[cfg(debug_assertions)]
+        CaptureMode::Area(area) => area.screen.clone(),
+        #[cfg(debug_assertions)]
+        CaptureMode::CameraOnly => tr::main::target::camera_only().to_string(),
+        #[cfg(debug_assertions)]
+        CaptureMode::AudioOnly => tr::main::target::audio_only().to_string(),
+    }
+}
+
+fn start_confirmation_detail(
+    mode: recording::RecordingMode,
+    target: &str,
+    microphone: Option<&str>,
+    camera: Option<&str>,
+    system_audio: bool,
+) -> String {
+    let none = tr::main::link_start::none();
+    let mut lines = vec![
+        tr::main::link_start::requested().to_string(),
+        String::new(),
+        match mode {
+            recording::RecordingMode::Studio => tr::main::link_start::studio(target),
+            recording::RecordingMode::Instant => tr::main::link_start::instant(target),
+        },
+        tr::main::link_start::microphone(microphone.unwrap_or(none)),
+        tr::main::link_start::camera(camera.unwrap_or(none)),
+    ];
+    if system_audio {
+        lines.push(tr::main::link_start::system_audio().to_string());
+    }
+    lines.join("\n")
+}
+
 fn camera_selection(id: DeviceOrModelID) -> SelectedCamera {
     let info = cap_camera::list_cameras().find(|info| match &id {
         DeviceOrModelID::DeviceID(device) => info.device_id() == device,
@@ -641,6 +768,68 @@ fn camera_selection(id: DeviceOrModelID) -> SelectedCamera {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_editor_paths_must_be_on_a_local_drive() {
+        for local in [
+            r"C:\Users\me\Documents\Cap\My Recording.cap",
+            r"d:\Recordings\clip.cap",
+            "C:/Users/me/clip.cap",
+            r"\\?\C:\Users\me\clip.cap",
+        ] {
+            assert!(is_local_drive_path(local), "{local}");
+        }
+        for remote in [
+            r"\\server\share\clip.cap",
+            "//server/share/clip.cap",
+            r"\\?\UNC\server\share\clip.cap",
+            r"\\.\C:\clip.cap",
+            r"\\.\pipe\clip",
+            r"\??\UNC\server\share\clip.cap",
+            r"\server\share\clip.cap",
+            r"clip.cap",
+            r"..\clip.cap",
+            "",
+            "C",
+        ] {
+            assert!(!is_local_drive_path(remote), "{remote}");
+        }
+    }
+
+    #[test]
+    fn link_start_confirmation_names_every_input() {
+        let studio = start_confirmation_detail(
+            recording::RecordingMode::Studio,
+            "Display 1",
+            Some("USB Mic"),
+            None,
+            true,
+        );
+        assert!(studio.contains("Display 1"), "{studio}");
+        assert!(studio.contains("USB Mic"), "{studio}");
+        assert!(studio.contains(tr::main::link_start::none()), "{studio}");
+        assert!(
+            studio.contains(tr::main::link_start::system_audio()),
+            "{studio}"
+        );
+        let instant = start_confirmation_detail(
+            recording::RecordingMode::Instant,
+            "Window",
+            None,
+            Some("FaceTime HD Camera"),
+            false,
+        );
+        assert!(instant.contains("FaceTime HD Camera"), "{instant}");
+        assert!(
+            !instant.contains(tr::main::link_start::system_audio()),
+            "{instant}"
+        );
+        assert_eq!(
+            studio.lines().next(),
+            Some(tr::main::link_start::requested())
+        );
+        assert_ne!(studio.lines().nth(2), instant.lines().nth(2));
+    }
 
     #[test]
     fn stop_dispatch_cancels_idle_preflight_and_preserves_live_session_stop() {

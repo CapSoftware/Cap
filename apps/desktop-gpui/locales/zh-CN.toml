@@ -1090,6 +1090,17 @@ screenshots_description = "你的截图会显示在这里。截一张图开始�
 view_all_recordings = "查看所有录制"
 view_all_screenshots = "查看所有截图"
 
+[main.link_start]
+camera = "摄像头：{name}"
+instant = "Instant 模式：{target}"
+microphone = "麦克风：{name}"
+none = "无"
+requested = "某个链接请求开始录制。"
+start = "开始录制"
+studio = "Studio 模式：{target}"
+system_audio = "系统音频：开启"
+title = "开始录制？"
+
 [main.mic_warning]
 body = "这段录制不会包含你的声音。请选择一个麦克风，或在没有麦克风的情况下继续。"
 dont_show_again = "不再显示"
