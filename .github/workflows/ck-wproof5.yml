@@ -1,0 +1,178 @@
+name: Scratch CK Windows device changes and hooks
+# Temporary branch (deleted after use): builder CK's base and head Windows builds through
+# call-output scenarios with NVDA (.ckw, from BS/CD's rig). Nothing here ships.
+
+on:
+  push:
+    branches: [ci/ck-wproof5*]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ck-wproof-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  # The scripted-meeting hooks (CAP_GPUI_AUTO_MEETING) only exist with debug assertions.
+  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: "true"
+  BS_BASE_REF: d5a2dc5a9aea6d776411e38f3ecf39ee80e712bd
+  CK_HEAD_REF: be60a51216d56afbfd6b0b1baaad389d0660fad1
+
+jobs:
+  build:
+    name: Build ${{ matrix.which }}
+    strategy:
+      matrix:
+        which: [base, head, dbg]
+    runs-on: blacksmith-8vcpu-windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ matrix.which == 'base' && env.BS_BASE_REF || env.CK_HEAD_REF }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+          prefix-key: v1-rust-meetings
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+      - shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - shell: bash
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked ${{ matrix.which != 'dbg' && '--release' || '' }} --bin cap-gpui
+      - shell: bash
+        run: |
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage/gpui-windows-shaders"
+          profile=${{ matrix.which == 'dbg' && 'debug' || 'release' }}
+          cp apps/desktop-gpui/target/$profile/cap-gpui.exe "$stage/"
+          cp target/$profile/*.dll "$stage/" 2>/dev/null || cp target/release/*.dll "$stage/" 2>/dev/null || true
+          ls "$stage"
+          cp target/native-deps/vcruntime/*.dll "$stage/" 2>/dev/null || true
+          cp ../zed-cap/crates/gpui_windows/src/*.hlsl "$stage/gpui-windows-shaders/"
+          printf '%s' "$GITHUB_WORKSPACE" > "$stage/build-workspace.txt"
+          printf '%s' "$(cd ../zed-cap && pwd -W)" > "$stage/build-zed.txt"
+          git rev-parse HEAD > "$stage/commit.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ck-wp5-app-${{ matrix.which }}
+          path: ${{ runner.temp }}/stage
+          retention-days: 3
+
+  run:
+    name: ${{ matrix.name }} on ${{ matrix.os }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: nvda, os: windows-2022, cases: 'nvda-default-switch nvda-default-removed nvda-followed-removed nosr-followed-removed dbg-refuse dbg-zeros dbg-flip', ab: '', long: '', longsecs: '', base: true, head: true }
+          - { name: nvda, os: windows-2025, cases: 'nvda-default-switch nvda-default-removed nvda-followed-removed nosr-followed-removed dbg-refuse dbg-zeros dbg-flip', ab: '', long: '', longsecs: '', base: true, head: true }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ck-wp5-app-head
+          path: ${{ runner.temp }}/head
+      - uses: actions/download-artifact@v4
+        with:
+          name: ck-wp5-app-base
+          path: ${{ runner.temp }}/base
+      - uses: actions/download-artifact@v4
+        with:
+          name: ck-wp5-app-dbg
+          path: ${{ runner.temp }}/dbg
+      - name: Put the builds' source files back at their paths
+        shell: pwsh
+        run: |
+          foreach ($dir in "$env:RUNNER_TEMP\head", "$env:RUNNER_TEMP\base", "$env:RUNNER_TEMP\dbg") {
+            $workspace = (Get-Content "$dir\build-workspace.txt" -Raw).Trim()
+            if ($workspace -ne $env:GITHUB_WORKSPACE -and -not (Test-Path $workspace)) {
+              New-Item -ItemType Directory -Force (Split-Path $workspace) | Out-Null
+              cmd /c mklink /J "$workspace" "$env:GITHUB_WORKSPACE"
+            }
+            $shaders = Join-Path (Get-Content "$dir\build-zed.txt" -Raw).Trim() "crates\gpui_windows\src"
+            New-Item -ItemType Directory -Force $shaders | Out-Null
+            Copy-Item -Force "$dir\gpui-windows-shaders\*.hlsl" $shaders
+            "$dir $(Get-Content "$dir\commit.txt")"
+          }
+      - shell: pwsh
+        run: scripts/ci/meetings/setup_audio.ps1
+      - shell: pwsh
+        run: |
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            $dir = "$env:RUNNER_TEMP\ffmpeg"
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              try { Invoke-WebRequest -UseBasicParsing 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"; break } catch { Start-Sleep -Seconds (20 * $attempt) }
+            }
+            Expand-Archive -Force "$env:RUNNER_TEMP\ffmpeg.zip" $dir
+            $bin = (Get-ChildItem -Recurse $dir -Filter ffmpeg.exe | Select-Object -First 1).DirectoryName
+            $env:Path = "$bin;$env:Path"; Add-Content $env:GITHUB_PATH $bin
+          }
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { Write-Host 'no ffmpeg'; exit 1 }
+      - name: NVDA (silent install) and its controller client
+        shell: pwsh
+        run: |
+          $v = '2025.3.2'
+          Invoke-WebRequest -UseBasicParsing "https://download.nvaccess.org/releases/$v/nvda_$v.exe" -OutFile "$env:RUNNER_TEMP\nvda-setup.exe"
+          Start-Process -Wait "$env:RUNNER_TEMP\nvda-setup.exe" -ArgumentList '--install-silent'
+          Invoke-WebRequest -UseBasicParsing "https://download.nvaccess.org/releases/$v/nvda_${v}_controllerClient.zip" -OutFile "$env:RUNNER_TEMP\nvdacc.zip"
+          Expand-Archive -Force "$env:RUNNER_TEMP\nvdacc.zip" "$env:RUNNER_TEMP\nvdacc"
+          $dll = Get-ChildItem -Recurse "$env:RUNNER_TEMP\nvdacc" -Filter nvdaControllerClient*.dll | Where-Object { $_.DirectoryName -match 'x64' } | Select-Object -First 1
+          if (-not $dll) { $dll = Get-ChildItem -Recurse "$env:RUNNER_TEMP\nvdacc" -Filter nvdaControllerClient*.dll | Select-Object -First 1 }
+          "CD_NVDA=${env:ProgramFiles(x86)}\NVDA\nvda.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "CD_NVDA_CLIENT=$($dll.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "client: $($dll.FullName)"
+      - name: Restore the meeting models
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/meeting-models
+          key: meeting-models-v1-${{ hashFiles('scripts/ci/meetings/models.sh') }}
+      - shell: bash
+        run: bash scripts/ci/meetings/models.sh "$RUNNER_TEMP/meeting-models"
+      - name: Scenarios
+        shell: pwsh
+        run: |
+          $env:CAP_MEETINGS_MODELS = "$env:RUNNER_TEMP\meeting-models"
+          if ('${{ matrix.head }}' -eq 'true') { $env:BS_BIN_HEAD = "$env:RUNNER_TEMP\head\cap-gpui.exe" }
+          if ('${{ matrix.base }}' -eq 'true') { $env:BS_BIN_BASE = "$env:RUNNER_TEMP\base\cap-gpui.exe" }
+          $env:BS_BIN_DBG = "$env:RUNNER_TEMP\dbg\cap-gpui.exe"
+          $env:BS_CASES = '${{ matrix.cases }}'
+          $env:CK_CASES = '${{ matrix.cases }}'
+          & .ckw/wspeech.ps1 -Work "$env:RUNNER_TEMP\bs"
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ck-wp5-${{ matrix.name }}-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/bs/*.txt
+            ${{ runner.temp }}/bs/*/report.txt
+            ${{ runner.temp }}/bs/*/app.log
+            ${{ runner.temp }}/bs/*/summary.json
+            ${{ runner.temp }}/bs/*/timeline.txt
+            ${{ runner.temp }}/bs/*/page.txt
+            ${{ runner.temp }}/bs/*/native-*.out
+            ${{ runner.temp }}/bs/*/usage.txt
+            ${{ runner.temp }}/bs/*/sessions.txt
+            ${{ runner.temp }}/bs/*/devices.txt
+            ${{ runner.temp }}/bs/devices.txt
+            ${{ runner.temp }}/bs/*/data/documents/*/audio/*.ogg
+          retention-days: 3
