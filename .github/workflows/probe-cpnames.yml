@@ -1,0 +1,168 @@
+name: Smoke speaker-names hide on main (temporary)
+
+on:
+  push:
+    branches: ["probe/cp-smoke"]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe (${{ matrix.settings.name }})
+    timeout-minutes: 200
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: macOS
+            slug: macos
+            target: aarch64-apple-darwin
+            runner: blacksmith-6vcpu-macos-15
+          - name: Windows
+            slug: windows
+            target: x86_64-pc-windows-msvc
+            runner: windows-2022
+          - name: Linux X11
+            slug: linux
+            target: x86_64-unknown-linux-gnu
+            runner: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ matrix.settings.runner }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      VARIANTS: "base=efe94b1d3c9c3f70d6a658011113f6217fcc522c"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Stage the probe
+        shell: bash
+        run: |
+          cp -R probe-cpnames "$RUNNER_TEMP/probe"
+          for pair in $VARIANTS; do git fetch -q origin "${pair#*=}"; done
+
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Install a window manager, software Vulkan and capture tools
+        if: ${{ runner.os == 'Linux' }}
+        run: sudo apt-get install -y openbox mesa-vulkan-drivers libvulkan1 imagemagick xdotool
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.settings.target }}
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Check out base
+        shell: bash
+        run: |
+          first=${VARIANTS%% *}
+          git checkout -q --force "${first#base=}"
+
+      - name: Run setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build both variants
+        shell: bash
+        run: |
+          set -eu
+          for pair in $VARIANTS; do
+            v=${pair%%=*} sha=${pair#*=}
+            git checkout -q --force "$sha"
+            node scripts/sync-desktop-versions.mjs
+            echo "::group::build $v $sha"
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked \
+              --target ${{ matrix.settings.target }} --bin cap-gpui
+            echo "::endgroup::"
+            mkdir -p "$RUNNER_TEMP/bins/$v"
+            bin="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/cap-gpui"
+            [ "$RUNNER_OS" = Windows ] && bin="$bin.exe"
+            cp "$bin" "$RUNNER_TEMP/bins/$v/"
+            echo "$sha" > "$RUNNER_TEMP/bins/$v/sha.txt"
+          done
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            for v in base .; do
+              mkdir -p "$RUNNER_TEMP/bins/$v/Frameworks"
+              ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$RUNNER_TEMP/bins/$v/Frameworks/Spacedrive.framework"
+            done
+          fi
+
+      - name: Screen setup (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 || true
+          caffeinate -u -t 2
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          now=$(date +%s)
+          for client in /bin/bash /Users/runner/bin/Runner.Worker /Users/runner/bin/Runner.Listener /usr/sbin/screencapture "$RUNNER_TEMP/bins/base/cap-gpui"; do
+            sudo sqlite3 "$db" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('kTCCServiceScreenCapture','$client',1,2,4,1,'UNUSED',0,$now);" || true
+          done
+          echo "accessibility rows before:"; sudo sqlite3 "$db" "SELECT client FROM access WHERE service='kTCCServiceAccessibility';" || true
+          sudo sqlite3 "$db" "DELETE FROM access WHERE service='kTCCServiceAccessibility';" || true
+          sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "DELETE FROM access WHERE service='kTCCServiceAccessibility';" || true
+          sudo killall tccd || true
+          killall tccd || true
+          sleep 2
+          sw_vers
+
+      - name: Screen setup (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+
+      - name: Probe
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/probe-out"
+          mkdir -p "$out"
+          case "$RUNNER_OS" in
+            macOS)
+              SCROLLS="1700 2100" PROBE_WAIT=20 bash "$RUNNER_TEMP/probe/scenarios.sh" "$RUNNER_TEMP/bins" "$out"
+              ;;
+            Windows)
+              export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+              PROBE_WAIT=35 bash "$RUNNER_TEMP/probe/scenarios.sh" "$RUNNER_TEMP/bins" "$out"
+              ;;
+            Linux)
+              export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+              Xvfb :99 -screen 0 1920x1080x24 -noreset &
+              export DISPLAY=:99
+              sleep 1
+              openbox &
+              sleep 1
+              PROBE_WAIT=30 bash "$RUNNER_TEMP/probe/scenarios.sh" "$RUNNER_TEMP/bins" "$out"
+              ;;
+          esac
+          ls -R "$out" | grep -c png || true
+
+      - name: Upload shots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-${{ matrix.settings.slug }}
+          path: |
+            ${{ runner.temp }}/probe-out/*/shots
+            ${{ runner.temp }}/probe-out/*/logs
+          retention-days: 5

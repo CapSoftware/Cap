@@ -1,0 +1,7 @@
+{"op": "upsert", "utterance": {"id": "u0", "source": "mic", "speaker": null, "startMs": 0, "endMs": 4000, "text": "Thanks for joining. Let's go through the onboarding changes first.", "isFinal": true, "words": []}}
+{"op": "upsert", "utterance": {"id": "u1", "source": "system", "speaker": null, "startMs": 5000, "endMs": 9000, "text": "Sure. The new welcome screen is shorter and the setup takes about a minute.", "isFinal": true, "words": [], "speakerId": 1}}
+{"op": "upsert", "utterance": {"id": "u2", "source": "system", "speaker": null, "startMs": 10000, "endMs": 14000, "text": "I tested it on a fresh account and it felt much faster.", "isFinal": true, "words": [], "speakerId": 2}}
+{"op": "upsert", "utterance": {"id": "u3", "source": "mic", "speaker": null, "startMs": 15000, "endMs": 19000, "text": "Great. Any open questions on the permissions step?", "isFinal": true, "words": []}}
+{"op": "upsert", "utterance": {"id": "u4", "source": "system", "speaker": null, "startMs": 20000, "endMs": 24000, "text": "Only the microphone one. We ask for it once, before the first recording.", "isFinal": true, "words": [], "speakerId": 1}}
+{"op": "upsert", "utterance": {"id": "u5", "source": "system", "speaker": null, "startMs": 25000, "endMs": 29000, "text": "And we explain why right next to the button.", "isFinal": true, "words": [], "speakerId": 2}}
+{"op": "speakerNames", "names": {"numbers": [[1, 1], [2, 2]], "known": [1, 2], "systemSeen": true}}
