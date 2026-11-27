@@ -1325,6 +1325,121 @@ def flow_editor_ux():
                 kill(proc)
 
 
+def display_stats(media):
+    """frames / seconds / fps of the screen track(s) in local_media output."""
+    out = {}
+    for name, probe in (media or {}).items():
+        if "display" not in name and "screen" not in name and not name.endswith("output.mp4"):
+            continue
+        for s in probe.get("streams", []):
+            if s.get("codec_type") == "video":
+                try:
+                    frames = int(s.get("nb_frames") or 0)
+                    dur = float(s.get("duration") or probe.get("duration") or 0)
+                except (TypeError, ValueError):
+                    continue
+                out[name] = {"frames": frames, "secs": round(dur, 2), "fps": round(frames / dur, 2) if dur else None, "size": f"{s.get('width')}x{s.get('height')}"}
+    return out
+
+
+def wait_finalized(sb, timeout):
+    """Monotonic time when the newest project's recording-meta says Complete."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        projects = sb.projects()
+        if projects and "Complete" in json.dumps(meta_status(projects[-1])):
+            return time.monotonic()
+        time.sleep(0.1)
+    return None
+
+
+def perf_record(side, label, mode, fps, secs, mic):
+    sb = Sandbox(f"perf-{label}-{side}-{int(time.time())}", general={"maxFps": fps, "postStudioRecordingBehaviour": "showOverlay"})
+    env = {} if OS != "Linux" else {"CAP_GPUI_AUTO_OVERLAY": "window", "CAP_GPUI_AUTO_WINDOW": "xmessage"}
+    if not mic:
+        env["CAP_GPUI_AUTO_NO_MIC"] = "1"
+    env["CAP_GPUI_AUTO_RECORD"] = f"{mode}:{secs}"
+    server = None
+    if mode == "instant":
+        server = Mock(f"perf-{label}-{side}-{int(time.time())}")
+        sb = Sandbox(f"perf-{label}-{side}-{int(time.time())}", server=server.url, general={"maxFps": fps})
+    proc = sb.launch(side, f"perf-{label}", env)
+    entry = {"label": label, "mode": mode, "fps_setting": fps, "secs": secs, "mic": mic}
+    t_start = wait_log(proc, "auto-record start requested", 90)
+    entry["started"] = t_start is not None
+    if t_start:
+        time.sleep(2)
+        with Sampler(proc.pid) as s:
+            t_stop = wait_log(proc, "auto-record stop requested", secs + 60)
+        entry["recording_resources"] = s.summary()
+        if mode == "studio":
+            done = wait_finalized(sb, 120)
+            if t_stop and done:
+                entry["stop_to_complete_s"] = round(done - t_stop, 2)
+            idle = wait_log(proc, "auto-record main window after the recording", 3)
+            if t_stop and idle:
+                entry["stop_to_idle_s"] = round(idle - t_stop, 2)
+        else:
+            deadline = time.monotonic() + 240
+            while time.monotonic() < deadline:
+                projects = sb.projects()
+                try:
+                    state = json.loads((projects[0] / "instant-upload.json").read_text()) if projects else None
+                except Exception:  # noqa: BLE001
+                    state = None
+                if state and state.get("phase") == "Verified":
+                    if t_stop:
+                        entry["stop_to_verified_s"] = round(time.monotonic() - t_stop, 2)
+                    break
+                time.sleep(0.25)
+    entry["log_errors"] = tail(proc, 8, grep=["ERROR", "panicked"])
+    kill(proc)
+    if server:
+        server.finish()
+    projects = sb.projects()
+    if projects:
+        entry["status"] = meta_status(projects[0])
+        media = local_media(projects[0])
+        entry["display"] = display_stats(media)
+        entry["project"] = str(projects[0])
+    return sb, entry
+
+
+def perf_playback(side, sb, project):
+    env = {"CAP_GPUI_AUTO_EDITOR": str(project), "CAP_GPUI_AUTO_PLAYBACK": "12", "CAP_GPUI_AUTO_FRAME_STATS": "10"}
+    proc = sb.launch(side, "perf-play", env)
+    entry = {}
+    elapsed, _ = wait_window(proc, 90, min_size=400)
+    entry["editor_window_s"] = round(elapsed, 3) if elapsed else None
+    t_play = wait_log(proc, "auto playback: playing", 120)
+    if t_play:
+        with Sampler(proc.pid) as s:
+            time.sleep(10)
+        entry["playback_resources"] = s.summary()
+        time.sleep(4)
+    entry["frame_stats"] = tail(proc, 2, grep=["frame stats"])
+    entry["log_errors"] = tail(proc, 6, grep=["ERROR", "panicked"])
+    kill(proc)
+    return entry
+
+
+def flow_perf():
+    """Same-machine A/B, sides rotated every round."""
+    rounds = int(os.environ.get("GATE_PERF_ROUNDS", "3"))
+    cases = [("studio30", "studio", 30, False), ("studio60", "studio", 60, False), ("instant60", "instant", 60, OS != "Windows")]
+    for rnd in range(rounds):
+        order = SIDES[rnd % len(SIDES):] + SIDES[: rnd % len(SIDES)]
+        for label, mode, fps, mic in cases:
+            for side in order:
+                sb, entry = perf_record(side, label, mode, fps, 30, mic)
+                entry["round"] = rnd
+                if mode == "studio" and fps == 60 and entry.get("project"):
+                    entry["playback"] = perf_playback(side, sb, Path(entry["project"]))
+                record("perf", side, entry)
+                rr = entry.get("recording_resources") or {}
+                log("perf", label, side, rnd, rr.get("cpu_mean_pct"), rr.get("rss_mean_mb"), entry.get("stop_to_complete_s") or entry.get("stop_to_verified_s"))
+
+
 def main():
     build_helpers()
     flows = {
@@ -1342,6 +1457,7 @@ def main():
         "export4k": flow_export4k,
         "ux": flow_ux,
         "editor_ux": flow_editor_ux,
+        "perf": flow_perf,
     }
     for name, fn in flows.items():
         if "all" not in FLOWS and name not in FLOWS:
