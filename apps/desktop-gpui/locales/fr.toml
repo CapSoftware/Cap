@@ -3445,6 +3445,12 @@ title = "Repères"
 [ui]
 coming_soon = "Bientôt disponible"
 
+[ui.caption]
+close = "Fermer"
+maximize = "Agrandir"
+minimize = "Réduire"
+restore = "Niveau inférieur"
+
 [ui.selection]
 audio = { one = "{count} segment audio sélectionné", other = "{count} segments audio sélectionnés" }
 caption = { one = "{count} segment de sous-titres sélectionné", other = "{count} segments de sous-titres sélectionnés" }
@@ -3593,6 +3599,7 @@ stop = "Arrêter"
 keep_recording = "Continuer"
 resume = "Reprendre"
 still_there = "Toujours là ?"
+resumed = "Repris après la veille"
 untitled = "Réunion"
 open_notes = "Ouvrir les notes"
 call_ended = "Appel terminé"
@@ -3613,6 +3620,7 @@ disk_full = "Disque presque plein"
 sign_in = "Connectez-vous pour terminer la transcription"
 offline = "Hors ligne, l'audio est enregistré"
 cloud_local = "Transcription sur cet ordinateur"
+cloud_limit = "Transcription cloud épuisée pour aujourd'hui"
 words_missing = "Des mots peuvent manquer"
 
 [meeting.shortcuts]
@@ -3810,6 +3818,7 @@ choose_calendars = { one = "{count} calendrier", many = "Choisir parmi {count} d
 waiting_for_access = "En attente de l'accès aux calendriers..."
 retry = "Réessayer"
 remove = "Supprimer"
+disconnect = "Déconnecter"
 open_settings = "Ouvrir Réglages Système"
 allow_access = "Autoriser l'accès"
 access_needed = "Cap a besoin de votre autorisation pour lire ces calendriers."
@@ -4209,6 +4218,8 @@ call_ended = "Appel terminé. Arrêt dans {time}"
 inactive = "Personne n'a parlé depuis un moment. Arrêt dans {time}"
 keep_recording = "Continuer"
 stopped_quiet = "Arrêté après un moment de silence"
+stopped_asleep = "Arrêté pendant la mise en veille de l'ordinateur"
+resumed_asleep = "Repris après la mise en veille de l'ordinateur"
 record_more = "Enregistrer la suite"
 set_up = "Configurer"
 error_start = "L'enregistrement n'a pas pu démarrer."
@@ -4235,6 +4246,8 @@ disk_full = "Votre disque est presque plein. Libérez de l'espace pour que Cap c
 sign_in_again = "Reconnectez-vous pour terminer la transcription. Cap conserve l'audio."
 offline_catching_up = "Vous êtes hors ligne. Cap enregistre l'audio et terminera la transcription à votre retour."
 cloud_local = "Cap Cloud ne répond pas, cet ordinateur transcrit en attendant."
+cloud_limit_waiting = "Vous avez épuisé la transcription cloud d'aujourd'hui. Cap enregistre l'audio et terminera la transcription à sa réinitialisation."
+cloud_limit_local = "Vous avez épuisé la transcription cloud d'aujourd'hui, cet ordinateur transcrit en attendant sa réinitialisation."
 words_missing = "Cap n'a pas pu transcrire une partie de cette réunion, certains mots peuvent manquer."
 
 [documents.ask]
@@ -4260,6 +4273,8 @@ connect = "Connecter"
 cancel = "Annuler"
 try_again = "Réessayer"
 connected = "Connecté"
+disconnected = "Déconnecté sur cet ordinateur."
+google_remove_access = "Retirer Cap de votre compte Google"
 waiting = "Terminez la connexion dans votre navigateur..."
 finishing = "Finalisation..."
 error_not_configured = "La connexion n'est pas disponible dans cette version."
@@ -4272,7 +4287,12 @@ error_rejected = "La connexion n'a pas abouti. Réessayez."
 engine = "Transcrire"
 setup = "Configuration"
 setup_description = "Revoir les autorisations, la transcription et les calendriers."
+[documents.a11y]
+collapsed = "Réduit"
+expanded = "Développé"
+
 [documents.home]
+clear_search = "Effacer la recherche"
 trash_count = "Corbeille · {count}"
 recording_now = "Enregistrement"
 notes = "Notes"

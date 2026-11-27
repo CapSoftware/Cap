@@ -3445,6 +3445,12 @@ title = "Marker"
 [ui]
 coming_soon = "Demnächst verfügbar"
 
+[ui.caption]
+close = "Schließen"
+maximize = "Maximieren"
+minimize = "Minimieren"
+restore = "Verkleinern"
+
 [ui.selection]
 audio = { one = "{count} Audiosegment ausgewählt", other = "{count} Audiosegmente ausgewählt" }
 caption = { one = "{count} Untertitelsegment ausgewählt", other = "{count} Untertitelsegmente ausgewählt" }
@@ -3593,6 +3599,7 @@ stop = "Stoppen"
 keep_recording = "Weiter aufnehmen"
 resume = "Fortsetzen"
 still_there = "Noch da?"
+resumed = "Nach Ruhezustand fortgesetzt"
 untitled = "Besprechung"
 open_notes = "Notizen öffnen"
 call_ended = "Anruf beendet"
@@ -3613,6 +3620,7 @@ disk_full = "Speicher fast voll"
 sign_in = "Anmelden, um das Transkript fertigzustellen"
 offline = "Offline, die Aufnahme ist gesichert"
 cloud_local = "Transkription auf diesem Computer"
+cloud_limit = "Cloud-Transkription für heute aufgebraucht"
 words_missing = "Eventuell fehlen Wörter"
 
 [meeting.shortcuts]
@@ -3810,6 +3818,7 @@ choose_calendars = { one = "{count} Kalender", other = "Aus {count} Kalendern w�
 waiting_for_access = "Warte auf Kalenderzugriff..."
 retry = "Erneut versuchen"
 remove = "Entfernen"
+disconnect = "Trennen"
 open_settings = "Systemeinstellungen öffnen"
 allow_access = "Zugriff erlauben"
 access_needed = "Cap braucht Ihre Erlaubnis, um diese Kalender zu lesen."
@@ -4209,6 +4218,8 @@ call_ended = "Anruf beendet. Stopp in {time}"
 inactive = "Seit einer Weile spricht niemand. Stopp in {time}"
 keep_recording = "Weiter aufnehmen"
 stopped_quiet = "Nach einer ruhigen Phase gestoppt"
+stopped_asleep = "Gestoppt, während der Computer im Ruhezustand war"
+resumed_asleep = "Nach dem Ruhezustand des Computers fortgesetzt"
 record_more = "Mehr aufnehmen"
 set_up = "Einrichten"
 error_start = "Die Aufnahme konnte nicht starten."
@@ -4235,6 +4246,8 @@ disk_full = "Ihr Speicher ist fast voll. Geben Sie etwas Platz frei, damit Cap d
 sign_in_again = "Melden Sie sich erneut an, um das Transkript fertigzustellen. Cap behält die Aufnahme."
 offline_catching_up = "Sie sind offline. Cap speichert die Aufnahme und stellt das Transkript fertig, sobald Sie wieder online sind."
 cloud_local = "Cap Cloud antwortet nicht, daher transkribiert vorerst dieser Computer."
+cloud_limit_waiting = "Sie haben die Cloud-Transkription für heute aufgebraucht. Cap speichert die Aufnahme und stellt das Transkript fertig, sobald sie zurückgesetzt wird."
+cloud_limit_local = "Sie haben die Cloud-Transkription für heute aufgebraucht, daher transkribiert dieser Computer, bis sie zurückgesetzt wird."
 words_missing = "Cap konnte einen Teil dieses Meetings nicht transkribieren, daher fehlen eventuell einige Wörter."
 
 [documents.ask]
@@ -4260,6 +4273,8 @@ connect = "Verbinden"
 cancel = "Abbrechen"
 try_again = "Erneut versuchen"
 connected = "Verbunden"
+disconnected = "Auf diesem Computer getrennt."
+google_remove_access = "Cap aus Ihrem Google-Konto entfernen"
 waiting = "Schließen Sie die Anmeldung im Browser ab..."
 finishing = "Wird abgeschlossen..."
 error_not_configured = "Anmelden ist in diesem Build nicht verfügbar."
@@ -4272,7 +4287,12 @@ error_rejected = "Die Anmeldung hat nicht geklappt. Versuchen Sie es erneut."
 engine = "Transkribieren"
 setup = "Einrichtung"
 setup_description = "Berechtigungen, Transkription und Kalender noch einmal durchgehen."
+[documents.a11y]
+collapsed = "Eingeklappt"
+expanded = "Ausgeklappt"
+
 [documents.home]
+clear_search = "Suche löschen"
 trash_count = "Papierkorb · {count}"
 recording_now = "Aufnahme läuft"
 notes = "Notizen"

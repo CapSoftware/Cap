@@ -82,13 +82,36 @@ fn apply(scroll: Option<f32>, open: &str, cx: &mut App) {
                         view.set_page(Page::Meetings, window, cx);
                     }
                     let state = &mut view.pages.meetings;
+                    let mut disconnect = false;
                     for flag in open.split(',') {
                         match flag.trim() {
                             "help" => state.help_open = true,
                             "link" => state.link_form = true,
                             "system" => state.expanded_system = true,
+                            "disconnect" => disconnect = true,
                             _ => {}
                         }
+                    }
+                    // `disconnect`: the first calendar account's Disconnect.
+                    let account = disconnect
+                        .then(|| crate::meetings::Meetings::try_global(cx))
+                        .flatten()
+                        .and_then(|meetings| {
+                            meetings
+                                .read(cx)
+                                .calendar_sources()
+                                .iter()
+                                .find(|source| {
+                                    crate::meetings_ui::settings::accounts::provider_of(
+                                        source.config.kind(),
+                                    )
+                                    .is_some()
+                                })
+                                .map(|source| source.id.clone())
+                        });
+                    if let Some(id) = account {
+                        tracing::info!("meeting settings hook: disconnect");
+                        view.meetings_remove_calendar(&id, cx);
                     }
                     if let Some(y) = scroll {
                         view.page_scroll

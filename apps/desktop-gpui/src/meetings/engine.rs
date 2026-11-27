@@ -108,6 +108,9 @@ pub enum CloudState {
     Down { local: bool },
     /// The sign-in was refused; the audio waits for a new one.
     SignIn { local: bool },
+    /// The day's cloud audio is used up: this computer's words stand in
+    /// (`local`), or the audio waits until the reset.
+    DailyLimit { local: bool },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -570,6 +573,9 @@ struct Bridge {
     /// The token the cloud refused; a different one is worth a try at once.
     token: Option<String>,
     probing: bool,
+    /// The day is used up until then: another clip's ordinary failure
+    /// keeps that wait.
+    daily_until: Option<Instant>,
 }
 
 /// One track's cloud requests run here so an upload, a retry wait or a slow
@@ -646,7 +652,10 @@ impl CloudLane {
                         };
                         tracing::warn!(?error, attempt, probe = job.probe, "cloud meeting transcription failed");
                         match error {
-                            CloudError::UpgradeRequired => break result,
+                            // Neither clears within a clip's retries.
+                            CloudError::UpgradeRequired | CloudError::DailyLimit { .. } => {
+                                break result;
+                            }
                             // A sign-in that changed since is tried at once.
                             CloudError::NotSignedIn => {
                                 let now = current_token();
@@ -1641,8 +1650,10 @@ impl Worker {
     fn on_cloud(&mut self, msg: CloudMsg) {
         let (clip, result, probe) = match msg {
             CloudMsg::Retrying(issue) => {
-                self.status.issue = Some(issue);
-                self.publish_status();
+                if !self.used_up() {
+                    self.status.issue = Some(issue);
+                    self.publish_status();
+                }
                 return;
             }
             CloudMsg::Done {
@@ -1742,14 +1753,32 @@ impl Worker {
         }
     }
 
+    /// The day's cloud audio is used up and its reset has not come yet.
+    fn used_up(&self) -> bool {
+        self.bridge
+            .as_ref()
+            .and_then(|bridge| bridge.daily_until)
+            .is_some_and(|until| Instant::now() < until)
+    }
+
     /// The cloud is not answering: local words stand in where there are
     /// any, the rest of the audio waits in the ledger, and a probe every
     /// minute or so (doubling to ten) finds out when the cloud is back.
     fn cloud_down(&mut self, error: &CloudError) {
         let sign_in = matches!(error, CloudError::NotSignedIn);
+        let daily = match error {
+            CloudError::DailyLimit { retry_after_secs } => {
+                Some(Duration::from_secs(*retry_after_secs))
+            }
+            _ => None,
+        };
+        if self.used_up() && daily.is_none() && !sign_in {
+            return;
+        }
         let now = Instant::now();
         match self.bridge.as_mut() {
             Some(bridge) => {
+                bridge.daily_until = None;
                 bridge.interval = (bridge.interval * 2).min(self.policy.probe_max);
                 bridge.next_probe = now + self.policy.next_probe(bridge.interval);
                 bridge.sign_in = sign_in;
@@ -1764,12 +1793,21 @@ impl Worker {
                     sign_in,
                     token: current_token(),
                     probing: false,
+                    daily_until: None,
                 });
             }
+        }
+        // Used up for the day: ask again only once the day resets.
+        if let (Some(reset), Some(bridge)) = (daily, self.bridge.as_mut()) {
+            bridge.interval = reset;
+            bridge.next_probe = now + reset + self.policy.probe_jitter.mul_f64(jitter());
+            bridge.daily_until = Some(bridge.next_probe);
         }
         let local = self.config.fallback.is_some();
         self.status.cloud = if sign_in {
             CloudState::SignIn { local }
+        } else if daily.is_some() {
+            CloudState::DailyLimit { local }
         } else {
             CloudState::Down { local }
         };

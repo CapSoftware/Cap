@@ -23,6 +23,11 @@ use crate::{
 };
 
 const METER_TWEEN: Duration = Duration::from_millis(130);
+/// How often the meter steps while it eases. Levels change up to ten times
+/// a second for as long as anyone talks, so a redraw every display frame
+/// would repaint the window for the whole meeting; 20 steps a second look
+/// the same on a meter this small.
+const METER_FRAME: Duration = Duration::from_millis(50);
 /// Record more ignores presses this long after a stop, so a second click on
 /// Stop does not start recording again.
 pub const RECORD_MORE_GUARD: Duration = Duration::from_millis(1500);
@@ -54,7 +59,9 @@ pub fn issues(active: &ActiveMeeting) -> Vec<Issue> {
 pub enum Banner {
     Ending(u64),
     Inactive(u64),
-    ResumeOffer,
+    ResumeOffer { slept: bool },
+    /// The call went on through a sleep and so did the meeting.
+    ResumedAfterSleep,
     Issue(Issue),
     Permission(&'static str),
 }
@@ -67,7 +74,9 @@ pub fn banner_for(
 ) -> Option<Banner> {
     let active = active?;
     if active.state == ActiveState::ResumeOffered {
-        return Some(Banner::ResumeOffer);
+        return Some(Banner::ResumeOffer {
+            slept: active.slept,
+        });
     }
     match active.warning {
         Some(MeetingWarning::Ending { stop_at, .. }) => {
@@ -81,6 +90,9 @@ pub fn banner_for(
             ));
         }
         None => {}
+    }
+    if active.resumed_after_sleep && active.state == ActiveState::Recording {
+        return Some(Banner::ResumedAfterSleep);
     }
     if let Some(line) = permission {
         return Some(Banner::Permission(line));
@@ -175,6 +187,7 @@ pub struct RecordingBar {
     pub embedded: bool,
     palette: Palette,
     meter: Meter,
+    meter_frame: Option<Task<()>>,
     permission: Option<&'static str>,
     dismissed: HashSet<Issue>,
     banner_at: Instant,
@@ -271,6 +284,7 @@ impl RecordingBar {
             embedded: false,
             palette,
             meter: Meter::default(),
+            meter_frame: None,
             permission: None,
             dismissed: HashSet::new(),
             banner_at: Instant::now(),
@@ -494,9 +508,18 @@ impl RecordingBar {
                     ],
                     false,
                 ),
-                Banner::ResumeOffer => (
-                    tr::documents::bar::stopped_quiet().to_string(),
+                Banner::ResumeOffer { slept } => (
+                    if *slept {
+                        tr::documents::bar::stopped_asleep().to_string()
+                    } else {
+                        tr::documents::bar::stopped_quiet().to_string()
+                    },
                     Vec::new(),
+                    false,
+                ),
+                Banner::ResumedAfterSleep => (
+                    tr::documents::bar::resumed_asleep().to_string(),
+                    vec![(tr::documents::bar::stop(), false, 1)],
                     false,
                 ),
                 Banner::Permission(line) => (line.to_string(), Vec::new(), true),
@@ -553,23 +576,29 @@ impl RecordingBar {
                     } else {
                         style::quiet_pill(&palette, SharedString::from(format!("banner-{kind}")))
                     };
-                    button.flex_shrink_0().child(label).on_click(cx.listener(
-                        move |this, _, _, cx| match kind {
+                    button
+                        .flex_shrink_0()
+                        .aria_label(label)
+                        .child(label)
+                        .on_click(cx.listener(move |this, _, _, cx| match kind {
                             0 => this.keep(cx),
                             1 => this.stop(cx),
                             3 => this.request_permission(cx),
                             _ => cx.defer(crate::meetings_ui::settings::open),
-                        },
-                    ))
+                        }))
                 }))
                 .when(dismissable, |el| {
                     el.child(
-                        style::icon_button(&palette, "banner-dismiss", "icons/x.svg", 28.)
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| {
-                                    this.dismiss(&dismiss_banner, cx)
-                                }),
-                            ),
+                        style::icon_button(
+                            &palette,
+                            "banner-dismiss",
+                            "icons/x.svg",
+                            28.,
+                            tr::common::dismiss(),
+                        )
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.dismiss(&dismiss_banner, cx)),
+                        ),
                     )
                 })
                 .into_any_element(),
@@ -662,6 +691,8 @@ impl RecordingBar {
         let palette = self.palette;
         div()
             .id(id)
+            .role(gpui::Role::Button)
+            .when(palette.keyboard, crate::ui::keyboard_nav::stop)
             .h(px(34.))
             .px(px(10.))
             .flex()
@@ -691,6 +722,7 @@ impl RecordingBar {
 
 impl Render for RecordingBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
         let palette = self.palette;
         if Meetings::try_global(cx).is_none() || self.doc_id.is_none() {
             return div().into_any_element();
@@ -725,6 +757,7 @@ impl Render for RecordingBar {
                 )
                 .child(
                     self.segment("bar-show")
+                        .aria_label(tr::documents::bar::show())
                         .child(tr::documents::bar::show())
                         .on_click(
                             cx.listener(move |_, _, _, cx| cx.emit(BarEvent::ShowDoc(id.clone()))),
@@ -749,6 +782,7 @@ impl Render for RecordingBar {
                     style::ink_pill(&palette, "bar-start")
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(div().size(px(8.)).rounded_full().bg(palette.live))
+                        .aria_label(label.clone())
                         .child(label)
                         .on_click(cx.listener(move |_, _, _, cx| {
                             cx.emit(BarEvent::Start(event_id.clone()))
@@ -792,6 +826,9 @@ impl RecordingBar {
                     el.child(
                         div()
                             .id("bar-stop-writing")
+                            .role(gpui::Role::Button)
+                            .when(palette.keyboard, crate::ui::keyboard_nav::stop)
+                            .aria_label(tr::documents::notes::stop())
                             .ml(px(2.))
                             .px(px(8.))
                             .py(px(3.))
@@ -807,6 +844,7 @@ impl RecordingBar {
                 .into_any_element(),
             EndedItem::RecordMore { open } => self
                 .segment("bar-record-more")
+                .aria_label(tr::documents::bar::record_more())
                 .pr(px(14.))
                 .flex_shrink_0()
                 .when(!open, |this| this.opacity(0.45).cursor_default())
@@ -822,6 +860,12 @@ impl RecordingBar {
         self.capsule()
             .child(
                 self.segment("bar-panel")
+                    .aria_label(tr::documents::export::transcript())
+                    .aria_description(if self.panel_open {
+                        tr::documents::a11y::expanded()
+                    } else {
+                        tr::documents::a11y::collapsed()
+                    })
                     .child(glyph(palette.muted))
                     .child(self.chevron())
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(BarEvent::TogglePanel))),
@@ -858,12 +902,19 @@ impl RecordingBar {
                 .capsule()
                 .child(
                     self.segment("bar-panel")
+                        .aria_label(tr::documents::export::transcript())
+                        .aria_description(if self.panel_open {
+                            tr::documents::a11y::expanded()
+                        } else {
+                            tr::documents::a11y::collapsed()
+                        })
                         .child(glyph(palette.muted))
                         .child(chevron)
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(BarEvent::TogglePanel))),
                 )
                 .child(
                     self.segment("bar-offer-resume")
+                        .aria_label(tr::documents::bar::resume())
                         .pr(px(14.))
                         .text_color(palette.green)
                         .child(tr::documents::bar::resume())
@@ -891,8 +942,15 @@ impl RecordingBar {
                 .into_any_element();
         }
         let (levels, animating) = self.meter.current(now);
-        if animating && surface_visible(window) {
-            window.request_animation_frame();
+        if animating && surface_visible(window) && self.meter_frame.is_none() {
+            self.meter_frame = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(METER_FRAME).await;
+                this.update(cx, |this, cx| {
+                    this.meter_frame = None;
+                    cx.notify();
+                })
+                .ok();
+            }));
         }
         let trouble = !issues(&active).is_empty();
         let elapsed =
@@ -900,6 +958,12 @@ impl RecordingBar {
         self.capsule()
             .child(
                 self.segment("bar-panel")
+                    .aria_label(tr::documents::export::transcript())
+                    .aria_description(if self.panel_open {
+                        tr::documents::a11y::expanded()
+                    } else {
+                        tr::documents::a11y::collapsed()
+                    })
                     .pl(px(12.))
                     .child(dots(
                         levels[0].max(levels[1]),
@@ -922,6 +986,7 @@ impl RecordingBar {
             )
             .child(
                 style::ink_pill(&palette, "bar-stop")
+                    .aria_label(tr::documents::bar::stop())
                     .ml(px(4.))
                     .pl(px(13.))
                     .pr(px(15.))
@@ -962,6 +1027,8 @@ impl RecordingBar {
             engine: EngineStatus::default(),
             warning: None,
             resume_offer_until: None,
+            slept: false,
+            resumed_after_sleep: false,
             app_name: Some("Zoom".into()),
             event_id: None,
             health: Vec::new(),

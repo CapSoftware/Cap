@@ -76,6 +76,22 @@ fn tap_functions() -> Option<(CreateTap, DestroyTap)> {
     })
 }
 
+/// Whether a process other than this one (or a screen reader, which the tap
+/// leaves out) is playing audio right now, as Core Audio tracks each
+/// process's output. `None` when it can't say.
+pub fn others_playing() -> Option<bool> {
+    let me = unsafe { libc::getpid() };
+    let processes = System::processes().ok()?;
+    // A screen reader the tap leaves out is not something it should hear.
+    Some(processes.iter().any(|process| {
+        process.pid().is_ok_and(|pid| pid != me)
+            && process.is_running_output().unwrap_or(false)
+            && !process
+                .bundle_id()
+                .is_ok_and(|id| READER_BUNDLES.contains(&id.to_string().as_str()))
+    }))
+}
+
 pub fn system_tap_supported() -> bool {
     tap_functions().is_some()
         && ns::ProcessInfo::current().is_os_at_least_version(ns::OsVersion {
@@ -83,6 +99,56 @@ pub fn system_tap_supported() -> bool {
             minor: 2,
             patch: 0,
         })
+}
+
+/// Screen readers whose speech never belongs in a meeting's computer audio.
+/// VoiceOver plays its speech from its own process.
+const READER_BUNDLES: &[&str] = &["com.apple.VoiceOver"];
+
+/// The audio process objects of the screen readers running now, sorted.
+fn reader_processes() -> Vec<u32> {
+    let Ok(processes) = Process::list() else {
+        return Vec::new();
+    };
+    let mut readers: Vec<u32> = processes
+        .iter()
+        .filter(|process| {
+            process
+                .bundle_id()
+                .is_ok_and(|id| READER_BUNDLES.contains(&id.to_string().as_str()))
+        })
+        .map(|process| process.0.0)
+        .collect();
+    readers.sort_unstable();
+    readers
+}
+
+/// Looks at the audio process list once, so the look a meeting's tap makes
+/// before it starts is quick (the first look in a process takes ~25 ms, the
+/// next ~1 ms). Call it off the main thread.
+pub fn warm_screen_reader_lookup() {
+    let _ = reader_processes();
+}
+
+/// The processes a tap leaves out: Cap itself (when asked) and any running
+/// screen reader.
+fn exclusion(own: Option<u32>, readers: &[u32]) -> arc::R<ns::Array<ns::Number>> {
+    let numbers: Vec<arc::R<ns::Number>> = own
+        .into_iter()
+        .chain(readers.iter().copied())
+        .map(ns::Number::with_u32)
+        .collect();
+    if numbers.is_empty() {
+        return ns::Array::new();
+    }
+    let numbers: Vec<&ns::Number> = numbers.iter().map(|number| number.as_ref()).collect();
+    ns::Array::from_slice(&numbers)
+}
+
+/// Test builds only: `CAP_GPUI_TEST_READER_EXCLUDE_FAIL` makes every attempt
+/// to leave a screen reader out fail, to prove the fallback.
+fn reader_exclusion_refused_for_test() -> bool {
+    cfg!(debug_assertions) && std::env::var_os("CAP_GPUI_TEST_READER_EXCLUDE_FAIL").is_some()
 }
 
 struct Ring {
@@ -285,22 +351,38 @@ struct Session {
 }
 
 impl Session {
-    fn start(context: &mut IoContext, exclude_own_audio: bool) -> Result<Self, TapError> {
+    fn start(
+        context: &mut IoContext,
+        exclude_own_audio: bool,
+        readers: &[u32],
+    ) -> Result<Self, TapError> {
+        let mut session = Self::build(context, exclude_own_audio, readers)?;
+        session.run()?;
+        Ok(session)
+    }
+
+    /// Everything but starting the device: the tap, its aggregate and the
+    /// IO proc. Nothing is delivered until [`Session::run`].
+    fn build(
+        context: &mut IoContext,
+        exclude_own_audio: bool,
+        readers: &[u32],
+    ) -> Result<Self, TapError> {
         let _pool = cidre::objc::AutoreleasePoolPage::push();
         let (create_tap, destroy_tap) = tap_functions().ok_or(TapError::Unsupported)?;
+        if !readers.is_empty() && reader_exclusion_refused_for_test() {
+            return Err(TapError::Os(1));
+        }
 
-        let excluded = if exclude_own_audio {
+        let own = if exclude_own_audio {
             Process::with_pid(unsafe { libc::getpid() })
                 .ok()
                 .filter(|process| process.0 != Obj::UNKNOWN)
-                .map(|process| ns::Number::with_u32(process.0.0))
+                .map(|process| process.0.0)
         } else {
             None
         };
-        let excluded = match &excluded {
-            Some(number) => ns::Array::from_slice(&[number.as_ref()]),
-            None => ns::Array::new(),
-        };
+        let excluded = exclusion(own, readers);
 
         // The `initMonoGlobalTapButExcludeProcesses:` convenience initializer
         // returns an over-retained object on macOS 27 (measured: retain count
@@ -398,17 +480,10 @@ impl Session {
         };
         context.skip.store(skip, Ordering::Relaxed);
         let proc_id = aggregate.create_io_proc_id(io_proc, Some(context))?;
-        let started = match ca::device_start(Device(Obj(aggregate_id)), Some(proc_id)) {
-            Ok(started) => started,
-            Err(error) => {
-                unsafe { AudioDeviceDestroyIOProcID(aggregate_id, proc_id as *const c_void) };
-                return Err(error.into());
-            }
-        };
 
         std::mem::forget(tap_guard);
         Ok(Self {
-            started: Some(started),
+            started: None,
             aggregate: Some(aggregate),
             aggregate_id,
             proc_id,
@@ -417,6 +492,48 @@ impl Session {
             sample_rate: format.sample_rate.round() as u32,
         })
     }
+
+    /// Starts delivering. A session dropped before it runs cleans up all the
+    /// same.
+    fn run(&mut self) -> Result<(), TapError> {
+        let started = ca::device_start(Device(Obj(self.aggregate_id)), Some(self.proc_id))?;
+        self.started = Some(started);
+        Ok(())
+    }
+}
+
+/// Starts the tap leaving running screen readers out. If that is refused,
+/// starts it at once as before, with the readers' speech in it.
+fn start_session(
+    context: &mut IoContext,
+    exclude_own_audio: bool,
+    readers: &[u32],
+) -> Result<Session, TapError> {
+    if readers.is_empty() {
+        return Session::start(context, exclude_own_audio, &[]);
+    }
+    match Session::start(context, exclude_own_audio, readers) {
+        Ok(session) => {
+            tracing::info!("a screen reader is running; its speech is left out of computer audio");
+            Ok(session)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "could not leave the screen reader's speech out of computer audio; recording as before");
+            Session::start(context, exclude_own_audio, &[])
+        }
+    }
+}
+
+extern "C-unwind" fn on_processes_changed(
+    _obj: Obj,
+    _count: u32,
+    _addresses: *const PropAddr,
+    signal: *mut flume::Sender<()>,
+) -> os::Status {
+    if let Some(tx) = unsafe { signal.as_ref() } {
+        let _ = tx.try_send(());
+    }
+    os::Status::NO_ERR
 }
 
 impl Drop for Session {
@@ -533,7 +650,8 @@ impl SystemAudioTap {
                         counters: counters.clone(),
                         skip: AtomicUsize::new(0),
                     });
-                    let started = Session::start(&mut context, exclude_own_audio);
+                    let mut readers = reader_processes();
+                    let started = start_session(&mut context, exclude_own_audio, &readers);
                     built.store(true, Ordering::Release);
                     let mut session = match started {
                         Ok(session) => {
@@ -563,6 +681,14 @@ impl SystemAudioTap {
                     let restarted = PropSelector(u32::from_be_bytes(*b"srst")).global_addr();
                     let restart_listening = System::OBJ
                         .add_prop_listener(&restarted, on_output_changed, signal)
+                        .is_ok();
+                    // A screen reader starting or quitting changes the audio
+                    // process list; the tap's exclusions follow it.
+                    let (processes_tx, processes_rx) = flume::bounded::<()>(1);
+                    let processes_signal = Box::into_raw(Box::new(processes_tx));
+                    let processes = PropSelector::HW_PROCESS_OBJ_LIST.global_addr();
+                    let processes_listening = System::OBJ
+                        .add_prop_listener(&processes, on_processes_changed, processes_signal)
                         .is_ok();
 
                     let mut samples = Vec::with_capacity(RING_FRAMES);
@@ -606,10 +732,50 @@ impl SystemAudioTap {
                             next_rebuild = Instant::now() + REBUILD_SETTLE;
                             counters.gave_up.store(false, Ordering::Relaxed);
                         }
+                        if processes_rx.try_recv().is_ok() {
+                            let now = reader_processes();
+                            if now != readers {
+                                // A running tap refuses a new description, so
+                                // the next tap is built first, then the old one
+                                // stops and the new one starts. If building is
+                                // refused, the old tap goes on.
+                                if let Some(active) = session.take() {
+                                    match Session::build(&mut context, exclude_own_audio, &now) {
+                                        Ok(mut next) => {
+                                            drop(active);
+                                            match next.run() {
+                                                Ok(()) => {
+                                                    counters.restarts.fetch_add(1, Ordering::Relaxed);
+                                                    tracing::info!(
+                                                        readers = now.len(),
+                                                        "the screen readers computer audio leaves out changed"
+                                                    );
+                                                    session = Some(next);
+                                                }
+                                                Err(error) => {
+                                                    tracing::warn!(%error, "could not change which screen readers computer audio leaves out; recording as before");
+                                                    drop(next);
+                                                    session = Session::start(&mut context, exclude_own_audio, &[]).ok();
+                                                    if session.is_none() {
+                                                        rebuilds_left = REBUILD_ATTEMPTS;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(error) => {
+                                            tracing::warn!(%error, "could not change which screen readers computer audio leaves out; recording as before");
+                                            session = Some(active);
+                                        }
+                                    }
+                                }
+                                readers = now;
+                            }
+                        }
                         if session.is_none() && rebuilds_left > 0 && Instant::now() >= next_rebuild
                         {
                             rebuilds_left -= 1;
-                            match Session::start(&mut context, exclude_own_audio) {
+                            readers = reader_processes();
+                            match start_session(&mut context, exclude_own_audio, &readers) {
                                 Ok(rebuilt) => {
                                     counters.restarts.fetch_add(1, Ordering::Relaxed);
                                     if rebuilt.sample_rate != sample_rate {
@@ -674,6 +840,14 @@ impl SystemAudioTap {
                     if restart_listening {
                         let _ = System::OBJ.remove_prop_listener(&restarted, on_output_changed, signal);
                     }
+                    if processes_listening {
+                        let _ = System::OBJ.remove_prop_listener(
+                            &processes,
+                            on_processes_changed,
+                            processes_signal,
+                        );
+                    }
+                    drop(unsafe { Box::from_raw(processes_signal) });
                     drop(unsafe { Box::from_raw(signal) });
                     drop(context);
                 }
@@ -831,5 +1005,17 @@ mod tests {
         // A skip past the end leaves nothing rather than reading the wrong
         // buffer.
         assert!(pushed(&[buf(&mut tap, 1)], 3).is_empty());
+    }
+
+    #[test]
+    fn a_running_screen_reader_is_left_out_next_to_cap() {
+        let numbers = |array: &ns::Array<ns::Number>| -> Vec<u32> {
+            (0..array.len()).map(|i| array[i].as_u32()).collect()
+        };
+        // No reader: exactly what the tap left out before.
+        assert_eq!(numbers(&exclusion(Some(7), &[])), vec![7]);
+        assert!(numbers(&exclusion(None, &[])).is_empty());
+        assert_eq!(numbers(&exclusion(Some(7), &[41, 52])), vec![7, 41, 52]);
+        assert_eq!(numbers(&exclusion(None, &[41])), vec![41]);
     }
 }

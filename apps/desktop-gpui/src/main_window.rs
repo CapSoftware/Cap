@@ -3652,6 +3652,8 @@ impl MainWindow {
             .child(
                 div()
                     .id("modal-card")
+                    .role(gpui::Role::Dialog)
+                    .aria_label(title)
                     .relative()
                     .w_full()
                     .rounded(px(14.))
@@ -3694,6 +3696,8 @@ impl MainWindow {
                     .child(
                         div()
                             .id("modal-close")
+                            .role(gpui::Role::Button)
+                            .aria_label(tr::common::close())
                             .absolute()
                             .top(px(10.))
                             .right(px(10.))
@@ -3744,6 +3748,7 @@ impl MainWindow {
             )
             .label(tr::main::sign_in::open_browser_again())
             .full_width()
+            .exposed()
             .on_click(cx.listener(|_, _, _, cx| {
                 SignIn::global(cx).update(cx, |sign_in, cx| sign_in.reopen(cx));
             }))
@@ -3757,6 +3762,7 @@ impl MainWindow {
             .icon("icons/user-round.svg")
             .label(tr::main::sign_in::sign_in())
             .full_width()
+            .exposed()
             .on_click(cx.listener(|this, _, _, cx| {
                 let Some(prompt) = this.sign_in_prompt.as_mut() else {
                     return;
@@ -3777,6 +3783,7 @@ impl MainWindow {
                 )
                 .label(tr::common::cancel())
                 .full_width()
+                .exposed()
                 .on_click(cx.listener(|_, _, _, cx| {
                     SignIn::global(cx).update(cx, |sign_in, cx| sign_in.cancel(cx));
                 })),
@@ -3795,6 +3802,7 @@ impl MainWindow {
                         )
                         .label(tr::main::sign_in::use_studio())
                         .full_width()
+                        .exposed()
                         .on_click(cx.listener(|this, _, _, cx| {
                             let Some(prompt) = this.sign_in_prompt.take() else {
                                 return;
@@ -3814,6 +3822,7 @@ impl MainWindow {
                         )
                         .label(tr::main::sign_in::not_now())
                         .full_width()
+                        .exposed()
                         .on_click(cx.listener(|this, _, _, cx| this.dismiss_sign_in_prompt(cx))),
                     ),
                 )
@@ -3828,7 +3837,7 @@ impl MainWindow {
                     .text_size(px(12.5))
                     .line_height(px(19.))
                     .text_color(theme.gray_11)
-                    .child(message),
+                    .child(gpui::Text::new("sign-in-prompt-message".into(), message.into())),
             )
             .when_some(error, |this, error| {
                 this.child(
@@ -3840,7 +3849,7 @@ impl MainWindow {
                         .text_size(px(12.))
                         .line_height(px(16.))
                         .text_color(theme.red_11)
-                        .child(error),
+                        .child(gpui::Text::new("sign-in-prompt-error".into(), error.into())),
                 )
             })
             .child(
@@ -4587,6 +4596,7 @@ impl MainWindow {
                                 tr::main::error::copy()
                             })
                             .full_width()
+                            .exposed()
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(
@@ -4608,6 +4618,7 @@ impl MainWindow {
                             )
                             .label(tr::common::dismiss())
                             .full_width()
+                            .exposed()
                             .on_click(cx.listener(|this, _, _, cx| this.dismiss_idle_error(cx))),
                         ),
                     ),
@@ -8217,7 +8228,10 @@ fn recording_error_text(error: String) -> impl IntoElement + Styled {
         .line_height(px(16.))
         .whitespace_normal()
         .overflow_scroll()
-        .child(error)
+        .child(gpui::Text::new(
+            "recording-error-message".into(),
+            error.into(),
+        ))
 }
 
 #[cfg(any(target_os = "linux", test))]

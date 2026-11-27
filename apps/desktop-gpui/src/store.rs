@@ -667,6 +667,23 @@ fn set_aside_unparseable_store(path: &Path) -> bool {
 /// to what tauri-plugin-store writes, so a store the two apps take turns on
 /// does not churn.
 ///
+/// The store holds the sign-in, so on Unix only its owner may read it.
+fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    // A leftover temp file would keep its old mode if it were reopened.
+    let _ = std::fs::remove_file(path);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)
+}
+
 /// Written to a sibling temp file and renamed, so a crash mid-write cannot
 /// leave a half-written store behind (the Tauri app would refuse to parse it,
 /// and the user would lose every setting).
@@ -687,8 +704,9 @@ fn write_store(path: &std::path::Path, store: &Value) -> bool {
     }
 
     let temp = path.with_extension("gpui-tmp");
-    if let Err(error) = std::fs::write(&temp, bytes) {
+    if let Err(error) = write_owner_only(&temp, &bytes) {
         tracing::warn!("writing the Tauri store: {error}");
+        let _ = std::fs::remove_file(&temp);
         return false;
     }
     if let Err(error) = std::fs::rename(&temp, path) {
@@ -2755,6 +2773,15 @@ mod tests {
         )));
         assert!(auth_snapshot().signed_in());
         assert!(auth_snapshot().is_upgraded());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(tauri_store_path())
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "the store holds the sign-in");
+        }
 
         settle();
         assert!(set_auth(None));

@@ -20,6 +20,9 @@ const COLLAPSE_AFTER: Duration = Duration::from_millis(650);
 const RESIZE: Duration = Duration::from_millis(200);
 /// How long the "still recording" line shows after the indicator is hidden.
 const HIDDEN_NOTE: Duration = Duration::from_millis(1800);
+/// A countdown up to this long drains ten times a second; a longer one (a
+/// Resume kept up after a sleep) moves too slowly to need it.
+const FAST_COUNTDOWN: Duration = Duration::from_secs(120);
 
 /// A press on the body. macOS moves the panel itself (screen points);
 /// elsewhere the window manager does, once the press has moved (window px).
@@ -56,6 +59,8 @@ pub enum Banner {
     Inactivity,
     Resume,
     Stopping,
+    /// The call went on through a sleep and so did the meeting.
+    Resumed,
 }
 
 pub fn banner(active: &ActiveMeeting) -> Option<Banner> {
@@ -64,6 +69,7 @@ pub fn banner(active: &ActiveMeeting) -> Option<Banner> {
         (ActiveState::Stopping, _) => Some(Banner::Stopping),
         (_, Some(MeetingWarning::Ending { .. })) => Some(Banner::Ending),
         (_, Some(MeetingWarning::Inactivity { .. })) => Some(Banner::Inactivity),
+        (ActiveState::Recording, None) if active.resumed_after_sleep => Some(Banner::Resumed),
         _ => None,
     }
 }
@@ -113,6 +119,9 @@ pub fn health_text(active: &ActiveMeeting) -> Option<String> {
         Concern::SignIn => tr::meeting::health::sign_in().into(),
         Concern::CloudCatchingUp => tr::meeting::health::offline().into(),
         Concern::CloudLocal => tr::meeting::health::cloud_local().into(),
+        Concern::CloudLimitWaiting | Concern::CloudLimitLocal => {
+            tr::meeting::health::cloud_limit().into()
+        }
         Concern::WordsMissing => tr::meeting::health::words_missing().into(),
         Concern::NoModel => return None,
     })
@@ -124,6 +133,7 @@ pub fn banner_title(banner: Banner) -> &'static str {
         Banner::Ending => tr::meeting::live::call_ended(),
         Banner::Inactivity => tr::meeting::live::still_there(),
         Banner::Resume | Banner::Stopping => tr::meeting::live::stopped(),
+        Banner::Resumed => tr::meeting::live::resumed(),
     }
 }
 
@@ -236,7 +246,9 @@ impl Indicator {
                 matches!(active.state, ActiveState::Recording | ActiveState::Starting)
                     || countdown_secs(active).is_some()
             });
-        let fast = self.countdown.is_some();
+        let fast = self
+            .countdown
+            .is_some_and(|(_, total)| total <= FAST_COUNTDOWN);
         if !ticking {
             self.tick = None;
         } else if self.tick.is_none() || self.tick_fast != fast {
@@ -718,6 +730,16 @@ impl Indicator {
                         .into_any_element(),
                     ],
                     Banner::Stopping => Vec::new(),
+                    Banner::Resumed => vec![
+                        self.small_button(
+                            "indicator-stop",
+                            tr::meeting::live::stop(),
+                            true,
+                            |cx| super::stop(StopReason::UserFromIndicator, cx),
+                            cx,
+                        )
+                        .into_any_element(),
+                    ],
                 };
                 // One calm row: what happened, the time left, the way out.
                 div()
@@ -1153,6 +1175,7 @@ fn open_window(cx: &mut App) {
                     shadow: true,
                 },
             );
+            crate::platform::take_key_only_on_click(window);
             indicator.panel = Panel::of(window);
             indicator.material = indicator.panel.is_some();
             cx.notify();

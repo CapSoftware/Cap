@@ -1,3 +1,4 @@
+mod announce;
 mod ask;
 mod audio;
 mod bar;
@@ -143,6 +144,14 @@ pub fn open(doc_id: Option<String>, cx: &mut App) {
     window::open(target, cx);
 }
 
+/// Open the notes window in front without taking the keyboard from the app
+/// in use: a meeting that needs the person while they may be typing in the
+/// call (it started on its own, or is about to stop).
+pub fn open_quietly(cx: &mut App) {
+    tracing::info!("opening the notes window without focus");
+    window::open_quietly(cx);
+}
+
 /// Open the notes window on a meeting just started, cursor in its notes, so
 /// what the person types first is kept wherever they started it from.
 pub fn open_to_type(doc_id: String, cx: &mut App) {
@@ -189,7 +198,8 @@ pub fn start_failed(error: crate::meetings::MeetingError, cx: &mut App) {
         MeetingError::NotFound => crate::i18n::tr::documents::bar::error_not_found(),
         _ => crate::i18n::tr::documents::bar::error_start(),
     };
-    window::open_with_message(message, cx);
+    let reason = start_failure_reason(&error).map(SharedString::from);
+    window::open_with_message(message, reason, cx);
 }
 
 /// Why a start failed, in the person's words, when Cap can tell: a full
@@ -279,27 +289,50 @@ pub fn auto_start_failed(error: crate::meetings::MeetingError, cx: &mut App) {
     };
     let body: SharedString = start_failure_reason(&error).unwrap_or_default().into();
     if !crate::notifications::enabled() {
-        window::open_with_message(title, cx);
+        window::open_with_message(title, Some(body), cx);
         return;
     }
     notify_start_failure(title, body, cx);
+}
+
+/// How long a failed start waits for macOS to answer the notification
+/// permission request. macOS answers only once the person has answered its
+/// prompt, and never when it cannot show one; the failure must still be said.
+#[cfg(any(target_os = "macos", test))]
+const PERMISSION_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The answer to a notification permission request, or `None` when none came
+/// within [`PERMISSION_WAIT`].
+#[cfg(any(target_os = "macos", test))]
+async fn permission_answer(answer: flume::Receiver<bool>, cx: &gpui::AsyncApp) -> Option<bool> {
+    use futures_util::future::{Either, select};
+    let answered = Box::pin(answer.recv_async());
+    let timeout = Box::pin(cx.background_executor().timer(PERMISSION_WAIT));
+    match select(answered, timeout).await {
+        Either::Left((answer, _)) => Some(answer.unwrap_or(false)),
+        Either::Right(_) => None,
+    }
 }
 
 #[cfg(target_os = "macos")]
 fn notify_start_failure(title: SharedString, body: SharedString, cx: &mut App) {
     let permission = crate::notifications::request_permission();
     cx.spawn(async move |cx| {
-        let allowed = permission.recv_async().await.unwrap_or(false);
+        let answer = permission_answer(permission, cx).await;
         cx.update(|cx| {
-            if !allowed {
-                tracing::info!("notifications are not allowed; opening the notes window");
-                window::open_with_message(title, cx);
+            if answer != Some(true) {
+                if answer.is_none() {
+                    tracing::info!("no notification answer; opening the notes window");
+                } else {
+                    tracing::info!("notifications are not allowed; opening the notes window");
+                }
+                window::open_with_message(title, Some(body), cx);
                 return;
             }
-            let message = title.clone();
+            let (message, detail) = (title.clone(), body.clone());
             cx.on_system_notification_response(move |response, cx| {
                 if response.tag.as_ref() == START_FAILED_TAG {
-                    window::open_with_message(message.clone(), cx);
+                    window::open_with_message(message.clone(), Some(detail.clone()), cx);
                 }
             });
             cx.show_system_notification(gpui::SystemNotification {
@@ -331,14 +364,14 @@ fn notify_start_failure(title: SharedString, body: SharedString, cx: &mut App) {
         });
     if let Err(error) = spawned {
         tracing::warn!(%error, "could not show the notification; opening the notes window");
-        window::open_with_message(title, cx);
+        window::open_with_message(title, Some(body), cx);
         return;
     }
     cx.spawn(async move |cx| {
         let outcome = rx.recv_async().await.unwrap_or(Outcome::NotShown);
         tracing::info!(?outcome, "start failure notification");
         if outcome != Outcome::Closed {
-            cx.update(|cx| window::open_with_message(title, cx));
+            cx.update(|cx| window::open_with_message(title, Some(body), cx));
         }
     })
     .detach();

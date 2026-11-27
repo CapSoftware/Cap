@@ -34,6 +34,8 @@ struct Tray {
     mode: Mode,
     previous: Vec<PreviousItem>,
     recording: bool,
+    /// A Notes meeting is recording: the icon shows it, as for Studio.
+    notes_recording: bool,
     previous_generation: u64,
     /// The next meeting, shown in the tooltip the way macOS shows it beside
     /// the menu bar icon.
@@ -110,6 +112,7 @@ fn create_tray(mode: Mode, entries: &[Entry]) -> anyhow::Result<Tray> {
         mode,
         previous: Vec::new(),
         recording: false,
+        notes_recording: false,
         previous_generation: 0,
         meeting_title: None,
     })
@@ -225,7 +228,25 @@ pub fn set_recording(recording: bool, cx: &mut App) {
         tray.icon
             .set_menu(Some(Box::new(tray.native_menu.menu.clone())));
     }
+    apply_icon(tray);
+    apply_tooltip(tray);
+}
+
+/// Shows a Notes recording on the icon and tooltip (the menu stays).
+pub fn set_notes_recording(on: bool, cx: &mut App) {
+    if !cx.has_global::<Tray>() || cx.global::<Tray>().notes_recording == on {
+        return;
+    }
+    let tray = cx.global_mut::<Tray>();
+    tray.notes_recording = on;
+    apply_icon(tray);
+    apply_tooltip(tray);
+}
+
+fn apply_icon(tray: &Tray) {
+    let recording = tray.recording || tray.notes_recording;
     let bytes = if recording { STOP_ICON } else { DEFAULT_ICON };
+    tracing::info!(recording, "tray icon set");
     match decode_tray_icon(bytes) {
         Ok(icon) => {
             if let Err(error) = tray.icon.set_icon(Some(icon)) {
@@ -234,11 +255,10 @@ pub fn set_recording(recording: bool, cx: &mut App) {
         }
         Err(error) => tracing::warn!("failed to decode the Windows tray icon: {error:#}"),
     }
-    apply_tooltip(tray);
 }
 
 fn apply_tooltip(tray: &Tray) {
-    let tooltip = match (&tray.meeting_title, tray.recording) {
+    let tooltip = match (&tray.meeting_title, tray.recording || tray.notes_recording) {
         (_, true) => tr::tray::tooltip_recording().to_string(),
         (Some(title), false) => format!("Cap · {title}"),
         (None, false) => "Cap".to_string(),

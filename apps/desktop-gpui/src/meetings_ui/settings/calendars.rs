@@ -97,6 +97,11 @@ impl SettingsWindow {
         let expanded = system && state.expanded_system && !calendars.is_empty();
         let hidden = state.settings.calendar.hidden_calendar_ids.clone();
         let remove_id = id.clone();
+        let remove_label = if accounts::provider_of(source.config.kind()).is_some() {
+            tr::settings::meetings::calendars::disconnect()
+        } else {
+            tr::settings::meetings::calendars::remove()
+        };
         div()
             .flex()
             .flex_col()
@@ -203,7 +208,7 @@ impl SettingsWindow {
                     .child(self.button(
                         ("meetings-calendar-remove", index),
                         (ui::ButtonVariant::Gray, None),
-                        tr::settings::meetings::calendars::remove(),
+                        remove_label,
                         false,
                         cx,
                         move |this, _, cx| this.meetings_remove_calendar(&remove_id, cx),
@@ -255,7 +260,14 @@ impl SettingsWindow {
     ) -> AnyElement {
         let palette = Palette::new(&self.theme);
         let provider = row.provider;
-        let detail = accounts::detail(&row);
+        let disconnected =
+            self.pages.meetings.disconnected == Some(provider) && row.phase == Phase::Available;
+        let detail = if disconnected {
+            tr::settings::meetings::accounts::disconnected().to_string()
+        } else {
+            accounts::detail(&row)
+        };
+        let remove_access = accounts::remove_access_url(provider).filter(|_| disconnected);
         let detail_color = match &row.phase {
             Phase::Failed(_) => palette.red,
             _ => palette.muted,
@@ -304,7 +316,21 @@ impl SettingsWindow {
                                 el.child(shared::spinner("meetings-account-spinner", palette.muted))
                             })
                             .child(detail),
-                    ),
+                    )
+                    .children(remove_access.map(|url| {
+                        let label = tr::settings::meetings::accounts::google_remove_access();
+                        ui::keyboard_nav::stop(div().id(gpui::ElementId::Name(
+                            format!("meetings-account-access-{}", accounts::slug(provider)).into(),
+                        )))
+                        .aria_label(label)
+                        .self_start()
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(palette.accent)
+                        .cursor_pointer()
+                        .child(label)
+                        .on_click(move |_, _, cx| cx.open_url(url))
+                    })),
             )
             .children(accounts::action(&row.phase).map(|action| {
                 self.button(
@@ -322,7 +348,10 @@ impl SettingsWindow {
                     accounts::action_label(action),
                     row.phase == Phase::Blocked,
                     cx,
-                    move |_, _, cx| accounts::run(action, provider, cx),
+                    move |this, _, cx| {
+                        this.pages.meetings.disconnected = None;
+                        accounts::run(action, provider, cx);
+                    },
                 )
             }))
             .into_any_element()

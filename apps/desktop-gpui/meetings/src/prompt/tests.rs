@@ -195,13 +195,53 @@ fn describe(action: &PromptAction) -> String {
 }
 
 #[test]
-fn detected_prompt_shows_and_times_out() {
+fn detected_prompt_stays_while_the_call_is_on_until_the_cap() {
     let mut s = Sim::new();
     s.at(2_000).started("zoom");
     s.expect(&[(2_000, "show #1 Detected Meeting detected | Zoom")]);
-    s.at(21_999).quiet();
-    s.at(22_000).expect(&[(22_000, "dismiss #1 TimedOut")]);
+    s.at(22_000).quiet();
+    s.at(121_999).quiet();
+    s.at(122_000).expect(&[(122_000, "dismiss #1 TimedOut")]);
     assert_eq!(s.planner.next_deadline(), None);
+}
+
+#[test]
+fn a_live_calls_prompt_closes_when_the_call_ends() {
+    let mut s = Sim::new();
+    s.at(2_000).started("zoom").take();
+    s.at(40_000).ended("zoom");
+    s.expect(&[(40_000, "dismiss #1 CallEnded")]);
+    assert_eq!(s.planner.next_deadline(), None);
+}
+
+#[test]
+fn a_dismissed_live_prompt_never_returns_for_that_call() {
+    let mut s = Sim::new();
+    s.started_at("zoom", 0).take();
+    s.at(30_000).dismiss(1).expect(&[(30_000, "dismiss #1 User")]);
+    let update = DetectEvent::CallUpdated(call("zoom", 0));
+    let actions = s.planner.on_detect(s.clock(), &update);
+    assert!(actions.is_empty());
+    s.at(100_000).started_at("zoom", 0).quiet();
+    s.at(300_000).quiet();
+    assert!(s.visible_ids().is_empty());
+}
+
+#[test]
+fn two_calls_in_a_row_each_get_exactly_one_prompt() {
+    let mut s = Sim::new();
+    s.started_at("zoom", 0);
+    s.at(1_000).started_at("zoom", 0);
+    s.expect(&[(0, "show #1 Detected Meeting detected | Zoom")]);
+    assert_eq!(s.visible_ids(), vec![1]);
+    s.at(90_000).ended("zoom");
+    s.expect(&[(90_000, "dismiss #1 CallEnded")]);
+    s.at(130_000).started_at("zoom", 130_000);
+    s.at(131_000).started_at("zoom", 130_000);
+    s.expect(&[(130_000, "show #2 Detected Meeting detected | Zoom")]);
+    assert_eq!(s.visible_ids(), vec![2]);
+    s.at(200_000).ended("zoom");
+    s.expect(&[(200_000, "dismiss #2 CallEnded")]);
 }
 
 #[test]
@@ -216,15 +256,15 @@ fn call_nouns_shape_the_title() {
 }
 
 #[test]
-fn hover_pauses_auto_dismiss() {
+fn hover_never_ends_a_live_calls_prompt_early() {
     let mut s = Sim::new();
     s.started("zoom").take();
     s.at(5_000).hover(1, true);
     s.at(15_000).hover(1, false);
     s.at(25_000).hover(1, true);
     s.at(26_000).hover(1, false).quiet();
-    s.at(29_999).quiet();
-    s.at(31_000).expect(&[(31_000, "dismiss #1 TimedOut")]);
+    s.at(119_999).quiet();
+    s.at(120_000).expect(&[(120_000, "dismiss #1 TimedOut")]);
 }
 
 #[test]
@@ -352,6 +392,250 @@ fn auto_record_countdown_and_completion() {
     s.started("teams").quiet();
 }
 
+fn meet_tab(call: ActiveCall) -> ActiveCall {
+    ActiveCall {
+        web: Some(crate::detect::WebMeeting {
+            provider: crate::browser::WebProvider::GoogleMeet,
+            meeting_id: Some("abc-defg-hij".into()),
+            title: Some("Weekly".into()),
+        }),
+        ..call
+    }
+}
+
+fn detect(s: &mut Sim, event: DetectEvent) {
+    let actions = s.planner.on_detect(s.clock(), &event);
+    s.record(actions);
+}
+
+#[test]
+fn unrecognised_browser_microphone_is_offered_but_never_records_on_its_own() {
+    for detected_enabled in [true, false] {
+        let mut s = Sim::with(PromptConfig {
+            auto_record: AutoRecord::Both,
+            detected_enabled,
+            ..PromptConfig::default()
+        });
+        s.at(1_000).started("chrome");
+        let shown = s.take();
+        if detected_enabled {
+            assert_eq!(
+                shown,
+                vec![(
+                    1_000,
+                    "show #1 Detected Meeting detected | Google Chrome".to_string()
+                )]
+            );
+        } else {
+            assert!(shown.is_empty(), "{shown:?}");
+        }
+        s.at(10 * MIN);
+        let later = s.take();
+        assert!(
+            later.iter().all(|(_, a)| !a.starts_with("record")),
+            "{later:?}"
+        );
+        assert_eq!(s.planner.recording(), &RecordingState::Idle);
+    }
+}
+
+#[test]
+fn unrecognised_browser_records_on_its_own_during_a_calendar_meeting() {
+    for auto_record in [
+        AutoRecord::Detected,
+        AutoRecord::Scheduled,
+        AutoRecord::Both,
+    ] {
+        let mut s = Sim::with(PromptConfig {
+            auto_record,
+            scheduled_enabled: false,
+            ..PromptConfig::default()
+        });
+        s.events(vec![ev("e", "Standup", 0, 30 * MIN as i64, false)]);
+        s.take();
+        s.at(1_000).started("chrome");
+        s.at(10_000);
+        let log = s.take();
+        assert!(
+            log.iter()
+                .any(|(_, a)| a == "record call chrome Some(\"e\")"),
+            "{auto_record:?} {log:?}"
+        );
+    }
+}
+
+#[test]
+fn unrecognised_browser_waits_for_an_upcoming_meeting_to_start() {
+    // The meeting starts in 60 s, inside the match window: the page using the
+    // microphone is offered but never records on its own, and the meeting is
+    // not tied to it: with scheduled automatic recording the meeting starts
+    // itself when it begins, whether the page is still on or stopped before.
+    for page_stops in [false, true] {
+        for auto_record in [
+            AutoRecord::Detected,
+            AutoRecord::Scheduled,
+            AutoRecord::Both,
+        ] {
+            let mut s = Sim::with(PromptConfig {
+                auto_record,
+                scheduled_enabled: false,
+                ..PromptConfig::default()
+            });
+            s.events(vec![ev("e", "Standup", 61_000, 30 * MIN as i64, false)]);
+            s.take();
+            s.at(1_000).started("chrome");
+            if page_stops {
+                s.at(30_000).ended("chrome");
+            }
+            s.at(60_000);
+            let early = s.take();
+            assert!(
+                early.iter().all(|(_, a)| !a.starts_with("record")),
+                "{page_stops} {auto_record:?} {early:?}"
+            );
+            s.at(61_000 + 5_000);
+            let log = s.take();
+            assert_eq!(
+                log.iter()
+                    .any(|(t, a)| *t == 66_000 && a == "record event e"),
+                auto_record.for_scheduled(),
+                "{page_stops} {auto_record:?} {log:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_reminder_of_a_meeting_an_unrecognised_page_preceded_still_shows() {
+    // Reminders on, no automatic recording: the page's prompt does not take
+    // the meeting's reminder, which shows at its usual lead time.
+    let mut s = Sim::with(PromptConfig {
+        scheduled_enabled: true,
+        ..PromptConfig::default()
+    });
+    s.events(vec![ev("e", "Standup", 90_000, 30 * MIN as i64, false)]);
+    s.take();
+    s.at(1_000).started("chrome");
+    s.at(30_000).ended("chrome");
+    s.at(31_000);
+    let log = s.take();
+    assert!(
+        log.iter().any(|(_, a)| a.starts_with("show") && a.contains("Scheduled Standup")),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn a_cancelled_start_of_that_meeting_records_nothing() {
+    let mut s = Sim::with(PromptConfig {
+        auto_record: AutoRecord::Scheduled,
+        scheduled_enabled: false,
+        ..PromptConfig::default()
+    });
+    s.events(vec![ev("e", "Standup", 61_000, 30 * MIN as i64, false)]);
+    s.take();
+    s.at(1_000).started("chrome");
+    s.at(61_000);
+    let shown = s.take();
+    let id = shown
+        .iter()
+        .find_map(|(_, a)| {
+            a.strip_prefix("update #")
+                .or_else(|| a.strip_prefix("show #"))
+                .filter(|rest| rest.contains("Scheduled Standup") && rest.contains("countdown"))
+                .and_then(|rest| rest.split_whitespace().next()?.parse::<u64>().ok())
+        })
+        .unwrap_or_else(|| panic!("no countdown for the meeting: {shown:?}"));
+    s.cancel(id);
+    s.at(30 * MIN);
+    let log = s.take();
+    assert!(log.iter().all(|(_, a)| !a.starts_with("record")), "{log:?}");
+}
+
+#[test]
+fn a_recognised_call_app_before_a_meeting_is_unchanged() {
+    // Zoom 60 s before a meeting, scheduled automatic recording: linked to the
+    // meeting and counted down at once, as before.
+    let mut s = Sim::with(PromptConfig {
+        auto_record: AutoRecord::Scheduled,
+        scheduled_enabled: false,
+        ..PromptConfig::default()
+    });
+    s.events(vec![ev("e", "Standup", 61_000, 30 * MIN as i64, false)]);
+    s.take();
+    s.at(1_000).started("zoom");
+    s.at(10_000);
+    let log = s.take();
+    assert!(
+        log.iter().any(|(_, a)| a == "record call zoom Some(\"e\")"),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn recognised_meeting_tab_records_on_its_own_as_before() {
+    let mut s = Sim::with(PromptConfig {
+        auto_record: AutoRecord::Detected,
+        ..PromptConfig::default()
+    });
+    s.at(1_000);
+    detect(
+        &mut s,
+        DetectEvent::CallStarted(meet_tab(call("chrome", 1_000))),
+    );
+    s.expect(&[(
+        1_000,
+        "show #1 Detected Meeting detected | Google Chrome countdown 6000",
+    )]);
+    s.at(6_000).expect(&[
+        (6_000, "record call chrome None"),
+        (6_000, "dismiss #1 RecordingStarted"),
+    ]);
+}
+
+#[test]
+fn meeting_tab_recognised_after_the_call_started_records_on_its_own() {
+    for detected_enabled in [true, false] {
+        let mut s = Sim::with(PromptConfig {
+            auto_record: AutoRecord::Detected,
+            detected_enabled,
+            ..PromptConfig::default()
+        });
+        s.at(1_000).started("chrome");
+        s.take();
+        s.at(2_000);
+        detect(
+            &mut s,
+            DetectEvent::CallUpdated(meet_tab(call("chrome", 1_000))),
+        );
+        s.at(7_000);
+        let log = s.take();
+        assert!(
+            log.iter()
+                .any(|(t, a)| *t <= 7_000 && a == "record call chrome None"),
+            "{detected_enabled} {log:?}"
+        );
+    }
+}
+
+#[test]
+fn native_call_apps_still_record_on_their_own() {
+    for app in ["zoom", "teams", "slack", "facetime"] {
+        let mut s = Sim::with(PromptConfig {
+            auto_record: AutoRecord::Detected,
+            ..PromptConfig::default()
+        });
+        s.at(1_000).started(app);
+        s.at(6_000);
+        let log = s.take();
+        assert!(
+            log.iter()
+                .any(|(t, a)| *t == 6_000 && a == &format!("record call {app} None")),
+            "{app} {log:?}"
+        );
+    }
+}
+
 #[test]
 fn auto_record_cancel_suppresses_for_call() {
     let mut s = Sim::with(PromptConfig {
@@ -365,6 +649,242 @@ fn auto_record_cancel_suppresses_for_call() {
         .expect(&[(2_000, "dismiss #1 Cancelled")]);
     s.at(10_000).quiet();
     s.started_at("zoom", 0).quiet();
+}
+
+#[test]
+fn accepting_the_next_meeting_while_one_records_switches_to_it() {
+    let mut s = Sim::new();
+    s.events(vec![
+        ev("a", "A", 0, 10 * MIN as i64, false),
+        ev("b", "B", 10 * MIN as i64, 30 * MIN as i64, false),
+    ]);
+    s.recording(RecordingState::Recording {
+        event_id: Some("a".into()),
+    });
+    s.take();
+    s.at(9 * MIN)
+        .expect(&[(540_000, "show #2 Scheduled B | 600-2400")]);
+    s.accept(2).expect(&[
+        (540_000, "record event b"),
+        (540_000, "dismiss #2 RecordingStarted"),
+    ]);
+}
+
+#[test]
+fn accepting_while_a_meeting_is_still_starting_waits_for_it() {
+    let mut s = Sim::new();
+    s.events(vec![
+        ev("a", "A", 0, 10 * MIN as i64, false),
+        ev("b", "B", 10 * MIN as i64, 30 * MIN as i64, false),
+    ]);
+    s.recording(RecordingState::Starting {
+        event_id: Some("a".into()),
+    });
+    s.at(9 * MIN).take();
+    s.accept(2)
+        .expect(&[(540_000, "dismiss #2 RecordingStarted")]);
+}
+
+fn back_to_back(scheduled_enabled: bool, a_minutes: u64) -> Sim {
+    let mut s = Sim::with(PromptConfig {
+        scheduled_enabled,
+        auto_record: AutoRecord::Scheduled,
+        ..PromptConfig::default()
+    });
+    s.events(vec![
+        ev("a", "A", 0, (a_minutes * MIN) as i64, false),
+        ev("b", "B", 10 * MIN as i64, 30 * MIN as i64, false),
+    ]);
+    s.recording(RecordingState::Recording {
+        event_id: Some("a".into()),
+    });
+    s.take();
+    s
+}
+
+#[test]
+fn auto_record_hands_a_meeting_that_ran_over_to_the_next_one() {
+    let mut s = back_to_back(true, 10);
+    s.at(9 * MIN)
+        .expect(&[(540_000, "show #2 Scheduled B | 600-2400")]);
+    s.at(10 * MIN - 1).quiet();
+    s.at(10 * MIN)
+        .expect(&[(600_000, "update #2 Scheduled B | 600-2400 countdown 605000")]);
+    s.at(10 * MIN + 5_000).expect(&[
+        (605_000, "record event b"),
+        (605_000, "dismiss #2 RecordingStarted"),
+    ]);
+
+    let mut s = back_to_back(false, 10);
+    s.at(10 * MIN - 1).quiet();
+    s.at(10 * MIN)
+        .expect(&[(600_000, "show #2 Scheduled B | 600-2400 countdown 605000")]);
+    s.at(10 * MIN + 5_000).expect(&[
+        (605_000, "record event b"),
+        (605_000, "dismiss #2 RecordingStarted"),
+    ]);
+}
+
+#[test]
+fn cancelling_the_hand_over_keeps_the_meeting_recording() {
+    let mut s = back_to_back(true, 10);
+    s.at(10 * MIN).take();
+    s.cancel(2).expect(&[(600_000, "dismiss #2 Cancelled")]);
+    s.at(60 * MIN).quiet();
+    assert_eq!(s.planner.next_deadline(), None);
+}
+
+#[test]
+fn auto_record_waits_for_the_recorded_meeting_to_end() {
+    // A ends at 12 min, two minutes into B: B takes over then.
+    let mut s = back_to_back(true, 12);
+    s.at(9 * MIN)
+        .expect(&[(540_000, "show #2 Scheduled B | 600-2400")]);
+    s.at(12 * MIN - 1).quiet();
+    s.at(12 * MIN)
+        .expect(&[(720_000, "update #2 Scheduled B | 600-2400 countdown 725000")]);
+    s.at(12 * MIN + 5_000).expect(&[
+        (725_000, "record event b"),
+        (725_000, "dismiss #2 RecordingStarted"),
+    ]);
+
+    let mut s = back_to_back(false, 12);
+    s.at(12 * MIN - 1).quiet();
+    s.at(12 * MIN)
+        .expect(&[(720_000, "show #2 Scheduled B | 600-2400 countdown 725000")]);
+
+    // A runs past B's reminder: B's prompt ends as usual, nothing switches.
+    let mut s = back_to_back(true, 20);
+    s.at(9 * MIN).take();
+    s.at(60 * MIN).expect(&[(840_000, "dismiss #2 EventOver")]);
+    let mut s = back_to_back(false, 20);
+    s.at(60 * MIN).quiet();
+    assert_eq!(s.planner.next_deadline(), None);
+}
+
+#[test]
+fn auto_record_never_hands_over_to_a_meeting_that_is_over() {
+    // B (26..29 min) runs inside A (0..30 min), A records: when A ends, B
+    // is over too, so A keeps recording and nothing switches.
+    for scheduled_enabled in [true, false] {
+        let mut s = Sim::with(PromptConfig {
+            scheduled_enabled,
+            auto_record: AutoRecord::Scheduled,
+            ..PromptConfig::default()
+        });
+        s.events(vec![
+            ev("a", "A", 0, 30 * MIN as i64, false),
+            ev("b", "B", 26 * MIN as i64, 3 * MIN as i64, false),
+        ]);
+        s.recording(RecordingState::Recording {
+            event_id: Some("a".into()),
+        });
+        s.take();
+        s.at(60 * MIN);
+        let log = s.take();
+        assert!(
+            log.iter()
+                .all(|(_, a)| !a.starts_with("record") && !a.contains("countdown")),
+            "{scheduled_enabled} {log:?}"
+        );
+    }
+
+    // Nothing records and a short meeting is already over when its
+    // reminder would show: it is not recorded on its own.
+    let mut s = Sim::with(PromptConfig {
+        scheduled_enabled: false,
+        auto_record: AutoRecord::Scheduled,
+        ..PromptConfig::default()
+    });
+    s.at(10 * MIN);
+    s.events(vec![ev("c", "C", 7 * MIN as i64, 2 * MIN as i64, false)]);
+    s.at(30 * MIN);
+    let log = s.take();
+    assert!(log.iter().all(|(_, a)| !a.starts_with("record")), "{log:?}");
+}
+
+#[test]
+fn auto_record_never_hands_over_to_a_meeting_that_ends_during_the_countdown() {
+    // B (10 min .. 10 min + 3 s) is still on when A ends and the countdown
+    // starts, and over when it would fire.
+    for scheduled_enabled in [true, false] {
+        let mut s = Sim::with(PromptConfig {
+            scheduled_enabled,
+            auto_record: AutoRecord::Scheduled,
+            ..PromptConfig::default()
+        });
+        s.events(vec![
+            ev("a", "A", 0, 10 * MIN as i64, false),
+            ev("b", "B", 10 * MIN as i64, 3_000, false),
+        ]);
+        s.recording(RecordingState::Recording {
+            event_id: Some("a".into()),
+        });
+        s.take();
+        s.at(10 * MIN);
+        assert!(
+            s.take().iter().any(|(_, a)| a.contains("countdown 605000")),
+            "{scheduled_enabled}"
+        );
+        s.at(60 * MIN);
+        let log = s.take();
+        assert!(
+            log.iter().all(|(_, a)| !a.starts_with("record")),
+            "{scheduled_enabled} {log:?}"
+        );
+        assert!(
+            log.iter()
+                .any(|(t, a)| *t == 10 * MIN + 5_000 && a.ends_with("EventOver")),
+            "{scheduled_enabled} {log:?}"
+        );
+    }
+}
+
+#[test]
+fn auto_record_hands_over_to_a_meeting_still_running_when_the_recorded_one_ends() {
+    // B (27..40 min) starts inside A (0..30 min): when A ends B takes over.
+    let mut s = Sim::with(PromptConfig {
+        auto_record: AutoRecord::Scheduled,
+        ..PromptConfig::default()
+    });
+    s.events(vec![
+        ev("a", "A", 0, 30 * MIN as i64, false),
+        ev("b", "B", 27 * MIN as i64, 13 * MIN as i64, false),
+    ]);
+    s.recording(RecordingState::Recording {
+        event_id: Some("a".into()),
+    });
+    s.take();
+    s.at(30 * MIN + 5_000);
+    let log = s.take();
+    assert!(
+        log.iter()
+            .any(|(t, a)| *t == 30 * MIN + 5_000 && a == "record event b"),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn auto_record_never_ends_a_recording_the_calendar_does_not_end() {
+    for state in [
+        RecordingState::Recording { event_id: None },
+        RecordingState::Recording {
+            event_id: Some("gone".into()),
+        },
+        RecordingState::Starting {
+            event_id: Some("a".into()),
+        },
+    ] {
+        let mut s = Sim::with(PromptConfig {
+            auto_record: AutoRecord::Scheduled,
+            ..PromptConfig::default()
+        });
+        s.recording(state.clone());
+        s.events(vec![ev("b", "B", 10 * MIN as i64, 30 * MIN as i64, false)]);
+        s.at(9 * MIN)
+            .expect(&[(540_000, "show #1 Scheduled B | 600-2400")]);
+        s.at(60 * MIN).expect(&[(840_000, "dismiss #1 EventOver")]);
+    }
 }
 
 #[test]
@@ -613,8 +1133,8 @@ fn detected_call_upgrades_visible_reminder() {
     s.at(9 * MIN + 30_000).started("zoom");
     s.expect(&[(570_000, "update #1 Detected Weekly | 600-2400")]);
     assert_eq!(s.visible_ids(), vec![1]);
-    s.at(9 * MIN + 30_000 + 20_000)
-        .expect(&[(590_000, "dismiss #1 TimedOut")]);
+    s.at(9 * MIN + 30_000 + 120_000)
+        .expect(&[(690_000, "dismiss #1 TimedOut")]);
     s.at(30 * MIN).quiet();
 }
 
@@ -630,7 +1150,7 @@ fn detected_attach_consumes_upcoming_reminder() {
     )]);
     s.at(10 * MIN - 80_000).started("zoom");
     s.expect(&[(520_000, "show #1 Detected Weekly | 600-2400")]);
-    s.at(30 * MIN).expect(&[(540_000, "dismiss #1 TimedOut")]);
+    s.at(30 * MIN).expect(&[(640_000, "dismiss #1 TimedOut")]);
 }
 
 #[test]
@@ -732,7 +1252,7 @@ fn clock_going_backwards_is_ignored() {
     s.at(10_000).started("zoom").take();
     let early = Now::new(Millis(5_000), wall(5_000));
     assert!(s.planner.tick(early).is_empty());
-    assert_eq!(s.planner.next_deadline(), Some(Millis(30_000)));
+    assert_eq!(s.planner.next_deadline(), Some(Millis(130_000)));
 }
 
 #[test]
@@ -793,6 +1313,14 @@ fn randomised_invariants() {
         for step in 0..600 {
             now += rng.below(30_000);
             let clock = Now::new(Millis(now), wall(now as i64));
+            // Accepting a prompt while a meeting records switches to it, and
+            // so does a scheduled one starting after the recorded meeting is
+            // over: the app ends that meeting before it starts this one. A
+            // start while one is still starting never happens.
+            let mut switching = match planner.recording() {
+                RecordingState::Recording { event_id: Some(_) } => auto.for_scheduled(),
+                _ => false,
+            };
             let actions = match rng.below(10) {
                 0 => {
                     let app = rng.pick(&apps).to_string();
@@ -841,7 +1369,9 @@ fn randomised_invariants() {
                         1 => RecordingState::Starting {
                             event_id: Some(format!("e{}", rng.below(5))),
                         },
-                        _ => RecordingState::Recording { event_id: None },
+                        _ => RecordingState::Recording {
+                            event_id: rng.chance(50).then(|| format!("e{}", rng.below(5))),
+                        },
                     };
                     if state.is_active() {
                         recording_requested = true;
@@ -853,7 +1383,11 @@ fn randomised_invariants() {
                     match rng.below(4) {
                         0 => planner.dismiss(clock, id),
                         1 => planner.cancel(clock, id),
-                        2 => planner.accept(clock, id),
+                        2 => {
+                            switching |=
+                                matches!(planner.recording(), RecordingState::Recording { .. });
+                            planner.accept(clock, id)
+                        }
                         _ => planner.hover(clock, id, rng.chance(50)),
                     }
                 }
@@ -881,7 +1415,7 @@ fn randomised_invariants() {
                     }
                     PromptAction::StartRecording { .. } => {
                         assert!(
-                            !recording_requested,
+                            !recording_requested || switching,
                             "seed {seed} step {step}: double start"
                         );
                         recording_requested = true;

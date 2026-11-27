@@ -43,6 +43,25 @@ pub fn direction(keystroke: &Keystroke) -> Option<Direction> {
     })
 }
 
+/// Ctrl-Tab and Ctrl-Shift-Tab: how focus leaves a text editor that keeps
+/// Tab for itself, as in native text views.
+fn control_direction(keystroke: &Keystroke) -> Option<Direction> {
+    let modifiers = keystroke.modifiers;
+    if keystroke.key != "tab"
+        || !modifiers.control
+        || modifiers.alt
+        || modifiers.platform
+        || modifiers.function
+    {
+        return None;
+    }
+    Some(if modifiers.shift {
+        Direction::Previous
+    } else {
+        Direction::Next
+    })
+}
+
 fn takes_tab(blocked: bool, prompt_active: bool, composing: bool) -> bool {
     !(blocked || prompt_active || composing)
 }
@@ -89,20 +108,45 @@ pub fn install<V: 'static>(
     cx: &mut Context<V>,
     blocked: impl Fn(&V, &App) -> bool + 'static,
 ) -> Subscription {
+    install_keeping(
+        window,
+        cx,
+        move |view, _, cx| blocked(view, cx),
+        |_, _, _| false,
+    )
+}
+
+/// `install` for a window with a text editor that uses Tab itself (list
+/// indent): while `keeps_tab` says focus is in it, Tab goes to the editor
+/// and Ctrl-Tab / Ctrl-Shift-Tab move focus on instead.
+pub fn install_keeping<V: 'static>(
+    window: &Window,
+    cx: &mut Context<V>,
+    blocked: impl Fn(&V, &Window, &App) -> bool + 'static,
+    keeps_tab: impl Fn(&V, &Window, &App) -> bool + 'static,
+) -> Subscription {
     let owner = window.window_handle().window_id();
     let view = cx.weak_entity();
     cx.intercept_keystrokes(move |event, window, cx| {
         if window.window_handle().window_id() != owner {
             return;
         }
-        let Some(direction) = direction(&event.keystroke) else {
+        if event.keystroke.key != "tab" {
             return;
-        };
+        }
         let Some(view) = view.upgrade() else {
             return;
         };
+        let direction = if keeps_tab(view.read(cx), window, cx) {
+            control_direction(&event.keystroke)
+        } else {
+            direction(&event.keystroke)
+        };
+        let Some(direction) = direction else {
+            return;
+        };
         if !takes_tab(
-            blocked(view.read(cx), cx),
+            blocked(view.read(cx), window, cx),
             window.has_active_prompt(),
             text_input_is_composing(window, cx),
         ) {
@@ -184,6 +228,16 @@ mod tests {
             "t",
         ] {
             assert_eq!(parsed(source), None, "{source}");
+        }
+    }
+
+    #[test]
+    fn only_control_tab_leaves_an_editor_that_keeps_tab() {
+        let control = |source: &str| control_direction(&Keystroke::parse(source).unwrap());
+        assert_eq!(control("ctrl-tab"), Some(Direction::Next));
+        assert_eq!(control("ctrl-shift-tab"), Some(Direction::Previous));
+        for source in ["tab", "shift-tab", "ctrl-alt-tab", "cmd-ctrl-tab", "ctrl-t"] {
+            assert_eq!(control(source), None, "{source}");
         }
     }
 

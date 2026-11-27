@@ -57,6 +57,10 @@ enum Answer {
     Upgrade,
     /// The sign-in is refused this many times, then the same one works.
     AuthThen(usize, &'static [&'static str]),
+    /// The account's cloud audio for the day is used up.
+    DailyLimit,
+    /// The day is used up, then every later request fails as an outage.
+    DailyLimitThenFail,
 }
 
 struct Ran {
@@ -350,6 +354,13 @@ fn run_opts(opts: Opts) -> Ran {
                 Answer::Upgrade => Err(CloudError::UpgradeRequired),
                 Answer::AuthThen(fails, texts) if n >= *fails => Ok(words(clip, texts)),
                 Answer::AuthThen(..) => Err(CloudError::NotSignedIn),
+                Answer::DailyLimit => Err(CloudError::DailyLimit {
+                    retry_after_secs: 3_600,
+                }),
+                Answer::DailyLimitThenFail if n == 0 => Err(CloudError::DailyLimit {
+                    retry_after_secs: 3_600,
+                }),
+                Answer::DailyLimitThenFail => Err(CloudError::Failed("server error".into())),
             }
         })
     });
@@ -426,6 +437,64 @@ fn a_failed_clip_keeps_the_local_words_and_the_meeting_stays_on_cloud() {
     assert_eq!(status.cloud, CloudState::Down { local: true });
     assert_eq!(status.gaps, 0, "no words were lost");
     assert!(ran.transcript.gaps().is_empty());
+}
+
+#[test]
+fn a_used_up_day_says_so_and_this_computer_transcribes() {
+    let ran = run(
+        cloud_mode(),
+        true,
+        LOCAL,
+        Some(Answer::DailyLimit),
+        Vec::new(),
+        vec![job()],
+    );
+    let id = utterance_id(Source::Mic, START);
+    assert_eq!(ran.saved(), vec![(id, "hello from here".into())]);
+    let status = ran.last_status().unwrap();
+    assert_eq!(status.cloud, CloudState::DailyLimit { local: true });
+    assert_eq!(status.issue.as_deref(), Some("Today's cloud transcription is used up"));
+    assert!(
+        !ran.events.iter().any(|e| matches!(
+            e,
+            EngineEvent::Status { status, .. } if status.issue.as_deref().is_some_and(|i| i.contains("retrying"))
+        )),
+        "a used-up day is not retried"
+    );
+}
+
+#[test]
+fn a_used_up_day_without_a_model_keeps_the_audio_for_later() {
+    let ran = run_opts(Opts {
+        cloud: Some(Answer::DailyLimit),
+        segments: vec![job()],
+        ..Opts::default()
+    });
+    assert!(
+        ran.events.iter().any(|e| matches!(
+            e,
+            EngineEvent::Status { status, .. } if status.cloud == CloudState::DailyLimit { local: false } && status.gaps == 1
+        )),
+        "the clip waits in the ledger"
+    );
+    assert_eq!(ran.transcript.gaps().len(), 1, "the audio is kept for after the reset");
+}
+
+#[test]
+fn a_used_up_day_stays_used_up_when_the_other_track_then_fails() {
+    let system = SegmentJob {
+        source: Source::System,
+        ..job()
+    };
+    let ran = run_opts(Opts {
+        fallback: true,
+        cloud: Some(Answer::DailyLimitThenFail),
+        segments: vec![job(), system],
+        ..Opts::default()
+    });
+    let status = ran.last_status().unwrap();
+    assert_eq!(status.cloud, CloudState::DailyLimit { local: true });
+    assert_eq!(status.issue.as_deref(), Some("Today's cloud transcription is used up"));
 }
 
 #[test]

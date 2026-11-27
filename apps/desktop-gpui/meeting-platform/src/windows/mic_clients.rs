@@ -150,6 +150,7 @@ pub fn snapshot_now() -> MicSnapshot {
                     raw_id: path.replace('#', "\\"),
                     pid: 0,
                     device_uid: None,
+                    device_uids: Vec::new(),
                 });
             }
         } else if let Some(entry) = Key::open(store.0, &name, KEY_READ)
@@ -160,6 +161,7 @@ pub fn snapshot_now() -> MicSnapshot {
                 raw_id: name,
                 pid: 0,
                 device_uid: None,
+                device_uids: Vec::new(),
             });
         }
     }

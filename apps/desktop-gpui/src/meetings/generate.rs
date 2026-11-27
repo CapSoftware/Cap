@@ -11,7 +11,11 @@ use serde_json::{Value, json};
 
 use super::cloud::{self, CloudError};
 
-pub const TRANSCRIPT_MAX_CHARS: usize = 400_000;
+/// Room for about 12 hours of dense speech; past it the notes keep the start
+/// and the end of the meeting.
+pub const TRANSCRIPT_MAX_CHARS: usize = 1_000_000;
+/// Questions keep the smaller budget: the server answers from excerpts.
+pub const ASK_TRANSCRIPT_MAX_CHARS: usize = 400_000;
 const USER_NOTES_MAX_CHARS: usize = 50_000;
 const PREVIOUS_MAX_CHARS: usize = 100_000;
 const INSTRUCTION_MAX_CHARS: usize = 2_000;
@@ -96,7 +100,8 @@ impl From<CloudError> for NotesError {
         match error {
             CloudError::NotSignedIn => NotesError::NotSignedIn,
             CloudError::UpgradeRequired => NotesError::UpgradeRequired,
-            CloudError::RateLimited { retry_after_secs } => {
+            CloudError::RateLimited { retry_after_secs }
+            | CloudError::DailyLimit { retry_after_secs } => {
                 NotesError::RateLimited { retry_after_secs }
             }
             CloudError::NotConfigured => NotesError::NotConfigured,
@@ -170,13 +175,27 @@ impl SseParser {
                 .to_string()
         };
         match event.as_deref().unwrap_or("message") {
-            "title" => Some(SseEvent::Title(text("title"))),
-            "delta" => Some(SseEvent::Delta(text("text"))),
+            "title" => Some(SseEvent::Title(shown_text(&text("title"), false))),
+            "delta" => Some(SseEvent::Delta(shown_text(&text("text"), true))),
             "done" => Some(SseEvent::Done),
             "error" => Some(SseEvent::Error(text("error"))),
             _ => None,
         }
     }
+}
+
+/// Written text without control characters, which show as boxes, or the
+/// left-to-right and right-to-left override marks, which reverse what follows
+/// them. Line breaks and tabs are kept in notes and become spaces in a title.
+fn shown_text(text: &str, multiline: bool) -> String {
+    text.chars()
+        .filter_map(|c| match c {
+            '\n' | '\t' if multiline => Some(c),
+            '\n' | '\t' => Some(' '),
+            c if c.is_control() || matches!(c, '\u{202D}' | '\u{202E}') => None,
+            c => Some(c),
+        })
+        .collect()
 }
 
 fn clip_chars(text: &str, max: usize) -> String {
@@ -369,7 +388,7 @@ pub fn ask_body(
     vocabulary: &[String],
 ) -> Result<Value, NotesError> {
     let transcript = transcript
-        .labelled_for_prompt(TRANSCRIPT_MAX_CHARS, self_name)
+        .labelled_for_prompt(ASK_TRANSCRIPT_MAX_CHARS, self_name)
         .text;
     if question.trim().is_empty() {
         return Err(NotesError::Failed("empty question".into()));

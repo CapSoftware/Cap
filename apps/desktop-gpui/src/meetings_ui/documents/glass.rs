@@ -7,7 +7,7 @@
 
 use gpui::{
     BoxShadow, Div, ElementId, FocusHandle, Hsla, InteractiveElement, ParentElement, Stateful,
-    StatefulInteractiveElement, Styled, div, hsla, point, px,
+    StatefulInteractiveElement, Styled, div, hsla, point, prelude::FluentBuilder, px,
 };
 
 use super::style::Palette;
@@ -189,6 +189,8 @@ pub fn chip(palette: &Palette, id: impl Into<ElementId>, focus: &FocusHandle) ->
     let ring = focus_ring(palette);
     div()
         .id(id)
+        .role(gpui::Role::Button)
+        .when(palette.keyboard, crate::ui::keyboard_nav::stop)
         .track_focus(focus)
         .h(px(CHIP_HEIGHT))
         .px(px(12.))

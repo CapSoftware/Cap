@@ -1,3 +1,5 @@
+#[cfg(any(windows, test))]
+pub(crate) mod call_output;
 pub mod resample;
 
 #[cfg(target_os = "linux")]
@@ -15,7 +17,10 @@ use macos as platform;
 use windows as platform;
 
 #[cfg(target_os = "macos")]
-pub use macos::system_tap::{SystemAudioTap, TapChunk, TapError, TapStats, system_tap_supported};
+pub use macos::system_tap::{
+    SystemAudioTap, TapChunk, TapError, TapStats, others_playing, system_tap_supported,
+    warm_screen_reader_lookup,
+};
 #[cfg(target_os = "macos")]
 pub use macos::tcc::{
     AudioCapturePermission, audio_capture_permission, request_audio_capture_permission,
@@ -29,8 +34,14 @@ pub struct BrowserProbe {
     pub trusted: bool,
 }
 
+#[cfg(windows)]
+pub use call_output::Followed;
 #[cfg(target_os = "macos")]
 pub use macos::browser_probe::{accessibility_trusted, probe_browser};
+#[cfg(windows)]
+pub use windows::follow::{CallOutputWatch, EndpointLoopback};
+#[cfg(windows)]
+pub use windows::reader::{ReaderFreeLoopback, running_reader};
 #[cfg(windows)]
 pub use windows::uia::probe_browser;
 
@@ -191,6 +202,9 @@ pub struct MicClient {
     pub raw_id: String,
     pub pid: u32,
     pub device_uid: Option<String>,
+    /// Every input device the process records from. On an aggregate device macOS reports each
+    /// sub-device in the aggregate's order, never the aggregate; `device_uid` is the first.
+    pub device_uids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

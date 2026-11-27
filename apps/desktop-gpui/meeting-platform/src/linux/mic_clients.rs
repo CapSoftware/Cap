@@ -99,6 +99,7 @@ pub(crate) fn parse_source_outputs(
                 id: id.to_lowercase(),
                 raw_id: entry.name.or(entry.binary).unwrap_or_default(),
                 pid: entry.pid.unwrap_or(0),
+                device_uids: entry.source.clone().into_iter().collect(),
                 device_uid: entry.source,
             })
         })

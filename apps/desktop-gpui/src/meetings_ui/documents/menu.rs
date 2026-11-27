@@ -108,6 +108,14 @@ pub fn panel<A: Clone + 'static>(
         let pick = pick.clone();
         div()
             .id(ElementId::NamedInteger(id.into(), index as u64))
+            .when(palette.keyboard && enabled, crate::ui::keyboard_nav::stop)
+            .role(if entry.checked {
+                gpui::Role::MenuItemCheckBox
+            } else {
+                gpui::Role::MenuItem
+            })
+            .aria_label(entry.label.clone())
+            .when(entry.checked, |el| el.aria_toggled(gpui::Toggled::True))
             .h(px(28.))
             .px(px(8.))
             .rounded(px(6.))
@@ -145,6 +153,7 @@ pub fn panel<A: Clone + 'static>(
     });
     surface(palette)
         .id(id)
+        .role(gpui::Role::Menu)
         .min_w(px(min_width))
         .max_w(px(320.))
         .max_h(px(420.))

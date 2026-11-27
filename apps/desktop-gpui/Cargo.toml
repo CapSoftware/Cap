@@ -246,6 +246,9 @@ windows-sys = { version = "0.59", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+# Notes' reader-free capture: a PipeWire input stream of Cap's own. Already in
+# the tree through cap-recording's screen capture.
+pipewire = "0.10.0"
 # GNOME's wallpapers are JPEG XL, which `image` cannot read.
 jxl-oxide = { version = "0.12", features = ["image"] }
 wayland-client = "0.31"

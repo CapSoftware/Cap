@@ -11,6 +11,10 @@ use crate::model::{
 };
 use crate::text::html_to_text;
 
+/// Most memory the events of one feed may hold once expanded. One series with
+/// huge fields can otherwise repeat them on up to a thousand occurrences.
+const EXPANDED_BYTES: usize = 64 * 1024 * 1024;
+
 pub fn expand(
     cal: &ParsedCalendar,
     window: Range<DateTime<Utc>>,
@@ -39,6 +43,7 @@ pub fn expand(
         |start: DateTime<Utc>, end: DateTime<Utc>| start < window.end && end > window.start;
 
     let mut out: Vec<CalendarEvent> = Vec::new();
+    let mut memory_left = EXPANDED_BYTES;
     for master in masters {
         let room = opts.max_events.saturating_sub(out.len());
         if room == 0 {
@@ -60,11 +65,17 @@ pub fn expand(
         let skip = |wall: NaiveDateTime, start: DateTime<Utc>| {
             replaced.contains(&start.timestamp()) || excluded.contains(wall, start)
         };
-        let cap = opts.max_instances_per_series.min(room);
+        let template = builder.template(master);
+        let weight = template.approx_bytes();
+        let cap = opts
+            .max_instances_per_series
+            .min(room)
+            .min(memory_left / weight);
         for (wall, start) in occurrences(master, &window, cap, &skip, &mut budget) {
             let end = master.end_for(wall, start);
             let original = recurring.then_some(start);
-            out.push(builder.build(master, start, end, original));
+            out.push(builder.occurrence(&template, master, start, end, original));
+            memory_left -= weight;
         }
     }
     let cancelled_series: HashSet<&str> = cal
@@ -87,7 +98,13 @@ pub fn expand(
             let start = event.start_utc();
             let end = event.end_for(event.start_wall, start);
             if overlaps(start, end) {
-                out.push(builder.build(event, start, end, event.recurrence_id));
+                let template = builder.template(event);
+                let weight = template.approx_bytes();
+                if weight > memory_left {
+                    continue;
+                }
+                memory_left -= weight;
+                out.push(builder.occurrence(&template, event, start, end, event.recurrence_id));
             }
         }
     }
@@ -208,23 +225,17 @@ impl Builder<'_> {
         }
     }
 
-    fn build(
-        &self,
-        raw: &RawEvent,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
-        original: Option<DateTime<Utc>>,
-    ) -> CalendarEvent {
+    /// Everything about `raw` that every occurrence shares, held to the
+    /// event limits, with the series uid as its id. Built once per series.
+    fn template(&self, raw: &RawEvent) -> CalendarEvent {
         let organizer = raw.organizer.as_ref().map(|o| self.person(o));
         let mut attendees: Vec<Person> = Vec::with_capacity(raw.attendees.len());
+        let mut emails: HashSet<String> = HashSet::with_capacity(raw.attendees.len());
         for person in raw.attendees.iter().map(|a| self.person(a)) {
-            let duplicate = person.email.as_deref().is_some_and(|email| {
-                attendees.iter().any(|p| {
-                    p.email
-                        .as_deref()
-                        .is_some_and(|e| e.eq_ignore_ascii_case(email))
-                })
-            });
+            let duplicate = person
+                .email
+                .as_deref()
+                .is_some_and(|email| !emails.insert(email.to_ascii_lowercase()));
             if !duplicate {
                 attendees.push(person);
             }
@@ -244,18 +255,14 @@ impl Builder<'_> {
                 .map(html_to_text)
                 .filter(|d| !d.trim().is_empty())
         });
-        let id = match original {
-            Some(original) => format!("{}_{}", raw.uid, occurrence_key(original, raw.all_day)),
-            None => raw.uid.clone(),
-        };
         CalendarEvent {
-            id,
-            series_id: original.map(|_| raw.uid.clone()),
+            id: raw.uid.clone(),
+            series_id: None,
             calendar_id: self.calendar_id.to_string(),
             source: SourceKind::Ics,
             title: raw.title.clone(),
-            start,
-            end,
+            start: DateTime::<Utc>::MIN_UTC,
+            end: DateTime::<Utc>::MIN_UTC,
             all_day: raw.all_day,
             location: raw.location.clone(),
             description,
@@ -269,6 +276,30 @@ impl Builder<'_> {
                 .clone()
                 .filter(|u| u.starts_with("https://") || u.starts_with("http://")),
             free: raw.free,
+        }
+        .bounded()
+    }
+
+    fn occurrence(
+        &self,
+        template: &CalendarEvent,
+        raw: &RawEvent,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        original: Option<DateTime<Utc>>,
+    ) -> CalendarEvent {
+        // The template's id is the series uid, already held to the id limit.
+        let uid = &template.id;
+        let id = match original {
+            Some(original) => format!("{uid}_{}", occurrence_key(original, raw.all_day)),
+            None => uid.clone(),
+        };
+        CalendarEvent {
+            id,
+            series_id: original.map(|_| uid.clone()),
+            start,
+            end,
+            ..template.clone()
         }
     }
 }

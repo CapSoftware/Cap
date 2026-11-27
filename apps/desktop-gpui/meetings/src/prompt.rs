@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::apps::CallNoun;
+use crate::apps::{AppKind, CallNoun};
 use crate::detect::{ActiveCall, DetectEvent};
 use crate::{Millis, Now};
 
@@ -349,7 +349,7 @@ impl PromptPlanner {
         let mut out = self.advance(now);
         match event {
             DetectEvent::CallStarted(call) => self.call_started(now, call, &mut out),
-            DetectEvent::CallUpdated(call) => self.call_updated(call, &mut out),
+            DetectEvent::CallUpdated(call) => self.call_updated(now, call, &mut out),
             DetectEvent::CallEnded { app_id, .. } => {
                 self.calls.retain(|c| &c.key.0 != app_id);
                 self.prompted_calls.retain(|k| &k.0 != app_id);
@@ -413,7 +413,11 @@ impl PromptPlanner {
         let now = self.sync(now);
         let mut out = self.advance(now);
         if let Some(index) = self.slots.iter().position(|s| s.prompt.id == id) {
-            if self.recording.is_active() {
+            // While a meeting records, the prompts left are for other meetings
+            // (the next one on the calendar): taking notes for one switches to
+            // it, and the app ends the meeting it was recording first, as it
+            // does for any start. One that is still starting is waited for.
+            if matches!(self.recording, RecordingState::Starting { .. }) {
                 self.remove(id, DismissReason::RecordingStarted, &mut out);
             } else {
                 self.start_from(index, &mut out);
@@ -451,24 +455,36 @@ impl PromptPlanner {
                     }
                     if let Some(event) = &slot.prompt.event
                         && slot.prompt.countdown.is_none()
-                        && self.config.auto_record.for_scheduled()
-                        && !self.recording.is_active()
-                        && event.start > clock.wall
+                        && let Some(from) = self.auto_start_from(clock.wall)
                     {
-                        consider(self.mono_at(clock, event.start));
+                        let at = event.start.max(from);
+                        if at > clock.wall
+                            && at < event.end
+                            && self.over_at(slot).is_some_and(|over| at < over)
+                        {
+                            consider(self.mono_at(clock, at));
+                        }
                     }
                 }
             }
         }
-        let auto_only = self.auto_only_scheduled();
-        if self.config.scheduled_enabled || auto_only {
+        let auto_from = if self.config.scheduled_enabled {
+            None
+        } else {
+            self.auto_start_from(clock.wall)
+        };
+        if self.config.scheduled_enabled || auto_from.is_some() {
             for event in &self.events {
-                let show_at = if auto_only {
-                    event.start
-                } else {
-                    shift(event.start, -self.lead())
+                let show_at = match auto_from {
+                    Some(from) => event.start.max(from),
+                    None => shift(event.start, -self.lead()),
                 };
-                if show_at > clock.wall && !self.seen_events.contains(&event_key(event)) {
+                let in_time = auto_from.is_none() || show_at < shift(event.start, self.tail());
+                if show_at > clock.wall
+                    && in_time
+                    && self.recording.event_id() != Some(event.id.as_str())
+                    && !self.seen_events.contains(&event_key(event))
+                {
                     consider(self.mono_at(clock, show_at));
                 }
             }
@@ -490,10 +506,37 @@ impl PromptPlanner {
         ms_i64(self.config.lead_ms)
     }
 
-    fn auto_only_scheduled(&self) -> bool {
-        !self.config.scheduled_enabled
-            && self.config.auto_record.for_scheduled()
-            && !self.recording.is_active()
+    fn auto_only_scheduled(&self, now: DateTime<Utc>) -> bool {
+        !self.config.scheduled_enabled && self.may_auto_start(now)
+    }
+
+    /// From when a scheduled meeting may start recording on its own: now
+    /// while nothing records; once the calendar says the meeting being
+    /// recorded is over, so a meeting that ran over hands over to the next
+    /// one (after the usual countdown, which the person can cancel to keep
+    /// recording). `None` while a recording is starting, or records
+    /// something the calendar does not end.
+    fn auto_start_from(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        if !self.config.auto_record.for_scheduled() {
+            return None;
+        }
+        match &self.recording {
+            RecordingState::Idle => Some(now),
+            RecordingState::Starting { .. } | RecordingState::Recording { event_id: None } => None,
+            RecordingState::Recording { event_id: Some(id) } => {
+                let instances = self.events.iter().filter(|e| &e.id == id);
+                let ongoing = instances
+                    .clone()
+                    .filter(|e| e.start <= now && now < e.end)
+                    .map(|e| e.end)
+                    .max();
+                ongoing.or_else(|| instances.filter(|e| e.end <= now).map(|e| e.end).max())
+            }
+        }
+    }
+
+    fn may_auto_start(&self, now: DateTime<Utc>) -> bool {
+        self.auto_start_from(now).is_some_and(|from| from <= now)
     }
 
     fn tail(&self) -> i64 {
@@ -511,7 +554,15 @@ impl PromptPlanner {
 
     fn timeout_at(&self, slot: &Slot) -> Millis {
         let cap = slot.prompt.shown_at.plus(self.config.max_visible_ms);
-        if slot.prompt.countdown.is_some() || slot.hovered {
+        // A call app often shows its own card in the same corner when a call
+        // starts and outlasts a short prompt, so the prompt for a call that is
+        // still on stays until it is answered, the call ends, or the cap.
+        let live_call = slot.prompt.kind == PromptKind::Detected
+            && slot
+                .call
+                .as_ref()
+                .is_some_and(|key| self.calls.iter().any(|c| &c.key == key));
+        if slot.prompt.countdown.is_some() || slot.hovered || live_call {
             return cap;
         }
         let remaining = self.config.visible_ms.saturating_sub(slot.unhovered_used);
@@ -616,8 +667,17 @@ impl PromptPlanner {
         {
             return;
         }
-        let event = self.match_event(now);
-        let auto = self.config.auto_record.for_detected()
+        // A browser using the microphone on a page Cap can't tell is a meeting
+        // (tabs unreadable, or no meeting page among them) may be voice typing
+        // or a voice note: it can be offered, but it only records on its own
+        // when the calendar has a meeting now. A meeting that has not begun is
+        // not tied to such a page, so it keeps its own reminder and automatic
+        // start.
+        let recognised = call.kind != AppKind::Browser || call.web.is_some();
+        let event = self
+            .match_event(now)
+            .filter(|e| recognised || (e.start <= now.wall && now.wall < e.end));
+        let auto = (self.config.auto_record.for_detected() && (recognised || event.is_some()))
             || (self.config.auto_record.for_scheduled() && event.is_some());
         if !self.config.detected_enabled && !auto {
             return;
@@ -686,15 +746,35 @@ impl PromptPlanner {
         }
     }
 
-    fn call_updated(&mut self, call: &ActiveCall, out: &mut Vec<PromptAction>) {
+    fn call_updated(&mut self, now: Now, call: &ActiveCall, out: &mut Vec<PromptAction>) {
         let key = (call.app_id.clone(), call.started_at);
         let title = call.web.as_ref().and_then(|w| w.title.clone());
         if let Some(info) = self.calls.iter_mut().find(|c| c.key == key) {
             info.web_title.clone_from(&title);
         }
+        // A browser call whose meeting page was recognised only after it
+        // started records on its own as a recognised one would have.
+        let late_auto = call.web.is_some()
+            && self.config.auto_record.for_detected()
+            && !self.recording.is_active();
+        if late_auto && !self.prompted_calls.contains(&key) {
+            self.call_started(now, call, out);
+            return;
+        }
+        let countdown = self.countdown(now);
         for slot in &mut self.slots {
-            if slot.call.as_ref() == Some(&key) && slot.prompt.detail != title {
+            if slot.call.as_ref() != Some(&key) {
+                continue;
+            }
+            let start = late_auto
+                && slot.prompt.kind == PromptKind::Detected
+                && slot.prompt.countdown.is_none()
+                && slot.prompt.event.is_none();
+            if slot.prompt.detail != title || start {
                 slot.prompt.detail.clone_from(&title);
+                if start {
+                    slot.prompt.countdown = Some(countdown);
+                }
                 out.push(PromptAction::Update(slot.prompt.clone()));
             }
         }
@@ -769,7 +849,17 @@ impl PromptPlanner {
             .iter()
             .position(|s| s.prompt.countdown.is_some_and(|c| c.ends_at <= now.mono))
         {
-            if self.recording.is_active() {
+            let slot = &self.slots[index];
+            let over = slot.prompt.kind == PromptKind::Scheduled
+                && slot
+                    .prompt
+                    .event
+                    .as_ref()
+                    .is_some_and(|e| e.end <= now.wall);
+            if over {
+                let id = slot.prompt.id;
+                self.remove(id, DismissReason::EventOver, &mut out);
+            } else if self.recording.is_active() && !self.may_auto_start(now.wall) {
                 let id = self.slots[index].prompt.id;
                 self.remove(id, DismissReason::RecordingStarted, &mut out);
             } else {
@@ -779,14 +869,13 @@ impl PromptPlanner {
 
         let tail = self.tail();
 
-        if self.config.auto_record.for_scheduled() && !self.recording.is_active() {
+        if self.may_auto_start(now.wall) {
             let countdown = self.countdown(now);
+            let recorded = self.recording.event_id().map(str::to_string);
             for slot in &mut self.slots {
-                let started = slot
-                    .prompt
-                    .event
-                    .as_ref()
-                    .is_some_and(|e| e.start <= now.wall);
+                let started = slot.prompt.event.as_ref().is_some_and(|e| {
+                    e.start <= now.wall && now.wall < e.end && Some(&e.id) != recorded.as_ref()
+                });
                 if slot.prompt.kind == PromptKind::Scheduled
                     && slot.prompt.countdown.is_none()
                     && started
@@ -797,7 +886,7 @@ impl PromptPlanner {
             }
         }
 
-        let auto_only = self.auto_only_scheduled();
+        let auto_only = self.auto_only_scheduled(now.wall);
         if self.config.scheduled_enabled || auto_only {
             let lead = if auto_only { 0 } else { self.lead() };
             let mut due: Vec<EventInfo> = self
@@ -821,9 +910,9 @@ impl PromptPlanner {
                 if attached {
                     continue;
                 }
-                let countdown = (self.config.auto_record.for_scheduled()
-                    && !self.recording.is_active()
-                    && event.start <= now.wall)
+                let countdown = (self.may_auto_start(now.wall)
+                    && event.start <= now.wall
+                    && now.wall < event.end)
                     .then(|| self.countdown(now));
                 let mut prompt = Prompt {
                     id: self.new_id(),

@@ -116,6 +116,28 @@ fn meet(title: &str) -> BrowserVerdict {
 }
 
 #[test]
+fn holds_mic_reads_one_look_the_way_a_call_is_read() {
+    let detector = Detector::new(
+        Platform::MacOS,
+        DetectConfig {
+            own_pids: vec![7],
+            ..DetectConfig::default()
+        },
+    );
+    let zoom = MicClient::new("us.zoom.xos", 1).on_device("BuiltInMic-uid");
+    assert!(detector.holds_mic("zoom", std::slice::from_ref(&zoom)));
+    assert!(!detector.holds_mic("teams", std::slice::from_ref(&zoom)));
+    assert!(!detector.holds_mic("zoom", &[]));
+    assert!(!detector.holds_mic(
+        "zoom",
+        &[MicClient::new("us.zoom.xos", 1).on_device("BlackHole2ch_UID")]
+    ));
+    assert!(!detector.holds_mic("zoom", &[MicClient::new("us.zoom.xos", 7)]));
+    let linux = Detector::new(Platform::Linux, DetectConfig::default());
+    assert!(linux.holds_mic("zoom", &[MicClient::new("zoom", 40)]));
+}
+
+#[test]
 fn join_and_leave() {
     let mut s = Sim::new();
     s.at(1_000).mic(&["us.zoom.xos"]).quiet();
@@ -230,6 +252,41 @@ fn two_overlapping_calls_are_ordered_by_start() {
     s.at(30_000)
         .expect(&[(22_000, "end slack@20000 held 20000")]);
     assert_eq!(s.detector.active_calls().len(), 1);
+}
+
+// The process object of an app recording from an aggregate input lists every sub-device, in the
+// aggregate's order, and never the aggregate (measured on macOS with private aggregates of
+// BlackHole 2ch and 16ch, both orders). These are the UID shapes CoreAudio reports.
+const USB_MIC: &str = "AppleUSBAudioEngine:Blue Microphones:Yeti Stereo Microphone:REV8_2041SG00:1";
+const BUILT_IN_MIC: &str = "BuiltInMicrophoneDevice";
+
+#[test]
+fn a_real_microphone_in_an_aggregate_is_real_whichever_sub_device_comes_first() {
+    let detector = Detector::new(Platform::MacOS, DetectConfig::default());
+    for subs in [
+        [USB_MIC, "BlackHole2ch_UID"],
+        ["BlackHole2ch_UID", USB_MIC],
+        [BUILT_IN_MIC, "BlackHole16ch_UID"],
+        ["BlackHole16ch_UID", BUILT_IN_MIC],
+    ] {
+        let zoom = MicClient::new("us.zoom.xos", 1).on_devices(&subs);
+        assert!(detector.holds_mic("zoom", &[zoom]), "{subs:?}");
+    }
+    for subs in [
+        ["BlackHole2ch_UID", "BlackHole16ch_UID"],
+        ["BlackHole16ch_UID", "BlackHole2ch_UID"],
+    ] {
+        let zoom = MicClient::new("us.zoom.xos", 1).on_devices(&subs);
+        assert!(!detector.holds_mic("zoom", &[zoom]), "{subs:?}");
+    }
+}
+
+#[test]
+fn a_call_on_an_aggregate_that_lists_a_loopback_first_starts() {
+    let mut s = Sim::new();
+    s.at(0)
+        .clients(&[MicClient::new("us.zoom.xos", 1).on_devices(&["BlackHole2ch_UID", USB_MIC])]);
+    s.at(2_000).expect(&[(2_000, "start zoom@0")]);
 }
 
 #[test]

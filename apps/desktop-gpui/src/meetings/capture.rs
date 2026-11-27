@@ -407,8 +407,9 @@ impl MeetingCapture {
     /// through, as a value to compare between looks. Linux: the default
     /// and the output a call was followed to, as the sink watch last saw
     /// them. macOS: how many times the audio system said the default output
-    /// changed (the tap listens for it). Windows: nothing, see
-    /// [`output_identity`]. Cheap: no audio system call.
+    /// changed (the tap listens for it). Windows: the output a call was
+    /// followed to, if any (the default is added by [`output_identity`]).
+    /// Cheap: no audio system call.
     pub fn outputs_seen(&self) -> Option<String> {
         #[cfg(target_os = "linux")]
         {
@@ -423,7 +424,13 @@ impl MeetingCapture {
             let replaced = platform.replaced.load(Ordering::Relaxed);
             Some(format!("{replaced}:{changes}"))
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(windows)]
+        {
+            self.platform
+                .as_ref()
+                .and_then(|platform| platform.followed.lock().ok()?.clone())
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             None
         }
@@ -1151,10 +1158,18 @@ impl SystemPlatform {
     }
 }
 
+/// Windows: what the default output plays (scap_cpal), or, while a call
+/// plays only to another output (Teams, Zoom and browser calls play to the
+/// default communications device, often a headset), that output alone. See
+/// `cap_meeting_platform::CallOutputWatch` for which output a call is on.
 #[cfg(windows)]
 struct SystemPlatform {
     stop: Option<flume::Sender<()>>,
     thread: Option<JoinHandle<()>>,
+    /// Looks for the output a call plays to.
+    watch: Option<cap_meeting_platform::CallOutputWatch>,
+    /// The output a call was followed to; `None` while the default is read.
+    followed: Arc<std::sync::Mutex<Option<String>>>,
     dropped: Arc<AtomicU64>,
     callbacks: Arc<AtomicU64>,
     restarts: Arc<AtomicU64>,
@@ -1162,6 +1177,45 @@ struct SystemPlatform {
     /// loopback again.
     failed: Arc<AtomicBool>,
 }
+
+#[cfg(windows)]
+enum WindowsLoopback {
+    Default(scap_cpal::Capturer),
+    /// The output a call was followed to, by endpoint id.
+    Call(cap_meeting_platform::EndpointLoopback, String),
+    /// While a screen reader runs: what the computer plays, without the
+    /// reader's speech.
+    ReaderFree(cap_meeting_platform::ReaderFreeLoopback),
+    /// Only the call's processes, by endpoint id: on a followed output a
+    /// screen reader plays to as well (true), or on the default output while
+    /// a reader runs and other outputs play (false).
+    CallOnly(cap_meeting_platform::ReaderFreeLoopback, String, bool),
+}
+
+#[cfg(windows)]
+impl WindowsLoopback {
+    fn stop(self) {
+        match self {
+            Self::Default(capturer) => {
+                let _ = capturer.pause();
+            }
+            Self::Call(loopback, _) => drop(loopback),
+            Self::ReaderFree(loopback) | Self::CallOnly(loopback, _, _) => drop(loopback),
+        }
+    }
+
+    fn followed(&self) -> Option<String> {
+        match self {
+            Self::Default(_) | Self::ReaderFree(_) | Self::CallOnly(_, _, false) => None,
+            Self::Call(_, id) | Self::CallOnly(_, id, true) => Some(id.clone()),
+        }
+    }
+}
+
+/// How long an output that would not open is left alone while the call
+/// stays on it (the default output is read meanwhile).
+#[cfg(windows)]
+const REFUSED_RETRY: Duration = Duration::from_secs(30);
 
 #[cfg(windows)]
 impl SystemPlatform {
@@ -1208,24 +1262,158 @@ impl SystemPlatform {
             )
         }
 
+        fn follower(
+            id: &str,
+            tx: flume::Sender<SystemChunk>,
+            dropped: Arc<AtomicU64>,
+            callbacks: Arc<AtomicU64>,
+            failed: Arc<AtomicBool>,
+        ) -> Result<cap_meeting_platform::EndpointLoopback, String> {
+            cap_meeting_platform::EndpointLoopback::start(
+                id.to_string(),
+                move |samples, sample_rate| {
+                    callbacks.fetch_add(1, Ordering::Relaxed);
+                    let message = SystemChunk::Samples {
+                        samples: samples.to_vec(),
+                        sample_rate,
+                        synthetic: false,
+                        received: Instant::now(),
+                    };
+                    if tx.try_send(message).is_err() {
+                        dropped.fetch_add(1, Ordering::Relaxed);
+                    }
+                },
+                failed,
+            )
+        }
+
+        fn reader_free(
+            reader: u32,
+            call: Option<u32>,
+            tx: flume::Sender<SystemChunk>,
+            dropped: Arc<AtomicU64>,
+            callbacks: Arc<AtomicU64>,
+            failed: Arc<AtomicBool>,
+        ) -> Result<cap_meeting_platform::ReaderFreeLoopback, String> {
+            let sink = move |samples: &[f32], sample_rate: u32| {
+                callbacks.fetch_add(1, Ordering::Relaxed);
+                let message = SystemChunk::Samples {
+                    samples: samples.to_vec(),
+                    sample_rate,
+                    synthetic: false,
+                    received: Instant::now(),
+                };
+                if tx.try_send(message).is_err() {
+                    dropped.fetch_add(1, Ordering::Relaxed);
+                }
+            };
+            match call {
+                Some(call) => cap_meeting_platform::ReaderFreeLoopback::start_call_only(
+                    call, reader, sink, failed,
+                ),
+                None => cap_meeting_platform::ReaderFreeLoopback::start(reader, sink, failed),
+            }
+        }
+
         let (tx, rx) = flume::bounded::<SystemChunk>(SOURCE_CHANNEL);
         let dropped = Arc::new(AtomicU64::new(0));
         let callbacks = Arc::new(AtomicU64::new(0));
         let restarts = Arc::new(AtomicU64::new(0));
         let failed = Arc::new(AtomicBool::new(false));
-        let first = capturer(
-            tx.clone(),
-            dropped.clone(),
-            callbacks.clone(),
-            failed.clone(),
-        )
-        .map_err(|error| match error {
-            scap_cpal::CapturerError::NoDevice => HealthIssue::NoInputDevice,
-            other => HealthIssue::Failed(format!("Computer audio capture failed: {other}")),
-        })?;
-        first
-            .play()
-            .map_err(|e| HealthIssue::Failed(format!("Computer audio capture failed: {e}")))?;
+        let followed = Arc::new(std::sync::Mutex::new(None));
+
+        let (target_tx, target_rx) = flume::unbounded::<Option<String>>();
+        let watch = cap_meeting_platform::CallOutputWatch::start(Duration::from_secs(2), target_tx)
+            .inspect_err(|error| tracing::warn!(%error, "could not look for a call's output"))
+            .ok();
+        // The first look decides where a meeting that starts mid-call reads
+        // from; it takes a few milliseconds.
+        let mut target = if watch.is_some() {
+            target_rx
+                .recv_timeout(Duration::from_millis(1500))
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        let mut refused: Option<(String, Instant)> = None;
+        let mut first = None;
+        if let Some(id) = target.as_deref() {
+            match follower(
+                id,
+                tx.clone(),
+                dropped.clone(),
+                callbacks.clone(),
+                failed.clone(),
+            ) {
+                Ok(loopback) => {
+                    tracing::info!(output = %id, "meeting computer audio follows the call to another output");
+                    first = Some(WindowsLoopback::Call(loopback, id.to_string()));
+                }
+                Err(error) => {
+                    tracing::warn!(%error, output = %id, "could not read the call's output; reading the default output");
+                    refused = Some((id.to_string(), Instant::now()));
+                }
+            }
+        }
+        // A screen reader running as the meeting starts: read everything
+        // but its speech; if that cannot open, read the default as before.
+        let mut reader_refused: Option<(u32, Instant)> = None;
+        // A refusal is logged once per meeting; retries after it stay quiet.
+        let mut reader_told = false;
+        // The same for a reader on a followed call's output, by (call, reader).
+        let mut call_only_refused: Option<((u32, u32), Instant)> = None;
+        let mut call_only_told = false;
+        if first.is_none()
+            && let Some(reader) = cap_meeting_platform::running_reader()
+        {
+            match reader_free(
+                reader,
+                None,
+                tx.clone(),
+                dropped.clone(),
+                callbacks.clone(),
+                failed.clone(),
+            ) {
+                Ok(loopback) => {
+                    tracing::info!(
+                        "a screen reader is running; its speech is left out of computer audio"
+                    );
+                    first = Some(WindowsLoopback::ReaderFree(loopback));
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "could not leave the screen reader's speech out of computer audio; recording as before");
+                    reader_told = true;
+                    reader_refused = Some((reader, Instant::now()));
+                }
+            }
+        }
+        let first = match first {
+            Some(first) => first,
+            None => {
+                let first = capturer(
+                    tx.clone(),
+                    dropped.clone(),
+                    callbacks.clone(),
+                    failed.clone(),
+                )
+                .map_err(|error| match error {
+                    scap_cpal::CapturerError::NoDevice => HealthIssue::NoInputDevice,
+                    other => HealthIssue::Failed(format!("Computer audio capture failed: {other}")),
+                })?;
+                first.play().map_err(|e| {
+                    HealthIssue::Failed(format!("Computer audio capture failed: {e}"))
+                })?;
+                WindowsLoopback::Default(first)
+            }
+        };
+        if let Ok(mut slot) = followed.lock() {
+            *slot = first.followed();
+        }
+        let watching = watch.is_some();
+        let call_info = watch
+            .as_ref()
+            .map(cap_meeting_platform::CallOutputWatch::followed);
         let (stop_tx, stop_rx) = flume::bounded::<()>(1);
         let thread = std::thread::Builder::new()
             .name("cap-meeting-loopback".into())
@@ -1234,42 +1422,282 @@ impl SystemPlatform {
                 let callbacks = callbacks.clone();
                 let restarts = restarts.clone();
                 let failed = failed.clone();
+                let followed = followed.clone();
                 move || {
+                    enum Woke {
+                        Stop,
+                        Target(Option<String>),
+                        WatchGone,
+                    }
+                    let mut targets = watching.then_some(target_rx);
                     let mut current = Some(first);
                     let mut name = device_name();
                     loop {
-                        match stop_rx.recv_timeout(Duration::from_secs(2)) {
-                            Err(flume::RecvTimeoutError::Timeout) => {}
-                            _ => break,
+                        let selector = flume::Selector::new().recv(&stop_rx, |_| Woke::Stop);
+                        let selector = match targets.as_ref() {
+                            Some(targets) => selector.recv(targets, |message| match message {
+                                Ok(target) => Woke::Target(target),
+                                Err(_) => Woke::WatchGone,
+                            }),
+                            None => selector,
+                        };
+                        match selector.wait_timeout(Duration::from_secs(2)) {
+                            Ok(Woke::Stop) => break,
+                            Ok(Woke::Target(next)) => target = next,
+                            Ok(Woke::WatchGone) => {
+                                targets = None;
+                                target = None;
+                            }
+                            Err(_) => {}
                         }
-                        let now_name = device_name();
                         let errored = failed.swap(false, Ordering::Relaxed);
-                        if now_name == name && !errored && current.is_some() {
-                            continue;
+                        if refused
+                            .as_ref()
+                            .is_some_and(|(id, at)| Some(id) != target.as_ref() || at.elapsed() >= REFUSED_RETRY)
+                        {
+                            refused = None;
                         }
-                        if let Some(old) = current.take() {
-                            let _ = old.pause();
+                        let wanted = target.clone().filter(|_| refused.is_none());
+                        // A screen reader matters only while the default
+                        // output is read: a followed call's output does not
+                        // carry the reader's speech.
+                        if reader_refused
+                            .as_ref()
+                            .is_some_and(|(_, at)| at.elapsed() >= REFUSED_RETRY)
+                        {
+                            reader_refused = None;
                         }
-                        name = now_name;
-                        match capturer(
-                            tx.clone(),
-                            dropped.clone(),
-                            callbacks.clone(),
-                            failed.clone(),
-                        ) {
-                            Ok(next) => {
-                                if next.play().is_ok() {
+                        let reader = if wanted.is_none() {
+                            cap_meeting_platform::running_reader().filter(|pid| {
+                                reader_refused.as_ref().is_none_or(|(refused, _)| refused != pid)
+                            })
+                        } else {
+                            None
+                        };
+                        // A followed output a screen reader plays to as well:
+                        // only the call is read there. Otherwise following is
+                        // as before.
+                        if call_only_refused
+                            .as_ref()
+                            .is_some_and(|(_, at)| at.elapsed() >= REFUSED_RETRY)
+                        {
+                            call_only_refused = None;
+                        }
+                        let there = call_info
+                            .as_ref()
+                            .and_then(|info| info.lock().ok()?.clone());
+                        // The default output read while a reader runs and
+                        // another output plays: leaving out only the reader
+                        // would take that output in too. The call alone is
+                        // read when it is known; otherwise the default output
+                        // as before.
+                        let others = wanted.is_none()
+                            && reader.zip(there.as_ref()).is_some_and(|(pid, there)| {
+                                there.elsewhere.iter().any(|other| *other != pid)
+                            });
+                        let call_only = match wanted.as_deref() {
+                            Some(id) => there.as_ref().and_then(|there| {
+                                let call = there.call.filter(|_| there.endpoint == id)?;
+                                let reader = cap_meeting_platform::running_reader()?;
+                                there
+                                    .on_output
+                                    .contains(&reader)
+                                    .then(|| (call, reader, id.to_string(), true))
+                            }),
+                            None if others => there.as_ref().and_then(|there| {
+                                Some((there.call?, reader?, there.endpoint.clone(), false))
+                            }),
+                            None => None,
+                        }
+                        .filter(|(call, pid, _, _)| {
+                            call_only_refused
+                                .as_ref()
+                                .is_none_or(|(refused, _)| *refused != (*call, *pid))
+                        });
+                        let reader = if others && call_only.is_none() { None } else { reader };
+                        if let Some((call, pid, id, follows)) = call_only {
+                            if let Some(WindowsLoopback::CallOnly(only, at, was)) = &current
+                                && only.call() == Some(call)
+                                && only.reader() == pid
+                                && *at == id
+                                && *was == follows
+                                && !errored
+                            {
+                                continue;
+                            }
+                            match reader_free(
+                                pid,
+                                Some(call),
+                                tx.clone(),
+                                dropped.clone(),
+                                callbacks.clone(),
+                                failed.clone(),
+                            ) {
+                                Ok(loopback) => {
+                                    if let Some(old) = current.take() {
+                                        old.stop();
+                                    }
                                     restarts.fetch_add(1, Ordering::Relaxed);
-                                    current = Some(next);
+                                    if follows {
+                                        tracing::info!(output = %id, "a screen reader plays to the call's output; only the call is read there");
+                                    } else {
+                                        tracing::info!(output = %id, "a screen reader runs and another output plays; only the call is read");
+                                    }
+                                    if let Ok(mut slot) = followed.lock() {
+                                        *slot = follows.then(|| id.clone());
+                                    }
+                                    current = Some(WindowsLoopback::CallOnly(loopback, id, follows));
+                                    continue;
+                                }
+                                Err(error) => {
+                                    if call_only_told {
+                                        tracing::debug!(%error, "the call-only loopback was refused again");
+                                    } else {
+                                        tracing::warn!(%error, "could not leave the screen reader's speech out of the call's output; recording as before");
+                                        call_only_told = true;
+                                    }
+                                    call_only_refused = Some(((call, pid), Instant::now()));
                                 }
                             }
-                            Err(error) => {
-                                tracing::warn!(%error, "meeting loopback restart failed");
+                        }
+                        match (&current, &wanted, reader) {
+                            (Some(WindowsLoopback::ReaderFree(free)), None, Some(pid))
+                                if free.reader() == pid && !errored =>
+                            {
+                                continue;
                             }
+                            (Some(WindowsLoopback::ReaderFree(_)), None, None) if !errored => {
+                                // The reader quit: the default output opens
+                                // before the reader-free loopback stops.
+                                if let Ok(next) = capturer(
+                                    tx.clone(),
+                                    dropped.clone(),
+                                    callbacks.clone(),
+                                    failed.clone(),
+                                ) && next.play().is_ok()
+                                {
+                                    if let Some(old) = current.take() {
+                                        old.stop();
+                                    }
+                                    name = device_name();
+                                    restarts.fetch_add(1, Ordering::Relaxed);
+                                    current = Some(WindowsLoopback::Default(next));
+                                    if others {
+                                        tracing::info!("another output plays and no call is known; the default output is read as before");
+                                    } else {
+                                        tracing::info!("the screen reader quit; computer audio is read as before");
+                                    }
+                                }
+                                continue;
+                            }
+                            (_, None, Some(pid)) => {
+                                // A reader runs: the reader-free loopback
+                                // opens before what runs now stops; if it
+                                // cannot open, what runs now goes on.
+                                match reader_free(
+                                    pid,
+                                    None,
+                                    tx.clone(),
+                                    dropped.clone(),
+                                    callbacks.clone(),
+                                    failed.clone(),
+                                ) {
+                                    Ok(loopback) => {
+                                        if let Some(old) = current.take() {
+                                            old.stop();
+                                        }
+                                        restarts.fetch_add(1, Ordering::Relaxed);
+                                        current = Some(WindowsLoopback::ReaderFree(loopback));
+                                        tracing::info!("a screen reader is running; its speech is left out of computer audio");
+                                        if let Ok(mut slot) = followed.lock() {
+                                            *slot = None;
+                                        }
+                                        continue;
+                                    }
+                                    Err(error) => {
+                                        if reader_told {
+                                            tracing::debug!(%error, "the reader-free loopback was refused again");
+                                        } else {
+                                            tracing::warn!(%error, "could not leave the screen reader's speech out of computer audio; recording as before");
+                                            reader_told = true;
+                                        }
+                                        reader_refused = Some((pid, Instant::now()));
+                                        if matches!(current, Some(WindowsLoopback::Default(_)))
+                                            && !errored
+                                        {
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        match (&current, &wanted) {
+                            (Some(WindowsLoopback::Default(_)) | None, None) => {
+                                let now_name = device_name();
+                                if now_name == name && !errored && current.is_some() {
+                                    continue;
+                                }
+                                name = now_name;
+                            }
+                            (Some(WindowsLoopback::Call(_, id)), Some(want))
+                                if id == want && !errored =>
+                            {
+                                continue;
+                            }
+                            _ => {}
+                        }
+                        let was_following = current.as_ref().and_then(WindowsLoopback::followed);
+                        if let Some(old) = current.take() {
+                            old.stop();
+                        }
+                        if let Some(id) = wanted.as_deref() {
+                            match follower(
+                                id,
+                                tx.clone(),
+                                dropped.clone(),
+                                callbacks.clone(),
+                                failed.clone(),
+                            ) {
+                                Ok(loopback) => {
+                                    tracing::info!(output = %id, "meeting computer audio follows the call to another output");
+                                    restarts.fetch_add(1, Ordering::Relaxed);
+                                    current = Some(WindowsLoopback::Call(loopback, id.to_string()));
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error, output = %id, "could not read the call's output; reading the default output");
+                                    refused = Some((id.to_string(), Instant::now()));
+                                }
+                            }
+                        }
+                        if current.is_none() {
+                            if was_following.is_some() {
+                                name = device_name();
+                                tracing::info!("meeting computer audio is back on the default output");
+                            }
+                            match capturer(
+                                tx.clone(),
+                                dropped.clone(),
+                                callbacks.clone(),
+                                failed.clone(),
+                            ) {
+                                Ok(next) => {
+                                    if next.play().is_ok() {
+                                        restarts.fetch_add(1, Ordering::Relaxed);
+                                        current = Some(WindowsLoopback::Default(next));
+                                    }
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error, "meeting loopback restart failed");
+                                }
+                            }
+                        }
+                        if let Ok(mut slot) = followed.lock() {
+                            *slot = current.as_ref().and_then(WindowsLoopback::followed);
                         }
                     }
                     if let Some(old) = current.take() {
-                        let _ = old.pause();
+                        old.stop();
                     }
                 }
             })
@@ -1278,6 +1706,8 @@ impl SystemPlatform {
             Self {
                 stop: Some(stop_tx),
                 thread: Some(thread),
+                watch,
+                followed,
                 dropped,
                 callbacks,
                 restarts,
@@ -1308,6 +1738,7 @@ impl Drop for SystemPlatform {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        drop(self.watch.take());
     }
 }
 
@@ -1334,6 +1765,8 @@ struct SystemPlatform {
 const MONITOR_RATE: u32 = 48_000;
 
 #[cfg(any(target_os = "linux", test))]
+mod reader_free;
+#[cfg(any(target_os = "linux", test))]
 mod sink;
 
 /// The output a meeting's computer audio is read from: `None` is the default.
@@ -1358,14 +1791,22 @@ fn pactl(args: &[&str]) -> String {
 #[cfg(target_os = "linux")]
 /// One look at the sound server: the output to read (`None`: the default),
 /// whether the reader `reader` (a `parec` pid) sits on that output's
-/// monitor (`None` when pactl does not say), and the default output.
-fn look_at_outputs(reader: Option<u32>) -> (Option<String>, Option<bool>, Option<String>) {
+/// monitor (`None` when pactl does not say), the default output, and
+/// whether a screen reader's speech stream exists.
+fn look_at_outputs(reader: Option<u32>) -> (Option<String>, Option<bool>, Option<String>, bool) {
     let default = sink::parse_default_sink(&pactl(&["info"]));
     let recording = sink::parse_streams(&pactl(&["list", "source-outputs"]), "Source");
+    let playing = sink::parse_streams(&pactl(&["list", "sink-inputs"]), "Sink");
+    // A screen reader's speech stream, and a screen reader running: the
+    // process scan only happens when such a stream exists.
+    let reading_aloud = playing
+        .iter()
+        .any(|stream| reader_free::is_reader_stream(&stream.app))
+        && reader_free::screen_reader_running();
     let target = sink::choose(
         &sink::parse_sinks(&pactl(&["list", "short", "sinks"])),
         default.as_deref(),
-        &sink::parse_streams(&pactl(&["list", "sink-inputs"]), "Sink"),
+        &playing,
         &recording,
         std::process::id(),
     );
@@ -1375,15 +1816,19 @@ fn look_at_outputs(reader: Option<u32>) -> (Option<String>, Option<bool>, Option
             let sources = sink::parse_sinks(&pactl(&["list", "short", "sources"]));
             sink::reader_on_monitor(&sources, &recording, pid, &output)
         });
-    (target, placed, default)
+    (target, placed, default, reading_aloud)
 }
 
 #[cfg(target_os = "linux")]
 fn spawn_monitor_reader(sink: Option<&str>) -> std::io::Result<std::process::Child> {
-    let device = match sink {
-        Some(sink) => format!("--device={sink}.monitor"),
-        None => "--device=@DEFAULT_MONITOR@".to_string(),
+    let default = match sink {
+        Some(_) => None,
+        None => sink::parse_default_sink(&pactl(&["info"])),
     };
+    let device = format!(
+        "--device={}",
+        sink::monitor_device(sink, default.as_deref())
+    );
     std::process::Command::new("parec")
         .args([
             device.as_str(),
@@ -1412,10 +1857,13 @@ pub fn output_identity(seen: Option<String>) -> Option<String> {
     #[cfg(windows)]
     {
         use cpal::traits::{DeviceTrait, HostTrait};
-        let _ = seen;
-        cpal::default_host()
+        let default = cpal::default_host()
             .default_output_device()
-            .and_then(|device| device.name().ok())
+            .and_then(|device| device.name().ok());
+        match seen {
+            Some(followed) => Some(format!("{} > {followed}", default.unwrap_or_default())),
+            None => default,
+        }
     }
     #[cfg(not(windows))]
     {
@@ -1444,14 +1892,49 @@ impl SystemPlatform {
         if !system_audio_available() {
             return Err(HealthIssue::TapUnsupported);
         }
-        // The default at first; the watch looks at once, off this thread.
-        let target: SinkTarget = Arc::new(std::sync::Mutex::new(None));
-        let first = spawn_monitor_reader(None)
-            .map_err(|e| HealthIssue::Failed(format!("Computer audio capture failed: {e}")))?;
         let (tx, rx) = flume::bounded::<SystemChunk>(SOURCE_CHANNEL);
-        let stop = Arc::new(AtomicBool::new(false));
-        let child = Arc::new(std::sync::Mutex::new(Some(first)));
         let counters = MonitorCounters::default();
+        // A screen reader already speaking (PipeWire): Cap's reader-free
+        // capture comes first, so its speech never reaches the meeting even
+        // for a moment. Otherwise the default; the watch looks at once, off
+        // this thread.
+        let info = pactl(&["info"]);
+        let pipewire = reader_free::on_pipewire(&info);
+        let mut free = None;
+        let mut told = false;
+        if pipewire
+            && sink::parse_streams(&pactl(&["list", "sink-inputs"]), "Sink")
+                .iter()
+                .any(|stream| reader_free::is_reader_stream(&stream.app))
+            && reader_free::screen_reader_running()
+            && let Some(default) = sink::parse_default_sink(&info)
+        {
+            match reader_free::ReaderFree::start(&default, reader_free_sink(&tx, &counters)) {
+                Ok(made) => {
+                    tracing::info!(
+                        "a screen reader is speaking; its speech is left out of computer audio"
+                    );
+                    made.go_live();
+                    free = Some(made);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "could not leave the screen reader's speech out of computer audio; recording as before");
+                    told = true;
+                }
+            }
+        }
+        let target: SinkTarget = Arc::new(std::sync::Mutex::new(
+            free.as_ref().map(|_| reader_free::NODE.to_string()),
+        ));
+        let first = if free.is_some() {
+            None
+        } else {
+            let first = spawn_monitor_reader(None)
+                .map_err(|e| HealthIssue::Failed(format!("Computer audio capture failed: {e}")))?;
+            Some(first)
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let child = Arc::new(std::sync::Mutex::new(first));
         let thread = std::thread::Builder::new()
             .name("cap-meeting-monitor".into())
             .spawn({
@@ -1461,6 +1944,7 @@ impl SystemPlatform {
                     counters.clone(),
                     target.clone(),
                 );
+                let tx = tx.clone();
                 move || run_monitor(&stop, &child, &tx, &counters, &target)
             })
             .map_err(|e| HealthIssue::Failed(e.to_string()))?;
@@ -1471,7 +1955,14 @@ impl SystemPlatform {
                 let (stop, child, target) = (stop.clone(), child.clone(), target.clone());
                 let outputs = outputs.clone();
                 let monitor = thread.thread().clone();
-                move || watch_sink(&stop, &child, &target, &outputs, &monitor)
+                let reader = ReaderState {
+                    pipewire,
+                    free,
+                    told,
+                    tx,
+                    counters: counters.clone(),
+                };
+                move || watch_sink(&stop, &child, &target, &outputs, &monitor, reader)
             })
             .ok();
         Ok((
@@ -1514,9 +2005,52 @@ impl SystemPlatform {
 #[derive(Clone, Default)]
 struct MonitorCounters {
     dropped: Arc<AtomicU64>,
+    /// The monitor reader's deliveries.
     callbacks: Arc<AtomicU64>,
     frames: Arc<AtomicU64>,
     restarts: Arc<AtomicU64>,
+    /// The reader-free capture's deliveries.
+    reader_free: Arc<AtomicU64>,
+}
+
+/// Where Cap's reader-free capture delivers: the meeting's channel, as the
+/// monitor reader does.
+#[cfg(target_os = "linux")]
+fn reader_free_sink(
+    tx: &flume::Sender<SystemChunk>,
+    counters: &MonitorCounters,
+) -> impl FnMut(&[f32]) + Send + 'static {
+    let (tx, counters) = (tx.clone(), counters.clone());
+    move |samples| {
+        counters.reader_free.fetch_add(1, Ordering::Relaxed);
+        counters
+            .frames
+            .fetch_add(samples.len() as u64, Ordering::Relaxed);
+        let message = SystemChunk::Samples {
+            samples: samples.to_vec(),
+            sample_rate: MONITOR_RATE,
+            synthetic: false,
+            received: Instant::now(),
+        };
+        if tx.try_send(message).is_err() {
+            counters.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// What the meeting's start learned about a screen reader (Linux).
+#[cfg(target_os = "linux")]
+struct ReaderState {
+    /// The sound server is PipeWire's.
+    pipewire: bool,
+    /// The reader-free capture, when a reader was speaking at the start.
+    free: Option<reader_free::ReaderFree>,
+    /// A refusal was already logged.
+    told: bool,
+    /// The meeting's channel and counters, for a reader-free capture made
+    /// later.
+    tx: flume::Sender<SystemChunk>,
+    counters: MonitorCounters,
 }
 
 /// Every couple of seconds: when the call moved to another output (or
@@ -1528,16 +2062,80 @@ fn watch_sink(
     target: &SinkTarget,
     outputs: &std::sync::Mutex<Option<String>>,
     monitor: &std::thread::Thread,
+    reader: ReaderState,
 ) {
+    let ReaderState {
+        pipewire,
+        mut free,
+        mut told,
+        tx,
+        counters,
+    } = reader;
+    // While a screen reader speaks (PipeWire only), the meeting reads a sink
+    // that has everything but the reader's speech. Built before the monitor
+    // moves to it, so a failure leaves today's reading untouched. A refusal
+    // is logged once per meeting.
+    let mut refused: Option<Instant> = told.then(Instant::now);
+    let mut told_pulse = false;
     loop {
         if stop.load(Ordering::Acquire) {
             return;
+        }
+        // Our capture stream died with the sound server: the monitor reader
+        // takes over again, and a new capture is tried after the usual wait.
+        if free.as_ref().is_some_and(|free| free.failed()) {
+            tracing::warn!("the reader-free capture stopped; computer audio is read as before");
+            free = None;
+            refused = Some(Instant::now());
         }
         let reader = child
             .lock()
             .ok()
             .and_then(|slot| slot.as_ref().map(|c| c.id()));
-        let (next, placed, default) = look_at_outputs(reader);
+        let (next, placed, default, reading_aloud) = look_at_outputs(reader);
+        let reading = next.clone().or(default.clone());
+        if reading_aloud && !pipewire && !told_pulse {
+            told_pulse = true;
+            tracing::info!(
+                "a screen reader is speaking; on PulseAudio its speech stays in computer audio"
+            );
+        }
+        if reading_aloud && pipewire {
+            match (&free, reading.as_deref()) {
+                (Some(free), Some(output)) => free.follow(output),
+                (None, Some(output))
+                    if refused.is_none_or(|at| at.elapsed() >= Duration::from_secs(30)) =>
+                {
+                    match reader_free::ReaderFree::start(output, reader_free_sink(&tx, &counters)) {
+                        Ok(made) => {
+                            tracing::info!(
+                                "a screen reader is speaking; its speech is left out of computer audio"
+                            );
+                            free = Some(made);
+                        }
+                        Err(error) => {
+                            if told {
+                                tracing::debug!(%error, "the reader-free sink was refused again");
+                            } else {
+                                tracing::warn!(%error, "could not leave the screen reader's speech out of computer audio; recording as before");
+                                told = true;
+                            }
+                            refused = Some(Instant::now());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let leaving = !reading_aloud && free.is_some();
+        let reader_free_now = reading_aloud && free.is_some();
+        // The reader sits on our sink's monitor then, not the output's.
+        let placed = if reader_free_now { None } else { placed };
+        let next = if reader_free_now {
+            Some(reader_free::NODE.to_string())
+        } else {
+            next
+        };
         if let Ok(mut seen) = outputs.lock() {
             *seen = default.map(|default| match &next {
                 Some(followed) => format!("{default} > {followed}"),
@@ -1548,7 +2146,13 @@ fn watch_sink(
             return;
         };
         if *current != next {
-            tracing::info!(from = ?*current, to = ?next, "the meeting's computer audio follows the call to another output");
+            if next.as_deref() == Some(reader_free::NODE) {
+                tracing::info!(from = ?*current, "the meeting's computer audio moves to the reader-free capture");
+            } else if leaving {
+                tracing::info!(to = ?next, "the screen reader's stream ended; computer audio is read as before");
+            } else {
+                tracing::info!(from = ?*current, to = ?next, "the meeting's computer audio follows the call to another output");
+            }
             *current = next;
         } else if placed == Some(false) {
             // PulseAudio moves a recording off a monitor when the default
@@ -1567,8 +2171,27 @@ fn watch_sink(
         {
             let _ = child.kill();
         }
+        // Our capture takes over as the monitor reader stops.
+        if reader_free_now && let Some(free) = &free {
+            free.go_live();
+        }
         // The monitor loop opens the new output now, not a second later.
         monitor.unpark();
+        if leaving {
+            // Our capture goes once the monitor reader delivers again (or
+            // after a second).
+            let delivered = counters.callbacks.load(Ordering::Relaxed);
+            let waited = Instant::now();
+            loop {
+                if counters.callbacks.load(Ordering::Relaxed) != delivered
+                    || waited.elapsed() >= Duration::from_secs(1)
+                {
+                    break;
+                }
+                std::thread::park_timeout(Duration::from_millis(10));
+            }
+            free = None;
+        }
         std::thread::park_timeout(SINK_CHECK_EVERY);
     }
 }
@@ -1629,6 +2252,10 @@ fn run_monitor(
             return;
         }
         let sink = target.lock().ok().and_then(|t| t.clone());
+        if sink.as_deref() == Some(reader_free::NODE) {
+            // Cap's reader-free capture delivers meanwhile.
+            continue;
+        }
         match spawn_monitor_reader(sink.as_deref()) {
             Ok(mut next) => {
                 counters.restarts.fetch_add(1, Ordering::Relaxed);

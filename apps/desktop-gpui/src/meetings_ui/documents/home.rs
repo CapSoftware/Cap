@@ -1528,6 +1528,7 @@ impl Home {
                                 "documents-search-clear",
                                 "icons/x.svg",
                                 28.,
+                                tr::documents::home::clear_search(),
                             )
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.clear_search(window, cx)),
@@ -1541,6 +1542,7 @@ impl Home {
 
 impl Render for Home {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
         let sidebar_open = self
             .root
             .upgrade()
@@ -1616,6 +1618,7 @@ impl Render for Home {
                     // for when the sidebar is closed.
                     .when(!sidebar_open, |el| el.child(self.start.clone())),
             )
+            .children(super::window::notice_bar(&self.root, &palette, cx))
             .child(
                 div()
                     .id("documents-list")

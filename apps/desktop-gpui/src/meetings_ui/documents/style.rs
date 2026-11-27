@@ -48,6 +48,10 @@ pub struct Palette {
     pub popover: Hsla,
     pub popover_border: Hsla,
     pub highlight: Hsla,
+    /// The window is in keyboard mode (Tab was pressed): controls built
+    /// from this palette are tab stops with a focus ring. Off for the
+    /// mouse, so clicks never move focus.
+    pub keyboard: bool,
 }
 
 /// Speaker colours as (hue, saturation, lightness on light, on dark). Every
@@ -153,6 +157,7 @@ impl Palette {
             },
             popover_border: if dark { track } else { alpha(ink, 0.10) },
             highlight: alpha(amber, if dark { 0.30 } else { 0.22 }),
+            keyboard: false,
         }
     }
 
@@ -323,10 +328,12 @@ pub fn heading(palette: &Palette, title: impl Into<SharedString>, shown_at: Inst
 pub const SPEAKER_COLOURS: usize = SPEAKERS.len();
 
 pub fn ink_pill(palette: &Palette, id: impl Into<gpui::ElementId>) -> gpui::Stateful<Div> {
-    use gpui::InteractiveElement;
+    use gpui::{InteractiveElement, StatefulInteractiveElement, prelude::FluentBuilder};
     let palette = *palette;
     div()
         .id(id)
+        .role(gpui::Role::Button)
+        .when(palette.keyboard, crate::ui::keyboard_nav::stop)
         .h(px(34.))
         .px(px(16.))
         .flex()
@@ -342,10 +349,12 @@ pub fn ink_pill(palette: &Palette, id: impl Into<gpui::ElementId>) -> gpui::Stat
 }
 
 pub fn quiet_pill(palette: &Palette, id: impl Into<gpui::ElementId>) -> gpui::Stateful<Div> {
-    use gpui::InteractiveElement;
+    use gpui::{InteractiveElement, StatefulInteractiveElement, prelude::FluentBuilder};
     let palette = *palette;
     div()
         .id(id)
+        .role(gpui::Role::Button)
+        .when(palette.keyboard, crate::ui::keyboard_nav::stop)
         .h(px(30.))
         .px(px(13.))
         .flex()
@@ -366,11 +375,15 @@ pub fn icon_button(
     id: impl Into<gpui::ElementId>,
     icon: &'static str,
     size: f32,
+    label: impl Into<SharedString>,
 ) -> gpui::Stateful<Div> {
-    use gpui::InteractiveElement;
+    use gpui::{InteractiveElement, StatefulInteractiveElement, prelude::FluentBuilder};
     let palette = *palette;
     div()
         .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .when(palette.keyboard, crate::ui::keyboard_nav::stop)
         .size(px(size))
         .flex()
         .flex_shrink_0()
