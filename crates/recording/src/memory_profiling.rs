@@ -294,6 +294,78 @@ impl CpuTracker {
         Some(curr.cpu_percent_since(prev))
     }
 
+    fn compute_interval_percents(&self) -> Vec<f64> {
+        self.samples
+            .windows(2)
+            .map(|pair| pair[1].cpu_percent_since(&pair[0]))
+            .collect()
+    }
+
+    fn print_timeline_summary(&self, cpu_percents: &[f64]) {
+        if cpu_percents.is_empty() {
+            return;
+        }
+        let max_cpu = cpu_percents.iter().copied().fold(0.0_f64, f64::max);
+        let min_cpu = cpu_percents.iter().copied().fold(f64::MAX, f64::min);
+
+        let mut sorted = cpu_percents.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let p50 = sorted[sorted.len() / 2];
+        let p95_idx = ((sorted.len() as f64) * 0.95) as usize;
+        let p95 = sorted[p95_idx.min(sorted.len() - 1)];
+
+        println!("\nCPU % timeline (per sample interval):");
+        println!("  Min:  {min_cpu:.1}%");
+        println!("  P50:  {p50:.1}%");
+        println!("  P95:  {p95:.1}%");
+        println!("  Max:  {max_cpu:.1}%");
+    }
+
+    fn print_thread_summary(&self) {
+        let max_threads = self
+            .samples
+            .iter()
+            .map(|s| s.thread_count)
+            .max()
+            .unwrap_or(0);
+        let min_threads = self
+            .samples
+            .iter()
+            .map(|s| s.thread_count)
+            .min()
+            .unwrap_or(0);
+        let last_threads = self.samples.last().map(|s| s.thread_count).unwrap_or(0);
+
+        println!("\nThreads:");
+        println!("  Current:  {last_threads}");
+        println!("  Min:      {min_threads}");
+        println!("  Max:      {max_threads}");
+
+        if max_threads > min_threads + 10 {
+            println!("  *** Thread count variance is high — possible thread leak ***");
+        }
+    }
+
+    fn print_cpu_assessment(&self, avg_per_core_pct: f64, cpu_percents: &[f64]) {
+        println!("\n=== CPU Assessment ===");
+        let max_cpu_per_core = cpu_percents.iter().copied().fold(0.0_f64, f64::max)
+            / self.num_cores as f64;
+
+        if avg_per_core_pct < 10.0 {
+            println!("  CPU usage: LOW ({avg_per_core_pct:.1}% per core avg)");
+        } else if avg_per_core_pct < 30.0 {
+            println!("  CPU usage: MODERATE ({avg_per_core_pct:.1}% per core avg)");
+        } else {
+            println!(
+                "  CPU usage: HIGH ({avg_per_core_pct:.1}% per core avg) — investigate hot paths"
+            );
+        }
+
+        if max_cpu_per_core > 80.0 {
+            println!("  CPU spikes: Peak {max_cpu_per_core:.0}% per core — may cause frame drops");
+        }
+    }
+
     pub fn print_report(&self) {
         if self.samples.len() < 2 {
             println!("Not enough CPU samples to analyze");
@@ -323,62 +395,10 @@ impl CpuTracker {
         println!("CPU time (total):  {total_cpu_secs:.2}s");
         println!("Average CPU: {avg_cpu_pct:.1}% ({avg_per_core_pct:.1}% per core)");
 
-        let mut cpu_percents: Vec<f64> = Vec::new();
-        for i in 1..self.samples.len() {
-            cpu_percents.push(self.samples[i].cpu_percent_since(&self.samples[i - 1]));
-        }
-
-        if !cpu_percents.is_empty() {
-            let max_cpu = cpu_percents.iter().cloned().fold(0.0_f64, f64::max);
-            let min_cpu = cpu_percents.iter().cloned().fold(f64::MAX, f64::min);
-
-            let mut sorted = cpu_percents.clone();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let p50 = sorted[sorted.len() / 2];
-            let p95_idx = ((sorted.len() as f64) * 0.95) as usize;
-            let p95 = sorted[p95_idx.min(sorted.len() - 1)];
-
-            println!("\nCPU % timeline (per sample interval):");
-            println!("  Min:  {min_cpu:.1}%");
-            println!("  P50:  {p50:.1}%");
-            println!("  P95:  {p95:.1}%");
-            println!("  Max:  {max_cpu:.1}%");
-        }
-
-        let thread_counts: Vec<u32> = self.samples.iter().map(|s| s.thread_count).collect();
-        let max_threads = thread_counts.iter().copied().max().unwrap_or(0);
-        let min_threads = thread_counts.iter().copied().min().unwrap_or(0);
-        let last_threads = thread_counts.last().copied().unwrap_or(0);
-
-        println!("\nThreads:");
-        println!("  Current:  {last_threads}");
-        println!("  Min:      {min_threads}");
-        println!("  Max:      {max_threads}");
-
-        if max_threads > min_threads + 10 {
-            println!("  *** Thread count variance is high — possible thread leak ***");
-        }
-
-        println!("\n=== CPU Assessment ===");
-        let max_cpu_per_core = if !cpu_percents.is_empty() {
-            cpu_percents.iter().cloned().fold(0.0_f64, f64::max) / self.num_cores as f64
-        } else {
-            0.0
-        };
-
-        if avg_per_core_pct < 10.0 {
-            println!("  CPU usage: LOW ({avg_per_core_pct:.1}% per core avg)");
-        } else if avg_per_core_pct < 30.0 {
-            println!("  CPU usage: MODERATE ({avg_per_core_pct:.1}% per core avg)");
-        } else {
-            println!(
-                "  CPU usage: HIGH ({avg_per_core_pct:.1}% per core avg) — investigate hot paths"
-            );
-        }
-
-        if max_cpu_per_core > 80.0 {
-            println!("  CPU spikes: Peak {max_cpu_per_core:.0}% per core — may cause frame drops");
-        }
+        let cpu_percents = self.compute_interval_percents();
+        self.print_timeline_summary(&cpu_percents);
+        self.print_thread_summary();
+        self.print_cpu_assessment(avg_per_core_pct, &cpu_percents);
     }
 }
 
@@ -453,15 +473,10 @@ impl MemoryTracker {
             return;
         }
 
+        let growth = self.analyze_growth();
         let first = &self.samples[0];
         let last = &self.samples[self.samples.len() - 1];
         let duration_secs = last.0.as_secs_f64() - first.0.as_secs_f64();
-        let growth = last.1.primary_metric() - first.1.primary_metric();
-        let growth_rate = if duration_secs > 0.0 {
-            growth / duration_secs
-        } else {
-            0.0
-        };
 
         println!("Memory Timeline:");
         println!(
@@ -493,20 +508,14 @@ impl MemoryTracker {
         println!("Duration: {duration_secs:.1}s");
         println!("Start: {:.1} MB", first.1.primary_metric());
         println!("End: {:.1} MB", last.1.primary_metric());
-        println!("Growth: {growth:.1} MB");
+        println!("Growth: {:.1} MB", growth.total_mb);
         println!(
             "Rate: {:.2} MB/s ({:.1} MB/min)",
-            growth_rate,
-            growth_rate * 60.0
+            growth.rate_mb_per_sec,
+            growth.rate_mb_per_sec * 60.0
         );
-        println!(
-            "Peak: {:.1} MB",
-            self.samples
-                .iter()
-                .map(|(_, s)| s.primary_metric())
-                .fold(0.0_f64, |a, b| a.max(b))
-        );
-        println!("\nVerdict: {}", classify_leak(growth_rate));
+        println!("Peak: {:.1} MB", growth.peak_mb);
+        println!("\nVerdict: {}", classify_leak(growth.rate_mb_per_sec));
     }
 }
 
