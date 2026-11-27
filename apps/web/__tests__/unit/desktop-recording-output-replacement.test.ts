@@ -30,9 +30,9 @@ vi.mock("@cap/database/schema", () => ({
 }));
 vi.mock("drizzle-orm", () => ({ and: vi.fn(), eq: vi.fn() }));
 vi.mock("@cap/env", () => ({ serverEnv: mocks.env }));
-vi.mock("@cap/web-backend", () => ({
+vi.mock("@cap/web-backend", async () => ({
 	Storage: { getAccessForVideo: mocks.access },
-	AwsCredentials: {},
+	AwsCredentials: (await import("effect")).Effect.succeed({ credentials: {} }),
 }));
 vi.mock("@cap/web-backend/src/Storage/index", () => ({
 	Storage: { getAccessForVideo: mocks.access },
@@ -669,6 +669,22 @@ describe("intentional administrator replacements", () => {
 		expect(video.metadata).not.toHaveProperty("desktopRecordingUpload");
 		expect(events).toContain("delete-uploads");
 		expect(mocks.cloudfront).not.toHaveBeenCalled();
+	});
+
+	it("invalidates the replaced recording together with its download responses", async () => {
+		mocks.env.mockReturnValue({
+			CAP_CLOUDFRONT_DISTRIBUTION_ID: "distribution",
+		});
+		await invalidateVideoCache("video");
+		expect(mocks.cloudfront).toHaveBeenCalledOnce();
+		expect(mocks.cloudfront.mock.calls[0]?.[0]).toMatchObject({
+			input: {
+				DistributionId: "distribution",
+				InvalidationBatch: {
+					Paths: { Quantity: 1, Items: ["/user/video/result.mp4*"] },
+				},
+			},
+		});
 	});
 
 	it("publishes replacements in custom storage before the cache bypass return", async () => {

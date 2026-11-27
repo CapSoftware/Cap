@@ -6,6 +6,7 @@ import { Config, Effect, Layer, Option } from "effect";
 
 import { AwsCredentials } from "../Aws.ts";
 import { Database } from "../Database.ts";
+import { attachmentContentDisposition } from "../Storage/content-disposition.ts";
 import {
 	cloudFrontExpiresAt,
 	createCloudFrontSignedUrl,
@@ -113,6 +114,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 					const getCloudFrontSignedUrl = (
 						key: string,
 						signingArgs?: RequestPresigningArguments,
+						responseContentDisposition?: string,
 					) =>
 						Effect.succeed(
 							createCloudFrontSignedUrl({
@@ -121,12 +123,20 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 								keyPairId: cloudfrontEnvs.keypairId,
 								privateKey: cloudfrontEnvs.privateKey,
 								expiresAt: cloudFrontExpiresAt(signingArgs, Date.now()),
+								responseContentDisposition,
 							}),
 						);
 
 					return Effect.succeed<typeof s3>({
 						...s3,
-						getSignedObjectUrl: getCloudFrontSignedUrl,
+						getSignedObjectUrl: (key, signingArgs) =>
+							getCloudFrontSignedUrl(key, signingArgs),
+						getSignedDownloadUrl: (key, fileName, signingArgs) =>
+							getCloudFrontSignedUrl(
+								key,
+								signingArgs,
+								attachmentContentDisposition(fileName),
+							),
 					});
 				}),
 			),

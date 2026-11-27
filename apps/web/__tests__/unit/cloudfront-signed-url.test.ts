@@ -85,6 +85,29 @@ describe("createCloudFrontSignedUrl", () => {
 		expect(baseOf(signedUrl)).toBe(resourceOf(signedUrl));
 	});
 
+	it("signs the response disposition as part of the resource and keeps the URL aligned", () => {
+		const disposition = `attachment; filename="a*b's (1).mp4"; filename*=UTF-8''a%2Ab%27s%20%281%29.mp4`;
+		const signedUrl = createCloudFrontSignedUrl({
+			bucketUrl,
+			key: "user/video/result.mp4",
+			keyPairId: "K2JCJMDEHXQW5F",
+			privateKey,
+			expiresAt: 1_900_000_000,
+			responseContentDisposition: disposition,
+		});
+		const resource = resourceOf(signedUrl) ?? "";
+
+		expect(resource).toBe(
+			"https://cdn.example.com/dl/user/video/result.mp4?response-content-disposition=attachment%3B%20filename%3D%22a%2Ab%27s%20%281%29.mp4%22%3B%20filename%2A%3DUTF-8%27%27a%252Ab%2527s%2520%25281%2529.mp4",
+		);
+		expect(resource).not.toMatch(/[*]/);
+		expect(signedUrl.startsWith(`${resource}&Policy=`)).toBe(true);
+		expect(
+			new URL(signedUrl).searchParams.get("response-content-disposition"),
+		).toBe(disposition);
+		expect(isCloudFrontSignedUrl(signedUrl)).toBe(true);
+	});
+
 	it("gives the same URL for the same key and expiry, and another for a later expiry", () => {
 		const signedUrl = sign("user/video/result.mp4");
 
