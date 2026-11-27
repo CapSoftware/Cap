@@ -3873,6 +3873,23 @@ impl Message<Lock> for MicrophoneFeed {
             state.handle_input_connected(data);
         }
 
+        // A preview stream that already failed would fail the recording when
+        // it attaches. Refusing it here lets the caller open a fresh stream.
+        #[cfg(windows)]
+        if let Some(attached) = &state.attached
+            && self
+                .stream_health
+                .get(&attached.id)
+                .is_some_and(|health| health.failed.load(Ordering::Acquire))
+        {
+            if let Some(failed) = state.attached.take() {
+                let _ = self.stream_health.remove(&failed.id);
+            }
+            return Err(LockFeedError::InitializeFailed(SetInputError::BuildStream(
+                "Microphone stream already failed".into(),
+            )));
+        }
+
         let Some(attached) = state.attached.take() else {
             return Err(LockFeedError::NoInput);
         };
@@ -6407,6 +6424,45 @@ mod recording_subscription_tests {
         let snapshot = actor.ask(Snapshot).await.unwrap();
         assert_eq!(snapshot, (3, 7, None, 1, 0, 8));
         assert!(matches!(native.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        actor.kill();
+        actor.wait_for_stop().await;
+    }
+
+    #[tokio::test]
+    async fn lock_refuses_a_failed_preview_stream_and_keeps_a_lost_one() {
+        let (feed, token, native) = fixture();
+        feed.stream_health[&7].failed.store(true, Ordering::Release);
+        drop(token);
+        let actor = MicrophoneFeed::spawn(feed);
+        assert!(matches!(
+            actor.ask(Lock).await,
+            Err(kameo::error::SendError::HandlerError(
+                LockFeedError::InitializeFailed(SetInputError::BuildStream(_))
+            ))
+        ));
+        assert!(matches!(
+            native.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        assert!(matches!(
+            actor.ask(Lock).await,
+            Err(kameo::error::SendError::HandlerError(
+                LockFeedError::NoInput
+            ))
+        ));
+        actor.kill();
+        actor.wait_for_stop().await;
+
+        let (feed, token, native) = fixture();
+        feed.stream_health[&7]
+            .device_lost
+            .store(true, Ordering::Release);
+        drop(token);
+        let actor = MicrophoneFeed::spawn(feed);
+        let lock = actor.ask(Lock).await.unwrap();
+        assert_eq!(lock.device_name(), "requested");
+        assert!(matches!(native.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        drop(lock);
         actor.kill();
         actor.wait_for_stop().await;
     }

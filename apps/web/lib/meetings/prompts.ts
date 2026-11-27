@@ -513,6 +513,10 @@ function prefixWithin(
 
 const SELF_LABEL_LINE = /^You: /m;
 
+// Applies to every Ask. It never says who is asking, only how a draft ends.
+const NO_PLACEHOLDERS =
+	'Never leave a placeholder to fill in, such as "[Name]" or "[Your name]", in anything you write. When a draft needs a sign-off and the sender\'s name is not given, use one that needs no name.';
+
 // Who the person asking is in the transcript, and how to write as them. With
 // no name and no "You" lines nothing says which speaker they are, so the
 // prompt stays as it was rather than pointing at the wrong person.
@@ -578,6 +582,7 @@ ${untrustedDataRules(b, "The question after the tags, and the earlier questions 
 		}
 - Be direct and brief: lead with the answer, then only the detail that supports it. Quote sparingly: a short exact quote, attributed to its speaker label, only when the exact wording matters.
 - Reply in the language of the question.
+- ${NO_PLACEHOLDERS}
 - Use plain sentences, or "-" bullets when listing several items, and **bold** sparingly. No headings, tables or code blocks.`,
 	].join("\n\n");
 
