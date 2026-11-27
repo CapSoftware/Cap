@@ -2160,6 +2160,12 @@ replace = "Replace image"
 rotation = "Rotation"
 rounding = "Rounding"
 
+[editor.panel.keyframes]
+title = { text = "Keyframes", context = "Section of the text and image panels that animates position, size and opacity over time." }
+add = "Add keyframe"
+clear = { text = "Clear", context = "Button that removes every keyframe of the selected overlay." }
+hint = "Add a keyframe, move the playhead, then drag the overlay or change its opacity. It animates smoothly between keyframes."
+
 [editor.panel.keyboard]
 title = "Keyboard {number}"
 

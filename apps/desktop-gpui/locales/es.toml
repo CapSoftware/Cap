@@ -2158,6 +2158,12 @@ replace = "Reemplazar imagen"
 rotation = "Rotación"
 rounding = "Redondeo"
 
+[editor.panel.keyframes]
+title = "Fotogramas clave"
+add = "Añadir fotograma clave"
+clear = "Borrar todo"
+hint = "Añade un fotograma clave, mueve el cabezal y luego arrastra la superposición o cambia su opacidad. Se anima con suavidad entre fotogramas clave."
+
 [editor.panel.keyboard]
 title = "Teclado {number}"
 

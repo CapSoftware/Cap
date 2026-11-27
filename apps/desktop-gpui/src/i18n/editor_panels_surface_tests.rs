@@ -975,6 +975,13 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::shape::animations::fade(), "Fade"),
         (tr::editor::shape::animations::scale(), "Scale"),
         (tr::editor::shape::animations::draw(), "Draw on"),
+        (tr::editor::panel::keyframes::title(), "Keyframes"),
+        (tr::editor::panel::keyframes::add(), "Add keyframe"),
+        (tr::editor::panel::keyframes::clear(), "Clear"),
+        (
+            tr::editor::panel::keyframes::hint(),
+            "Add a keyframe, move the playhead, then drag the overlay or change its opacity. It animates smoothly between keyframes.",
+        ),
     ];
     for (translated, literal) in pairs {
         assert_eq!(translated, literal);

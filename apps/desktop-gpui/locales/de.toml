@@ -2158,6 +2158,12 @@ replace = "Bild ersetzen"
 rotation = "Drehung"
 rounding = "Rundung"
 
+[editor.panel.keyframes]
+title = "Keyframes"
+add = "Keyframe hinzufügen"
+clear = "Alle entfernen"
+hint = "Fügen Sie einen Keyframe hinzu, bewegen Sie den Abspielkopf und ziehen Sie dann das Overlay oder ändern Sie seine Deckkraft. Zwischen den Keyframes wird weich animiert."
+
 [editor.panel.keyboard]
 title = "Tastatur {number}"
 

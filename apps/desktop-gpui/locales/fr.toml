@@ -2158,6 +2158,12 @@ replace = "Remplacer l'image"
 rotation = "Rotation"
 rounding = "Arrondi"
 
+[editor.panel.keyframes]
+title = "Images clés"
+add = "Ajouter une image clé"
+clear = "Tout effacer"
+hint = "Ajoutez une image clé, déplacez la tête de lecture, puis faites glisser l'élément ou modifiez son opacité. L'animation passe en douceur d'une image clé à l'autre."
+
 [editor.panel.keyboard]
 title = "Clavier {number}"
 

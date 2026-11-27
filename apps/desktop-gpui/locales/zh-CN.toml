@@ -2158,6 +2158,12 @@ replace = "替换图片"
 rotation = "旋转"
 rounding = "圆角"
 
+[editor.panel.keyframes]
+title = "关键帧"
+add = "添加关键帧"
+clear = "全部清除"
+hint = "添加一个关键帧，移动播放头，然后拖动叠加层或更改其不透明度。关键帧之间会平滑过渡。"
+
 [editor.panel.keyboard]
 title = "键盘 {number}"
 

@@ -2158,6 +2158,12 @@ replace = "画像を置き換え"
 rotation = "回転"
 rounding = "角丸"
 
+[editor.panel.keyframes]
+title = "キーフレーム"
+add = "キーフレームを追加"
+clear = "すべて消去"
+hint = "キーフレームを追加し、再生ヘッドを動かしてから、オーバーレイをドラッグするか不透明度を変更します。キーフレームの間はなめらかにアニメーションします。"
+
 [editor.panel.keyboard]
 title = "キーボード{number}"
 
