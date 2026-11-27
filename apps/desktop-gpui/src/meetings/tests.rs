@@ -1747,7 +1747,7 @@ fn accepting_a_prompt_whose_start_fails_reports_why(cx: &mut gpui::TestAppContex
     });
     let prompt = prompt.expect("a prompt for the meeting about to start");
 
-    let accepted = meetings.update(cx, |m, cx| m.accept_prompt(prompt, cx));
+    let accepted = meetings.update(cx, |m, cx| m.accept_prompt(prompt, false, cx));
     assert!(
         matches!(accepted, Err(super::MeetingError::Library(_))),
         "{accepted:?}"
@@ -1758,7 +1758,7 @@ fn accepting_a_prompt_whose_start_fails_reports_why(cx: &mut gpui::TestAppContex
     // that starts nothing must not report it.
     let accepted = meetings.update(cx, |m, cx| {
         m.prompt_start_error = Some(super::MeetingError::Library("an older failure".into()));
-        m.accept_prompt(prompt + 1000, cx)
+        m.accept_prompt(prompt + 1000, false, cx)
     });
     assert_eq!(accepted, Ok(()));
 }
@@ -1807,7 +1807,7 @@ fn an_automatic_start_that_fails_is_reported_but_an_accept_is_not(cx: &mut gpui:
     });
     let prompt = prompt.expect("a prompt for the meeting about to start");
 
-    let accepted = meetings.update(cx, |m, cx| m.accept_prompt(prompt, cx));
+    let accepted = meetings.update(cx, |m, cx| m.accept_prompt(prompt, false, cx));
     assert!(accepted.is_err(), "{accepted:?}");
     cx.run_until_parked();
     assert!(
@@ -2408,4 +2408,202 @@ fn a_late_label_keeps_a_summary_edit_still_being_saved(cx: &mut gpui::TestAppCon
         "the label follows: {text}"
     );
     assert!(!text.contains("Person 2"), "{text}");
+}
+
+#[test]
+fn a_meeting_link_names_the_call_app_it_opens_in() {
+    use cap_calendar::link::Provider;
+    assert_eq!(super::link_call_app(Provider::Zoom), Some("zoom"));
+    assert_eq!(super::link_call_app(Provider::Teams), Some("teams"));
+    assert_eq!(
+        super::link_call_app(Provider::GoogleMeet),
+        Some("google-meet")
+    );
+    assert_eq!(super::link_call_app(Provider::GoToMeeting), Some("goto"));
+    assert_eq!(super::link_call_app(Provider::Other), None);
+    for provider in Provider::ALL {
+        if let Some(id) = super::link_call_app(provider) {
+            let app = cap_meetings::apps::app_by_id(id).unwrap();
+            assert_ne!(
+                app.kind,
+                cap_meetings::apps::AppKind::Browser,
+                "{provider:?}"
+            );
+        }
+    }
+}
+
+/// "Join and take notes" (the accept that opened the meeting's link) marks
+/// the meeting it starts as joining its call; a plain accept, an automatic
+/// start and a detected call do not.
+#[gpui::test]
+fn join_and_take_notes_starts_a_meeting_joining_its_call(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let meetings = cx.update(|cx| {
+        super::Meetings::install_for_tests(
+            cap_meetings::settings::MeetingSettings::default(),
+            dir.path().join("calendar"),
+            cx,
+        )
+    });
+    let scheduled = cap_meetings::prompt::RecordSource::Scheduled {
+        event_id: "planning".into(),
+    };
+    let detected = cap_meetings::prompt::RecordSource::DetectedCall {
+        app_id: "zoom".into(),
+        event_id: Some("planning".into()),
+    };
+    meetings.update(cx, |m, _| {
+        assert!(!m.origin_for(&scheduled).joining);
+        m.accepting = true;
+        assert!(!m.origin_for(&scheduled).joining);
+        m.accepting_join = true;
+        assert!(m.origin_for(&scheduled).joining);
+        assert!(!m.origin_for(&detected).joining);
+        m.accepting = false;
+        assert!(!m.origin_for(&scheduled).joining);
+    });
+}
+
+/// A finished meeting's count of voices follows the transcript's edits (a
+/// voice left out, labels moved after Stop), so the notes list stays right.
+#[test]
+fn a_finished_meetings_voice_count_follows_its_transcript() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let mut meta = library.create(DocKind::Meeting, Utc::now(), 5).unwrap();
+    let mut meeting = MeetingDetails {
+        ended_at: Some(Utc::now()),
+        ..MeetingDetails::default()
+    };
+    meeting.set_speaker_count(1);
+    meta.meeting = Some(meeting);
+    library.save(&meta).unwrap();
+    let mut transcript = Transcript::new();
+    transcript.upsert(utterance("m1", Source::Mic, 0, "Morning."));
+    transcript.upsert(utterance("s1", Source::System, 1_000, "Hi there."));
+
+    assert!(persist::follow_left_out(&library, &meta.id, &transcript));
+    let count = |library: &Library| {
+        library
+            .load(&meta.id)
+            .unwrap()
+            .meeting
+            .and_then(|m| m.speaker_count())
+    };
+    assert_eq!(count(&library), Some(2));
+    assert!(
+        !persist::follow_left_out(&library, &meta.id, &transcript),
+        "nothing changed"
+    );
+
+    // still recording: the stop saves the count
+    let mut live = library.create(DocKind::Meeting, Utc::now(), 6).unwrap();
+    live.meeting = Some(MeetingDetails::default());
+    library.save(&live).unwrap();
+    assert!(!persist::follow_left_out(&library, &live.id, &transcript));
+    assert_eq!(
+        library.load(&live.id).unwrap().meeting.unwrap().speaker_count(),
+        None
+    );
+}
+
+/// Lines of a finished meeting deleted or moved to another voice: its count
+/// of voices follows once the edit is written.
+#[test]
+fn a_finished_meetings_voice_count_follows_line_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let mut meta = library.create(DocKind::Meeting, Utc::now(), 7).unwrap();
+    let mut meeting = MeetingDetails {
+        ended_at: Some(Utc::now()),
+        ..MeetingDetails::default()
+    };
+    meeting.set_speaker_count(2);
+    meta.meeting = Some(meeting);
+    library.save(&meta).unwrap();
+    let mut transcript = Transcript::new();
+    transcript.upsert(utterance("m1", Source::Mic, 0, "Morning."));
+    transcript.upsert(utterance("s1", Source::System, 1_000, "Hi there."));
+    assert!(!persist::follow_speakers(&library, &meta.id, &transcript));
+
+    transcript.apply(LogLine::Delete {
+        ids: vec!["s1".into()],
+    });
+    assert!(persist::follow_speakers(&library, &meta.id, &transcript));
+    let count = library
+        .load(&meta.id)
+        .unwrap()
+        .meeting
+        .and_then(|m| m.speaker_count());
+    assert_eq!(count, Some(1));
+}
+
+/// Through the app: deleting the only line of a finished meeting's second
+/// voice is written on the documents writer first, and the count of voices
+/// that follows reads it there (same writer, after the edit), then the notes
+/// list is told.
+#[gpui::test]
+fn deleting_a_voices_lines_updates_the_notes_lists_count(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let meetings = cx.update(|cx| {
+        super::Meetings::install_for_tests(
+            cap_meetings::settings::MeetingSettings::default(),
+            dir.path().join("calendar"),
+            cx,
+        )
+    });
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let mut meta = library.create(DocKind::Meeting, Utc::now(), 8).unwrap();
+    let mut meeting = MeetingDetails {
+        started_at: Some(Utc::now()),
+        ended_at: Some(Utc::now()),
+        ..MeetingDetails::default()
+    };
+    meeting.set_speaker_count(2);
+    meta.meeting = Some(meeting);
+    library.save(&meta).unwrap();
+    append_jsonl(
+        &library.transcript_path(&meta.id).unwrap(),
+        &[
+            LogLine::Upsert {
+                utterance: utterance("m1", Source::Mic, 0, "Morning."),
+            },
+            LogLine::Upsert {
+                utterance: utterance("s1", Source::System, 2_000, "Hi there."),
+            },
+        ],
+    )
+    .unwrap();
+    let doc = meta.id.clone();
+    meetings.update(cx, |m, _| m.library = Some(library.clone()));
+    let told = std::rc::Rc::new(std::cell::Cell::new(false));
+    let _subscription = cx.update(|cx| {
+        let told = told.clone();
+        cx.subscribe(&meetings, move |_, event: &super::MeetingEvent, _| {
+            if matches!(event, super::MeetingEvent::LibraryChanged) {
+                told.set(true);
+            }
+        })
+    });
+
+    // one action editing several lines queues one recount, behind its edits
+    meetings.update(cx, |m, cx| {
+        m.delete_utterances(&doc, vec!["s1".into()], cx);
+        m.delete_utterances(&doc, vec!["s1".into()], cx);
+        assert_eq!(m.speaker_recounts.len(), 1);
+    });
+    cx.run_until_parked();
+    assert!(crate::meetings_ui::documents::flush_writer(
+        Duration::from_secs(5)
+    ));
+    cx.run_until_parked();
+
+    let count = library
+        .load(&doc)
+        .unwrap()
+        .meeting
+        .and_then(|m| m.speaker_count());
+    assert_eq!(count, Some(1));
+    assert!(told.get(), "the notes list hears the count changed");
 }

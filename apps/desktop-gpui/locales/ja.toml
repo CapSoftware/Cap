@@ -4288,6 +4288,7 @@ calendar_settings = "カレンダー設定"
 empty_title = "ここにメモが表示されます"
 empty_body = "会議が始まったらメモを開始を押してください。Cap が聞き取り、停止するとまとめます。"
 just_you = "自分のみ"
+people = { other = "{count}人" }
 note = "メモ"
 start_notes = "メモを開始"
 

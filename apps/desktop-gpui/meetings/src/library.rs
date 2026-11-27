@@ -155,6 +155,21 @@ pub struct MeetingDetails {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// How many people a meeting's transcript heard, kept in
+/// [`MeetingDetails::extra`] so the notes list can say so without reading it.
+pub const SPEAKER_COUNT_KEY: &str = "speakerCount";
+
+impl MeetingDetails {
+    pub fn speaker_count(&self) -> Option<u64> {
+        self.extra.get(SPEAKER_COUNT_KEY).and_then(Value::as_u64)
+    }
+
+    pub fn set_speaker_count(&mut self, count: usize) {
+        self.extra
+            .insert(SPEAKER_COUNT_KEY.to_string(), Value::from(count as u64));
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", from = "DocMetaRaw")]
 pub struct DocMeta {

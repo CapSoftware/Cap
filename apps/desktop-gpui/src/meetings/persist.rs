@@ -158,23 +158,61 @@ pub fn summary_follows(meta: &DocMeta, transcript: &Transcript) -> bool {
 }
 
 /// After the person changed who is left out of the notes, or a summary was
-/// written: one written under other choices is offered for an update.
+/// written: one written under other choices is offered for an update, and a
+/// finished meeting's count of voices follows the transcript.
 /// Returns whether the note changed.
 pub fn follow_left_out(library: &Library, doc_id: &str, transcript: &Transcript) -> bool {
     let _lock = cap_meetings::library::lock_meta();
     let Ok(mut meta) = library.load(doc_id) else {
         return false;
     };
-    if !meta.meeting.as_ref().is_some_and(|m| m.has_enhanced)
-        || summary_follows(&meta, transcript)
-        || !set_flag(&mut meta, NOTES_STALE_KEY, true)
+    let mut changed = sync_speaker_count(&mut meta, transcript);
+    if meta.meeting.as_ref().is_some_and(|m| m.has_enhanced)
+        && !summary_follows(&meta, transcript)
+        && set_flag(&mut meta, NOTES_STALE_KEY, true)
     {
+        changed = true;
+    }
+    if !changed {
         return false;
     }
     match library.save(&meta) {
         Ok(()) => true,
         Err(error) => {
             tracing::warn!(%error, "could not offer to update the notes");
+            false
+        }
+    }
+}
+
+/// A finished meeting's count of voices, which the notes list shows, follows
+/// its transcript. Returns whether it changed.
+fn sync_speaker_count(meta: &mut DocMeta, transcript: &Transcript) -> bool {
+    let Some(meeting) = meta.meeting.as_mut().filter(|m| m.ended_at.is_some()) else {
+        return false;
+    };
+    let speakers = transcript.speaker_count();
+    if meeting.speaker_count() == Some(speakers as u64) {
+        return false;
+    }
+    meeting.set_speaker_count(speakers);
+    true
+}
+
+/// After lines of a finished meeting were edited (deleted, moved to another
+/// voice): its count of voices follows. Returns whether the note changed.
+pub fn follow_speakers(library: &Library, doc_id: &str, transcript: &Transcript) -> bool {
+    let _lock = cap_meetings::library::lock_meta();
+    let Ok(mut meta) = library.load(doc_id) else {
+        return false;
+    };
+    if !sync_speaker_count(&mut meta, transcript) {
+        return false;
+    }
+    match library.save(&meta) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(%error, "could not save the meeting's voices");
             false
         }
     }
@@ -790,6 +828,7 @@ pub fn recover_unfinished(library: &Library, opened: &OpenedHere) -> Vec<String>
         meeting.ended_at = Some(started_at + Duration::milliseconds(meeting.duration_ms as i64));
         meeting.stop_reason = Some(StopReason::Error);
         meeting.transcript_chars = stats.total_chars as u64;
+        meeting.set_speaker_count(transcript.speaker_count());
         if !tracks.is_empty() {
             meeting.audio = tracks;
         }

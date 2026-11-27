@@ -38,7 +38,7 @@ use cap_meetings::{
     detect::{DetectConfig, DetectEvent, Detector, MicClient},
     library::{DocKind, DocMeta, Library, MeetingDetails, TitleHint, auto_title_from, lock_meta},
     prompt::{Prompt, PromptAction, PromptPlanner, RecordSource, RecordingState},
-    session::{Session, SessionAction, SessionState, Warning},
+    session::{OwnCall, Session, SessionAction, SessionState, Warning},
     settings::{Engine, Language, MeetingSettings, Microphone},
     templates::{self, Template},
     transcript::{EchoConfig, LogLine, Transcript, Utterance, append_jsonl},
@@ -462,6 +462,8 @@ struct Origin {
     event_id: Option<String>,
     resume_doc: Option<String>,
     automatic: bool,
+    /// Cap opened the event's meeting link as these notes started.
+    joining: bool,
 }
 
 struct Watch {
@@ -602,6 +604,9 @@ pub struct Meetings {
     notify_due: Option<Millis>,
     dirty_active: bool,
     dirty_transcripts: BTreeSet<String>,
+    /// Finished meetings whose count of voices is recounted once the action
+    /// editing their lines has queued all its edits.
+    speaker_recounts: HashSet<String>,
     capabilities: Option<(String, Capabilities)>,
     capabilities_task: Option<Task<()>>,
     capabilities_error: Option<(String, cloud::CloudError)>,
@@ -629,6 +634,8 @@ pub struct Meetings {
     /// An accept is starting the prompt's recording: its failure goes back
     /// to the accept, not to a system notification.
     accepting: bool,
+    /// That accept also opened the meeting's link ("Join and take notes").
+    accepting_join: bool,
     pending_restore_mic: Option<(Option<String>, Option<String>)>,
     #[cfg(debug_assertions)]
     pub(crate) dev_mic: Option<flume::Receiver<capture::RawBatch>>,
@@ -700,6 +707,19 @@ fn linux_monitor_missing() -> bool {
     {
         false
     }
+}
+
+/// The call app a calendar event's meeting link opens in, when that link
+/// belongs to one (a browser call is only known by the tab it is in).
+fn link_call_app(provider: cap_calendar::link::Provider) -> Option<&'static str> {
+    use cap_calendar::link::Provider;
+    let id = match provider {
+        Provider::GoToMeeting | Provider::GoToWebinar => "goto",
+        provider => provider.slug(),
+    };
+    apps::app_by_id(id)
+        .filter(|app| app.kind != apps::AppKind::Browser)
+        .map(|app| app.id)
 }
 
 fn platform() -> Platform {
@@ -848,6 +868,7 @@ impl Meetings {
             notify_due: None,
             dirty_active: false,
             dirty_transcripts: BTreeSet::new(),
+            speaker_recounts: HashSet::new(),
             capabilities: None,
             capabilities_task: None,
             capabilities_error: None,
@@ -866,6 +887,7 @@ impl Meetings {
             last_start_error: None,
             prompt_start_error: None,
             accepting: false,
+            accepting_join: false,
             pending_restore_mic: None,
             #[cfg(debug_assertions)]
             dev_mic: None,
@@ -1311,6 +1333,7 @@ impl Meetings {
                 event_id: event_id.clone(),
                 resume_doc: None,
                 automatic: true,
+                joining: false,
             },
             RecordSource::Scheduled { event_id } => {
                 let call = self.detector.active_calls().last();
@@ -1320,6 +1343,7 @@ impl Meetings {
                     event_id: Some(event_id.clone()),
                     resume_doc: None,
                     automatic: true,
+                    joining: self.accepting && self.accepting_join,
                 }
             }
         }
@@ -1327,13 +1351,21 @@ impl Meetings {
 
     /// Accepts a prompt. `Err` when the meeting it started could not start,
     /// so the person can be told; an earlier failure (an automatic start)
-    /// never counts for this accept.
-    pub fn accept_prompt(&mut self, id: u64, cx: &mut Context<Self>) -> Result<(), MeetingError> {
+    /// never counts for this accept. `joining` when the accept also opened
+    /// the meeting's link.
+    pub fn accept_prompt(
+        &mut self,
+        id: u64,
+        joining: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), MeetingError> {
         self.prompt_start_error = None;
         let actions = self.planner.accept(self.now_pair(), id);
         self.accepting = true;
+        self.accepting_join = joining;
         self.apply_prompt_actions(actions, cx);
         self.accepting = false;
+        self.accepting_join = false;
         self.rearm(cx);
         match self.prompt_start_error.take() {
             Some(error) => Err(error),
@@ -1476,11 +1508,18 @@ impl Meetings {
             origin.event_id =
                 calendar::auto_link(agenda.events(), Utc::now()).map(calendar::event_key);
         }
-        let event_end = origin
+        let event = origin
             .event_id
             .as_ref()
-            .and_then(|id| self.calendar.find(id))
-            .map(|e| e.end);
+            .and_then(|id| self.calendar.find(id));
+        let event_end = event.map(|e| e.end);
+        let own_call = OwnCall {
+            joining: origin.joining,
+            link_app: event
+                .and_then(|e| e.link.as_ref())
+                .and_then(|link| link_call_app(link.provider))
+                .map(str::to_string),
+        };
         self.pending_start = Some(origin.clone());
         let actions = self.session.start(self.now(), origin.app_id.clone());
         if let Some(end) = event_end {
@@ -1492,6 +1531,7 @@ impl Meetings {
             };
             self.session.set_linked_event_end(Some(at));
         }
+        self.session.set_own_call(own_call);
         self.apply_session_actions(actions, cx);
         self.pending_start = None;
         match &self.recording {
@@ -2677,6 +2717,7 @@ impl Meetings {
                 .unwrap_or_else(|| recording.started.elapsed().as_millis() as u64);
         let doc_id = recording.doc_id.clone();
         let chars = recording.transcript.stats().total_chars as u64;
+        let speakers = recording.transcript.speaker_count();
         if let Some(library) = self.library().cloned()
             && let (_lock, Ok(mut meta)) = (lock_meta(), library.load(&doc_id))
         {
@@ -2686,6 +2727,7 @@ impl Meetings {
                 meeting.duration_ms = meeting.duration_ms.max(duration_ms);
                 meeting.stop_reason = Some(reason);
                 meeting.transcript_chars = chars;
+                meeting.set_speaker_count(speakers);
                 meeting.audio = tracks;
             }
             // One hold-up stops both tracks, so the longer track's total is
@@ -3097,6 +3139,7 @@ impl Meetings {
         finishing.transcript.retract_partials(Source::Mic);
         finishing.transcript.retract_partials(Source::System);
         let chars = finishing.transcript.stats().total_chars;
+        let speakers = finishing.transcript.speaker_count();
         let engine = finishing.engine;
         cx.background_executor()
             .spawn(async move {
@@ -3114,6 +3157,7 @@ impl Meetings {
             && let Some(meeting) = meta.meeting.as_mut()
         {
             meeting.transcript_chars = chars as u64;
+            meeting.set_speaker_count(speakers);
             // Audio still waiting for its words is tried again next launch;
             // gaps with no saved audio can't be, so they don't keep it waiting.
             let open = finishing.open_gaps > finishing.unrepairable;
@@ -3406,11 +3450,52 @@ impl Meetings {
                     self.append_direct(doc_id, lines);
                 }
             }
-            None => self.append_direct(doc_id, vec![line]),
+            None => {
+                self.append_direct(doc_id, vec![line]);
+                self.recount_speakers_soon(doc_id, cx);
+            }
         }
         cx.emit(MeetingEvent::TranscriptChanged {
             doc_id: doc_id.to_string(),
         });
+    }
+
+    /// One recount per meeting however many lines one action edits (a bulk
+    /// spelling fix, moving a voice's lines): it is queued after the action
+    /// returns, so behind all of its edits.
+    fn recount_speakers_soon(&mut self, doc_id: &str, cx: &mut Context<Self>) {
+        if !self.speaker_recounts.insert(doc_id.to_string()) {
+            return;
+        }
+        let doc = doc_id.to_string();
+        cx.spawn(async move |this, cx| {
+            this.update(cx, |this, cx| {
+                this.speaker_recounts.remove(&doc);
+                this.speakers_follow_edits(&doc, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// A finished meeting's lines changed: once the edit is on disk, its
+    /// count of voices follows and the notes list hears of it.
+    fn speakers_follow_edits(&mut self, doc_id: &str, cx: &mut Context<Self>) {
+        let Some(library) = self.library().cloned() else {
+            return;
+        };
+        let Ok(path) = library.transcript_path(doc_id) else {
+            return;
+        };
+        let doc = doc_id.to_string();
+        let (changed, note) = flume::bounded(1);
+        crate::meetings_ui::documents::queue_after_saves(move || {
+            let transcript = Transcript::load_jsonl(&path)
+                .map(|(t, _)| t)
+                .unwrap_or_default();
+            let _ = changed.send(persist::follow_speakers(&library, &doc, &transcript));
+        });
+        Self::library_changed_when(note, cx);
     }
 
     /// "Always spell as": the dictionary learns `wrong` as a sounds-like form
@@ -4032,6 +4117,8 @@ impl Meetings {
                 this.dirty_transcripts.insert(doc.clone());
                 this.schedule_notify(cx);
                 this.follow_late_renames(&doc, renames, cx);
+                // the notes list reads the corrected count of voices
+                cx.emit(MeetingEvent::LibraryChanged);
             })
             .ok();
         })
@@ -4256,6 +4343,7 @@ impl Meetings {
                 };
                 let chars = transcript.stats().total_chars;
                 meeting.transcript_chars = chars as u64;
+                meeting.set_speaker_count(transcript.speaker_count());
                 if self.settings.notes.auto_generate
                     && !meeting.has_enhanced
                     && (finishing.generate_notes || chars >= min_chars)
@@ -5272,10 +5360,20 @@ fn late_labels(
         .and_then(|meta| Meetings::self_name(&meta));
     let renames =
         late_summary_renames(&transcript, &after, &pass.merged, self_name.as_deref());
+    let speakers = after.speaker_count();
     let lines = vec![LogLine::Speakers { assign }, LogLine::SpeakerNames { names }];
     if let Err(error) = append_jsonl(&path, &lines) {
         tracing::warn!(%error, "could not add Nemotron's labels to the meeting transcript");
         return None;
+    }
+    if let (_lock, Ok(mut meta)) = (lock_meta(), library.load(doc_id))
+        && let Some(meeting) = meta.meeting.as_mut()
+        && meeting.speaker_count() != Some(speakers as u64)
+    {
+        meeting.set_speaker_count(speakers);
+        if let Err(error) = library.save(&meta) {
+            tracing::warn!(%error, "could not save the meeting's speakers");
+        }
     }
     Some(renames)
 }
