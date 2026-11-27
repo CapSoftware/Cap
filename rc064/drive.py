@@ -1155,6 +1155,176 @@ for w in list {
         subprocess.run(["swiftc", "-O", "-o", str(WORK / "winlist"), str(src)], check=True)
 
 
+def set_export_prefs(sb, prefs):
+    path = sb.root / "gpui-state.json"
+    try:
+        doc = json.loads(path.read_text())
+    except Exception:  # noqa: BLE001
+        doc = {}
+    if prefs is None:
+        doc.pop("export", None)
+    else:
+        doc["export"] = prefs
+    path.write_text(json.dumps(doc))
+
+
+EXPORT_4K = {"format": "Mp4", "fps": 60, "export_to": "file", "resolution": "4K", "compression": "Maximum", "custom_bpp": None}
+
+
+def target_window():
+    """Opens a plain window of our own to record; returns (env, cleanup)."""
+    if OS == "Linux":
+        return {"CAP_GPUI_AUTO_OVERLAY": "window", "CAP_GPUI_AUTO_WINDOW": "xmessage"}, (lambda: None)
+    if OS == "Darwin":
+        title = f"gate064-target-{os.getpid()}"
+        doc = WORK / title
+        doc.write_text("The window Cap records\n" * 20)
+        before = set(subprocess.run(["pgrep", "-x", "TextEdit"], capture_output=True, text=True).stdout.split())
+        subprocess.run(["open", "-n", "-a", "TextEdit", str(doc)])
+        time.sleep(4)
+        ours = [p for p in subprocess.run(["pgrep", "-x", "TextEdit"], capture_output=True, text=True).stdout.split() if p not in before]
+
+        def cleanup():
+            for p in ours:
+                subprocess.run(["kill", p])
+
+        return {"CAP_GPUI_AUTO_OVERLAY": "window", "CAP_GPUI_AUTO_WINDOW": title}, cleanup
+    doc = WORK / "gate064-target.txt"
+    doc.write_text("The window Cap records\r\n" * 20)
+    proc = subprocess.Popen(["notepad.exe", str(doc)])
+    time.sleep(4)
+    wins = visible_windows(proc.pid)
+    title = wins[0][4] if wins else "gate064-target.txt - Notepad"
+    log("notepad window", wins)
+    return {"CAP_GPUI_AUTO_OVERLAY": "window", "CAP_GPUI_AUTO_WINDOW": title}, (lambda: kill(proc))
+
+
+def flow_targets():
+    """Studio display, window and area targets, 12 s each, both builds."""
+    for rnd in range(2):
+        for side in (SIDES if rnd % 2 == 0 else SIDES[::-1]):
+            for target in ("display", "window", "area"):
+                cleanup = lambda: None  # noqa: E731
+                if target == "display":
+                    env = {"CAP_GPUI_AUTO_OVERLAY": "display"}
+                    if OS == "Windows":
+                        env["CAP_GPUI_AUTO_NO_MIC"] = "1"
+                elif target == "window":
+                    env, cleanup = target_window()
+                    if OS == "Windows":
+                        env["CAP_GPUI_AUTO_NO_MIC"] = "1"
+                else:
+                    env = {"CAP_GPUI_AUTO_OVERLAY": "area", "CAP_GPUI_AUTO_AREA": "200,150,1000,600"}
+                    if OS == "Windows":
+                        env["CAP_GPUI_AUTO_NO_MIC"] = "1"
+                sb = Sandbox(f"target-{target}-{side}-{rnd}", general={"postStudioRecordingBehaviour": "showOverlay"})
+                env["CAP_GPUI_AUTO_RECORD"] = "studio:12"
+                proc = sb.launch(side, f"target-{target}", env)
+                entry = {"target": target, "round": rnd}
+                t_start = wait_log(proc, "auto-record start requested", 90)
+                entry["started"] = t_start is not None
+                if t_start:
+                    time.sleep(4)
+                    if rnd == 0:
+                        entry["shot_recording"] = screenshot(f"target-{target}-recording-{side}")
+                    with Sampler(proc.pid) as s:
+                        t_stop = wait_log(proc, "auto-record stop requested", 80)
+                    entry["recording_resources"] = s.summary()
+                    done = wait_log(proc, "auto-record main window after the recording", 120)
+                    entry["finished"] = done is not None
+                    if t_stop and done:
+                        entry["stop_to_idle_s"] = round(done - t_stop, 2)
+                entry["log_errors"] = tail(proc, 12, grep=["ERROR", "panicked"])
+                kill(proc)
+                cleanup()
+                projects = sb.projects()
+                if projects:
+                    entry["status"] = meta_status(projects[0])
+                    entry["local_media"] = local_media(projects[0])
+                record("targets", side, entry)
+                log("target", target, side, rnd, entry.get("finished"), entry.get("status"))
+
+
+def flow_export4k():
+    """Default and 4K MP4 exports of one fresh Studio recording per build, alternating."""
+    recorded = {}
+    for side in SIDES:
+        sb, entry = studio_record(side, f"e4k-{side}", secs=20)
+        record("export4k_source", side, entry)
+        if entry.get("project"):
+            recorded[side] = (sb, Path(entry["project"]))
+    for rnd in range(1 if OS == "Windows" else 2):
+        for side in (SIDES if rnd % 2 == 0 else SIDES[::-1]):
+            if side not in recorded:
+                continue
+            sb, project = recorded[side]
+            for label, prefs in (("default", None), ("4k", EXPORT_4K)):
+                set_export_prefs(sb, prefs)
+                e = editor_export(side, sb, project, "mp4")
+                e["round"] = rnd
+                e["preset"] = label
+                record("export4k", side, e)
+                log("export", label, side, rnd, e.get("export_s"))
+            set_export_prefs(sb, None)
+
+
+def flow_ux():
+    """Screenshots of the main surfaces, light and dark, both builds."""
+    pages = ["general", "quality", "hotkeys", "recordings", "screenshots", "automations", "transcription", "integrations", "experimental", "license", "feedback", "changelog"]
+    for side in SIDES:
+        for theme in ("light", "dark"):
+            side_pages = pages + (["meetings"] if side == "head" else [])
+            for page in side_pages:
+                sb = Sandbox(f"ux-{page}-{side}-{theme}", theme=theme)
+                proc = sb.launch(side, f"settings-{page}", {"CAP_GPUI_AUTO_SETTINGS": page})
+                wait_window(proc, 60)
+                time.sleep(4)
+                record("ux", side, {"what": f"settings {page} {theme}", "shot": screenshot(f"ux-settings-{page}-{theme}-{side}"), "windows": visible_windows(proc.pid)})
+                kill(proc)
+            if side == "head":
+                for page in ("home", "recordings", "notes"):
+                    sb = Sandbox(f"ux-lib-{page}-{side}-{theme}", theme=theme)
+                    proc = sb.launch(side, f"library-{page}", {"CAP_GPUI_AUTO_LIBRARY": page})
+                    wait_window(proc, 60)
+                    time.sleep(5)
+                    record("ux", side, {"what": f"library {page} {theme}", "shot": screenshot(f"ux-library-{page}-{theme}-{side}"), "windows": visible_windows(proc.pid), "log_errors": tail(proc, 6, grep=["ERROR", "panicked"])})
+                    kill(proc)
+            for mode in ("1",):
+                sb = Sandbox(f"ux-mode-{side}-{theme}", theme=theme)
+                proc = sb.launch(side, "mode-select", {"CAP_GPUI_AUTO_MODE_SELECT": mode})
+                wait_window(proc, 60)
+                time.sleep(4)
+                record("ux", side, {"what": f"mode select {theme}", "shot": screenshot(f"ux-mode-{theme}-{side}")})
+                kill(proc)
+
+
+def flow_editor_ux():
+    """Editor + export page shots on one Studio recording per build."""
+    for side in SIDES:
+        sb, entry = studio_record(side, f"edux-{side}", secs=8)
+        if not entry.get("project"):
+            record("ux", side, {"what": "editor ux: no project", "entry": entry})
+            continue
+        project = Path(entry["project"])
+        for theme in ("light", "dark"):
+            view = Sandbox(f"edux-view-{side}-{theme}", theme=theme)
+            shutil.copytree(project, view.root / "recordings" / project.name)
+            p = view.root / "recordings" / project.name
+            for label, env in (
+                ("editor", {}),
+                ("export", {"CAP_GPUI_AUTO_EXPORT_PAGE": "advanced"}),
+                ("export-link", {"CAP_GPUI_AUTO_EXPORT_PAGE": "link"}),
+                ("captions", {"CAP_GPUI_AUTO_SIDEBAR": "captions"}),
+            ):
+                e = {"CAP_GPUI_AUTO_EDITOR": str(p)}
+                e.update(env)
+                proc = view.launch(side, f"edux-{label}", e)
+                wait_window(proc, 90, min_size=400)
+                time.sleep(7)
+                record("ux", side, {"what": f"editor {label} {theme}", "shot": screenshot(f"ux-editor-{label}-{theme}-{side}"), "log_errors": tail(proc, 6, grep=["ERROR", "panicked"])})
+                kill(proc)
+
+
 def main():
     build_helpers()
     flows = {
@@ -1168,6 +1338,10 @@ def main():
         "barmenu": flow_barmenu,
         "automations_native": flow_automations_native,
         "hotkeys": flow_hotkeys,
+        "targets": flow_targets,
+        "export4k": flow_export4k,
+        "ux": flow_ux,
+        "editor_ux": flow_editor_ux,
     }
     for name, fn in flows.items():
         if "all" not in FLOWS and name not in FLOWS:
