@@ -6,6 +6,7 @@ import { useCurrency } from "hooks/useCurrency";
 import { ArrowUpRight, Gift, X } from "lucide-react";
 import Link from "next/link";
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import { trackEvent } from "@/app/utils/analytics";
 import { useEnded } from "@/components/pages/blackfriday/Claim";
@@ -206,7 +207,10 @@ export const DesktopLicenseCard = ({ collapsed, onToggle }: PlanToggle) => {
 										<button
 											ref={codeToggle}
 											type="button"
-											onClick={() => setCodeApplied(false)}
+											onClick={() => {
+												flushSync(() => setCodeApplied(false));
+												codeToggle.current?.focus();
+											}}
 											aria-label={`Remove ${CODE}`}
 											className="grid size-4 place-items-center rounded-full transition-colors duration-200 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111]"
 										>
