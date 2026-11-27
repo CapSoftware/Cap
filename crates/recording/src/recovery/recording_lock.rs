@@ -480,12 +480,18 @@ mod tests {
             before,
             "a refused recovery wrote to the project"
         );
-        assert_eq!(studio_status(&swept), StudioRecordingStatus::InProgress);
+        assert!(matches!(
+            studio_status(&swept),
+            StudioRecordingStatus::InProgress
+        ));
 
         drop(child);
         assert!(!is_recording_elsewhere(&studio));
         assert!(RecoveryManager::remux_if_needed(&studio).unwrap());
-        assert_eq!(studio_status(&studio), StudioRecordingStatus::Complete);
+        assert!(matches!(
+            studio_status(&studio),
+            StudioRecordingStatus::Complete
+        ));
         assert!(RecoveryManager::find_incomplete(recordings.path()).is_empty());
         assert!(matches!(
             studio_status(&swept),
@@ -500,7 +506,10 @@ mod tests {
         let lock = RecordingLock::acquire(&project).unwrap();
         assert!(!is_recording_elsewhere(&project));
         assert!(RecoveryManager::remux_if_needed(&project).unwrap());
-        assert_eq!(studio_status(&project), StudioRecordingStatus::Complete);
+        assert!(matches!(
+            studio_status(&project),
+            StudioRecordingStatus::Complete
+        ));
         let after_finalize = RecordingLock::acquire(&project).unwrap();
         drop(lock);
         drop(after_finalize);
@@ -528,7 +537,10 @@ mod tests {
         let project = needs_remux_project(recordings.path(), "old", 3);
         assert!(!is_recording_elsewhere(&project));
         assert!(RecoveryManager::remux_if_needed(&project).unwrap());
-        assert_eq!(studio_status(&project), StudioRecordingStatus::Complete);
+        assert!(matches!(
+            studio_status(&project),
+            StudioRecordingStatus::Complete
+        ));
         assert!(!recordings.path().join(super::LOCK_DIR).exists());
     }
 
@@ -575,6 +587,9 @@ mod tests {
             assert!(!is_recording_elsewhere(&project));
         }
         assert!(RecoveryManager::remux_if_needed(&project).unwrap());
-        assert_eq!(studio_status(&project), StudioRecordingStatus::Complete);
+        assert!(matches!(
+            studio_status(&project),
+            StudioRecordingStatus::Complete
+        ));
     }
 }
