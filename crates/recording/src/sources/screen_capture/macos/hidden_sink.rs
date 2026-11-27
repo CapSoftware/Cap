@@ -7,13 +7,10 @@
 //! excluded, so excluding one window the app is not showing removes its
 //! audio and keeps every visible window in the video.
 
-use std::ffi::c_void;
-
 use cidre::{arc, core_audio as ca, sc, sys};
-use core_foundation::{base::FromVoid, boolean::CFBoolean, string::CFString};
-use core_graphics::{
-    display::{CFDictionary, kCGWindowListOptionIncludingWindow},
-    window::{copy_window_info, kCGWindowIsOnscreen},
+use core_graphics::window::{
+    CGWindowListOption, create_window_list, kCGNullWindowID, kCGWindowListOptionAll,
+    kCGWindowListOptionOnScreenOnly,
 };
 use tracing::info;
 
@@ -87,20 +84,26 @@ pub(super) fn off_screen_windows(
 /// Whether any of the excluded windows is now shown or has closed, so the
 /// exclusion must move to another window to keep the video complete.
 pub(super) fn any_shown_or_closed(window_ids: &[u32]) -> bool {
+    let (Some(on_screen), Some(all)) = (
+        window_list(kCGWindowListOptionOnScreenOnly),
+        window_list(kCGWindowListOptionAll),
+    ) else {
+        return false;
+    };
     window_ids
         .iter()
-        .any(|&id| window_on_screen(id).is_none_or(|on_screen| on_screen))
+        .any(|id| on_screen.contains(id) || !all.contains(id))
 }
 
-/// `None` once the window no longer exists.
-fn window_on_screen(id: u32) -> Option<bool> {
-    let windows = copy_window_info(kCGWindowListOptionIncludingWindow, id)?;
-    let info = unsafe { CFDictionary::<CFString, *const c_void>::from_void(*windows.get(0)?) };
-    // The window server leaves the key out for windows that are not on screen.
-    Some(unsafe {
-        info.find(kCGWindowIsOnscreen)
-            .is_some_and(|value| bool::from((*CFBoolean::from_void(*value)).clone()))
-    })
+fn window_list(option: CGWindowListOption) -> Option<Vec<u32>> {
+    let list = create_window_list(option, kCGNullWindowID)?;
+    // The list holds window numbers, not CF objects.
+    Some(
+        list.get_all_values()
+            .into_iter()
+            .map(|id| id as usize as u32)
+            .collect(),
+    )
 }
 
 fn default_outputs() -> Vec<u32> {
