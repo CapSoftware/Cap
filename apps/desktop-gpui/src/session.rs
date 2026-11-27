@@ -1203,10 +1203,11 @@ impl RecordingSession {
         Some(limit.saturating_sub(self.elapsed()))
     }
 
-    /// A stop or discard that capture did not confirm leaves the recording
-    /// running, so its limit applies again. The first check waits a little so
-    /// a stop that keeps failing is not retried in a tight loop.
-    fn resume_recording_limit(&mut self, cx: &mut Context<Self>) {
+    /// Starts the limit monitor again for the live recording: after a resume,
+    /// so an upgrade made while paused is fetched before the limit, and after
+    /// a stop or discard that capture did not confirm, waiting a little first
+    /// so a stop that keeps failing is not retried in a tight loop.
+    fn rearm_recording_limit(&mut self, first_check_after: Duration, cx: &mut Context<Self>) {
         if !matches!(self.phase, Phase::Recording { .. }) {
             return;
         }
@@ -1218,7 +1219,7 @@ impl RecordingSession {
         else {
             return;
         };
-        self.monitor_recording_limit(project_dir, LIMIT_CHECK_AFTER_FAILED_STOP, cx);
+        self.monitor_recording_limit(project_dir, first_check_after, cx);
     }
 
     fn monitor_recording_limit(
@@ -1613,7 +1614,7 @@ impl RecordingSession {
                     {
                         this.monitor_storage(active.project_dir.clone(), cx);
                     }
-                    this.resume_recording_limit(cx);
+                    this.rearm_recording_limit(LIMIT_CHECK_AFTER_FAILED_STOP, cx);
                     #[cfg(windows)]
                     let message = if this.mode() == Some(recording::RecordingMode::Studio) {
                         format!("{error}. Studio shutdown remains unconfirmed; recording and files retained.")
@@ -1768,6 +1769,7 @@ impl RecordingSession {
                         if let Some(since) = this.paused_since.take() {
                             this.paused_accum += since.elapsed();
                         }
+                        this.rearm_recording_limit(Duration::ZERO, cx);
                     } else if !was_paused && paused {
                         this.paused_since = Some(Instant::now());
                     }
@@ -1987,6 +1989,7 @@ impl RecordingSession {
                         if let Some(since) = this.paused_since.take() {
                             this.paused_accum += since.elapsed();
                         }
+                        this.rearm_recording_limit(Duration::ZERO, cx);
                     } else if !was_paused && paused {
                         this.paused_since = Some(Instant::now());
                     }
@@ -2235,7 +2238,7 @@ impl RecordingSession {
                         if matches!(this.phase, Phase::Recording { .. }) {
                             this.monitor_storage(directory.clone(), cx);
                         }
-                        this.resume_recording_limit(cx);
+                        this.rearm_recording_limit(LIMIT_CHECK_AFTER_FAILED_STOP, cx);
                         this.error = Some(match result {
                             Ok((_, Err(error))) => format!(
                                 "{error:#}; discard/restart stopped, local recording retained"
@@ -2299,7 +2302,7 @@ impl RecordingSession {
                     result => {
                         this.phase = Phase::Recording { paused: false };
                         this.clean_control.uncertain = true;
-                        this.resume_recording_limit(cx);
+                        this.rearm_recording_limit(LIMIT_CHECK_AFTER_FAILED_STOP, cx);
                         this.error = Some(match result {
                             Ok((_, Err(error))) => format!("{error:#}. Cleanup is unconfirmed; retry Stop."),
                             Err(error) => format!("Cancel task failed: {error}. Cleanup is unconfirmed; retry Stop."),
