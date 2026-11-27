@@ -245,6 +245,7 @@ struct StudioLifecycleInner {
     terminal: tokio::sync::Mutex<Option<(StudioStopIntent, StudioStopReport)>>,
     terminal_started: std::sync::atomic::AtomicBool,
     runtime: std::sync::Mutex<Option<tokio::runtime::Handle>>,
+    recording_lock: std::sync::Mutex<Option<crate::recovery::RecordingLock>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -258,6 +259,7 @@ impl StudioLifecycle {
             terminal: tokio::sync::Mutex::new(None),
             terminal_started: std::sync::atomic::AtomicBool::new(false),
             runtime: std::sync::Mutex::new(tokio::runtime::Handle::try_current().ok()),
+            recording_lock: std::sync::Mutex::new(None),
         }))
     }
 
@@ -379,6 +381,7 @@ struct WindowsStudioTerminal {
     late_stop: LateStop,
     #[cfg(windows)]
     stop_cut: crate::output_pipeline::StopCut,
+    recording_lock: Option<crate::recovery::RecordingLock>,
 }
 
 #[cfg(windows)]
@@ -3028,6 +3031,16 @@ async fn spawn_studio_recording_actor(
     }
     diagnostic.stage("initializing_capture");
     ensure_dir(&recording_dir)?;
+    let recording_lock = crate::recovery::RecordingLock::acquire_for_recording(&recording_dir);
+    #[cfg(target_os = "linux")]
+    {
+        *lifetime
+            .lifecycle
+            .0
+            .recording_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = recording_lock;
+    }
 
     trace!("creating recording actor");
 
@@ -3133,11 +3146,15 @@ async fn spawn_studio_recording_actor(
         #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         recording_dir: actor_recording_dir,
         #[cfg(target_os = "macos")]
-        terminal: Arc::new(WindowsStudioTerminal::default()),
+        terminal: Arc::new(WindowsStudioTerminal {
+            recording_lock,
+            ..Default::default()
+        }),
         #[cfg(windows)]
         terminal: Arc::new(WindowsStudioTerminal {
             late_stop,
             stop_cut,
+            recording_lock,
             ..Default::default()
         }),
         actor_ref,

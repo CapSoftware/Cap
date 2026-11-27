@@ -1160,6 +1160,7 @@ title = "Enregistrement incomplet"
 [main.recovery.error]
 nothing_saved = "Aucune vidéo n'a été enregistrée avant l'arrêt de cet enregistrement, il n'y a donc rien à récupérer. Ses fichiers se trouvent toujours dans {path}."
 rebuild_failed = "Cap n'a pas pu reconstruire cet enregistrement ({error}). Rien n'a été supprimé et les fichiers d'origine se trouvent dans {path}."
+still_recording = "Un autre processus Cap enregistre encore ce projet. Réessayez une fois cet enregistrement terminé."
 storage = "L'espace libre est insuffisant pour récupérer cet enregistrement ({error}). Libérez de l'espace puis cliquez à nouveau sur Récupérer. Rien n'a été supprimé et les fichiers se trouvent dans {path}."
 
 [main.sign_in]

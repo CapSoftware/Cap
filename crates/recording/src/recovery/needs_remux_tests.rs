@@ -53,7 +53,7 @@ fn encode_display_from(display: &Path, fragments: usize, first_second: u64) {
 /// stop does not run: the metadata points at the fragment directory and says
 /// `NeedsRemux`. The manifest fields are what every release since 0.6.0
 /// writes.
-fn needs_remux_project(parent: &Path, name: &str, fragments: usize) -> PathBuf {
+pub(super) fn needs_remux_project(parent: &Path, name: &str, fragments: usize) -> PathBuf {
     let project = parent.join(name);
     encode_display(&project.join(DISPLAY), fragments);
     let project = project.canonicalize().unwrap();

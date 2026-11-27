@@ -720,6 +720,7 @@ async fn finish_late_studio_stop(
     let path = finishing.project_path().to_path_buf();
     let mut save = tokio::spawn(async move {
         let _in_progress = in_progress;
+        let _finishing = finishing.clone();
         finish_after_capture_stop(
             async move {
                 let outcome = finishing.wait().await;

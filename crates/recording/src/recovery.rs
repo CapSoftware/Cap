@@ -27,6 +27,7 @@ use crate::studio_recording::CompletedRecording;
 mod prefix;
 mod preparing_observer;
 mod preparing_projection;
+mod recording_lock;
 mod retirement;
 
 type PreparingRecoveryLock = retirement::RecoveryLease;
@@ -39,6 +40,7 @@ pub use preparing_observer::{
 pub use preparing_projection::{
     PreparingAudioInput, PreparingCursorImage, PreparingStudioSegment, PreparingVideoInput,
 };
+pub use recording_lock::{RecordingLock, is_recording_elsewhere};
 
 /// Studio projects whose stop returned while their tracks were still
 /// writing. Recovery leaves them alone until the stop completes, since it
@@ -215,6 +217,8 @@ pub enum RecoveryError {
     Validation(String),
     #[error("Recovered video is not playable: {0}")]
     UnplayableVideo(String),
+    #[error("This recording is still being recorded by another Cap process")]
+    RecordingInProgress,
 }
 
 impl RecoveryError {
@@ -419,6 +423,7 @@ impl RecoveryManager {
         if finishing::contains(project_path) {
             return Err(finishing::busy());
         }
+        let _release = recording_lock::ReleaseWhenDone(project_path);
         let incomplete = {
             let _lock = RecoveryLock::acquire(project_path)?;
             let Ok(meta) = RecordingMeta::load_for_project(project_path) else {
@@ -2363,6 +2368,7 @@ impl RecoveryManager {
             VideoValidation::Full => RecoveryCopyDurability::Durable,
             VideoValidation::Bounded => RecoveryCopyDurability::Deferred,
         };
+        let _release = recording_lock::ReleaseWhenDone(project);
         Self::require_no_track_failure(project)?;
         let _lock = RecoveryLock::acquire(project)?;
         let before = recovery_snapshot(project)?;
@@ -3705,6 +3711,7 @@ struct RecoveryLock {
     _file: std::fs::File,
     #[cfg(unix)]
     owner_pid: libc::pid_t,
+    _recording: recording_lock::RecordingProbe,
 }
 
 impl RecoveryLock {
@@ -3730,6 +3737,7 @@ impl RecoveryLock {
         reconcile: impl FnOnce(&Path) -> Result<(), RecoveryError>,
     ) -> Result<Self, RecoveryError> {
         reject_recovery_link(&project.symlink_metadata()?)?;
+        let recording = recording_lock::probe(project)?;
         let path = project.join(".recovery.lock");
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
@@ -3773,6 +3781,7 @@ impl RecoveryLock {
             _file: file,
             #[cfg(unix)]
             owner_pid: unsafe { libc::getpid() },
+            _recording: recording,
         };
         if let Err(error) = reconcile(project) {
             warn!(path = %project.display(), %error, "Interrupted recovery publication requires attention; all files retained");

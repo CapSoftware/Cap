@@ -326,6 +326,7 @@ pub struct ActorHandle {
         >,
     >,
     microphone_switch: Option<crate::sources::MicrophoneSwitch>,
+    _recording_lock: Option<crate::recovery::RecordingLock>,
 }
 
 impl ActorHandle {
@@ -1322,6 +1323,7 @@ async fn build_instant_recording_actor(
         return Err(LinuxCameraPresentationError::UnsupportedTarget.into());
     }
     ensure_dir(&recording_dir)?;
+    let recording_lock = crate::recovery::RecordingLock::acquire_for_recording(&recording_dir);
 
     let timestamps = Timestamps::now();
 
@@ -1603,6 +1605,7 @@ async fn build_instant_recording_actor(
         health_rx,
         segment_rx: segment_rx.map(|rx| std::sync::Mutex::new(Some(rx))),
         microphone_switch,
+        _recording_lock: recording_lock,
     };
 
     #[cfg(not(target_os = "linux"))]
@@ -2151,6 +2154,7 @@ mod quiescence_tests {
                 health_rx: None,
                 segment_rx: None,
                 microphone_switch: None,
+                _recording_lock: None,
                 lifecycle,
             },
             audio_cancel,
@@ -2370,6 +2374,7 @@ mod quiescence_tests {
             health_rx: None,
             segment_rx: None,
             microphone_switch: None,
+            _recording_lock: None,
             lifecycle,
         };
         if start_video {

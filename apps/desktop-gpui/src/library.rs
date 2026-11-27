@@ -478,6 +478,7 @@ pub fn find_incomplete_recordings_in(
                     &recording.meta.pretty_name,
                     recording.sort_time_millis,
                 )
+                && !cap_recording::recovery::is_recording_elsewhere(&recording.path)
         })
         .filter_map(|recording| {
             let ScannedRecording { path, meta, .. } = recording;
@@ -555,6 +556,9 @@ fn recover_incomplete_recording_in(
         return Err("Path is not inside a recordings directory".to_string());
     }
 
+    if cap_recording::recovery::is_recording_elsewhere(&canonical_path) {
+        return Err(tr::main::recovery::error::still_recording().to_string());
+    }
     let meta = RecordingMeta::load_for_project(&canonical_path)
         .map_err(|error| format!("Failed to load recording metadata: {error}"))?;
     if matches!(meta.inner, RecordingMetaInner::Instant(_)) {
@@ -711,6 +715,9 @@ fn recover_interrupted_for_editing_in(
     if cap_recording::recovery::finishing::contains(project_path) {
         return Err(tr::dialog::saving::in_background().to_string());
     }
+    if cap_recording::recovery::is_recording_elsewhere(project_path) {
+        return Err(tr::main::recovery::error::still_recording().to_string());
+    }
     if RecoveryManager::inspect_recording(project_path).is_none() {
         let has_segments = match studio {
             StudioRecordingMeta::MultipleSegments { inner } => !inner.segments.is_empty(),
@@ -830,7 +837,9 @@ pub fn is_recording_in_progress(path: &Path) -> bool {
 /// Refuses a project folder a live recording still owns, under any path that
 /// leads to it.
 pub fn ensure_not_recording_in_progress(path: &Path) -> Result<(), String> {
-    if IN_PROGRESS_PROJECTS.holds_resolved(path) {
+    if IN_PROGRESS_PROJECTS.holds_resolved(path)
+        || cap_recording::recovery::is_recording_elsewhere(path)
+    {
         return Err(tr::dialog::delete_recording::recording_active().to_string());
     }
     Ok(())
