@@ -234,12 +234,21 @@ impl SpeakerNames {
     /// the live view to the notes. A voice the person named or made a choice
     /// about keeps its number.
     pub fn observe_speaking(&mut self, speakers: &[SpeakerInfo]) {
+        self.observe_speaking_keeping(speakers, &[]);
+    }
+
+    /// As [`observe_speaking`](Self::observe_speaking), keeping the numbers
+    /// of `with_lines` too: voices whose lines are still in the note. A
+    /// meeting resumed after a sleep starts a new capture that knows only its
+    /// own voices.
+    pub fn observe_speaking_keeping(&mut self, speakers: &[SpeakerInfo], with_lines: &[u32]) {
         let silent: Vec<SpeakerId> = self
             .numbers
             .keys()
             .copied()
             .filter(|id| {
                 !speakers.iter().any(|s| s.id == *id)
+                    && !with_lines.contains(&id.0)
                     && !self.renames.contains_key(id)
                     && !self.not_user.contains(id)
                     && !self.left_out.contains(id)

@@ -502,3 +502,31 @@ fn named_or_chosen_voices_keep_their_numbers_and_shown_ones_never_move() {
     assert_eq!(names.label(SpeakerId(4)), Some(Label::Person(3)));
     assert_eq!(names.label(SpeakerId(5)), Some(Label::Person(4)));
 }
+
+#[test]
+fn a_resumed_meeting_keeps_the_numbers_of_voices_with_lines() {
+    // Persons 1 and 2 speak before a sleep; after Resume the new capture
+    // knows only its own voices (4 and 6). The earlier voices keep their
+    // numbers while their lines are in the note, and the new ones go on from 3.
+    let mut names = SpeakerNames::new(None);
+    names.observe_speaking(&[info(1, Track::System, 0, 1, false)]);
+    names.observe_speaking(&[
+        info(1, Track::System, 0, 1, false),
+        info(3, Track::System, 2_000, 1, false),
+    ]);
+    names.observe_speaking_keeping(&[info(4, Track::System, 60_000, 1, false)], &[1, 3, 4]);
+    names.observe_speaking_keeping(
+        &[
+            info(4, Track::System, 60_000, 1, false),
+            info(6, Track::System, 62_000, 1, false),
+        ],
+        &[1, 3, 4, 6],
+    );
+    assert_eq!(names.label(SpeakerId(1)), Some(Label::Person(1)));
+    assert_eq!(names.label(SpeakerId(3)), Some(Label::Person(2)));
+    assert_eq!(names.label(SpeakerId(4)), Some(Label::Person(3)));
+    assert_eq!(names.label(SpeakerId(6)), Some(Label::Person(4)));
+    // A voice with no lines left still gives its number back.
+    names.observe_speaking_keeping(&[info(6, Track::System, 62_000, 1, false)], &[1, 3, 6]);
+    assert_eq!(names.label(SpeakerId(4)), None);
+}

@@ -4040,7 +4040,7 @@ impl Meetings {
         let mut names = before
             .clone()
             .unwrap_or_else(|| cap_diarize::SpeakerNames::new(voices.attendee.clone()));
-        names.observe_speaking(&heard);
+        names.observe_speaking_keeping(&heard, &speaking);
         if before.as_ref() != Some(&names) {
             self.edit_voices(doc_id, vec![LogLine::SpeakerNames { names }], cx);
         }
