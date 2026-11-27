@@ -844,7 +844,9 @@ const isAuth = (value: unknown): value is ExtensionAuth => {
 	const candidate = value as Partial<ExtensionAuth>;
 	return (
 		typeof candidate.authApiKey === "string" &&
-		typeof candidate.userId === "string"
+		typeof candidate.userId === "string" &&
+		(candidate.apiBaseUrl === undefined ||
+			typeof candidate.apiBaseUrl === "string")
 	);
 };
 
