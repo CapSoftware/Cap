@@ -513,7 +513,10 @@ impl AudioOutput {
         Self::new_headless_with_channels(HEADLESS_CHANNELS, tap)
     }
 
+    /// `channels` is clamped to what the playback source can produce, so the
+    /// pump always pulls whole frames at the real-time rate.
     pub fn new_headless_with_channels(channels: u16, tap: HeadlessAudioTap) -> Self {
+        let channels = channels.clamp(1, AudioInfo::MAX_AUDIO_CHANNELS);
         let (control_tx, control_rx) = std_mpsc::channel();
 
         if let Err(e) = std::thread::Builder::new()
