@@ -663,6 +663,7 @@ fn settings_snapshot() -> Value {
 
     json!({
         "maxFps": settings.max_fps,
+        "maxFpsMatchDisplay": settings.max_fps_match_display,
         "instantModeMaxResolution": settings.instant_mode_max_resolution,
         "studioRecordingQuality": settings.studio_recording_quality.as_json(),
         "studioVideoBitrate": settings.studio_video_bitrate(),

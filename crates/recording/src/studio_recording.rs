@@ -979,6 +979,11 @@ impl Actor {
                 return Err(self.preserve_failure_evidence(error));
             }
         };
+        #[cfg(target_os = "macos")]
+        let recording = CompletedRecording {
+            screen_frames: self.segment_factory.screen_frames.totals(),
+            ..recording
+        };
 
         if !self.all_tracks_stopped {
             return Err(self.preserve_failure_evidence(anyhow!(UNCONFIRMED_CAPTURE_CLEANUP)));
@@ -1687,10 +1692,10 @@ struct Pipeline {
     pub track_failures: SharedTrackFailures,
     pub watcher_task: Option<JoinHandle<()>>,
     stopping: Arc<std::sync::atomic::AtomicBool>,
-    /// macOS records an audio-only segment's system audio from its own
-    /// ScreenCaptureKit stream, so that stream ending (sharing stopped, the
-    /// display gone, a system stop) has to end the recording the way the
-    /// screen ending does, instead of leaving only the black canvas running.
+    /// Audio-only system audio is the recording. On macOS that stream is a
+    /// ScreenCaptureKit capture. On Linux it is the output monitor. Either
+    /// one ending has to end the take, instead of leaving the stand-in clock
+    /// running.
     system_audio_required: bool,
 }
 
@@ -2333,6 +2338,23 @@ impl Pipeline {
                     });
                     continue;
                 }
+                #[cfg(target_os = "linux")]
+                if matches!(track, RecordingTrackKind::SystemAudio)
+                    && required
+                    && res.is_ok()
+                    && !stopping.load(std::sync::atomic::Ordering::Acquire)
+                {
+                    warn!(?track, "Audio-only system audio ended before Stop");
+                    completion_tx.send_if_modified(|current| {
+                        if current.is_none() {
+                            *current = Some(Ok(()));
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                    continue;
+                }
                 #[cfg(any(target_os = "linux", windows))]
                 let res = match res {
                     Ok(()) if !stopping.load(std::sync::atomic::Ordering::Acquire) => {
@@ -2823,7 +2845,7 @@ impl ActorBuilder {
     }
 
     pub fn with_max_fps(mut self, max_fps: u32) -> Self {
-        self.max_fps = max_fps.clamp(1, 120);
+        self.max_fps = max_fps.clamp(1, crate::defaults::MAX_STUDIO_FPS);
         self
     }
 
@@ -3290,6 +3312,7 @@ pub struct CompletedRecording {
     pub meta: StudioRecordingMeta,
     pub cursor_data: cap_project::CursorImages,
     pub clean_stopped: Option<CleanStoppedStudio>,
+    pub screen_frames: Option<sources::screen_capture::frame_accounting::ScreenFrameTotals>,
 }
 
 /// Tracks starting within one audio output buffer of each other are treated
@@ -3700,6 +3723,7 @@ async fn stop_recording(
         meta,
         cursor_data: Default::default(),
         clean_stopped,
+        screen_frames: None,
         // display_source: actor.options.capture_target,
         // segments: actor.segments,
     })
@@ -3733,6 +3757,8 @@ struct SegmentPipelineFactory {
     /// The camera input of the segment built last, which a camera switch
     /// moves to another camera while that segment records.
     live_camera: Option<StudioCameraInput>,
+    #[cfg(target_os = "macos")]
+    screen_frames: sources::screen_capture::frame_accounting::ScreenFrameLedger,
 }
 
 #[cfg(target_os = "linux")]
@@ -3773,6 +3799,8 @@ impl SegmentPipelineFactory {
             #[cfg(windows)]
             encoder_preferences: crate::capture_pipeline::EncoderPreferences::new(),
             live_camera: None,
+            #[cfg(target_os = "macos")]
+            screen_frames: Default::default(),
         }
     }
 
@@ -3817,6 +3845,8 @@ impl SegmentPipelineFactory {
             segment_start_time,
             #[cfg(windows)]
             self.encoder_preferences.clone(),
+            #[cfg(target_os = "macos")]
+            &self.screen_frames,
         )
         .await
     }
@@ -3858,6 +3888,8 @@ impl SegmentPipelineFactory {
                 Timestamps::now(),
                 #[cfg(windows)]
                 self.encoder_preferences.clone(),
+                #[cfg(target_os = "macos")]
+                &self.screen_frames,
             )
             .await
         };
@@ -4008,6 +4040,8 @@ async fn create_segment_pipeline(
     video_bitrate: Option<u32>,
     start_time: Timestamps,
     #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
+    #[cfg(target_os = "macos")]
+    screen_frames: &sources::screen_capture::frame_accounting::ScreenFrameLedger,
 ) -> anyhow::Result<Pipeline> {
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device()
@@ -4202,6 +4236,8 @@ async fn create_segment_pipeline(
         {
             start_time = Timestamps::now();
         }
+        #[cfg(target_os = "macos")]
+        screen_frames.register(capture_source.frame_accounting());
 
         let screen = ScreenCaptureMethod::make_studio_mode_pipeline(
             capture_source,
@@ -4460,7 +4496,7 @@ async fn create_segment_pipeline(
         track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
         watcher_task: None,
         stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        system_audio_required: audio_only && cfg!(target_os = "macos"),
+        system_audio_required: audio_only && cfg!(any(target_os = "macos", target_os = "linux")),
     })
 }
 
@@ -4481,7 +4517,9 @@ async fn audio_only_system_audio(
     #[cfg(target_os = "linux")]
     {
         let _ = (base_inputs, start_time);
-        screen_capture::create_system_audio_source_config().await
+        screen_capture::create_system_audio_source_config()
+            .await
+            .map(screen_capture::SystemAudioSourceConfig::end_take_when_lost)
     }
 
     #[cfg(target_os = "macos")]
@@ -7640,6 +7678,42 @@ mod tests {
     }
 
     #[test]
+    fn studio_frame_rate_is_clamped_to_the_studio_ceiling() {
+        let builder = |fps| {
+            ActorBuilder::new(
+                PathBuf::from("unused.cap"),
+                screen_capture::ScreenCaptureTarget::CameraOnly,
+            )
+            .with_max_fps(fps)
+            .max_fps
+        };
+        let ceiling = if cfg!(target_os = "macos") { 240 } else { 120 };
+        assert_eq!(crate::defaults::MAX_STUDIO_FPS, ceiling);
+        assert_eq!(builder(0), 1);
+        for fps in [24, 25, 30, 60, 120, 144, 165, 240] {
+            assert_eq!(builder(fps), fps.min(ceiling));
+        }
+        assert_eq!(builder(241), ceiling);
+        assert_eq!(builder(u32::MAX), ceiling);
+    }
+
+    #[test]
+    fn camera_cap_still_applies_at_high_frame_rates() {
+        let defaults = crate::RecordingDefaults::default();
+        for fps in [60, 120, 144, 165, 240] {
+            assert_eq!(
+                defaults.studio_max_fps(true, Some(fps)),
+                crate::defaults::CAMERA_ACTIVE_STUDIO_MAX_FPS
+            );
+            assert_eq!(defaults.studio_max_fps(false, Some(fps)), fps);
+        }
+        assert_eq!(
+            defaults.studio_max_fps(false, None),
+            crate::defaults::DEFAULT_STUDIO_MAX_FPS
+        );
+    }
+
+    #[test]
     fn video_bitrate_is_absent_by_default_and_clamped_when_set() {
         let builder = || {
             ActorBuilder::new(
@@ -8692,6 +8766,7 @@ mod clean_stop_receipt_tests {
             meta: studio.as_ref().clone(),
             cursor_data: Default::default(),
             clean_stopped: receipt(metadata),
+            screen_frames: None,
         };
         let second = completed.clone();
         let first_receipt = completed.clean_stopped.as_ref().unwrap();
@@ -8738,6 +8813,7 @@ mod clean_stop_receipt_tests {
             meta: studio.as_ref().clone(),
             cursor_data: Default::default(),
             clean_stopped: receipt(oversized),
+            screen_frames: None,
         };
         assert!(completed.clean_stopped.is_none());
         let StudioRecordingMeta::MultipleSegments { inner } = completed.meta else {

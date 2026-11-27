@@ -6000,6 +6000,7 @@ mod clean_studio_snapshot_tests {
             meta: metadata.studio_meta().unwrap().clone(),
             cursor_data: Default::default(),
             clean_stopped: CleanStoppedStudio::for_test(metadata, configuration),
+            screen_frames: None,
         }
     }
 
@@ -6042,6 +6043,7 @@ mod clean_studio_snapshot_tests {
                     metadata,
                     configuration,
                 ),
+                screen_frames: None,
             };
             PreparingStudioJob::claim(&alternate_completed, 73).unwrap()
         } else {

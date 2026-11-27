@@ -437,6 +437,13 @@ pub enum PipelineHealthEvent {
     EncoderTailLost {
         encoder: String,
     },
+    FramesLost {
+        source: String,
+        displayed: u64,
+        lost_in_capture: u64,
+        lost_before_encoder: u64,
+        lost_in_encoder: u64,
+    },
 }
 
 pub type HealthSender = tokio::sync::mpsc::Sender<PipelineHealthEvent>;
@@ -504,6 +511,22 @@ pub fn emit_health(tx: &HealthSender, event: PipelineHealthEvent) {
             health_event(14, "microphone_digital_silence", &[])
         }
         PipelineHealthEvent::EncoderTailLost { .. } => health_event(15, "encoder_tail_lost", &[]),
+        PipelineHealthEvent::FramesLost {
+            displayed,
+            lost_in_capture,
+            lost_before_encoder,
+            lost_in_encoder,
+            ..
+        } => health_event(
+            16,
+            "frames_lost",
+            &[
+                Field::number("displayed", *displayed),
+                Field::number("lost_in_capture", *lost_in_capture),
+                Field::number("lost_before_encoder", *lost_before_encoder),
+                Field::number("lost_in_encoder", *lost_in_encoder),
+            ],
+        ),
     }
     let _ = tx.try_send(event);
 }
@@ -4469,6 +4492,12 @@ impl PreparedAudioSources {
                     self.erased_audio_sources.clear();
                 }
 
+                if was_cancelled && !mixed_audio {
+                    for source in &mut self.erased_audio_sources {
+                        (source.finish_capture_fn)(source.inner.as_mut()).await;
+                    }
+                }
+
                 if was_cancelled && !audio_degraded {
                     let drain_start = std::time::Instant::now();
                     let drain_deadline = tokio::time::Instant::now() + MIXER_STOP_TIMEOUT;
@@ -5643,6 +5672,7 @@ struct ErasedAudioSource {
     inner: Box<dyn Any + Send>,
     audio_info: AudioInfo,
     start_fn: fn(&mut dyn Any) -> BoxFuture<'_, anyhow::Result<()>>,
+    finish_capture_fn: fn(&mut dyn Any) -> BoxFuture<'_, ()>,
     stop_fn: fn(&mut dyn Any) -> BoxFuture<'_, anyhow::Result<()>>,
 }
 
@@ -5655,6 +5685,12 @@ impl ErasedAudioSource {
                 raw.downcast_mut::<TAudio>()
                     .expect("Wrong type")
                     .start()
+                    .boxed()
+            },
+            finish_capture_fn: |raw| {
+                raw.downcast_mut::<TAudio>()
+                    .expect("Wrong type")
+                    .finish_capture()
                     .boxed()
             },
             stop_fn: |raw| {
@@ -5693,6 +5729,13 @@ pub trait AudioSource: Send + 'static {
 
     fn start(&mut self) -> impl Future<Output = anyhow::Result<()>> + Send {
         async { Ok(()) }
+    }
+
+    /// Hands over everything the source still holds before a single-source
+    /// track takes its final drain at Stop. Sources that send every frame as
+    /// it is captured have nothing to do.
+    fn finish_capture(&mut self) -> impl Future<Output = ()> + Send {
+        async {}
     }
 
     fn stop(&mut self) -> impl Future<Output = anyhow::Result<()>> + Send {
@@ -10387,6 +10430,64 @@ mod tests {
             // it and is then padded with silence out to Stop.
             assert_eq!(frames[0].timestamp, Duration::ZERO);
             assert!(frames.iter().map(|frame| frame.samples).sum::<usize>() >= 4_800);
+        }
+
+        struct HeldFrameSource {
+            output: mpsc::Sender<AudioFrame>,
+            held: Option<AudioFrame>,
+        }
+
+        impl AudioSource for HeldFrameSource {
+            type Config = AudioFrame;
+
+            fn setup(
+                held: Self::Config,
+                output: mpsc::Sender<AudioFrame>,
+                _: &mut SetupCtx,
+            ) -> impl Future<Output = anyhow::Result<Self>> + Send + 'static {
+                std::future::ready(Ok(Self {
+                    output,
+                    held: Some(held),
+                }))
+            }
+
+            fn audio_info(&self) -> AudioInfo {
+                AudioMixer::INFO
+            }
+
+            async fn finish_capture(&mut self) {
+                if let Some(frame) = self.held.take() {
+                    self.output.send(frame).await.unwrap();
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn single_source_stop_keeps_audio_the_source_still_held() {
+            let temp = tempfile::tempdir().unwrap();
+            let timestamps = Timestamps::now();
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = OutputPipeline::builder(temp.path().join("held-stop.ogg"))
+                .with_timestamps(timestamps)
+                .with_audio_source::<HeldFrameSource>(AudioFrame::new(
+                    AudioMixer::INFO.empty_frame(4_800),
+                    Timestamp::Instant(timestamps.instant()),
+                ))
+                .build::<RecordingAudioMuxer>(sent.clone())
+                .await
+                .unwrap();
+            tokio::time::sleep_until((timestamps.instant() + Duration::from_millis(150)).into())
+                .await;
+            tokio::time::timeout(Duration::from_secs(3), pipeline.stop())
+                .await
+                .unwrap()
+                .unwrap();
+            let frames = sent.lock().unwrap();
+            assert!(
+                frames.iter().map(|frame| frame.samples).sum::<usize>() >= 4_800,
+                "audio handed over at Stop was not muxed: {:?}",
+                frames.iter().map(|frame| frame.samples).collect::<Vec<_>>()
+            );
         }
 
         /// A Stop that reaches the pipeline long after the user asked to stop
