@@ -381,7 +381,7 @@ struct WindowsStudioTerminal {
     late_stop: LateStop,
     #[cfg(windows)]
     stop_cut: crate::output_pipeline::StopCut,
-    recording_lock: Option<crate::recovery::RecordingLock>,
+    _recording_lock: Option<crate::recovery::RecordingLock>,
 }
 
 #[cfg(windows)]
@@ -3147,14 +3147,14 @@ async fn spawn_studio_recording_actor(
         recording_dir: actor_recording_dir,
         #[cfg(target_os = "macos")]
         terminal: Arc::new(WindowsStudioTerminal {
-            recording_lock,
+            _recording_lock: recording_lock,
             ..Default::default()
         }),
         #[cfg(windows)]
         terminal: Arc::new(WindowsStudioTerminal {
             late_stop,
             stop_cut,
-            recording_lock,
+            _recording_lock: recording_lock,
             ..Default::default()
         }),
         actor_ref,
