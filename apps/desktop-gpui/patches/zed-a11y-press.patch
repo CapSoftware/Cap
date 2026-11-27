@@ -1,0 +1,148 @@
+diff --git a/crates/gpui/src/element.rs b/crates/gpui/src/element.rs
+index c817492..9fe310c 100644
+--- a/crates/gpui/src/element.rs
++++ b/crates/gpui/src/element.rs
+@@ -376,7 +376,12 @@ impl<E: Element> Drawable<E> {
+                                 y1: ((bounds.origin.y.0 + bounds.size.height.0) * scale) as f64,
+                             });
+                             self.element.write_a11y_info(&mut node);
+-                            window.a11y.node_bounds.insert(node_id, bounds);
++                            // The part an assistive-technology press can reach:
++                            // a node scrolled out of its container keeps its
++                            // full bounds in the tree, but a click there would
++                            // land on whatever is drawn in its place.
++                            let visible = bounds.intersect(&window.content_mask().bounds);
++                            window.a11y.node_bounds.insert(node_id, visible);
+                             pushed_a11y_node = window.a11y.nodes.push(node_id, node);
+                             #[cfg(debug_assertions)]
+                             if pushed_a11y_node {
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 0dc181d..7268c1f 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -6364,7 +6364,16 @@ impl Window {
+         // Fall back to built-in action handling.
+         match request.action {
+             accesskit::Action::Click => {
+-                if let Some(bounds) = self.a11y.node_bounds.get(&request.target_node).copied() {
++                // `node_bounds` holds the visible part of the node. With none
++                // of it on screen the press does nothing rather than click
++                // whatever is drawn where the node would be.
++                if let Some(bounds) = self
++                    .a11y
++                    .node_bounds
++                    .get(&request.target_node)
++                    .copied()
++                    .filter(|bounds| bounds.size.width.0 > 0. && bounds.size.height.0 > 0.)
++                {
+                     let center = bounds.center();
+                     let mouse_down = PlatformInput::MouseDown(crate::MouseDownEvent {
+                         button: MouseButton::Left,
+diff --git a/crates/gpui/src/window/a11y.rs b/crates/gpui/src/window/a11y.rs
+index 8504ee2..c7eb400 100644
+--- a/crates/gpui/src/window/a11y.rs
++++ b/crates/gpui/src/window/a11y.rs
+@@ -1054,3 +1054,103 @@ mod tests {
+         assert!(a11y.mark().is_none());
+     }
+ }
++
++#[cfg(test)]
++mod press_tests {
++    use crate::{
++        Context, InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement,
++        Styled, TestAppContext, Window, div, px, size,
++    };
++    use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
++
++    #[derive(Default)]
++    struct Presses {
++        visible: Cell<u32>,
++        hidden: Cell<u32>,
++        underneath: Cell<u32>,
++    }
++
++    struct PressView(Rc<Presses>);
++
++    impl Render for PressView {
++        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++            let presses = self.0.clone();
++            let (a, b, c) = (presses.clone(), presses.clone(), presses);
++            div()
++                .size_full()
++                .child(
++                    div()
++                        .id("scroller")
++                        .w(px(200.))
++                        .h(px(100.))
++                        .overflow_y_scroll()
++                        .child(
++                            div()
++                                .id("visible")
++                                .role(accesskit::Role::Button)
++                                .h(px(40.))
++                                .on_click(move |_, _, _| a.visible.set(a.visible.get() + 1)),
++                        )
++                        .child(div().h(px(200.)))
++                        .child(
++                            div()
++                                .id("hidden")
++                                .role(accesskit::Role::Button)
++                                .h(px(40.))
++                                .on_click(move |_, _, _| b.hidden.set(b.hidden.get() + 1)),
++                        ),
++                )
++                // Drawn where the scrolled-out button's centre would be.
++                .child(
++                    div()
++                        .id("underneath")
++                        .absolute()
++                        .top(px(100.))
++                        .left(px(0.))
++                        .w(px(200.))
++                        .h(px(400.))
++                        .on_click(move |_, _, _| c.underneath.set(c.underneath.get() + 1)),
++                )
++        }
++    }
++
++    // An assistive-technology press acts on the node it targets or does
++    // nothing: a node scrolled out of its container must never click what is
++    // drawn in its place, and a visible one is pressed as before.
++    #[gpui::test]
++    fn press_never_lands_on_what_covers_a_hidden_node(cx: &mut TestAppContext) {
++        let presses = Rc::new(Presses::default());
++        let view = presses.clone();
++        let window = cx.open_window(size(px(400.), px(600.)), move |_, _| PressView(view));
++        window
++            .update(cx, |_, window, _| {
++                window.a11y.active_flag.store(true, Ordering::SeqCst);
++                window.refresh();
++            })
++            .unwrap();
++        cx.run_until_parked();
++        let nodes: Vec<_> = window
++            .update(cx, |_, window, _| window.a11y.node_bounds.keys().copied().collect())
++            .unwrap();
++        assert_eq!(nodes.len(), 2, "the two buttons are in the tree");
++        for target_node in nodes {
++            window
++                .update(cx, |_, window, cx| {
++                    window.handle_a11y_action(
++                        accesskit::ActionRequest {
++                            action: accesskit::Action::Click,
++                            target_tree: accesskit::TreeId::ROOT,
++                            target_node,
++                            data: None,
++                        },
++                        cx,
++                    )
++                })
++                .unwrap();
++            cx.run_until_parked();
++        }
++        assert_eq!(presses.visible.get(), 1, "the visible button is pressed");
++        assert_eq!(presses.underneath.get(), 0, "nothing under a hidden button is pressed");
++        assert_eq!(presses.hidden.get(), 0, "a hidden button has no visible point to press");
++    }
++}
