@@ -9,6 +9,7 @@ import {
 	type HlsLadderRange,
 	type HlsLadderRendition,
 	type HlsLadderTierName,
+	hlsLadderFrameRate,
 	hlsLadderSourceFps,
 	hlsRenditionsAreAligned,
 	parseHlsLadderMaster,
@@ -60,6 +61,7 @@ export interface EncodedHlsLadder {
 	// The largest rendition and the length of video in it. A poster taken from
 	// it has the colours viewers see, where the source may still be HDR.
 	poster: { path: string; durationSeconds: number };
+	frameRate: string;
 	cleanup: () => Promise<void>;
 }
 
@@ -67,6 +69,8 @@ export interface EncodeHlsLadderOptions {
 	maxTier?: HlsLadderTierName;
 	range?: HlsLadderRange | null;
 	includeAudio?: boolean;
+	niceness?: number;
+	idle?: boolean;
 }
 
 async function ladderFile(
@@ -93,25 +97,25 @@ export async function encodeHlsLadder(
 		? AbortSignal.any([abortSignal, probing.signal])
 		: probing.signal;
 	const traits = requireVideoSourceTraits(inputPath, probeSignal);
-	const frameTiming = probeFastestFrameRate(inputPath, probeSignal).catch(
-		(error) => {
-			// A full probe pool fails the job, as it does for the probe before
-			// this one. Falling back would quietly encode a variable frame rate
-			// source on its opening rate whenever the server is busy.
-			if (error instanceof ProbeBusyError) throw error;
-			// A slice has to land on the frame grid its neighbours use. Guessing
-			// the rate here while another worker measured it would put the slices
-			// on different grids, so the slice fails and is sent again.
-			if (options.range) throw error;
-			if (!probeSignal.aborted) {
-				console.warn(
-					"[hls-ladder] Could not read frame timing, using the probed frame rate:",
-					error,
-				);
-			}
-			return null;
-		},
-	);
+	const frameTiming = probeFastestFrameRate(inputPath, probeSignal, {
+		idle: options.idle,
+	}).catch((error) => {
+		// A full probe pool fails the job, as it does for the probe before
+		// this one. Falling back would quietly encode a variable frame rate
+		// source on its opening rate whenever the server is busy.
+		if (error instanceof ProbeBusyError) throw error;
+		// A slice has to land on the frame grid its neighbours use. Guessing
+		// the rate here while another worker measured it would put the slices
+		// on different grids, so the slice fails and is sent again.
+		if (options.range) throw error;
+		if (!probeSignal.aborted) {
+			console.warn(
+				"[hls-ladder] Could not read frame timing, using the probed frame rate:",
+				error,
+			);
+		}
+		return null;
+	});
 	const [{ rotation, hdr, hdrColor }, fastestFps] = await Promise.all([
 		traits,
 		frameTiming,
@@ -185,6 +189,8 @@ export async function encodeHlsLadder(
 					timeoutMs,
 					onProgress,
 					signal,
+					undefined,
+					options.niceness,
 				);
 				recordNvencAttempt("process");
 				return "nvenc";
@@ -213,6 +219,8 @@ export async function encodeHlsLadder(
 			timeoutMs,
 			onProgress,
 			signal,
+			undefined,
+			options.niceness,
 		);
 		return "libx264";
 	};
@@ -237,6 +245,8 @@ export async function encodeHlsLadder(
 							getProcessTimeoutMs(metadata.duration, PROCESS_TIMEOUT_MS),
 							undefined,
 							signal,
+							undefined,
+							options.niceness,
 						),
 					)
 				: Promise.resolve();
@@ -305,6 +315,7 @@ export async function encodeHlsLadder(
 			files,
 			result: { encoder, renditions, audio },
 			poster: { path: posterFile.path, durationSeconds: sliceSeconds },
+			frameRate: hlsLadderFrameRate(argsInput.sourceFps),
 			cleanup,
 		};
 	} catch (error) {

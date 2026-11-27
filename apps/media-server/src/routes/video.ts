@@ -9,8 +9,10 @@ import {
 	hasMediaServerSecret,
 	validateMediaServerSecret,
 } from "../lib/auth";
-import { HLS_LADDER_TIER_NAMES } from "../lib/hls-ladder";
+import { HLS_LADDER_TIER_NAMES, planHlsLadder } from "../lib/hls-ladder";
 import { encodeHlsLadder } from "../lib/hls-ladder-encode";
+import { pruneInvertedHlsRungs } from "../lib/hls-ladder-prune";
+import { verifyHlsLadder } from "../lib/hls-ladder-verify";
 import { posterThumbnailOptions } from "../lib/infra-poster";
 import type {
 	Job,
@@ -20,6 +22,7 @@ import type {
 import {
 	beginRecordingProcessing,
 	beginRecordingVerification,
+	canAcceptNewIdleVideoProcess,
 	canAcceptNewInfraVideoProcess,
 	canAcceptNewVideoProcess,
 	claimRecordingWorker,
@@ -35,6 +38,7 @@ import {
 	getMaxConcurrentVideoProcesses,
 	getSystemResources,
 	hasCriticalMemoryPressure,
+	preemptIdleJobs,
 	sendWebhook,
 	touchJob,
 	updateJob,
@@ -154,6 +158,9 @@ const MEDIA_ENGINE_ERROR_CODE = ["FF", "MPEG_ERROR"].join("");
 const PROBE_ERROR_CODE = ["FF", "PROBE_ERROR"].join("");
 const UNREADABLE_INPUT_CODE = "UNREADABLE_INPUT";
 const VIDEO_BUSY_RETRY_AFTER_SECONDS = 15;
+const IDLE_BUSY_RETRY_AFTER_SECONDS = 600;
+const IDLE_NICENESS = 10;
+const HEAVY_LADDER_TIERS: ReadonlySet<string> = new Set(["1440p", "2160p"]);
 const PEER_LOOKUP_RETRY_AFTER_SECONDS = 5;
 const VIDEO_MEMORY_PRESSURE_ERROR =
 	"SERVER_BUSY: container memory pressure is too high";
@@ -260,7 +267,20 @@ const ladderSchema = z.object({
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
 	infra: z.boolean().optional(),
+	priority: z.enum(["normal", "idle"]).optional(),
+	verify: z.boolean().optional(),
+	pruneInvertedRungs: z.boolean().optional(),
 });
+
+function ladderOptionsConflict(
+	options: z.infer<typeof ladderSchema>,
+): string | null {
+	if (options.priority === "idle" && (options.infra === true || options.range))
+		return "An idle ladder cannot be an Infra job or a slice";
+	if ((options.verify || options.pruneInvertedRungs) && options.range)
+		return "verify and pruneInvertedRungs need the whole video, not a slice";
+	return null;
+}
 
 export function isCompleteRecovery(
 	outputDuration: number,
@@ -326,6 +346,7 @@ function getVideoCapacitySnapshot() {
 			phase: job.phase,
 			progress: job.progress,
 			updatedAt: job.updatedAt,
+			...(job.idle && { idle: true }),
 		})),
 	};
 }
@@ -1051,9 +1072,20 @@ video.post("/ladder", async (c) => {
 			400,
 		);
 	}
+	const conflict = ladderOptionsConflict(result.data);
+	if (conflict) {
+		return c.json(
+			{ error: "Invalid request", code: "INVALID_REQUEST", details: conflict },
+			400,
+		);
+	}
+	const idle = result.data.priority === "idle";
+	const retryAfterSeconds = idle
+		? IDLE_BUSY_RETRY_AFTER_SECONDS
+		: VIDEO_BUSY_RETRY_AFTER_SECONDS;
 
 	if (isDraining()) {
-		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
+		c.header("Retry-After", retryAfterSeconds.toString());
 		return c.json(
 			{
 				...getBusyResponseBody(getVideoCapacitySnapshot()),
@@ -1066,21 +1098,45 @@ video.post("/ladder", async (c) => {
 		result.data.infra === true &&
 		(result.data.maxTier === "1440p" || result.data.maxTier === "2160p");
 	if (
-		!canAcceptNewVideoProcess() ||
-		(result.data.infra === true &&
-			!canAcceptNewInfraVideoProcess(
-				infraHeavyLadder,
-				result.data.range !== undefined,
-			))
+		idle
+			? !canAcceptNewIdleVideoProcess(isDraining())
+			: !canAcceptNewVideoProcess() ||
+				(result.data.infra === true &&
+					!canAcceptNewInfraVideoProcess(
+						infraHeavyLadder,
+						result.data.range !== undefined,
+					))
 	) {
-		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
+		c.header("Retry-After", retryAfterSeconds.toString());
 		return c.json(getBusyResponseBody(getVideoCapacitySnapshot()), 503);
 	}
 
 	const { videoId, userId, webhookUrl, webhookSecret } = result.data;
 	const jobId = generateJobId();
-	const job = createJob(jobId, videoId, userId, webhookUrl, webhookSecret);
+	const job = createJob(jobId, videoId, userId, webhookUrl, webhookSecret, {
+		idle,
+	});
 	if (infraHeavyLadder) job.infraHeavyLadder = true;
+	if (result.data.maxTier && HEAVY_LADDER_TIERS.has(result.data.maxTier))
+		job.heavyLadder = true;
+	const accepted = {
+		priority: idle ? ("idle" as const) : ("normal" as const),
+		verify: result.data.verify === true,
+		pruneInvertedRungs: result.data.pruneInvertedRungs === true,
+	};
+	if (
+		!idle &&
+		(result.data.priority !== undefined ||
+			result.data.verify !== undefined ||
+			result.data.pruneInvertedRungs !== undefined)
+	) {
+		job.idle = false;
+	}
+	if (idle) {
+		console.log(
+			JSON.stringify({ event: "idle_ladder_admitted", jobId, videoId }),
+		);
+	}
 
 	void trackBackgroundTask(
 		withMediaTransfers(32 * 1024 ** 3, () =>
@@ -1107,6 +1163,7 @@ video.post("/ladder", async (c) => {
 		jobId,
 		status: "queued",
 		message: "Ladder encoding started",
+		accepted,
 	});
 });
 
@@ -1519,7 +1576,8 @@ async function encodeLadderAsync(
 
 	const abortController = new AbortController();
 	const signal = abortController.signal;
-	updateJob(jobId, { abortController });
+	if (!updateJob(jobId, { abortController }) && options.priority === "idle")
+		return;
 	let inputTempFile: TempFileHandle | null = null;
 	let cleanupLadder: (() => Promise<void>) | null = null;
 
@@ -1544,7 +1602,9 @@ async function encodeLadderAsync(
 			message: "Analyzing source video...",
 		});
 		const metadata = await withJobHeartbeat(jobId, () =>
-			probeVideoFile(input.path),
+			options.priority === "idle"
+				? probeVideoFile(input.path, signal, { idle: true })
+				: probeVideoFile(input.path),
 		);
 		signal.throwIfAborted();
 		updateJob(jobId, { metadata });
@@ -1553,6 +1613,17 @@ async function encodeLadderAsync(
 			getProcessTimeoutMs(metadata.duration, PROCESS_TIMEOUT_MS),
 			metadata.fileSize,
 		);
+		const probedJob = getJob(jobId);
+		if (probedJob && metadata.width > 0 && metadata.height > 0) {
+			const [topRung] = planHlsLadder(
+				{ width: metadata.width, height: metadata.height },
+				{ maxTier: options.maxTier },
+			);
+			probedJob.heavyLadder = Boolean(
+				topRung && HEAVY_LADDER_TIERS.has(topRung.name),
+			);
+		}
+		const niceness = options.priority === "idle" ? IDLE_NICENESS : undefined;
 
 		updateJob(jobId, {
 			phase: "processing",
@@ -1562,7 +1633,7 @@ async function encodeLadderAsync(
 		const processingJob = getJob(jobId);
 		if (processingJob) void sendWebhook(processingJob);
 
-		const ladder = await withJobHeartbeat(jobId, () =>
+		let ladder = await withJobHeartbeat(jobId, () =>
 			encodeHlsLadder(
 				input.path,
 				metadata,
@@ -1570,6 +1641,8 @@ async function encodeLadderAsync(
 					maxTier: options.maxTier,
 					range: options.range,
 					includeAudio: options.includeAudio,
+					niceness,
+					...(options.priority === "idle" && { idle: true }),
 				},
 				(progress, message) => {
 					updateJob(jobId, {
@@ -1582,6 +1655,26 @@ async function encodeLadderAsync(
 		);
 		cleanupLadder = ladder.cleanup;
 
+		if (options.pruneInvertedRungs) {
+			const kept = await pruneInvertedHlsRungs(ladder);
+			ladder = kept.ladder;
+			updateJob(jobId, { pruned: kept.pruned });
+		}
+		if (options.verify) {
+			updateJob(jobId, { progress: 80, message: "Verifying renditions..." });
+			await withJobHeartbeat(jobId, () =>
+				verifyHlsLadder({
+					sourcePath: input.path,
+					ladder,
+					timeoutMs: getProcessTimeoutMs(metadata.duration, PROCESS_TIMEOUT_MS),
+					niceness,
+					signal,
+				}),
+			);
+			signal.throwIfAborted();
+			updateJob(jobId, { verified: true });
+		}
+
 		const missing = ladder.files.filter((file) => !options.uploads[file.name]);
 		if (missing.length > 0) {
 			throw new Error(
@@ -1589,6 +1682,7 @@ async function encodeLadderAsync(
 			);
 		}
 
+		signal.throwIfAborted();
 		updateJob(jobId, {
 			phase: "uploading",
 			progress: 80,
@@ -1627,7 +1721,10 @@ async function encodeLadderAsync(
 							throw error;
 						})
 				: null;
-			const failed = (await Promise.allSettled([...uploads, poster])).find(
+			const settled = Promise.allSettled([...uploads, poster]);
+			const ownJob = getJob(jobId);
+			if (ownJob?.idle) ownJob.uploadsStopped = settled.then(() => {});
+			const failed = (await settled).find(
 				(upload) => upload.status === "rejected",
 			);
 			if (failed?.status === "rejected") throw failed.reason;
@@ -1646,12 +1743,14 @@ async function encodeLadderAsync(
 		if (!signal.aborted) {
 			console.error(`[video/ladder] Error encoding job ${jobId}:`, err);
 		}
-		const updatedJob = updateJob(jobId, {
-			phase: "error",
-			error: err instanceof Error ? err.message : String(err),
-			message: "Encoding failed",
-		});
-		if (updatedJob) await sendWebhook(updatedJob);
+		if (!getJob(jobId)?.preemptedReason) {
+			const updatedJob = updateJob(jobId, {
+				phase: "error",
+				error: err instanceof Error ? err.message : String(err),
+				message: "Encoding failed",
+			});
+			if (updatedJob) await sendWebhook(updatedJob);
+		}
 	} finally {
 		await cleanupLadder?.();
 		await cleanupTempFiles([inputTempFile]);
@@ -3139,6 +3238,7 @@ video.post("/preverify-segments", async (c) => {
 		return c.json({ error: "Server busy", code: "SERVER_BUSY" }, 503);
 	}
 	activePreverifyRuns++;
+	preemptIdleJobs("Idle job preempted by a recording preverification");
 	void trackBackgroundTask(
 		preverifySegments(body.data, secret)
 			.catch((error: unknown) => {

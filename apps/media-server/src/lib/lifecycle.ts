@@ -1,4 +1,4 @@
-import { getActiveVideoProcessCount } from "./job-manager";
+import { getActiveVideoProcessCount, preemptIdleJobs } from "./job-manager";
 import {
 	getActiveAudioOperationCount,
 	getActiveProbeOperationCount,
@@ -80,6 +80,7 @@ export function isDraining(): boolean {
 
 export function setDraining(value: boolean): void {
 	draining = value;
+	if (value) preemptIdleJobs("Idle job preempted: server is draining");
 }
 
 export function trackBackgroundTask<T>(task: Promise<T>): Promise<T> {

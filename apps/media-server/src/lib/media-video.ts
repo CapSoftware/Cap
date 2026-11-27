@@ -66,7 +66,11 @@ import {
 	RecordingTimingError,
 	readRecordingVideoTiming,
 } from "./recording-timing";
-import { registerSubprocess, terminateProcess } from "./subprocess";
+import {
+	lowerProcessPriority,
+	registerSubprocess,
+	terminateProcess,
+} from "./subprocess";
 import {
 	createTempFile,
 	ensureTempDir,
@@ -2218,6 +2222,7 @@ export async function runTranscodeCommand(
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
 	stallWindows?: EncodeStallWindows,
+	niceness?: number,
 ): Promise<void> {
 	if (abortSignal?.aborted) throw new Error("Video processing was cancelled");
 	const proc = registerSubprocess(
@@ -2227,6 +2232,7 @@ export async function runTranscodeCommand(
 			stderr: "pipe",
 		}),
 	);
+	lowerProcessPriority(proc, niceness);
 	let abortCleanup: (() => void) | undefined;
 	if (abortSignal) {
 		abortCleanup = () => {
