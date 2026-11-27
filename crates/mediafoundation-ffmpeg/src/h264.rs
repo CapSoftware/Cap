@@ -197,6 +197,14 @@ impl H264StreamMuxer {
         Ok(())
     }
 
+    pub fn stream_index(&self) -> usize {
+        self.stream_index
+    }
+
+    pub fn last_written_pts(&self) -> Option<i64> {
+        self.last_written_pts
+    }
+
     pub fn frame_count(&self) -> u64 {
         self.frame_count
     }

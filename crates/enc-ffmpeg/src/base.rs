@@ -113,6 +113,14 @@ impl EncoderBase {
         }
     }
 
+    /// Keeps capture timestamps that already start at the beginning of the take.
+    /// `last_stream_dts` is the last dts written on this stream, in the stream
+    /// time base, so the next packet cannot move backwards.
+    pub(crate) fn continue_after(&mut self, last_stream_dts: Option<i64>) {
+        self.first_pts = Some(0);
+        self.last_written_dts = last_stream_dts;
+    }
+
     pub fn set_packet_stats(&mut self, stats: Arc<EncodedPacketStats>) {
         self.packet_stats = Some(stats);
     }

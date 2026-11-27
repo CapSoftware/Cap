@@ -67,6 +67,15 @@ pub enum EncoderFailureReason {
     ConsecutiveProcessFailures,
     Timeout,
     TooManyEmptySamples,
+    Injected,
+}
+
+pub fn injected_failure_after_frames() -> Option<u64> {
+    let Ok(value) = std::env::var("CAP_MF_FAIL_AFTER_FRAMES") else {
+        return None;
+    };
+    let frames = value.parse::<u64>().ok()?;
+    (frames > 0).then_some(frames)
 }
 
 struct EncoderHealthMonitor {
@@ -577,7 +586,22 @@ impl H264Encoder {
 
             let mut consecutive_empty_samples: u8 = 0;
             let mut should_exit = false;
+            let fail_after = injected_failure_after_frames();
             while !should_exit {
+                if let Some(limit) = fail_after
+                    && health_monitor.total_frames_encoded >= limit
+                {
+                    let frames_encoded = health_monitor.total_frames_encoded;
+                    let inputs_without_output = health_monitor.inputs_without_output;
+                    let process_failures = health_monitor.consecutive_process_failures;
+                    let _ = self.cleanup_encoder();
+                    return Err(EncoderRuntimeError::EncoderUnhealthy {
+                        reason: EncoderFailureReason::Injected,
+                        inputs_without_output,
+                        process_failures,
+                        frames_encoded,
+                    });
+                }
                 let health_status = health_monitor.check_health();
                 if !health_status.is_healthy
                     && let Some(reason) = health_status.failure_reason

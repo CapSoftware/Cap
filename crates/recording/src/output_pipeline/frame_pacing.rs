@@ -28,6 +28,21 @@ pub(crate) enum Paced<F> {
     End,
 }
 
+pub(crate) enum PacedPixels<F> {
+    New(F),
+    Repeat,
+}
+
+pub(crate) fn frame_to_encode<F>(carried: &mut Option<F>, step: PacedPixels<F>) -> Option<&F> {
+    match step {
+        PacedPixels::New(frame) => {
+            *carried = Some(frame);
+            carried.as_ref()
+        }
+        PacedPixels::Repeat => carried.as_ref(),
+    }
+}
+
 pub(crate) struct FramePacer {
     interval: Duration,
     last: Option<LastFrame>,
@@ -247,6 +262,86 @@ mod tests {
         assert_eq!(first, at(2));
         assert!(arrived.elapsed() < INTERVAL * 8);
         drop(tx);
+    }
+
+    fn record(
+        carried: &mut Option<u8>,
+        emitted: &mut Vec<Duration>,
+        step: super::PacedPixels<u8>,
+        stamp: Duration,
+    ) {
+        if super::frame_to_encode(carried, step).is_some() {
+            emitted.push(stamp);
+        }
+    }
+
+    fn static_switch_timestamps(keep_carried_frame: bool) -> Vec<Duration> {
+        let interval = Duration::from_secs(1) / 30;
+        let mut carried = None;
+        let mut emitted = Vec::new();
+        let mut stamp = Duration::ZERO;
+        record(
+            &mut carried,
+            &mut emitted,
+            super::PacedPixels::New(1),
+            stamp,
+        );
+        for _ in 0..30 {
+            stamp += interval;
+            record(
+                &mut carried,
+                &mut emitted,
+                super::PacedPixels::Repeat,
+                stamp,
+            );
+        }
+        if !keep_carried_frame {
+            carried = None;
+        }
+        for _ in 0..90 {
+            stamp += interval;
+            record(
+                &mut carried,
+                &mut emitted,
+                super::PacedPixels::Repeat,
+                stamp,
+            );
+        }
+        stamp += interval;
+        record(
+            &mut carried,
+            &mut emitted,
+            super::PacedPixels::New(2),
+            stamp,
+        );
+        emitted
+    }
+
+    fn widest_gap(timestamps: &[Duration]) -> Duration {
+        timestamps
+            .windows(2)
+            .map(|pair| pair[1].saturating_sub(pair[0]))
+            .max()
+            .unwrap_or(Duration::ZERO)
+    }
+
+    #[test]
+    fn static_screen_across_the_software_switch_has_no_multi_frame_gap() {
+        let interval = Duration::from_secs(1) / 30;
+        let kept = static_switch_timestamps(true);
+        let kept_gap = widest_gap(&kept);
+        assert!(
+            kept_gap <= interval * 2,
+            "static handover gap {kept_gap:?} exceeds two frame intervals ({interval:?})"
+        );
+        assert_eq!(kept.len(), 122);
+
+        let dropped = static_switch_timestamps(false);
+        let dropped_gap = widest_gap(&dropped);
+        assert!(
+            dropped_gap > interval * 2,
+            "clearing the carried frame should open the static-screen gap"
+        );
     }
 
     #[test]

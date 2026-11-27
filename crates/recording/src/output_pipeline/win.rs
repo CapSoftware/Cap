@@ -1,8 +1,8 @@
 use crate::{
     AudioFrame, AudioMuxer, Muxer, TaskPool, VideoFrame, VideoMuxer,
     output_pipeline::{
-        HealthSender, PipelineHealthEvent, emit_health,
-        frame_pacing::{FramePacer, Paced},
+        HealthSender, PipelineHealthEvent, SharedHealthSender, emit_health,
+        frame_pacing::{FramePacer, Paced, PacedPixels, frame_to_encode},
         mjpeg::MjpegDecoder,
     },
     screen_capture,
@@ -29,6 +29,29 @@ const DEFAULT_MUXER_BUFFER_SIZE: usize = 240;
 /// The direct Media Foundation encoder loads the same vendor transforms as
 /// FFmpeg's `h264_mf`, so it shares that name for crash recovery.
 const MEDIA_FOUNDATION_ENCODER: &str = "h264_mf";
+
+fn media_foundation_skipped(preferences: &crate::capture_pipeline::EncoderPreferences) -> bool {
+    preferences.should_force_software()
+        || (cap_enc_mediafoundation::injected_failure_after_frames().is_none()
+            && matches!(
+                cap_frame_converter::detect_primary_gpu().map(|gpu| gpu.vendor),
+                Some(cap_frame_converter::GpuVendor::Amd)
+            ))
+}
+
+fn even_output_size(size: SizeInt32, fallback_width: u32, fallback_height: u32) -> (u32, u32) {
+    let width = if size.Width > 0 {
+        size.Width as u32
+    } else {
+        fallback_width
+    };
+    let height = if size.Height > 0 {
+        size.Height as u32
+    } else {
+        fallback_height
+    };
+    (width, height)
+}
 
 fn get_muxer_buffer_size() -> usize {
     std::env::var("CAP_MUXER_BUFFER_SIZE")
@@ -138,6 +161,7 @@ pub struct WindowsMuxer {
     output: Arc<Mutex<ffmpeg::format::context::Output>>,
     audio_encoder: Option<AACEncoder>,
     frame_drops: FrameDropTracker,
+    health: SharedHealthSender,
 }
 
 pub struct WindowsMuxerConfig {
@@ -194,10 +218,12 @@ impl Muxer for WindowsMuxer {
 
         let output = Arc::new(Mutex::new(output));
         let (ready_tx, ready_rx) = oneshot::channel::<anyhow::Result<()>>();
+        let health = SharedHealthSender::new();
 
         {
             let output = output.clone();
             let pause_flag = pause_flag.clone();
+            let health = health.clone();
 
             tasks.spawn_thread("windows-encoder", move || {
                 cap_mediafoundation_utils::thread_init();
@@ -215,16 +241,11 @@ impl Muxer for WindowsMuxer {
                             info!("Using FFmpeg H264 encoder");
                         }
 
-                        let fallback_width = if output_size.Width > 0 {
-                            output_size.Width as u32
-                        } else {
-                            video_config.width
-                        };
-                        let fallback_height = if output_size.Height > 0 {
-                            output_size.Height as u32
-                        } else {
-                            video_config.height
-                        };
+                        let (fallback_width, fallback_height) = even_output_size(
+                            output_size,
+                            video_config.width,
+                            video_config.height,
+                        );
 
                         let mut output_guard = match output.lock() {
                             Ok(guard) => guard,
@@ -249,12 +270,7 @@ impl Muxer for WindowsMuxer {
                             .map_err(|e| anyhow!("ScreenSoftwareEncoder/{e}"))
                     };
 
-                    if encoder_preferences.should_force_software()
-                        || matches!(
-                            cap_frame_converter::detect_primary_gpu().map(|gpu| gpu.vendor),
-                            Some(cap_frame_converter::GpuVendor::Amd)
-                        )
-                    {
+                    if media_foundation_skipped(encoder_preferences) {
                         return fallback(None);
                     }
 
@@ -375,7 +391,7 @@ impl Muxer for WindowsMuxer {
                         _media_foundation_session = Some(session);
                         trace!("Running native encoder with frame pacing");
                         let mut pacer = FramePacer::new(config.frame_rate);
-                        let mut last_texture: Option<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> = None;
+                        let mut last_screen_frame: Option<screen_capture::ScreenFrame> = None;
                         let mut first_timestamp: Option<Duration> = None;
                         let mut frame_count: u64 = 0;
                         let mut frames_reused: u64 = 0;
@@ -386,11 +402,11 @@ impl Muxer for WindowsMuxer {
                                 let (texture, timestamp) = match pacer.next(&video_rx, &pause_flag) {
                                     Paced::Frame(frame, timestamp) => {
                                         let texture = frame.texture().clone();
-                                        last_texture = Some(texture.clone());
+                                        last_screen_frame = Some(frame);
                                         (texture, timestamp)
                                     }
                                     Paced::Repeat(timestamp) => {
-                                        let Some(texture) = &last_texture else {
+                                        let Some(frame) = last_screen_frame.as_ref() else {
                                             continue;
                                         };
                                         frames_reused += 1;
@@ -401,7 +417,7 @@ impl Muxer for WindowsMuxer {
                                                 "Frame pacing: reusing frames due to slow capture"
                                             );
                                         }
-                                        (texture.clone(), timestamp)
+                                        (frame.texture().clone(), timestamp)
                                     }
                                     Paced::End => {
                                         trace!("End of stream signal received");
@@ -434,16 +450,97 @@ impl Muxer for WindowsMuxer {
                                 );
                                 Ok(())
                             }
-                            Err(e) => {
-                                if e.should_fallback() {
-                                    error!(
-                                        "Hardware encoder failed with recoverable error, marking for software fallback: {}",
-                                        e
-                                    );
-                                    encoder_preferences.force_software_only();
+                            Err(e) if e.should_fallback() => {
+                                encoder_preferences.force_software_only();
+                                let carried_frame =
+                                    last_screen_frame.as_ref().and_then(|frame| {
+                                        match frame.as_ffmpeg() {
+                                            Ok(ffmpeg_frame) => {
+                                                Some(reference_video_frame(&ffmpeg_frame))
+                                            }
+                                            Err(err) => {
+                                                warn!(
+                                                    "Could not read the last screen frame for libx264: {err}"
+                                                );
+                                                None
+                                            }
+                                        }
+                                    });
+                                let (last_dts, stream_index) = {
+                                    let last_dts = muxer.last_written_pts();
+                                    let stream_index = muxer.stream_index();
+                                    (last_dts, stream_index)
+                                };
+                                drop(encoder);
+                                _media_foundation_session = None;
+                                let (width, height) = even_output_size(
+                                    output_size,
+                                    video_config.width,
+                                    video_config.height,
+                                );
+                                let mut soft = match cap_enc_ffmpeg::h264::H264Encoder::builder(
+                                    video_config,
+                                )
+                                .with_output_size(width, height)
+                                .and_then(|builder| {
+                                    builder.build_software_on_stream(stream_index, last_dts)
+                                }) {
+                                    Ok(encoder) => encoder,
+                                    Err(err) => {
+                                        return Err(anyhow!(
+                                            "Hardware encoder error: {e}; software encoder did not start: {err}"
+                                        ));
+                                    }
+                                };
+                                warn!(
+                                    error = %e,
+                                    "Media Foundation H264 stopped mid-take; switching to libx264"
+                                );
+                                health.emit(PipelineHealthEvent::EncoderRebuilt {
+                                    backend: "libx264".to_string(),
+                                    attempt: 1,
+                                });
+                                let mut last_ffmpeg_frame = carried_frame;
+                                loop {
+                                    let next = pacer.next(&video_rx, &pause_flag);
+                                    let (step, ts) = match next {
+                                        Paced::Frame(frame, timestamp) => match frame.as_ffmpeg() {
+                                            Ok(frame) => (
+                                                PacedPixels::New(reference_video_frame(&frame)),
+                                                timestamp,
+                                            ),
+                                            Err(err) => {
+                                                warn!("Failed to convert frame: {err:?}");
+                                                (PacedPixels::Repeat, timestamp)
+                                            }
+                                        },
+                                        Paced::Repeat(timestamp) => {
+                                            (PacedPixels::Repeat, timestamp)
+                                        }
+                                        Paced::End => break,
+                                    };
+                                    let Some(stored) =
+                                        frame_to_encode(&mut last_ffmpeg_frame, step)
+                                    else {
+                                        continue;
+                                    };
+                                    let ffmpeg_frame = reference_video_frame(stored);
+                                    let normalized_ts =
+                                        normalize_timestamp(ts, &mut first_timestamp);
+                                    let Ok(mut output_guard) = output.lock() else {
+                                        continue;
+                                    };
+                                    soft.queue_frame(ffmpeg_frame, normalized_ts, &mut output_guard)
+                                        .context("queue_frame")?;
                                 }
-                                Err(anyhow!("Hardware encoder error: {}", e))
+                                let mut output_guard = output.lock().map_err(|_| {
+                                    anyhow!("Failed to lock output while flushing software encoder")
+                                })?;
+                                soft.flush(&mut output_guard)
+                                    .context("flush software encoder")?;
+                                Ok(())
                             }
+                            Err(e) => Err(anyhow!("Hardware encoder error: {e}")),
                         }
                     }
                     either::Right(mut encoder) => {
@@ -509,11 +606,13 @@ impl Muxer for WindowsMuxer {
             output,
             audio_encoder,
             frame_drops: FrameDropTracker::new(None, "muxer:windows-mp4"),
+            health,
         })
     }
 
     fn set_health_sender(&mut self, tx: HealthSender) {
-        self.frame_drops.health_tx = Some(tx);
+        self.frame_drops.health_tx = Some(tx.clone());
+        self.health.set(tx);
     }
 
     fn stop(&mut self) {
@@ -675,6 +774,7 @@ pub struct WindowsCameraMuxer {
     output: Arc<Mutex<ffmpeg::format::context::Output>>,
     audio_encoder: Option<AACEncoder>,
     frame_drops: FrameDropTracker,
+    health: SharedHealthSender,
 }
 
 pub struct WindowsCameraMuxerConfig {
@@ -764,6 +864,7 @@ impl Muxer for WindowsCameraMuxer {
 
         let output = Arc::new(Mutex::new(output));
         let (ready_tx, ready_rx) = oneshot::channel::<anyhow::Result<()>>();
+        let health = SharedHealthSender::new();
 
         let expected_input_format = config
             .expected_pixel_format
@@ -774,6 +875,7 @@ impl Muxer for WindowsCameraMuxer {
             let output = output.clone();
             let pause_flag = pause_flag.clone();
             let encoder_preferences = config.encoder_preferences;
+            let health = health.clone();
 
             tasks.spawn_thread("windows-camera-encoder", move || {
                 cap_mediafoundation_utils::thread_init();
@@ -814,12 +916,7 @@ impl Muxer for WindowsCameraMuxer {
                             .map_err(|e| anyhow!("CameraSoftwareEncoder/{e}"))
                     };
 
-                    if encoder_preferences.should_force_software()
-                        || matches!(
-                            cap_frame_converter::detect_primary_gpu().map(|gpu| gpu.vendor),
-                            Some(cap_frame_converter::GpuVendor::Amd)
-                        )
-                    {
+                    if media_foundation_skipped(&encoder_preferences) {
                         return fallback(None);
                     }
 
@@ -977,15 +1074,80 @@ impl Muxer for WindowsCameraMuxer {
                                     health_status.total_frames_encoded
                                 );
                             }
-                            Err(e) => {
-                                if e.should_fallback() {
-                                    error!(
-                                        "Camera hardware encoder failed with recoverable error, marking for software fallback: {}",
-                                        e
-                                    );
-                                    encoder_preferences.force_software_only();
+                            Err(e) if e.should_fallback() => {
+                                encoder_preferences.force_software_only();
+                                let (last_dts, stream_index) = {
+                                    let last_dts = muxer.last_written_pts();
+                                    let stream_index = muxer.stream_index();
+                                    (last_dts, stream_index)
+                                };
+                                drop(encoder);
+                                _media_foundation_session = None;
+                                let mut soft = match cap_enc_ffmpeg::h264::H264Encoder::builder(
+                                    video_config,
+                                )
+                                .with_output_size(output_width, output_height)
+                                .and_then(|builder| {
+                                    builder.build_software_on_stream(stream_index, last_dts)
+                                }) {
+                                    Ok(encoder) => encoder,
+                                    Err(err) => {
+                                        return Err(anyhow!(
+                                            "Camera hardware encoder error: {e}; software encoder did not start: {err}"
+                                        ));
+                                    }
+                                };
+                                warn!(
+                                    error = %e,
+                                    "Media Foundation camera H264 stopped mid-take; switching to libx264"
+                                );
+                                health.emit(PipelineHealthEvent::EncoderRebuilt {
+                                    backend: "libx264".to_string(),
+                                    attempt: 1,
+                                });
+                                let mut mjpeg_decoder = MjpegDecoder::default();
+                                loop {
+                                    let ts = match pacer.next(&video_rx, &pause_flag) {
+                                        Paced::Frame(frame, timestamp) => {
+                                            last_frame = Some(frame);
+                                            timestamp
+                                        }
+                                        Paced::Repeat(timestamp) => timestamp,
+                                        Paced::End => break,
+                                    };
+                                    let Some(frame) = last_frame.clone() else {
+                                        continue;
+                                    };
+                                    let normalized_ts =
+                                        normalize_camera_timestamp(ts, &mut first_timestamp);
+                                    let ffmpeg_frame =
+                                        match camera_frame_to_ffmpeg(&frame, &mut mjpeg_decoder) {
+                                            Ok(frame) => frame,
+                                            Err(err) => {
+                                                error!("Failed to convert camera frame: {err}");
+                                                continue;
+                                            }
+                                        };
+                                    let Ok(mut output_guard) = output.lock() else {
+                                        continue;
+                                    };
+                                    soft.queue_frame(
+                                        ffmpeg_frame,
+                                        normalized_ts,
+                                        &mut output_guard,
+                                    )
+                                    .context("queue camera frame")?;
                                 }
-                                return Err(anyhow!("Camera hardware encoder error: {}", e));
+                                let mut output_guard = output.lock().map_err(|_| {
+                                    anyhow!(
+                                        "Failed to lock camera output while flushing software encoder"
+                                    )
+                                })?;
+                                soft.flush(&mut output_guard)
+                                    .context("flush software encoder")?;
+                            }
+                            Err(e) => {
+                                return Err(anyhow!("Camera hardware encoder error: {e}"));
                             }
                         }
 
@@ -1075,11 +1237,13 @@ impl Muxer for WindowsCameraMuxer {
             output,
             audio_encoder,
             frame_drops: FrameDropTracker::new(None, "muxer:windows-mp4-camera"),
+            health,
         })
     }
 
     fn set_health_sender(&mut self, tx: HealthSender) {
-        self.frame_drops.health_tx = Some(tx);
+        self.frame_drops.health_tx = Some(tx.clone());
+        self.health.set(tx);
     }
 
     fn stop(&mut self) {

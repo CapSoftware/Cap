@@ -442,6 +442,54 @@ impl H264EncoderBuilder {
         })
     }
 
+    /// Opens libx264 on a stream another encoder already added.
+    /// Frame timestamps are capture time since the start of the take.
+    /// `last_stream_dts` is the last dts already written, in that stream's time base.
+    pub fn build_software_on_stream(
+        self,
+        stream_index: usize,
+        last_stream_dts: Option<i64>,
+    ) -> Result<H264Encoder, H264EncoderError> {
+        let input_config = self.input_config;
+        let (raw_width, raw_height) = self
+            .output_size
+            .unwrap_or((input_config.width, input_config.height));
+        let (output_width, output_height) = (ensure_even(raw_width), ensure_even(raw_height));
+        let OpenedVideoEncoder {
+            encoder,
+            converter,
+            converted_frame_pool,
+            output_format,
+            output_width,
+            output_height,
+            input_format,
+            input_width,
+            input_height,
+            hw_upload,
+        } = self.open_software(output_width, output_height)?;
+        let mut encoder = H264Encoder {
+            base: EncoderBase::new(stream_index),
+            encoder,
+            converter,
+            output_format,
+            output_width,
+            output_height,
+            input_format,
+            input_width,
+            input_height,
+            converted_frame_pool,
+            hw_upload,
+            #[cfg(target_os = "macos")]
+            videotoolbox_hw: None,
+            software_fallback: None,
+            #[cfg(test)]
+            injected_failure: None,
+            hardware_session: None,
+        };
+        encoder.base.continue_after(last_stream_dts);
+        Ok(encoder)
+    }
+
     fn open_software(
         &self,
         output_width: u32,
