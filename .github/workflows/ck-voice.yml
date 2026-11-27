@@ -1,0 +1,112 @@
+name: Scratch CK Notes Greptile proofs
+# Temporary branch (deleted after use): builder CK's real-app proofs (daily limit, hand-over,
+# Linux reader-free follow) base vs head on one runner. Scratch profiles, a local stub server and
+# null sinks only. Nothing ships.
+
+on:
+  push:
+    branches: [ci/ck-voice*]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  # The meeting hooks the runs use only exist with debug assertions on; both arms get the same.
+  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: "true"
+  CK_BASE: 54ff7a74fd7c63863313361ee296f797296d53a4
+  CK_HEAD: df410d2506dc09e9d0b1fe0f99b4ee2302ecefc5
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: v-both-on
+            phases: voicepage
+            extra: CK_AUTO=both CK_VOICE_AFTER=45
+          - part: v-both-stops
+            phases: voicepage
+            extra: CK_AUTO=both CK_VOICE_AFTER=45 CK_PAGE_STOP=15
+          - part: v-detected
+            phases: voicepage
+            extra: CK_AUTO=detected CK_VOICE_AFTER=45
+          - part: v-zoom
+            phases: voicepage
+            extra: CK_AUTO=both CK_VOICE_AFTER=45 CK_PAGE=zoom
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/install-desktop-deps
+      - run: sudo apt-get install -y -qq --no-install-recommends xvfb openbox dbus dbus-x11 at-spi2-core gir1.2-atspi-2.0 python3-gi pulseaudio-utils ffmpeg fonts-noto-core orca speech-dispatcher speech-dispatcher-espeak-ng espeak-ng pipewire pipewire-pulse wireplumber pipewire-bin pipewire-alsa xdotool imagemagick > /dev/null
+      - name: Chrome
+        run: |
+          if ! command -v google-chrome > /dev/null; then
+            curl -fsSL -o "$RUNNER_TEMP/chrome.deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            sudo apt-get install -y -qq "$RUNNER_TEMP/chrome.deb" > /dev/null
+          fi
+          google-chrome --version
+      - name: Restore the meeting models
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/meeting-models
+          key: meeting-models-v1-${{ hashFiles('scripts/ci/meetings/models.sh') }}
+      - run: bash scripts/ci/meetings/models.sh "$RUNNER_TEMP/meeting-models" > /dev/null
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-meetings
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - name: Build the arms
+        run: |
+          set -e
+          SCRATCH=$(git rev-parse HEAD)
+          test "$(git rev-parse HEAD~1)" = "$CK_HEAD"
+          cp -R .ck "$RUNNER_TEMP/ck"
+          for pair in pre=477cf62451f5ab5d8ac1bcfd0b832d3432646acf base=$CK_BASE head=$CK_HEAD; do
+            arm=${pair%%=*}; sha=${pair#*=}
+            git checkout -q -f "$sha"
+            RUST_TARGET_TRIPLE=x86_64-unknown-linux-gnu node scripts/setup.js > /dev/null
+            node scripts/sync-desktop-versions.mjs
+            ./scripts/prepare-gpui-dependency.sh
+            cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui 2>&1 | tail -2
+            mkdir -p "$RUNNER_TEMP/$arm"
+            cp apps/desktop-gpui/target/release/cap-gpui "$RUNNER_TEMP/$arm/cap-gpui"
+            echo "$arm $sha $(sha256sum "$RUNNER_TEMP/$arm/cap-gpui")"
+          done
+          git checkout -q -f "$SCRATCH"
+      - name: Proofs
+        timeout-minutes: 100
+        run: |
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib"
+          T="$RUNNER_TEMP"
+          Xvfb :99 -screen 0 1600x1000x24 > /dev/null 2>&1 &
+          sleep 2
+          DISPLAY=:99 XDG_SESSION_TYPE=x11 dbus-run-session -- bash -c '
+            openbox > /dev/null 2>&1 &
+            /usr/libexec/at-spi-bus-launcher --launch-immediately > /dev/null 2>&1 &
+            sleep 2
+            gdbus call --session --dest org.a11y.Bus --object-path /org/a11y/bus --method org.freedesktop.DBus.Properties.Set org.a11y.Status IsEnabled "<true>" > /dev/null 2>&1
+            CK_PHASES="${{ matrix.phases }}" ${{ matrix.extra }} CK_ARMS="pre base head" CK_PRE_BIN="$0/pre/cap-gpui" CK_MODELS="$0/meeting-models" bash .ck/proof.sh "$0/out" "$0/base/cap-gpui" "$0/head/cap-gpui"' "$T"
+          cat "$T/out/results.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ck-proof-linux-${{ matrix.part }}
+          path: |
+            ${{ runner.temp }}/out
+            !${{ runner.temp }}/out/*.f32
+          retention-days: 3
