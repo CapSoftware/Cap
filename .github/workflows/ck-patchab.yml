@@ -1,0 +1,130 @@
+name: Scratch CK editor draw, patch stack A/B
+
+# Main's app (this tree = main 3519358233 + .ckpatch) built twice on one runner: on main's own GPUI
+# patch stack (base) and on #4506's stack (ff4d34e268) with one of its four new changes taken back out
+# (variant), then the real editor draw benchmark (scripts/gpui-app-bench.py, 10 interleaved rounds).
+# Isolates the patch stack from app code; each arm's ratio is paired on its own runner.
+
+on:
+  push:
+    branches:
+      - "ci/ck-patchab*"
+
+permissions:
+  contents: read
+
+jobs:
+  editor:
+    name: Editor draw, main app, ${{ matrix.variant }}
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [head-full, minus-a11y-replay, minus-aria-live, minus-quiet-show, minus-warp-atlas]
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      TARGET: aarch64-apple-darwin
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout the reference recording
+        uses: actions/checkout@v4
+        with:
+          repository: CapSoftware/cap-performance-fixtures
+          path: performance-fixtures
+          persist-credentials: false
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ env.TARGET }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ env.TARGET }}
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Run setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ env.TARGET }}
+
+      - name: Build on main's patch stack (base)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+          bin_dir="$GITHUB_WORKSPACE/apps/desktop-gpui/target/$TARGET/debug"
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target "$TARGET" --bin cap-gpui
+          cp "$bin_dir/cap-gpui" "$bin_dir/cap-gpui-base"
+          echo "base: main $(git rev-parse --short HEAD^) app on main's patch stack" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Build on the variant patch stack
+        shell: bash
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          zed="$(cd .. && pwd)/zed-cap"
+          mv "$zed" "$RUNNER_TEMP/zed-cap-base"
+          p=apps/desktop-gpui/patches
+          # #4506's stack: its four patch files that differ from main, and its patch list.
+          cp .ckpatch/zed-gpui.patch .ckpatch/zed-perf.patch .ckpatch/zed-quiet-show.patch .ckpatch/zed-warp-atlas.patch "$p/"
+          cp .ckpatch/prepare-gpui-dependency.sh scripts/prepare-gpui-dependency.sh
+          case "$VARIANT" in
+            head-full) ;;
+            minus-a11y-replay) git show HEAD^:"$p/zed-gpui.patch" > "$p/zed-gpui.patch" ;;
+            minus-aria-live) git show HEAD^:"$p/zed-perf.patch" > "$p/zed-perf.patch" ;;
+            minus-quiet-show) sed -i '' '/zed-quiet-show.patch/d' scripts/prepare-gpui-dependency.sh ;;
+            minus-warp-atlas) sed -i '' '/zed-warp-atlas.patch/d' scripts/prepare-gpui-dependency.sh ;;
+            *) echo "unknown variant $VARIANT"; exit 1 ;;
+          esac
+          grep -n 'patches/zed-' scripts/prepare-gpui-dependency.sh
+          shasum $p/zed-gpui.patch $p/zed-perf.patch
+          ./scripts/prepare-gpui-dependency.sh
+          find "$zed/crates" -type f -name '*.rs' -exec touch {} +
+          bin_dir="$GITHUB_WORKSPACE/apps/desktop-gpui/target/$TARGET/debug"
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target "$TARGET" --bin cap-gpui
+          cp "$bin_dir/cap-gpui" "$bin_dir/cap-gpui-head"
+          for frameworks in "$bin_dir/Frameworks" "$GITHUB_WORKSPACE/apps/desktop-gpui/target/$TARGET/Frameworks"; do
+            mkdir -p "$frameworks"
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+          done
+          if cmp -s "$bin_dir/cap-gpui-head" "$bin_dir/cap-gpui-base"; then
+            echo "variant $VARIANT: binary identical to base" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "variant: $VARIANT (main app on #4506's patch stack ff4d34e268)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the display awake
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 || true
+          caffeinate -u -t 2
+
+      - name: Measure
+        shell: bash
+        run: |
+          bin_dir="$GITHUB_WORKSPACE/apps/desktop-gpui/target/$TARGET/debug"
+          python3 scripts/gpui-app-bench.py \
+            --base "$bin_dir/cap-gpui-base" \
+            --head "$bin_dir/cap-gpui-head" \
+            --fixture "$GITHUB_WORKSPACE/performance-fixtures/reference-recording.cap" \
+            --out "$RUNNER_TEMP/app-bench" \
+            --rounds 10 \
+            --label "macOS ${{ matrix.variant }}" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ck-patchab-${{ matrix.variant }}
+          path: ${{ runner.temp }}/app-bench
+          if-no-files-found: ignore

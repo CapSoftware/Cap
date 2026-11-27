@@ -1,0 +1,206 @@
+diff --git a/crates/gpui_windows/src/directx_atlas.rs b/crates/gpui_windows/src/directx_atlas.rs
+index 719fd3c..c7904f4 100644
+--- a/crates/gpui_windows/src/directx_atlas.rs
++++ b/crates/gpui_windows/src/directx_atlas.rs
+@@ -1,12 +1,16 @@
+ use collections::FxHashMap;
+ use etagere::BucketedAtlasAllocator;
+ use parking_lot::Mutex;
+-use windows::Win32::Graphics::{
+-    Direct3D11::{
+-        D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+-        ID3D11Device, ID3D11DeviceContext, ID3D11ShaderResourceView, ID3D11Texture2D,
++use windows::{
++    Win32::Graphics::{
++        Direct3D11::{
++            D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
++            D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11DeviceContext, ID3D11ShaderResourceView,
++            ID3D11Texture2D,
++        },
++        Dxgi::{Common::*, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIAdapter1, IDXGIDevice},
+     },
+-    Dxgi::Common::*,
++    core::Interface,
+ };
+ 
+ use gpui::{
+@@ -21,6 +25,8 @@ pub(crate) struct DirectXAtlas(Mutex<DirectXAtlasState>);
+ struct DirectXAtlasState {
+     device: ID3D11Device,
+     device_context: ID3D11DeviceContext,
++    /// The device draws on the CPU (WARP): writes go in through a queued copy.
++    staged_uploads: bool,
+     monochrome_textures: AtlasTextureList<DirectXAtlasTexture>,
+     polychrome_textures: AtlasTextureList<DirectXAtlasTexture>,
+     subpixel_textures: AtlasTextureList<DirectXAtlasTexture>,
+@@ -55,6 +61,7 @@ impl DirectXAtlas {
+         DirectXAtlas(Mutex::new(DirectXAtlasState {
+             device: device.clone(),
+             device_context: device_context.clone(),
++            staged_uploads: draws_on_cpu(device),
+             monochrome_textures: Default::default(),
+             polychrome_textures: Default::default(),
+             subpixel_textures: Default::default(),
+@@ -93,6 +100,7 @@ impl DirectXAtlas {
+         let mut lock = self.0.lock();
+         lock.device = device.clone();
+         lock.device_context = device_context.clone();
++        lock.staged_uploads = draws_on_cpu(device);
+         lock.monochrome_textures = AtlasTextureList::default();
+         lock.polychrome_textures = AtlasTextureList::default();
+         lock.subpixel_textures = AtlasTextureList::default();
+@@ -120,7 +128,13 @@ impl PlatformAtlas for DirectXAtlas {
+                 .allocate(size, key.texture_kind())
+                 .ok_or_else(|| anyhow::anyhow!("failed to allocate"))?;
+             let texture = lock.texture(tile.texture_id);
+-            texture.upload(&lock.device_context, tile.bounds, &bytes);
++            texture.upload(
++                &lock.device,
++                &lock.device_context,
++                lock.staged_uploads,
++                tile.bounds,
++                &bytes,
++            );
+             lock.tiles_by_key.insert(key.clone(), tile);
+             Ok(Some(tile))
+         }
+@@ -368,7 +382,23 @@ impl DirectXAtlasState {
+             }
+         };
+         let stream = &mut self.streams[position];
+-        if stream.generation != frame.generation() {
++        if stream.generation != frame.generation()
++            && self.staged_uploads
++            && write_via_copy(
++                &self.device,
++                &self.device_context,
++                &stream.texture,
++                Point {
++                    x: DevicePixels(0),
++                    y: DevicePixels(0),
++                },
++                size,
++                frame.bytes(),
++                stride,
++            )
++        {
++            stream.generation = frame.generation();
++        } else if stream.generation != frame.generation() {
+             unsafe {
+                 self.device_context.UpdateSubresource(
+                     &stream.texture,
+@@ -446,7 +476,9 @@ impl DirectXAtlasTexture {
+ 
+     fn upload(
+         &self,
++        device: &ID3D11Device,
+         device_context: &ID3D11DeviceContext,
++        staged: bool,
+         bounds: Bounds<DevicePixels>,
+         bytes: &[u8],
+     ) {
+@@ -468,6 +500,19 @@ impl DirectXAtlasTexture {
+             );
+             return;
+         }
++        if staged
++            && write_via_copy(
++                device,
++                device_context,
++                &self.texture,
++                bounds.origin,
++                bounds.size,
++                bytes,
++                row_bytes as u32,
++            )
++        {
++            return;
++        }
+         unsafe {
+             device_context.UpdateSubresource(
+                 &self.texture,
+@@ -890,3 +935,84 @@ mod tests {
+         );
+     }
+ }
++
++/// Whether `device` draws on the CPU: an adapter flagged as software, or Windows'
++/// Basic Render Driver (WARP), which DXGI does not always flag.
++fn draws_on_cpu(device: &ID3D11Device) -> bool {
++    let desc = device
++        .cast::<IDXGIDevice>()
++        .and_then(|dxgi| unsafe { dxgi.GetAdapter() })
++        .and_then(|adapter| adapter.cast::<IDXGIAdapter1>())
++        .and_then(|adapter| unsafe { adapter.GetDesc1() });
++    let on_cpu = desc.is_ok_and(|desc| {
++        desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0
++            || (desc.VendorId == 0x1414 && desc.DeviceId == 0x8C)
++    });
++    log::info!(
++        "atlas writes {}",
++        if on_cpu {
++            "staged (CPU renderer)"
++        } else {
++            "direct"
++        }
++    );
++    on_cpu
++}
++
++/// Writes `bytes` (rows `row_pitch` bytes apart) into `target` at `origin` with a queued copy
++/// from a texture made with them. WARP runs `UpdateSubresource` only after every queued frame
++/// that reads `target` has been rasterized on the CPU, which held a frame for hundreds of
++/// milliseconds each time a note brought new glyphs; a queued copy does not wait. False when
++/// the texture could not be made (the caller then writes directly).
++fn write_via_copy(
++    device: &ID3D11Device,
++    device_context: &ID3D11DeviceContext,
++    target: &ID3D11Texture2D,
++    origin: Point<DevicePixels>,
++    size: Size<DevicePixels>,
++    bytes: &[u8],
++    row_pitch: u32,
++) -> bool {
++    if size.width.0 <= 0 || size.height.0 <= 0 {
++        return false;
++    }
++    let mut desc = D3D11_TEXTURE2D_DESC::default();
++    unsafe { target.GetDesc(&mut desc) };
++    desc.Width = size.width.0 as u32;
++    desc.Height = size.height.0 as u32;
++    desc.MipLevels = 1;
++    desc.ArraySize = 1;
++    desc.SampleDesc = DXGI_SAMPLE_DESC {
++        Count: 1,
++        Quality: 0,
++    };
++    desc.Usage = D3D11_USAGE_DEFAULT;
++    desc.BindFlags = 0;
++    desc.CPUAccessFlags = 0;
++    desc.MiscFlags = 0;
++    let data = D3D11_SUBRESOURCE_DATA {
++        pSysMem: bytes.as_ptr() as _,
++        SysMemPitch: row_pitch,
++        SysMemSlicePitch: 0,
++    };
++    let mut source = None;
++    if unsafe { device.CreateTexture2D(&desc, Some(&data), Some(&mut source)) }.is_err() {
++        return false;
++    }
++    let Some(source) = source else {
++        return false;
++    };
++    unsafe {
++        device_context.CopySubresourceRegion(
++            target,
++            0,
++            origin.x.0 as u32,
++            origin.y.0 as u32,
++            0,
++            &source,
++            0,
++            None,
++        );
++    }
++    true
++}
