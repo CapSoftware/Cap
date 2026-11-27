@@ -744,6 +744,16 @@ impl ActorHandle {
 
     async fn stop(&self) -> Result<CompletedRecording, String> {
         match self {
+            #[cfg(windows)]
+            Self::Studio(actor) => {
+                let outcome = actor.stop_with_outcome().await;
+                let outcome = match outcome.finishing.clone() {
+                    Some(finishing) => wait_for_studio_finish(finishing).await,
+                    None => outcome,
+                };
+                outcome.result.map(Box::new).map(CompletedRecording::Studio)
+            }
+            #[cfg(not(windows))]
             Self::Studio(actor) => actor
                 .stop()
                 .await
@@ -757,6 +767,68 @@ impl ActorHandle {
                 .map_err(|e| format!("{e:#}")),
         }
     }
+}
+
+/// How long `cap record` waits for Studio tracks still finishing after the
+/// stop limit before it exits and leaves the recording to recovery.
+#[cfg(windows)]
+const STUDIO_FINISH_WAIT: Duration = Duration::from_secs(120);
+
+#[cfg(windows)]
+static STUDIO_STILL_FINISHING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(windows)]
+async fn wait_for_studio_finish(
+    finishing: studio_recording::StudioFinishing,
+) -> studio_recording::StudioStopOutcome {
+    let path = finishing.project_path().display().to_string();
+    eprintln!(
+        "Recording is still finishing; waiting up to {}s for it to save: {path}",
+        STUDIO_FINISH_WAIT.as_secs()
+    );
+    match tokio::time::timeout(STUDIO_FINISH_WAIT, finishing.wait()).await {
+        Ok(outcome) => {
+            if outcome.result.is_ok() {
+                eprintln!("Recording finished saving: {path}");
+            }
+            outcome
+        }
+        Err(_) => {
+            STUDIO_STILL_FINISHING.store(true, std::sync::atomic::Ordering::SeqCst);
+            studio_recording::StudioStopOutcome {
+                capture_stopped: false,
+                result: Err(format!(
+                    "Recording is still finishing after {}s. Nothing was discarded; it will be recovered when it is next exported (cap export \"{path}\") or opened in Cap",
+                    STUDIO_FINISH_WAIT.as_secs()
+                )),
+                finishing: None,
+            }
+        }
+    }
+}
+
+/// Ends the process after `report` once `cap record` has given up waiting
+/// for Studio tracks still finishing. A writer still blocked in the OS keeps
+/// both the runtime and the normal process exit waiting on it, so the process
+/// terminates outright; the files are left in the state crash recovery
+/// expects.
+#[cfg(windows)]
+pub(crate) fn terminate_if_studio_still_finishing(report: impl FnOnce()) {
+    if !STUDIO_STILL_FINISHING.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    report();
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    unsafe {
+        let _ = windows::Win32::System::Threading::TerminateProcess(
+            windows::Win32::System::Threading::GetCurrentProcess(),
+            1,
+        );
+    }
+    std::process::exit(1);
 }
 
 enum CompletedRecording {

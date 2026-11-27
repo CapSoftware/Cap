@@ -1576,6 +1576,10 @@ studio = "Grabación local de máxima calidad para editar después."
 subtitle = "Elige cómo quieres capturar tu pantalla"
 title = "Elegir modo de grabación"
 
+[dialog.saving]
+in_background = "Tu grabación todavía se está guardando y aparecerá en tu biblioteca cuando termine. Ya puedes iniciar una nueva grabación."
+title = "Todavía se está guardando"
+
 [dialog.storage]
 stopped_kept = "La grabación se detuvo porque queda poco espacio. Tus archivos de grabación se conservaron. Libera espacio y recupera la grabación abajo."
 stopped_saved = "La grabación se detuvo porque queda poco espacio. Tu grabación se guardó."
