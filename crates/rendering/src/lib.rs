@@ -9138,6 +9138,25 @@ impl RendererLayers {
         self.camera_picture_shown = None;
     }
 
+    // A camera-only scene keeps the regular camera's uniforms at zero
+    // opacity, and `render` never draws it below 0.01, yet preparing it still
+    // converted and uploaded a full camera frame every frame. The blur falls
+    // back to the camera-only layer's texture, which holds the same frame.
+    // Forgetting the frame keeps a later visible frame from drawing one that
+    // predates the skipped stretch.
+    fn drawn_camera_uniforms(
+        &mut self,
+        uniforms: &ProjectUniforms,
+        camera_enabled: bool,
+    ) -> Option<CompositeVideoFrameUniforms> {
+        let camera = uniforms.camera.filter(|_| camera_enabled)?;
+        if uniforms.scene.regular_camera_transition_opacity() > 0.01 {
+            return Some(camera);
+        }
+        self.camera.reset_frame_state();
+        None
+    }
+
     fn follow_camera_picture(&mut self, picture: Option<&DecodedFrame>) {
         let Some(picture) = picture else {
             self.camera_picture_shown = None;
@@ -9539,14 +9558,11 @@ impl RendererLayers {
             None
         };
 
+        let camera_uniforms = self.drawn_camera_uniforms(uniforms, render_display && has_camera);
         self.camera.prepare(
             &constants.device,
             &constants.queue,
-            if render_display && has_camera {
-                uniforms.camera
-            } else {
-                None
-            },
+            camera_uniforms,
             camera_frame_data,
         );
 
@@ -9719,14 +9735,11 @@ impl RendererLayers {
         };
 
         let start = Instant::now();
+        let camera_uniforms = self.drawn_camera_uniforms(uniforms, render_display && has_camera);
         self.camera.prepare_with_encoder(
             &constants.device,
             &constants.queue,
-            if render_display && has_camera {
-                uniforms.camera
-            } else {
-                None
-            },
+            camera_uniforms,
             camera_frame_data,
             encoder,
         );

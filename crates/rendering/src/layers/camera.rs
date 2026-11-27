@@ -923,6 +923,78 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a working native WGPU adapter"]
+    async fn camera_only_scenes_leave_the_hidden_camera_bubble_unprepared() {
+        let constants = constants().await;
+        let mut project = ProjectConfiguration::default();
+        project.camera.hide = false;
+        project.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [], "zoomSegments": [],
+                "sceneSegments": [{
+                    "start": 2.0, "end": 5.0, "mode": "cameraOnly",
+                    "transitionIn": 0.0, "transitionOut": 0.0
+                }]
+            }))
+            .unwrap(),
+        );
+        let solid = |color: [u8; 4]| DecodedFrame::new(color.repeat(1920 * 1080), 1920, 1080);
+        for ordinary_prepare in [false, true] {
+            let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+            layers.prepare_for_video_dimensions(
+                &constants.device,
+                320,
+                180,
+                Some(1920),
+                Some(1080),
+            );
+
+            let red = [255, 0, 0, 255];
+            let output = pixels(
+                &constants,
+                &project,
+                frames(Some(solid(red)), 180),
+                &mut layers,
+                ordinary_prepare,
+            )
+            .await;
+            assert!(
+                output
+                    .chunks_exact(4)
+                    .filter(|pixel| matches_color(pixel, red))
+                    .count()
+                    > 100
+            );
+            assert!(layers.camera.last_recording_time.is_none());
+            assert!(layers.camera_only.last_recording_time.is_some());
+
+            let blue = [0, 0, 255, 255];
+            let output = pixels(
+                &constants,
+                &project,
+                frames(Some(solid(blue)), 330),
+                &mut layers,
+                ordinary_prepare,
+            )
+            .await;
+            assert!(
+                output
+                    .chunks_exact(4)
+                    .filter(|pixel| matches_color(pixel, blue))
+                    .count()
+                    > 100
+            );
+            assert!(
+                !output
+                    .chunks_exact(4)
+                    .any(|pixel| matches_color(pixel, red)),
+                "the bubble after the camera-only scene drew a frame from inside it"
+            );
+            assert!(layers.camera.last_recording_time.is_some());
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a working native WGPU adapter"]
     async fn camera_placeholders_preserve_pixels_through_frame_state_changes() {
         let constants = constants().await;
         for camera_only in [false, true] {
