@@ -80,6 +80,12 @@ app.get(
 			isScreenshot: z.coerce.boolean().default(false),
 			videoId: z.string().optional(),
 			createWithId: z.coerce.boolean().default(false),
+			// Set by a desktop retrying the upload of a cap it created earlier:
+			// a missing row means the owner deleted it, so it is not made again.
+			requireExisting: z
+				.literal("true")
+				.optional()
+				.transform((value) => value === "true"),
 			name: z.string().optional(),
 			durationInSecs: stringOrNumberOptional,
 			width: stringOrNumberOptional,
@@ -102,6 +108,7 @@ app.get(
 				isScreenshot,
 				videoId,
 				createWithId,
+				requireExisting,
 				name,
 				durationInSecs,
 				width,
@@ -191,6 +198,9 @@ app.get(
 						aws_bucket: "n/a",
 					});
 				}
+
+				if (requireExisting)
+					return c.json({ error: "Video not found" }, { status: 404 });
 			}
 
 			const [ownedOrganizations, memberOrganizations] = await Promise.all([
