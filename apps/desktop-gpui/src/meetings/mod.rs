@@ -50,7 +50,7 @@ use chrono::{DateTime, Utc};
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Global, Subscription, Task};
 use serde_json::json;
 
-pub use access::AiAccess;
+pub use access::{AiAccess, ProOffer};
 pub use calendar::{CalendarError, CalendarSource, SourceConfig, SyncErrorKind};
 pub use cap_calendar::{Agenda, CalendarEvent};
 pub use cap_meetings::{session::StopReason, transcript::Source};

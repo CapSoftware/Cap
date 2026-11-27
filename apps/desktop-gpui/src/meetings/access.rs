@@ -67,6 +67,11 @@ pub struct AccessInput<'a> {
 /// A server other than Cap's own, as the app talks to it (an empty setting is
 /// Cap's own).
 pub fn custom_server(server_url: &str) -> bool {
+    // Debug builds: a local stand-in server plays Cap's own in UI harnesses.
+    #[cfg(debug_assertions)]
+    if std::env::var_os("CAP_GPUI_TEST_SERVER_IS_CAP").is_some() {
+        return false;
+    }
     !server_url.trim().is_empty()
         && !crate::auth::has_same_origin(server_url, crate::store::DEFAULT_SERVER_URL)
 }
@@ -79,6 +84,17 @@ fn sells_cap_ai(input: &AccessInput<'_>) -> bool {
         || input
             .caps
             .is_some_and(|c| c.notes_trial_remaining.is_some())
+}
+
+/// The account as the Cap Pro row in Notes sees it: access, the free count,
+/// whether Cap AI is sold on this server, and whether the server has answered
+/// for this account (`known`); until it has, the row keeps what it showed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProOffer {
+    pub access: AiAccess,
+    pub trial: Option<u32>,
+    pub sells: bool,
+    pub known: bool,
 }
 
 pub fn resolve(input: AccessInput<'_>) -> AiAccess {
@@ -231,6 +247,33 @@ impl Meetings {
             error: self.capabilities_error(),
             custom_server: custom_server(&auth.server_url),
         })
+    }
+
+    /// What the Cap Pro row in Notes needs, from one look at the account.
+    pub fn pro_offer(&self) -> ProOffer {
+        #[cfg(debug_assertions)]
+        if debug_access().is_some() {
+            return ProOffer {
+                access: self.ai_access(),
+                trial: self.trial_remaining(),
+                sells: true,
+                known: true,
+            };
+        }
+        let auth = crate::store::auth_snapshot();
+        let input = AccessInput {
+            signed_in: auth.signed_in(),
+            pro: auth.is_upgraded(),
+            caps: self.capabilities(),
+            error: self.capabilities_error(),
+            custom_server: custom_server(&auth.server_url),
+        };
+        ProOffer {
+            access: resolve(input),
+            trial: self.trial_remaining(),
+            sells: sells_cap_ai(&input),
+            known: settled(input),
+        }
     }
 
     pub fn trial_remaining(&self) -> Option<u32> {

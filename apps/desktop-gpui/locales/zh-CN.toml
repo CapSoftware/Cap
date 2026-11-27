@@ -4338,6 +4338,11 @@ several = "{a}、{b} 等人"
 three = "{a}、{b} 和 {c}"
 two = "{a} 和 {b}"
 
+[cap_ai.row]
+pro = "Cap Pro 提供 AI 笔记"
+signed_out = "免费试用 Cap AI 笔记"
+spent = "免费次数已用完"
+
 [cap_ai.settings]
 get_pro = "获取 Cap Pro"
 ready = "Cap AI 已随 Cap Pro 开启。"

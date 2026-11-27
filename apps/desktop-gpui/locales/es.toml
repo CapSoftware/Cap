@@ -4338,6 +4338,11 @@ several = "{a}, {b} y otros"
 three = "{a}, {b} y {c}"
 two = "{a} y {b}"
 
+[cap_ai.row]
+pro = "Notas con IA en Cap Pro"
+signed_out = "Prueba Cap AI gratis"
+spent = "Sin notas gratis"
+
 [cap_ai.settings]
 get_pro = "Obtener Cap Pro"
 ready = "Cap AI está activado con Cap Pro."

@@ -3,14 +3,17 @@ use std::time::Instant;
 use cap_meetings::library::DocMeta;
 use gpui::{
     AnyElement, App, ClickEvent, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 
 use super::{
     ask::AskChip,
     style::{self, Palette},
 };
-use crate::{i18n::tr, meetings::AiAccess};
+use crate::{
+    i18n::tr,
+    meetings::{AiAccess, ProOffer},
+};
 
 pub const DISMISSED_KEY: &str = "capAiCardDismissed";
 pub const LIVE_DISMISSED_KEY: &str = "capAiLiveLineDismissed";
@@ -151,6 +154,157 @@ pub fn footer(
             Some(Footer::Last)
         }
         _ => None,
+    }
+}
+
+/// The Cap Pro row in Notes: the same quiet line and button on every Notes
+/// screen for everyone not on Cap Pro, where Cap AI is sold. Local notes never
+/// depend on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProRow {
+    SignedOut,
+    Left(u32),
+    Spent,
+    /// Not on Cap Pro, free count not known (yet).
+    Upgrade,
+}
+
+pub fn pro_row(access: AiAccess, trial_remaining: Option<u32>, sells: bool) -> Option<ProRow> {
+    if !sells {
+        return None;
+    }
+    Some(match access {
+        AiAccess::NeedsSignIn => ProRow::SignedOut,
+        AiAccess::Trial { remaining } => ProRow::Left(remaining),
+        AiAccess::NeedsUpgrade if trial_remaining == Some(0) => ProRow::Spent,
+        AiAccess::NeedsUpgrade => ProRow::Upgrade,
+        AiAccess::Ready | AiAccess::Unavailable => return None,
+    })
+}
+
+/// The row for `offer`, after `shown`. While the server is being asked again
+/// (after a write-up, or offline) the count it last gave stays on screen
+/// rather than flashing to the line without one.
+pub fn next_pro_row(shown: Option<ProRow>, offer: ProOffer) -> Option<ProRow> {
+    let next = pro_row(offer.access, offer.trial, offer.sells);
+    match (shown, next) {
+        (Some(held @ (ProRow::Left(_) | ProRow::Spent)), Some(ProRow::Upgrade)) if !offer.known => {
+            Some(held)
+        }
+        _ => next,
+    }
+}
+
+/// The row's line, its button, and whether the button signs in.
+pub fn pro_row_copy(row: ProRow) -> (SharedString, &'static str, bool) {
+    match row {
+        ProRow::SignedOut => (
+            tr::cap_ai::row::signed_out().into(),
+            tr::cap_ai::card::sign_in(),
+            true,
+        ),
+        ProRow::Left(n) => (
+            tr::cap_ai::card::free_left(n as usize).into(),
+            tr::cap_ai::card::get_pro(),
+            false,
+        ),
+        ProRow::Spent => (
+            tr::cap_ai::row::spent().into(),
+            tr::cap_ai::card::get_pro(),
+            false,
+        ),
+        ProRow::Upgrade => (
+            tr::cap_ai::row::pro().into(),
+            tr::cap_ai::card::get_pro(),
+            false,
+        ),
+    }
+}
+
+/// Where the row sits: the sidebar's foot (line over button), or a strip
+/// under the page when the sidebar is hidden (line beside button).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowPlace {
+    Sidebar,
+    Strip,
+}
+
+pub const PRO_STRIP_HEIGHT: f32 = 40.;
+
+pub fn render_pro_row(palette: &Palette, row: ProRow, place: RowPlace) -> AnyElement {
+    let palette = *palette;
+    let (line, label, sign_in) = pro_row_copy(row);
+    let button = div()
+        .id("notes-pro-button")
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .when(palette.keyboard, crate::ui::keyboard_nav::stop)
+        .flex_shrink_0()
+        .h(px(26.))
+        .px(px(10.))
+        .flex()
+        .items_center()
+        .rounded_full()
+        .border_1()
+        .border_color(palette.track)
+        .text_size(px(12.5))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(palette.text)
+        .cursor_pointer()
+        .hover(move |s| s.bg(palette.hover))
+        .child(label)
+        .on_click(move |_, _, cx| {
+            if sign_in {
+                cx.defer(crate::meetings_ui::cap_ai::sign_in);
+            } else {
+                cx.defer(|cx| {
+                    crate::meetings_ui::cap_ai::open_upgrade(
+                        None,
+                        crate::meetings_ui::cap_ai::Host::Documents,
+                        cx,
+                    )
+                });
+            }
+        });
+    let text = div()
+        .min_w_0()
+        .truncate()
+        .text_size(px(12.5))
+        .line_height(px(17.))
+        .text_color(palette.muted)
+        .child(gpui::Text::new("notes-pro-line".into(), line));
+    match place {
+        RowPlace::Sidebar => div()
+            .id("notes-pro")
+            .flex_shrink_0()
+            // A footer: the list above ends at this line when it scrolls.
+            .border_t_1()
+            .border_color(palette.hairline)
+            .px(px(19.))
+            .pt(px(10.))
+            .pb(px(4.))
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(8.))
+            .child(text)
+            .child(button)
+            .into_any_element(),
+        RowPlace::Strip => div()
+            .id("notes-pro")
+            .flex_shrink_0()
+            .w_full()
+            .h(px(PRO_STRIP_HEIGHT))
+            .px(px(16.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .border_t_1()
+            .border_color(palette.hairline)
+            .bg(palette.content)
+            .child(text)
+            .child(button)
+            .into_any_element(),
     }
 }
 
@@ -762,5 +916,105 @@ mod tests {
             footer(AiAccess::Trial { remaining: 2 }, Some(2), true, true, true),
             None
         );
+    }
+    #[test]
+    fn the_pro_row_shows_for_everyone_not_on_pro_where_cap_ai_is_sold() {
+        let sold = |access, trial| pro_row(access, trial, true);
+        assert_eq!(sold(AiAccess::NeedsSignIn, None), Some(ProRow::SignedOut));
+        for n in [3, 2, 1] {
+            assert_eq!(
+                sold(AiAccess::Trial { remaining: n }, Some(n)),
+                Some(ProRow::Left(n))
+            );
+        }
+        assert_eq!(sold(AiAccess::NeedsUpgrade, Some(0)), Some(ProRow::Spent));
+        assert_eq!(sold(AiAccess::NeedsUpgrade, None), Some(ProRow::Upgrade));
+        assert_eq!(sold(AiAccess::Ready, None), None, "Cap Pro");
+        assert_eq!(sold(AiAccess::Unavailable, None), None, "no Cap AI here");
+        for access in [
+            AiAccess::NeedsSignIn,
+            AiAccess::Trial { remaining: 2 },
+            AiAccess::NeedsUpgrade,
+            AiAccess::Ready,
+        ] {
+            assert_eq!(
+                pro_row(access, Some(0), false),
+                None,
+                "self-hosted: {access:?}"
+            );
+        }
+    }
+
+    fn offer(access: AiAccess, trial: Option<u32>, known: bool) -> ProOffer {
+        ProOffer {
+            access,
+            trial,
+            sells: true,
+            known,
+        }
+    }
+
+    #[test]
+    fn the_row_keeps_the_last_count_while_the_server_is_asked_again() {
+        let asking = offer(AiAccess::NeedsUpgrade, None, false);
+        assert_eq!(
+            next_pro_row(Some(ProRow::Left(3)), asking),
+            Some(ProRow::Left(3))
+        );
+        assert_eq!(
+            next_pro_row(Some(ProRow::Spent), asking),
+            Some(ProRow::Spent)
+        );
+        // The answer lands: the new count.
+        assert_eq!(
+            next_pro_row(
+                Some(ProRow::Left(3)),
+                offer(AiAccess::Trial { remaining: 2 }, Some(2), true)
+            ),
+            Some(ProRow::Left(2))
+        );
+        // Nothing known before: the line without a count, same height.
+        assert_eq!(next_pro_row(None, asking), Some(ProRow::Upgrade));
+        assert_eq!(
+            next_pro_row(Some(ProRow::SignedOut), asking),
+            Some(ProRow::Upgrade)
+        );
+    }
+
+    #[test]
+    fn the_row_never_shows_for_pro_even_with_the_server_down() {
+        let down = ProOffer {
+            access: AiAccess::Ready,
+            trial: None,
+            sells: true,
+            known: true,
+        };
+        for shown in [None, Some(ProRow::Left(1)), Some(ProRow::Upgrade)] {
+            assert_eq!(next_pro_row(shown, down), None);
+        }
+        // Signing out or upgrading clears a held count at once.
+        assert_eq!(
+            next_pro_row(
+                Some(ProRow::Left(2)),
+                offer(AiAccess::NeedsSignIn, None, true)
+            ),
+            Some(ProRow::SignedOut)
+        );
+    }
+
+    #[test]
+    fn the_row_signs_in_when_signed_out_and_opens_cap_pro_otherwise() {
+        assert_eq!(
+            pro_row_copy(ProRow::SignedOut),
+            ("Try Cap AI notes free".into(), "Sign in", true)
+        );
+        for (row, line) in [
+            (ProRow::Left(3), "3 free notes left"),
+            (ProRow::Left(1), "1 free note left"),
+            (ProRow::Spent, "No free notes left"),
+            (ProRow::Upgrade, "AI notes with Cap Pro"),
+        ] {
+            assert_eq!(pro_row_copy(row), (line.into(), "Get Cap Pro", false));
+        }
     }
 }

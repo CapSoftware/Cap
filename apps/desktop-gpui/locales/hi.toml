@@ -4338,6 +4338,11 @@ several = "{a}, {b} और अन्य"
 three = "{a}, {b} और {c}"
 two = "{a} और {b}"
 
+[cap_ai.row]
+pro = "Cap Pro के साथ AI नोट्स"
+signed_out = "Cap AI मुफ़्त आज़माएं"
+spent = "कोई मुफ़्त नोट बाकी नहीं"
+
 [cap_ai.settings]
 get_pro = "Cap Pro लें"
 ready = "Cap Pro के साथ Cap AI चालू है।"

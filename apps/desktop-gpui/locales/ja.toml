@@ -4338,6 +4338,11 @@ several = "{a}、{b}ほか"
 three = "{a}、{b}、{c}"
 two = "{a}、{b}"
 
+[cap_ai.row]
+pro = "Cap ProでAIメモ"
+signed_out = "Cap AIメモを無料で試す"
+spent = "無料枠は使い切りました"
+
 [cap_ai.settings]
 get_pro = "Cap Proにする"
 ready = "Cap ProでCap AIがオンです。"

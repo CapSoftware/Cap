@@ -4340,6 +4340,11 @@ several = { text = "{a}, {b} and others", context = "First names of people on a 
 three = { text = "{a}, {b} and {c}", context = "First names of three people on a call." }
 two = { text = "{a} and {b}", context = "First names of two people on a call." }
 
+[cap_ai.row]
+pro = { text = "AI notes with Cap Pro", context = "Cap Pro row in the Notes sidebar when the free count is not known yet, next to a Get Cap Pro button. One line.", max_px = 178, size = 12.5 }
+signed_out = { text = "Try Cap AI notes free", context = "Cap Pro row in the Notes sidebar for someone signed out, next to a Sign in button. One line.", max_px = 178, size = 12.5 }
+spent = { text = "No free notes left", context = "Cap Pro row in the Notes sidebar when the free Cap AI notes are used up, next to a Get Cap Pro button. One line.", max_px = 178, size = 12.5 }
+
 [cap_ai.settings]
 get_pro = "Get Cap Pro"
 ready = "Cap AI is on with Cap Pro."

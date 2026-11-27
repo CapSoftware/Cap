@@ -7,6 +7,7 @@ use gpui::{
 };
 
 use super::{
+    cap_ai::{ProRow, RowPlace, next_pro_row, render_pro_row},
     format, glass,
     menu::{self, Entry, OpenMenu},
     start::{StartButton, StartChoice, StartEvent, StartSize},
@@ -15,6 +16,7 @@ use super::{
 };
 use crate::{
     i18n::tr,
+    meetings::Meetings,
     theme::Theme,
     ui::{TextInput, TextInputEvent, TextInputState},
 };
@@ -24,6 +26,9 @@ pub enum SidebarEvent {
     Show(Scope),
     Open(String),
     Start(StartChoice),
+    /// The Cap Pro row changed (the window shows it while the sidebar is
+    /// hidden).
+    ProChanged,
 }
 
 /// How many notes the sidebar keeps at hand.
@@ -87,6 +92,8 @@ pub struct Sidebar {
     recent: Vec<RecentRow>,
     menu: Option<OpenMenu<Action>>,
     editing: Option<(Editing, Entity<TextInputState>)>,
+    /// The Cap Pro row (see [`super::cap_ai::pro_row`]).
+    pro: Option<ProRow>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -108,6 +115,11 @@ impl Sidebar {
                 cx.emit(SidebarEvent::Start(choice));
             }),
         ];
+        let mut subscriptions = subscriptions;
+        let meetings = Meetings::try_global(cx);
+        if let Some(meetings) = &meetings {
+            subscriptions.push(cx.observe(meetings, |this, _, cx| this.refresh_pro(cx)));
+        }
         let mut this = Self {
             store,
             palette: Palette::new(theme),
@@ -116,10 +128,33 @@ impl Sidebar {
             recent: Vec::new(),
             menu: None,
             editing: None,
+            pro: None,
             _subscriptions: subscriptions,
         };
         this.refresh_recent(cx);
+        this.pro = meetings.and_then(|m| next_pro_row(None, m.read(cx).pro_offer()));
+        // Home may be the first Notes screen: ask the server for the free
+        // count now rather than when a note opens.
+        if let Some(meetings) = Meetings::try_global(cx) {
+            meetings.update(cx, |m, cx| m.ensure_access(cx));
+        }
         this
+    }
+
+    pub fn pro(&self) -> Option<ProRow> {
+        self.pro
+    }
+
+    pub(super) fn refresh_pro(&mut self, cx: &mut Context<Self>) {
+        let Some(meetings) = Meetings::try_global(cx) else {
+            return;
+        };
+        let pro = next_pro_row(self.pro, meetings.read(cx).pro_offer());
+        if pro != self.pro {
+            self.pro = pro;
+            cx.emit(SidebarEvent::ProChanged);
+            cx.notify();
+        }
     }
 
     fn refresh_recent(&mut self, cx: &mut Context<Self>) {
@@ -341,6 +376,9 @@ impl Sidebar {
 impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = self.palette;
+        let pro = self
+            .pro
+            .map(|row| render_pro_row(&palette, row, RowPlace::Sidebar));
         let entity = cx.entity();
         let store = self.store.read(cx);
         let trashed = store.snapshot.trashed.len();
@@ -560,6 +598,7 @@ impl Render for Sidebar {
                     .children(recent)
                     .child(folder_list),
             )
+            .children(pro)
             .child(
                 div().pt(px(6.)).pb(px(12.)).child(
                     self.item(
