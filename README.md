@@ -75,7 +75,7 @@ The full product docs live at [cap.so/docs](https://cap.so/docs).
 
 ## Agent Skills
 
-An agent-agnostic plugin marketplace at [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json) registers [`apps/cli`](apps/cli) as the `cap` plugin: the [`cap`](apps/cli/skill/cap/SKILL.md) and [`cap-demo`](apps/cli/skill/cap-demo/SKILL.md) skills plus the local `cap mcp serve` MCP server, for Codex, Claude Code and other agents. It needs the `cap` CLI (see [apps/cli](apps/cli/README.md)).
+An agent-agnostic plugin marketplace at [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json) registers [`apps/cli`](apps/cli) as the `cap` plugin: the [`cap`](apps/cli/skill/cap/SKILL.md) and [`cap-demo`](apps/cli/skill/cap-demo/SKILL.md) skills plus the local `cap mcp serve` MCP server, for Codex, Claude Code and other agents. It needs the `cap` CLI (see [apps/cli](apps/cli/README.md)). Claude Code: `/plugin marketplace add CapSoftware/Cap`.
 
 ## Self-Hosting
 

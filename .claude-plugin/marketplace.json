@@ -1,0 +1,16 @@
+{
+	"name": "cap",
+	"owner": {
+		"name": "Cap Software, Inc."
+	},
+	"metadata": {
+		"description": "Cap agent skills and local MCP server for screen recording, library management, and product-demo videos."
+	},
+	"plugins": [
+		{
+			"name": "cap",
+			"source": "./apps/cli",
+			"description": "Cap's agent skills and local MCP server: record, export and upload screen recordings, manage the Cap library, and generate product-demo videos with the cap CLI."
+		}
+	]
+}
