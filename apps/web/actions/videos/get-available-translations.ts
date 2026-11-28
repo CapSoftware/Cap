@@ -3,9 +3,9 @@
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import { provideOptionalAuth, Storage, VideosPolicy } from "@cap/web-backend";
-import { Policy, type Video } from "@cap/web-domain";
+import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect, Exit } from "effect";
+import { Effect, Exit, Option } from "effect";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
@@ -41,13 +41,21 @@ export async function getAvailableTranslations(
 
 	const exit = await Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
+		const [video] = yield* Effect.promise(() =>
+			db().select().from(videos).where(eq(videos.id, videoId)),
+		);
 
-		return yield* Effect.promise(() =>
-			db().select({ video: videos }).from(videos).where(eq(videos.id, videoId)),
-		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
+		if (video) {
+			yield* videosPolicy.canViewLoaded(
+				video,
+				Option.fromNullable(video.password),
+			);
+		}
+
+		return video;
 	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
-	if (Exit.isFailure(exit)) {
+	if (Exit.isFailure(exit) || !exit.value) {
 		return {
 			success: false,
 			hasOriginal: false,
@@ -56,18 +64,7 @@ export async function getAvailableTranslations(
 		};
 	}
 
-	const query = exit.value;
-
-	if (query.length === 0 || !query[0]?.video) {
-		return {
-			success: false,
-			hasOriginal: false,
-			translations: [],
-			message: "Video not found",
-		};
-	}
-
-	const { video } = query[0];
+	const video = exit.value;
 	const prefix = `${video.ownerId}/${videoId}/transcription`;
 
 	try {
