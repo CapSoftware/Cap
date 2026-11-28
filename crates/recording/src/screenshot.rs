@@ -671,7 +671,9 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<DynamicImage> {
             }
             unsafe { core_graphics::image::CGImage::from_ptr(image) }
         }
-        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
+        ScreenCaptureTarget::DesktopArea { .. }
+        | ScreenCaptureTarget::CameraOnly
+        | ScreenCaptureTarget::AudioOnly => {
             return None;
         }
     };
@@ -1077,6 +1079,35 @@ fn capture_screenshot_fallback(target: ScreenCaptureTarget) -> anyhow::Result<Rg
             debug!("Windows GDI area capture");
             Ok(image)
         }
+        ScreenCaptureTarget::DesktopArea { .. } => {
+            let plan = target
+                .resolve_windows_desktop_area_plan()
+                .ok_or_else(unsupported_error)?;
+            let mut canvas =
+                RgbImage::from_pixel(plan.canvas_width, plan.canvas_height, image::Rgb([0, 0, 0]));
+            for region in &plan.regions {
+                let desktop_origin = plan.desktop_bounds.position();
+                let region_bounds = scap_targets::bounds::PhysicalBounds::new(
+                    scap_targets::bounds::PhysicalPosition::new(
+                        desktop_origin.x() + f64::from(region.dest_x),
+                        desktop_origin.y() + f64::from(region.dest_y),
+                    ),
+                    scap_targets::bounds::PhysicalSize::new(
+                        f64::from(region.source_width),
+                        f64::from(region.source_height),
+                    ),
+                );
+                let patch = capture_display_bounds(region_bounds)?;
+                image::imageops::overlay(
+                    &mut canvas,
+                    &patch,
+                    i64::from(region.dest_x),
+                    i64::from(region.dest_y),
+                );
+            }
+            debug!("Windows GDI multi-monitor desktop area capture");
+            Ok(canvas)
+        }
         ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
             Err(unsupported_error())
         }
@@ -1097,11 +1128,76 @@ fn gdi_or_error(
 }
 
 #[cfg(target_os = "windows")]
+fn try_fast_capture_desktop_area(target: &ScreenCaptureTarget) -> Option<DynamicImage> {
+    use std::sync::mpsc::sync_channel;
+
+    let plan = target.resolve_windows_desktop_area_plan()?;
+    let device = shared_d3d_device().ok().cloned();
+    let mut canvas =
+        RgbImage::from_pixel(plan.canvas_width, plan.canvas_height, image::Rgb([0, 0, 0]));
+
+    for region in &plan.regions {
+        let display = scap_targets::Display::from_id(&region.display_id)?;
+        let item = display.raw_handle().try_as_capture_item().ok()?;
+        let mut settings = Settings {
+            is_cursor_capture_enabled: Some(false),
+            pixel_format: PixelFormat::B8G8R8A8Unorm,
+            crop: Some(D3D11_BOX {
+                left: region.source_left,
+                top: region.source_top,
+                right: region.source_left + region.source_width,
+                bottom: region.source_top + region.source_height,
+                front: 0,
+                back: 1,
+            }),
+            ..Default::default()
+        };
+        if let Ok(true) = Settings::can_is_border_required() {
+            settings.is_border_required = Some(false);
+        }
+        if let Ok(true) = Settings::can_is_cursor_capture_enabled() {
+            settings.is_cursor_capture_enabled = Some(false);
+        }
+
+        let (tx, rx) = sync_channel(1);
+        let mut capturer = Capturer::new(
+            item,
+            settings,
+            move |frame| {
+                let _ = tx.try_send(frame_to_rgb(&frame));
+                Ok(())
+            },
+            || Ok(()),
+            device.clone(),
+        )
+        .ok()?;
+        if capturer.start().is_err() {
+            let _ = capturer.stop();
+            return None;
+        }
+        let patch = rx.recv_timeout(Duration::from_millis(750)).ok()?.ok()?;
+        let _ = capturer.stop();
+        image::imageops::overlay(
+            &mut canvas,
+            &patch,
+            i64::from(region.dest_x),
+            i64::from(region.dest_y),
+        );
+    }
+
+    Some(DynamicImage::ImageRgb8(canvas))
+}
+
+#[cfg(target_os = "windows")]
 fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<DynamicImage> {
     use std::sync::mpsc::sync_channel;
 
     if !windows_fast_path_available() {
         return None;
+    }
+
+    if matches!(target, ScreenCaptureTarget::DesktopArea { .. }) {
+        return try_fast_capture_desktop_area(target);
     }
 
     let start = std::time::Instant::now();
@@ -1120,7 +1216,9 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<DynamicImage> {
             let display = scap_targets::Display::from_id(&screen)?;
             display.raw_handle().try_as_capture_item().ok()?
         }
-        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
+        ScreenCaptureTarget::DesktopArea { .. }
+        | ScreenCaptureTarget::CameraOnly
+        | ScreenCaptureTarget::AudioOnly => {
             return None;
         }
     };
@@ -1306,6 +1404,9 @@ fn wayland_screenshot_display_id(
         ScreenCaptureTarget::Window { .. } => Err(anyhow!(
             "Wayland screenshot portal cannot safely isolate the selected window"
         )),
+        ScreenCaptureTarget::DesktopArea { .. } => Err(anyhow!(
+            "Multi-monitor desktop area screenshots are only supported on Windows"
+        )),
         ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
             Err(anyhow!("Screenshots need a screen, window or area"))
         }
@@ -1425,6 +1526,13 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
         if let Some(image) = try_fast_capture(&target) {
             return Ok(image);
         }
+        if matches!(target, ScreenCaptureTarget::DesktopArea { .. }) {
+            let fallback_image = gdi_or_error(
+                &target,
+                anyhow!("Windows.Graphics.Capture multi-monitor screenshot failed"),
+            )?;
+            return Ok(finalize_screenshot(fallback_image, &target));
+        }
         debug!("Fast capture failed, falling back to Windows.Graphics.Capture");
     }
 
@@ -1479,6 +1587,11 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
                     )
                     .ok_or_else(|| anyhow!("Failed to get content filter"))?
             }
+            ScreenCaptureTarget::DesktopArea { .. } => {
+                return Err(anyhow!(
+                    "Multi-monitor desktop area screenshots are only supported on Windows"
+                ));
+            }
             ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
                 return Err(anyhow!("Screenshots need a screen, window or area"));
             }
@@ -1497,6 +1610,11 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
                 .and_then(|d| d.physical_size())
                 .map(|s| s.width())
                 .unwrap_or(1920.0),
+            ScreenCaptureTarget::DesktopArea { .. } => {
+                return Err(anyhow!(
+                    "Multi-monitor desktop area screenshots are only supported on Windows"
+                ));
+            }
             ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
                 return Err(anyhow!("Screenshots need a screen, window or area"));
             }
@@ -1515,6 +1633,11 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
                 .and_then(|d| d.physical_size())
                 .map(|s| s.height())
                 .unwrap_or(1080.0),
+            ScreenCaptureTarget::DesktopArea { .. } => {
+                return Err(anyhow!(
+                    "Multi-monitor desktop area screenshots are only supported on Windows"
+                ));
+            }
             ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
                 return Err(anyhow!("Screenshots need a screen, window or area"));
             }
@@ -1583,6 +1706,11 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
                     .raw_handle()
                     .try_as_capture_item()
                     .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))
+            }
+            ScreenCaptureTarget::DesktopArea { .. } => {
+                return Err(anyhow!(
+                    "Multi-monitor desktop area screenshots are only supported on Windows"
+                ));
             }
             ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
                 return Err(anyhow!("Screenshots need a screen, window or area"));
@@ -2204,6 +2332,9 @@ fn linux_capture_geometry(
             )?;
             Ok((display_name, x, y, width, height))
         }
+        ScreenCaptureTarget::DesktopArea { .. } => Err(anyhow!(
+            "Multi-monitor desktop area screenshots are only supported on Windows"
+        )),
         ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
             Err(anyhow!("Screenshots need a screen, window or area"))
         }

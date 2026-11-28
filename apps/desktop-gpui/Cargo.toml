@@ -240,6 +240,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }

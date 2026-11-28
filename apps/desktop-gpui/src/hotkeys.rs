@@ -1313,6 +1313,13 @@ fn target_is_live(target: &ScreenCaptureTarget) -> bool {
         ScreenCaptureTarget::Area { screen, .. } => {
             scap_targets::Display::from_id(screen).is_some()
         }
+        ScreenCaptureTarget::DesktopArea { screens, .. } => {
+            cfg!(windows)
+                && screens.len() >= 2
+                && screens
+                    .iter()
+                    .all(|screen| scap_targets::Display::from_id(screen).is_some())
+        }
         ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => true,
     }
 }

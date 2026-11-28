@@ -17,6 +17,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use super::{ForcedAppearance, MaterialKind, PanelBehavior};
 
 mod capture_exclusion;
+mod capture_loss;
 mod hidden_frame;
 mod session_end;
 mod url_scheme;
@@ -70,6 +71,16 @@ fn native_handle(window: &Window) -> Option<isize> {
 
 pub fn native_window(window: &Window) -> Option<NativeWindow> {
     native_handle(window).map(NativeWindow)
+}
+
+pub fn mouse_capture_losses(
+    native: NativeWindow,
+) -> std::io::Result<tokio::sync::mpsc::Receiver<()>> {
+    capture_loss::install(native.hwnd())
+}
+
+pub fn owns_mouse_capture(native: NativeWindow) -> bool {
+    capture_loss::owns_capture(native.hwnd())
 }
 
 pub fn install_main_window_frame_policy(native: &NativeWindow) -> std::io::Result<()> {

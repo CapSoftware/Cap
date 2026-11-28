@@ -756,7 +756,11 @@ pub fn availability(session: &RecordingSession) -> Result<(), Unavailable> {
         return Err(Unavailable::NotRecording);
     }
     match session.capture_target() {
-        Some(ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. }) => Ok(()),
+        Some(
+            ScreenCaptureTarget::Display { .. }
+            | ScreenCaptureTarget::Area { .. }
+            | ScreenCaptureTarget::DesktopArea { .. },
+        ) => Ok(()),
         Some(ScreenCaptureTarget::Window { .. }) => Err(Unavailable::WindowRecording),
         Some(ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly) | None => {
             Err(Unavailable::NotRecording)

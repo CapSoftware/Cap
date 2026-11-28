@@ -34,7 +34,9 @@ use gpui::{
 };
 use scap_targets::{
     DisplayId, WindowId,
-    bounds::{LogicalBounds, LogicalPosition, LogicalSize},
+    bounds::{
+        LogicalBounds, LogicalPosition, LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize,
+    },
 };
 
 use crate::i18n::tr;
@@ -457,6 +459,9 @@ pub struct TargetSelect {
     /// the one setting it mirrors.
     pub focus_window: bool,
     pub focus_center: bool,
+    pub desktop_monitors: Vec<DesktopMonitorRect>,
+    pub desktop_area: Option<SharedDesktopArea>,
+    area_ratio: Option<(u32, u32)>,
     _poll: Option<gpui::Task<()>>,
 }
 
@@ -537,6 +542,9 @@ impl TargetSelect {
             arranged: HashMap::new(),
             focus_window: saved_focus(),
             focus_center: crate::store::GeneralSettings::load().focus_center,
+            desktop_monitors: Vec::new(),
+            desktop_area: None,
+            area_ratio: None,
             _poll: None,
         });
         cx.set_global(TargetSelectGlobal(select.clone()));
@@ -567,6 +575,9 @@ impl TargetSelect {
             crate::foreign_window::put_back_all(self.take_arranged(), cx.background_executor());
             self.focus_window = saved_focus();
             self.focus_center = crate::store::GeneralSettings::load().focus_center;
+            #[cfg(target_os = "macos")]
+            import_legacy_area_selection();
+            self.area_ratio = stored_area_ratio();
         }
         if self.mode == mode {
             cx.notify();
@@ -574,6 +585,14 @@ impl TargetSelect {
         }
         self.mode = mode;
         self.hovered_window = None;
+        if mode.is_some()
+            || !self
+                .desktop_area
+                .as_ref()
+                .is_some_and(|area| area.recording)
+        {
+            self.desktop_area = None;
+        }
         if mode.is_some() {
             self.start_polling(cx);
         } else {
@@ -581,6 +600,36 @@ impl TargetSelect {
             self.cursor_display = None;
         }
         cx.notify();
+    }
+
+    pub fn set_desktop_monitors(&mut self, monitors: Vec<DesktopMonitorRect>) {
+        self.desktop_monitors = monitors;
+    }
+
+    pub fn set_desktop_area(&mut self, area: Option<SharedDesktopArea>, cx: &mut Context<Self>) {
+        if self.desktop_area != area {
+            self.desktop_area = area;
+            cx.notify();
+        }
+    }
+
+    pub fn clear_desktop_area(&mut self) {
+        self.desktop_area = None;
+    }
+
+    pub fn desktop_area_target(&self, min_size: f32) -> Option<ScreenCaptureTarget> {
+        let area = self.desktop_area.as_ref()?;
+        if area.screens.len() < 2 {
+            return None;
+        }
+        let min_valid = area.recording || area.bounds.is_valid_for(min_size);
+        min_valid.then(|| ScreenCaptureTarget::DesktopArea {
+            bounds: PhysicalBounds::new(
+                PhysicalPosition::new(f64::from(area.bounds.x), f64::from(area.bounds.y)),
+                PhysicalSize::new(f64::from(area.bounds.width), f64::from(area.bounds.height)),
+            ),
+            screens: area.screens.clone(),
+        })
     }
 
     pub fn set_recording_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
@@ -1491,6 +1540,459 @@ impl AreaHandle {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct DesktopMonitorRect {
+    pub display_id: DisplayId,
+    pub physical: AreaRect,
+    pub logical_size: (f32, f32),
+}
+
+impl DesktopMonitorRect {
+    fn scale_xy(&self) -> (f32, f32) {
+        (
+            self.physical.width / self.logical_size.0.max(1.),
+            self.physical.height / self.logical_size.1.max(1.),
+        )
+    }
+
+    fn contains_physical(&self, point: (f32, f32)) -> bool {
+        point.0 >= self.physical.x
+            && point.0 < self.physical.right()
+            && point.1 >= self.physical.y
+            && point.1 < self.physical.bottom()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalAreaSlice {
+    pub rect: AreaRect,
+    pub open_left: bool,
+    pub open_right: bool,
+    pub open_top: bool,
+    pub open_bottom: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SharedDesktopArea {
+    pub bounds: AreaRect,
+    pub screens: Vec<DisplayId>,
+    pub controls_display: DisplayId,
+    pub dragging: bool,
+    pub recording: bool,
+    pub snapped_ratio: Option<(u32, u32)>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum DesktopSelectionKind {
+    Empty,
+    SingleMonitor {
+        display_id: DisplayId,
+        local_rect: AreaRect,
+    },
+    MultiMonitor {
+        bounds: AreaRect,
+        screens: Vec<DisplayId>,
+    },
+}
+
+#[cfg(windows)]
+pub fn windows_desktop_monitors() -> Vec<DesktopMonitorRect> {
+    scap_targets::Display::list()
+        .into_iter()
+        .filter_map(|display| {
+            let physical = display.raw_handle().physical_bounds()?;
+            let logical = display.logical_size()?;
+            let phys_rect = AreaRect {
+                x: physical.position().x() as f32,
+                y: physical.position().y() as f32,
+                width: physical.size().width() as f32,
+                height: physical.size().height() as f32,
+            };
+            let logical_size = (logical.width() as f32, logical.height() as f32);
+            (phys_rect.width > 0.
+                && phys_rect.height > 0.
+                && logical_size.0 > 0.
+                && logical_size.1 > 0.)
+                .then(|| DesktopMonitorRect {
+                    display_id: display.id(),
+                    physical: phys_rect,
+                    logical_size,
+                })
+        })
+        .collect()
+}
+
+fn local_to_desktop_physical(point: (f32, f32), monitor: &DesktopMonitorRect) -> (f32, f32) {
+    let (scale_x, scale_y) = monitor.scale_xy();
+    (
+        monitor.physical.x + point.0 * scale_x,
+        monitor.physical.y + point.1 * scale_y,
+    )
+}
+
+fn local_rect_to_desktop_physical(rect: AreaRect, monitor: &DesktopMonitorRect) -> AreaRect {
+    let (scale_x, scale_y) = monitor.scale_xy();
+    AreaRect {
+        x: monitor.physical.x + rect.x * scale_x,
+        y: monitor.physical.y + rect.y * scale_y,
+        width: rect.width * scale_x,
+        height: rect.height * scale_y,
+    }
+}
+
+fn desktop_physical_to_local_slice(
+    desktop: AreaRect,
+    monitor: &DesktopMonitorRect,
+) -> Option<LocalAreaSlice> {
+    let left = desktop.x.max(monitor.physical.x);
+    let top = desktop.y.max(monitor.physical.y);
+    let right = desktop.right().min(monitor.physical.right());
+    let bottom = desktop.bottom().min(monitor.physical.bottom());
+    if right <= left || bottom <= top {
+        return None;
+    }
+    let (scale_x, scale_y) = monitor.scale_xy();
+    Some(LocalAreaSlice {
+        rect: AreaRect {
+            x: (left - monitor.physical.x) / scale_x,
+            y: (top - monitor.physical.y) / scale_y,
+            width: (right - left) / scale_x,
+            height: (bottom - top) / scale_y,
+        },
+        open_left: desktop.x < monitor.physical.x - 0.5,
+        open_right: desktop.right() > monitor.physical.right() + 0.5,
+        open_top: desktop.y < monitor.physical.y - 0.5,
+        open_bottom: desktop.bottom() > monitor.physical.bottom() + 0.5,
+    })
+}
+
+fn desktop_union_bounds(monitors: &[DesktopMonitorRect]) -> Option<AreaRect> {
+    let mut left = f32::INFINITY;
+    let mut top = f32::INFINITY;
+    let mut right = f32::NEG_INFINITY;
+    let mut bottom = f32::NEG_INFINITY;
+    for monitor in monitors {
+        left = left.min(monitor.physical.x);
+        top = top.min(monitor.physical.y);
+        right = right.max(monitor.physical.right());
+        bottom = bottom.max(monitor.physical.bottom());
+    }
+    (left.is_finite() && top.is_finite() && right > left && bottom > top).then_some(AreaRect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    })
+}
+
+fn physical_rect_overlap_area(a: AreaRect, b: AreaRect) -> f32 {
+    let w = (a.right().min(b.right()) - a.x.max(b.x)).max(0.);
+    let h = (a.bottom().min(b.bottom()) - a.y.max(b.y)).max(0.);
+    w * h
+}
+
+fn classify_desktop_selection(
+    raw_rect: AreaRect,
+    monitors: &[DesktopMonitorRect],
+) -> DesktopSelectionKind {
+    let mut overlaps: Vec<(&DesktopMonitorRect, AreaRect)> = Vec::new();
+    for monitor in monitors {
+        let left = raw_rect.x.max(monitor.physical.x);
+        let top = raw_rect.y.max(monitor.physical.y);
+        let right = raw_rect.right().min(monitor.physical.right());
+        let bottom = raw_rect.bottom().min(monitor.physical.bottom());
+        if right > left && bottom > top {
+            overlaps.push((
+                monitor,
+                AreaRect {
+                    x: left,
+                    y: top,
+                    width: right - left,
+                    height: bottom - top,
+                },
+            ));
+        }
+    }
+
+    if overlaps.is_empty() {
+        return DesktopSelectionKind::Empty;
+    }
+
+    if overlaps.len() == 1 {
+        let (monitor, overlap) = overlaps[0];
+        let Some(slice) = desktop_physical_to_local_slice(overlap, monitor) else {
+            return DesktopSelectionKind::Empty;
+        };
+        return DesktopSelectionKind::SingleMonitor {
+            display_id: monitor.display_id.clone(),
+            local_rect: slice.rect,
+        };
+    }
+
+    let phys_monitors: Vec<(DisplayId, PhysicalBounds)> = monitors
+        .iter()
+        .map(|m| {
+            (
+                m.display_id.clone(),
+                PhysicalBounds::new(
+                    PhysicalPosition::new(f64::from(m.physical.x), f64::from(m.physical.y)),
+                    PhysicalSize::new(f64::from(m.physical.width), f64::from(m.physical.height)),
+                ),
+            )
+        })
+        .collect();
+    let phys_selection = PhysicalBounds::new(
+        PhysicalPosition::new(f64::from(raw_rect.x), f64::from(raw_rect.y)),
+        PhysicalSize::new(f64::from(raw_rect.width), f64::from(raw_rect.height)),
+    );
+
+    if let Some(plan) = cap_recording::sources::screen_capture::resolve_desktop_area_plan(
+        phys_selection,
+        &phys_monitors,
+    ) {
+        if plan.regions.len() >= 2 {
+            return DesktopSelectionKind::MultiMonitor {
+                bounds: AreaRect {
+                    x: plan.desktop_bounds.position().x() as f32,
+                    y: plan.desktop_bounds.position().y() as f32,
+                    width: plan.canvas_width as f32,
+                    height: plan.canvas_height as f32,
+                },
+                screens: plan
+                    .regions
+                    .into_iter()
+                    .map(|region| region.display_id)
+                    .collect(),
+            };
+        }
+        if let Some(only) = plan.regions.first()
+            && let Some(monitor) = monitors.iter().find(|m| m.display_id == only.display_id)
+            && let Some(slice) = desktop_physical_to_local_slice(
+                AreaRect {
+                    x: plan.desktop_bounds.position().x() as f32,
+                    y: plan.desktop_bounds.position().y() as f32,
+                    width: plan.canvas_width as f32,
+                    height: plan.canvas_height as f32,
+                },
+                monitor,
+            )
+        {
+            return DesktopSelectionKind::SingleMonitor {
+                display_id: monitor.display_id.clone(),
+                local_rect: slice.rect,
+            };
+        }
+    }
+
+    let (best_monitor, best_overlap) = overlaps
+        .into_iter()
+        .max_by(|(_, a), (_, b)| (a.width * a.height).total_cmp(&(b.width * b.height)))
+        .unwrap();
+    match desktop_physical_to_local_slice(best_overlap, best_monitor) {
+        Some(slice) => DesktopSelectionKind::SingleMonitor {
+            display_id: best_monitor.display_id.clone(),
+            local_rect: slice.rect,
+        },
+        None => DesktopSelectionKind::Empty,
+    }
+}
+
+fn desktop_area_zone_at(point: (f32, f32), bounds: AreaRect, grab_px: f32) -> Option<AreaZone> {
+    let (x, y) = point;
+    let near_left = (x - bounds.x).abs() <= grab_px;
+    let near_right = (x - bounds.right()).abs() <= grab_px;
+    let near_top = (y - bounds.y).abs() <= grab_px;
+    let near_bottom = (y - bounds.bottom()).abs() <= grab_px;
+    let within_x = x >= bounds.x - grab_px && x <= bounds.right() + grab_px;
+    let within_y = y >= bounds.y - grab_px && y <= bounds.bottom() + grab_px;
+
+    let handle = match (near_left, near_right, near_top, near_bottom) {
+        (true, _, true, _) => Some(AreaHandle::NorthWest),
+        (_, true, true, _) => Some(AreaHandle::NorthEast),
+        (true, _, _, true) => Some(AreaHandle::SouthWest),
+        (_, true, _, true) => Some(AreaHandle::SouthEast),
+        (true, _, _, _) if within_y => Some(AreaHandle::West),
+        (_, true, _, _) if within_y => Some(AreaHandle::East),
+        (_, _, true, _) if within_x => Some(AreaHandle::North),
+        (_, _, _, true) if within_x => Some(AreaHandle::South),
+        _ => None,
+    };
+
+    if let Some(handle) = handle {
+        return Some(AreaZone::Handle(handle));
+    }
+    (x > bounds.x && x < bounds.right() && y > bounds.y && y < bounds.bottom())
+        .then_some(AreaZone::Inside)
+}
+
+fn desktop_draw_rect(
+    anchor: (f32, f32),
+    pointer: (f32, f32),
+    ratio: Option<f32>,
+    union_bounds: AreaRect,
+) -> AreaRect {
+    let x = pointer.0.clamp(union_bounds.x, union_bounds.right());
+    let y = pointer.1.clamp(union_bounds.y, union_bounds.bottom());
+    match ratio {
+        Some(ratio) => {
+            let shifted = area_from_anchor_with_ratio(
+                (anchor.0 - union_bounds.x, anchor.1 - union_bounds.y),
+                (x - union_bounds.x, y - union_bounds.y),
+                ratio,
+                (union_bounds.width, union_bounds.height),
+            );
+            AreaRect {
+                x: shifted.x + union_bounds.x,
+                y: shifted.y + union_bounds.y,
+                width: shifted.width,
+                height: shifted.height,
+            }
+        }
+        None => AreaRect {
+            x: anchor.0.min(x),
+            y: anchor.1.min(y),
+            width: (x - anchor.0).abs(),
+            height: (y - anchor.1).abs(),
+        },
+    }
+}
+
+fn desktop_resize_rect(
+    handle: AreaHandle,
+    start: AreaRect,
+    pointer: (f32, f32),
+    ratio: Option<f32>,
+    union_bounds: AreaRect,
+) -> AreaRect {
+    let x = pointer.0.clamp(union_bounds.x, union_bounds.right());
+    let y = pointer.1.clamp(union_bounds.y, union_bounds.bottom());
+    match ratio {
+        Some(ratio) => {
+            let shifted_start = AreaRect {
+                x: start.x - union_bounds.x,
+                y: start.y - union_bounds.y,
+                width: start.width,
+                height: start.height,
+            };
+            let shifted_ptr = (x - union_bounds.x, y - union_bounds.y);
+            let shifted = if handle.east() != handle.west() && handle.north() != handle.south() {
+                let anchor = (
+                    if handle.west() {
+                        shifted_start.right()
+                    } else {
+                        shifted_start.x
+                    },
+                    if handle.north() {
+                        shifted_start.bottom()
+                    } else {
+                        shifted_start.y
+                    },
+                );
+                area_from_anchor_with_ratio(
+                    anchor,
+                    shifted_ptr,
+                    ratio,
+                    (union_bounds.width, union_bounds.height),
+                )
+            } else {
+                area_edge_resize_with_ratio(
+                    handle,
+                    shifted_start,
+                    shifted_ptr,
+                    ratio,
+                    (union_bounds.width, union_bounds.height),
+                )
+            };
+            AreaRect {
+                x: shifted.x + union_bounds.x,
+                y: shifted.y + union_bounds.y,
+                width: shifted.width,
+                height: shifted.height,
+            }
+        }
+        None => {
+            let mut left = start.x;
+            let mut top = start.y;
+            let mut right = start.right();
+            let mut bottom = start.bottom();
+            if handle.west() {
+                left = x;
+            }
+            if handle.east() {
+                right = x;
+            }
+            if handle.north() {
+                top = y;
+            }
+            if handle.south() {
+                bottom = y;
+            }
+            AreaRect {
+                x: left.min(right),
+                y: top.min(bottom),
+                width: (right - left).abs(),
+                height: (bottom - top).abs(),
+            }
+        }
+    }
+}
+
+fn desktop_move_rect(start: AreaRect, delta: (f32, f32), union_bounds: AreaRect) -> AreaRect {
+    let width = start.width.min(union_bounds.width);
+    let height = start.height.min(union_bounds.height);
+    let max_x = (union_bounds.right() - width).max(union_bounds.x);
+    let max_y = (union_bounds.bottom() - height).max(union_bounds.y);
+    AreaRect {
+        x: (start.x + delta.0).clamp(union_bounds.x, max_x),
+        y: (start.y + delta.1).clamp(union_bounds.y, max_y),
+        width,
+        height,
+    }
+}
+
+fn desktop_area_with_ratio(area: AreaRect, ratio: f32, union_bounds: AreaRect) -> AreaRect {
+    let shifted = area_with_ratio(
+        AreaRect {
+            x: area.x - union_bounds.x,
+            y: area.y - union_bounds.y,
+            width: area.width,
+            height: area.height,
+        },
+        ratio,
+        (union_bounds.width, union_bounds.height),
+    );
+    AreaRect {
+        x: shifted.x + union_bounds.x,
+        y: shifted.y + union_bounds.y,
+        width: shifted.width,
+        height: shifted.height,
+    }
+}
+
+fn choose_controls_display(
+    pointer: Option<(f32, f32)>,
+    bounds: AreaRect,
+    screens: &[DisplayId],
+    monitors: &[DesktopMonitorRect],
+) -> DisplayId {
+    if let Some(pointer) = pointer
+        && let Some(monitor) = monitors
+            .iter()
+            .find(|m| screens.contains(&m.display_id) && m.contains_physical(pointer))
+    {
+        return monitor.display_id.clone();
+    }
+    monitors
+        .iter()
+        .filter(|m| screens.contains(&m.display_id))
+        .max_by(|a, b| {
+            physical_rect_overlap_area(bounds, a.physical)
+                .total_cmp(&physical_rect_overlap_area(bounds, b.physical))
+        })
+        .map(|m| m.display_id.clone())
+        .unwrap_or_else(|| screens[0].clone())
+}
+
 enum AreaDrag {
     /// Drawing a fresh selection from an anchor point.
     Draw {
@@ -1507,6 +2009,21 @@ enum AreaDrag {
         handle: AreaHandle,
         start: AreaRect,
     },
+    DesktopDraw {
+        anchor: (f32, f32),
+        previous_local: Option<AreaRect>,
+        previous_shared: Option<SharedDesktopArea>,
+    },
+    DesktopMove {
+        grab: (f32, f32),
+        start: AreaRect,
+        previous_shared: SharedDesktopArea,
+    },
+    DesktopResize {
+        handle: AreaHandle,
+        start: AreaRect,
+        previous_shared: SharedDesktopArea,
+    },
 }
 
 /// One display's overlay.
@@ -1519,6 +2036,7 @@ pub struct OverlayWindow {
     /// Logical size, which is this window's size and the space every
     /// coordinate here lives in.
     display_size: (f32, f32),
+    physical_bounds: Option<AreaRect>,
     capture_scale: f32,
     controls_work_area: AreaRect,
     /// Physical pixels, for the `1920x1080 · 60FPS` line.
@@ -1528,8 +2046,6 @@ pub struct OverlayWindow {
     crop: Option<AreaRect>,
     drag: Option<AreaDrag>,
     snap_guides: Vec<SnapGuide>,
-    /// The aspect ratio a drawn or resized area keeps, `None` for free.
-    area_ratio: Option<(u32, u32)>,
     area_snap_to_ratio: bool,
     area_snapped: Option<(u32, u32)>,
     area_locked: bool,
@@ -1638,13 +2154,36 @@ impl OverlayWindow {
             .detach();
         // Activating an overlay (a click, or the focus hand-off when it opens)
         // lifts it to the top of its band on Windows and X11, over the camera.
-        cx.observe_window_activation(window, |_, window, cx| {
+        cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 cx.spawn(async move |_, cx| app_windows::raise_camera_above_overlays(cx))
                     .detach();
+            } else if cfg!(windows) && this.drag.is_some() {
+                this.cancel_area_drag(cx);
             }
         })
         .detach();
+        #[cfg(windows)]
+        if let Some(native) = crate::platform::native_window(window) {
+            match crate::platform::mouse_capture_losses(native) {
+                Ok(mut losses) => cx
+                    .spawn_in(window, async move |this, cx| {
+                        while losses.recv().await.is_some() {
+                            // GPUI releases capture before dispatching mouse-up.
+                            // Observe the loss after that event can finish the drag.
+                            if !crate::platform::owns_mouse_capture(native)
+                                && this
+                                    .update_in(cx, |this, _, cx| this.cancel_area_drag(cx))
+                                    .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    })
+                    .detach(),
+                Err(error) => tracing::warn!(%error, "Could not observe picker mouse capture"),
+            }
+        }
         let session = crate::session::RecordingSession::global(cx);
         let mut drawn_phase = session.read(cx).phase;
         cx.observe_in(&session, window, move |_, session, window, cx| {
@@ -1702,14 +2241,25 @@ impl OverlayWindow {
                 height: logical.1,
             })
             .clamped(logical);
-        #[cfg(target_os = "macos")]
-        import_legacy_area_selection();
         let area_screen = AreaScreen::of(&display.id(), cx);
         let locked_area = locked_area_for(
             &area_screen,
             logical,
             area_min_size(select.read(cx).recording_mode),
         );
+
+        #[cfg(windows)]
+        let physical_bounds = display
+            .raw_handle()
+            .physical_bounds()
+            .map(|bounds| AreaRect {
+                x: bounds.position().x() as f32,
+                y: bounds.position().y() as f32,
+                width: bounds.size().width() as f32,
+                height: bounds.size().height() as f32,
+            });
+        #[cfg(not(windows))]
+        let physical_bounds = None;
 
         Self {
             theme,
@@ -1720,6 +2270,7 @@ impl OverlayWindow {
                 .name()
                 .unwrap_or_else(|| tr::overlay::display_fallback(display.id())),
             display_size: logical,
+            physical_bounds,
             capture_scale,
             controls_work_area,
             physical_size: display
@@ -1730,7 +2281,6 @@ impl OverlayWindow {
             crop: locked_area,
             drag: None,
             snap_guides: Vec::new(),
-            area_ratio: stored_area_ratio(),
             area_snap_to_ratio: stored_area_snap_to_ratio(),
             area_snapped: None,
             area_locked: locked_area.is_some(),
@@ -1789,9 +2339,80 @@ impl OverlayWindow {
         cx.notify();
     }
 
+    fn monitor_rect(&self) -> Option<DesktopMonitorRect> {
+        let physical = self.physical_bounds?;
+        (physical.width > 0.
+            && physical.height > 0.
+            && self.display_size.0 > 0.
+            && self.display_size.1 > 0.)
+            .then(|| DesktopMonitorRect {
+                display_id: self.display_id.clone(),
+                physical,
+                logical_size: self.display_size,
+            })
+    }
+
+    fn desktop_area_enabled(&self, cx: &App) -> bool {
+        cfg!(windows)
+            && self.monitor_rect().is_some()
+            && self.select.read(cx).desktop_monitors.len() >= 2
+    }
+
+    fn area_drag_events(&self, cx: &Context<Self>) -> impl IntoElement {
+        let on_move = cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+            if this.drag.is_none() {
+                return;
+            }
+            if event.dragging() {
+                this.area_mouse_move(event.position, snap_off(&event.modifiers), true, cx);
+            } else {
+                this.cancel_area_drag(cx);
+            }
+        });
+        let on_up = cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+            if this.drag.is_none() {
+                return;
+            }
+            if event.button == MouseButton::Left {
+                this.area_mouse_up(event.position, snap_off(&event.modifiers), cx);
+            } else {
+                this.cancel_area_drag(cx);
+            }
+        });
+        gpui::canvas(
+            |_, _, _| (),
+            move |_, (), window, _| {
+                window.on_mouse_event(move |event, phase, window, cx| {
+                    if phase == gpui::DispatchPhase::Capture {
+                        on_move(event, window, cx);
+                    }
+                });
+                window.on_mouse_event(move |event, phase, window, cx| {
+                    if phase == gpui::DispatchPhase::Capture {
+                        on_up(event, window, cx);
+                    }
+                });
+            },
+        )
+        .absolute()
+        .inset_0()
+    }
+
     pub fn commit_area_for_recording(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.select.read(cx).mode != Some(TargetType::Area) || self.target(cx).is_none() {
+        let is_desktop_area = self.select.read(cx).desktop_area.is_some();
+        if (!is_desktop_area && self.select.read(cx).mode != Some(TargetType::Area))
+            || self.target(cx).is_none()
+        {
             return false;
+        }
+        if is_desktop_area {
+            self.select.update(cx, |select, cx| {
+                if let Some(area) = &mut select.desktop_area {
+                    area.recording = true;
+                    area.dragging = false;
+                }
+                cx.notify();
+            });
         }
         self.recording_area = true;
         self.drag = None;
@@ -1812,14 +2433,19 @@ impl OverlayWindow {
     /// The target this overlay would record, or `None` when it has nothing to
     /// record yet (no window under the cursor, no valid area drawn).
     pub fn target(&self, cx: &App) -> Option<ScreenCaptureTarget> {
+        let select = self.select.read(cx);
+        let min = area_min_size(select.recording_mode);
+        if let Some(desktop_target) = select.desktop_area_target(min)
+            && (self.recording_area || select.mode == Some(TargetType::Area))
+        {
+            return Some(desktop_target);
+        }
         if self.recording_area {
             return self.crop.map(|crop| ScreenCaptureTarget::Area {
                 screen: self.display_id.clone(),
                 bounds: crop.scaled(self.capture_scale).to_bounds(),
             });
         }
-        let select = self.select.read(cx);
-        let min = area_min_size(select.recording_mode);
         match select.mode? {
             TargetType::Display => Some(ScreenCaptureTarget::Display {
                 id: self.display_id.clone(),
@@ -2065,7 +2691,7 @@ impl OverlayWindow {
                 self.area_locked = false;
                 self.area_mouse_down(position, cx);
             }
-            ProbeDrag::Move => self.area_mouse_move(position, false, cx),
+            ProbeDrag::Move => self.area_mouse_move(position, false, true, cx),
             ProbeDrag::Release => self.area_mouse_up(position, false, cx),
         }
         self.drag.is_some()
@@ -3741,9 +4367,12 @@ impl OverlayWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        // Taken so the hint restarts whenever a render leaves it out, as a
-        // gpui animation's element state would.
         let hint_started = self.selection_hint_started.take();
+        let desktop_area = self.select.read(cx).desktop_area.clone();
+        if let Some(shared) = desktop_area {
+            return self.render_desktop_area_variant(shared, window, cx);
+        }
+
         let interacting = self.drag.is_some();
         // `shouldShowOverlay = isInteracting() || isActiveDisplay()`.
         let visible = self.recording_area || interacting || self.is_active_display(window, cx);
@@ -3774,14 +4403,24 @@ impl OverlayWindow {
                     )
                     .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                         this.area_hover_at(event.position, window, cx);
-                        this.area_mouse_move(event.position, snap_off(&event.modifiers), cx);
+                        if !cfg!(windows) {
+                            this.area_mouse_move(
+                                event.position,
+                                snap_off(&event.modifiers),
+                                true,
+                                cx,
+                            );
+                        }
                     }))
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseUpEvent, _window, cx| {
-                            this.area_mouse_up(event.position, snap_off(&event.modifiers), cx);
-                        }),
-                    )
+                    .when(cfg!(windows), |this| this.child(self.area_drag_events(cx)))
+                    .when(!cfg!(windows), |this| {
+                        this.on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                                this.area_mouse_up(event.position, snap_off(&event.modifiers), cx);
+                            }),
+                        )
+                    })
             });
 
         if !visible {
@@ -3844,7 +4483,7 @@ impl OverlayWindow {
                 root = root.child(self.render_locked_badge(shown, cx));
             } else if let Some(ratio) = self
                 .area_snapped
-                .filter(|_| interactive && self.area_ratio.is_none())
+                .filter(|_| interactive && self.select.read(cx).area_ratio.is_none())
             {
                 root = root.child(self.render_snapped_ratio(shown, ratio));
             }
@@ -3865,27 +4504,165 @@ impl OverlayWindow {
         }
     }
 
+    fn render_desktop_area_variant(
+        &mut self,
+        shared: SharedDesktopArea,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let slice = self
+            .monitor_rect()
+            .and_then(|mon| desktop_physical_to_local_slice(shared.bounds, &mon));
+        let recording = self.recording_area || shared.recording;
+        let interactive = !recording;
+        let visible = if recording {
+            slice.is_some()
+        } else {
+            slice.is_some() || self.drag.is_some() || self.is_active_display(window, cx)
+        };
+        let min = area_min_size(self.select.read(cx).recording_mode);
+        let valid = shared.bounds.is_valid_for(min) && shared.screens.len() >= 2;
+        let is_controls_display = shared.controls_display == self.display_id;
+
+        let mut root = div()
+            .id("area-root")
+            .size_full()
+            .relative()
+            .when(interactive, |this| {
+                this.cursor(gpui::CursorStyle::Crosshair)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                            this.area_mouse_down(event.position, cx);
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.area_hover_at(event.position, window, cx);
+                    }))
+                    .child(self.area_drag_events(cx))
+            });
+
+        if !visible {
+            return root.invisible();
+        }
+
+        let dim: Hsla = gpui::hsla(0., 0., 0., 0.45);
+        root = match slice {
+            None => root.child(div().absolute().inset_0().bg(dim)),
+            Some(slice) => {
+                let crop = slice.rect;
+                root.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .h_full()
+                        .w(px(crop.x.max(0.)))
+                        .bg(dim),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .h_full()
+                        .w(px((self.display_size.0 - crop.right()).max(0.)))
+                        .bg(dim),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left(px(crop.x))
+                        .w(px(crop.width))
+                        .h(px(crop.y.max(0.)))
+                        .bg(dim),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .left(px(crop.x))
+                        .w(px(crop.width))
+                        .h(px((self.display_size.1 - crop.bottom()).max(0.)))
+                        .bg(dim),
+                )
+            }
+        };
+
+        if let Some(slice) = slice {
+            root = root.child(self.render_crop_region_with_open_edges(
+                slice.rect,
+                [
+                    slice.open_left,
+                    slice.open_right,
+                    slice.open_top,
+                    slice.open_bottom,
+                ],
+                interactive,
+            ));
+            if interactive && shared.dragging && is_controls_display {
+                root = root.child(self.render_area_size_with_label(
+                    slice.rect,
+                    shared.bounds.width,
+                    shared.bounds.height,
+                ));
+            }
+        }
+
+        if recording {
+            return root;
+        }
+        if is_controls_display {
+            root = root.child(self.render_area_toolbar(Some(shared.bounds), valid, cx));
+            if let Some(slice) = slice {
+                root = root.child(self.render_area_controls(Some(slice.rect), valid, cx));
+            }
+        }
+        root
+    }
+
+    fn render_crop_region(&self, crop: AreaRect, interactive: bool) -> impl IntoElement {
+        self.render_crop_region_with_open_edges(crop, [false; 4], interactive)
+    }
+
     /// The zones carry only a cursor: the drag itself is dispatched from the
     /// root's mouse-down through [`Self::area_zone_at`], so a grab that starts
     /// a pixel outside the handle still resizes. The dark line outside the
     /// white border keeps the bounds visible over light content.
-    fn render_crop_region(&self, crop: AreaRect, interactive: bool) -> impl IntoElement {
+    fn render_crop_region_with_open_edges(
+        &self,
+        crop: AreaRect,
+        open: [bool; 4],
+        interactive: bool,
+    ) -> impl IntoElement {
+        let [open_left, open_right, open_top, open_bottom] = open;
         let hover = self
             .area_hover
             .filter(|_| interactive && self.drag.is_none());
-        let moving = matches!(self.drag, Some(AreaDrag::Move { .. }));
+        let moving = matches!(
+            self.drag,
+            Some(AreaDrag::Move { .. } | AreaDrag::DesktopMove { .. })
+        );
         let resizing = match self.drag {
-            Some(AreaDrag::Resize { handle, .. }) => Some(handle),
+            Some(AreaDrag::Resize { handle, .. } | AreaDrag::DesktopResize { handle, .. }) => {
+                Some(handle)
+            }
             _ => None,
         };
+        let border_color = gpui::hsla(0., 0., 1., if interactive { 0.95 } else { 0.7 });
+        let outer_color = gpui::hsla(0., 0., 0., 0.45);
         let mut region = div()
             .absolute()
             .left(px(crop.x))
             .top(px(crop.y))
             .w(px(crop.width))
             .h(px(crop.height))
-            .border_2()
-            .border_color(gpui::hsla(0., 0., 1., if interactive { 0.95 } else { 0.7 }))
+            .when(!open_left, |this| this.border_l_2())
+            .when(!open_right, |this| this.border_r_2())
+            .when(!open_top, |this| this.border_t_2())
+            .when(!open_bottom, |this| this.border_b_2())
+            .border_color(border_color)
             .when(hover == Some(AreaZone::Inside) || moving, |this| {
                 this.bg(gpui::hsla(0., 0., 1., 0.06))
             })
@@ -3899,12 +4676,15 @@ impl OverlayWindow {
             .child(
                 div()
                     .absolute()
-                    .top(px(-3.))
-                    .left(px(-3.))
-                    .right(px(-3.))
-                    .bottom(px(-3.))
-                    .border_1()
-                    .border_color(gpui::hsla(0., 0., 0., 0.45)),
+                    .top(px(if open_top { 0. } else { -3. }))
+                    .left(px(if open_left { 0. } else { -3. }))
+                    .right(px(if open_right { 0. } else { -3. }))
+                    .bottom(px(if open_bottom { 0. } else { -3. }))
+                    .when(!open_left, |this| this.border_l_1())
+                    .when(!open_right, |this| this.border_r_1())
+                    .when(!open_top, |this| this.border_t_1())
+                    .when(!open_bottom, |this| this.border_b_1())
+                    .border_color(outer_color),
             );
 
         if hover == Some(AreaZone::Inside) && crop.width >= 220. && crop.height >= 120. {
@@ -3938,7 +4718,13 @@ impl OverlayWindow {
             );
         }
 
-        for handle in AreaHandle::ALL.into_iter().filter(|_| interactive) {
+        for handle in AreaHandle::ALL.into_iter().filter(|handle| {
+            interactive
+                && !(handle.west() && open_left)
+                && !(handle.east() && open_right)
+                && !(handle.north() && open_top)
+                && !(handle.south() && open_bottom)
+        }) {
             let mut zone = div().id(handle.id()).absolute().cursor(handle.cursor());
             let reach = px(AREA_HANDLE_GRAB * 2.);
 
@@ -4179,6 +4965,9 @@ impl OverlayWindow {
         const WIDTH: f32 = 600.;
         let theme = self.theme;
         let locked = self.area_locked;
+        let select = self.select.read(cx);
+        let area_ratio = select.area_ratio;
+        let show_lock = select.desktop_area.is_none();
         let label = match crop.filter(|_| valid) {
             Some(crop) => format!("{} × {}", crop.width.round(), crop.height.round()),
             None => tr::overlay::area::draw().to_string(),
@@ -4206,11 +4995,9 @@ impl OverlayWindow {
                         .group_hover(id, move |style| style.text_color(theme.gray_12)),
                 )
         };
-        let in_more = self
-            .area_ratio
-            .is_some_and(|ratio| !QUICK_AREA_RATIOS.contains(&Some(ratio)));
+        let in_more = area_ratio.is_some_and(|ratio| !QUICK_AREA_RATIOS.contains(&Some(ratio)));
         let chips = QUICK_AREA_RATIOS.iter().enumerate().map(|(index, ratio)| {
-            let selected = self.area_ratio == *ratio;
+            let selected = area_ratio == *ratio;
             let ratio = *ratio;
             div()
                 .id(("area-ratio", index))
@@ -4316,36 +5103,37 @@ impl OverlayWindow {
                             cx,
                         ),
                     )
-                    .child(divider())
-                    .child(
-                        self.hinted(
-                            icon_button(
+                    .when(show_lock, |toolbar| {
+                        toolbar.child(divider()).child(
+                            self.hinted(
+                                icon_button(
+                                    "area-lock",
+                                    if locked {
+                                        "icons/lock.svg"
+                                    } else {
+                                        "icons/lock-open.svg"
+                                    },
+                                )
+                                .when(locked, |button| {
+                                    button.bg(Theme::with_alpha(theme.gray_12, 0.12))
+                                })
+                                .when(!locked && !valid, |button| button.opacity(0.4))
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_area_lock(cx))),
                                 "area-lock",
                                 if locked {
-                                    "icons/lock.svg"
+                                    Hint::new(tr::overlay::area::unlock_title())
+                                        .body(tr::overlay::area::unlock_body())
+                                } else if valid {
+                                    Hint::new(tr::overlay::area::lock_title())
+                                        .body(tr::overlay::area::lock_body())
                                 } else {
-                                    "icons/lock-open.svg"
+                                    Hint::new(tr::overlay::area::lock_title())
+                                        .body(tr::overlay::area::lock_needs_area())
                                 },
-                            )
-                            .when(locked, |button| {
-                                button.bg(Theme::with_alpha(theme.gray_12, 0.12))
-                            })
-                            .when(!locked && !valid, |button| button.opacity(0.4))
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_area_lock(cx))),
-                            "area-lock",
-                            if locked {
-                                Hint::new(tr::overlay::area::unlock_title())
-                                    .body(tr::overlay::area::unlock_body())
-                            } else if valid {
-                                Hint::new(tr::overlay::area::lock_title())
-                                    .body(tr::overlay::area::lock_body())
-                            } else {
-                                Hint::new(tr::overlay::area::lock_title())
-                                    .body(tr::overlay::area::lock_needs_area())
-                            },
-                            cx,
-                        ),
-                    ),
+                                cx,
+                            ),
+                        )
+                    }),
             )
     }
 
@@ -4382,19 +5170,28 @@ impl OverlayWindow {
     }
 
     fn render_area_size(&self, crop: AreaRect) -> impl IntoElement {
+        self.render_area_size_with_label(crop, crop.width, crop.height)
+    }
+
+    fn render_area_size_with_label(
+        &self,
+        anchor: AreaRect,
+        width: f32,
+        height: f32,
+    ) -> impl IntoElement {
         const HEIGHT: f32 = 24.;
         const GAP: f32 = 8.;
-        let label = format!("{} × {}", crop.width.round(), crop.height.round());
-        let below = crop.bottom() + GAP + HEIGHT <= self.display_size.1;
+        let label = format!("{} × {}", width.round(), height.round());
+        let below = anchor.bottom() + GAP + HEIGHT <= self.display_size.1;
         let top = if below {
-            crop.bottom() + GAP
+            anchor.bottom() + GAP
         } else {
-            (crop.bottom() - GAP - HEIGHT).max(0.)
+            (anchor.bottom() - GAP - HEIGHT).max(0.)
         };
         div()
             .absolute()
             .top(px(top))
-            .right(px((self.display_size.0 - crop.right()).max(0.)))
+            .right(px((self.display_size.0 - anchor.right()).max(0.)))
             .h(px(HEIGHT))
             .px(px(8.))
             .flex()
@@ -4451,10 +5248,39 @@ impl OverlayWindow {
         let Some(drag) = self.drag.take() else {
             return false;
         };
-        self.crop = match drag {
-            AreaDrag::Draw { previous, .. } => previous,
-            AreaDrag::Move { start, .. } | AreaDrag::Resize { start, .. } => Some(start),
-        };
+        match drag {
+            AreaDrag::Draw { previous, .. } => {
+                self.crop = previous;
+                self.select
+                    .update(cx, |select, cx| select.set_desktop_area(None, cx));
+            }
+            AreaDrag::Move { start, .. } | AreaDrag::Resize { start, .. } => {
+                self.crop = Some(start);
+                self.select
+                    .update(cx, |select, cx| select.set_desktop_area(None, cx));
+            }
+            AreaDrag::DesktopDraw {
+                previous_local,
+                previous_shared,
+                ..
+            } => {
+                self.crop = previous_local;
+                self.select.update(cx, |select, cx| {
+                    select.set_desktop_area(previous_shared, cx)
+                });
+            }
+            AreaDrag::DesktopMove {
+                previous_shared, ..
+            }
+            | AreaDrag::DesktopResize {
+                previous_shared, ..
+            } => {
+                self.crop = None;
+                self.select.update(cx, |select, cx| {
+                    select.set_desktop_area(Some(previous_shared), cx);
+                });
+            }
+        }
         self.snap_guides.clear();
         self.area_snapped = None;
         self.sync_area_camera(cx);
@@ -4551,7 +5377,7 @@ impl OverlayWindow {
         else {
             return;
         };
-        if let Some(ratio) = self.area_ratio {
+        if let Some(ratio) = self.select.read(cx).area_ratio {
             bounds = area_with_ratio(bounds, ratio_value(ratio), self.display_size);
         }
         if !bounds.is_valid_for(area_min_size(self.select.read(cx).recording_mode)) {
@@ -4591,6 +5417,19 @@ impl OverlayWindow {
             "down" => (0., step),
             _ => return false,
         };
+        if let Some(shared) = self.select.read(cx).desktop_area.clone()
+            && !self.area_locked
+            && self.drag.is_none()
+        {
+            let monitors = self.select.read(cx).desktop_monitors.clone();
+            if let Some(union_bounds) = desktop_union_bounds(&monitors) {
+                let scale = self.monitor_rect().map_or(1., |m| m.scale_xy().0);
+                let moved =
+                    desktop_move_rect(shared.bounds, (dx * scale, dy * scale), union_bounds);
+                self.apply_classified_desktop_rect(moved, None, false, cx);
+                return true;
+            }
+        }
         let Some(crop) = self
             .crop
             .filter(|_| !self.area_locked && self.drag.is_none())
@@ -4613,7 +5452,7 @@ impl OverlayWindow {
 
     fn open_aspect_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         self.area_snap_to_ratio = stored_area_snap_to_ratio();
-        let items = self.aspect_menu_items();
+        let items = self.aspect_menu_items(cx);
         self.mode_menu = None;
         self.countdown_menu = None;
         self.device_menu = None;
@@ -4622,13 +5461,14 @@ impl OverlayWindow {
         cx.notify();
     }
 
-    fn aspect_menu_items(&self) -> Vec<crate::ui::MenuItem> {
+    fn aspect_menu_items(&self, cx: &App) -> Vec<crate::ui::MenuItem> {
+        let area_ratio = self.select.read(cx).area_ratio;
         let mut items = more_area_ratios()
             .into_iter()
             .map(|ratio| {
                 crate::ui::MenuItem::new(
                     format!("{}:{}", ratio.0, ratio.1),
-                    self.area_ratio == Some(ratio),
+                    area_ratio == Some(ratio),
                 )
             })
             .collect::<Vec<_>>();
@@ -4645,7 +5485,7 @@ impl OverlayWindow {
             crate::ui::Menu::plain(
                 &self.theme,
                 "overlay-aspect-menu",
-                self.aspect_menu_items(),
+                self.aspect_menu_items(cx),
                 state,
             )
             .on_select(cx.listener(|this, index: &usize, _, cx| {
@@ -4693,6 +5533,12 @@ impl OverlayWindow {
     }
 
     fn reshape_area(&mut self, to: AreaRect, cx: &mut Context<Self>) {
+        self.set_area_reshape(to);
+        self.sync_area_camera(cx);
+        cx.notify();
+    }
+
+    fn set_area_reshape(&mut self, to: AreaRect) {
         let from = match (self.crop, self.reshape) {
             (Some(crop), Some((from, started))) => area_between(
                 from,
@@ -4706,12 +5552,30 @@ impl OverlayWindow {
         self.crop = Some(to.clamped(self.display_size));
         self.area_snapped = None;
         self.persist_locked_area();
-        self.sync_area_camera(cx);
+    }
+
+    pub(crate) fn reshape_local_area_for_ratio(
+        &mut self,
+        ratio: Option<(u32, u32)>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.recording_area {
+            return;
+        }
+        self.area_snapped = None;
+        if let (Some(ratio), Some(crop)) = (ratio, self.crop) {
+            self.set_area_reshape(area_with_ratio(crop, ratio_value(ratio), self.display_size));
+        }
         cx.notify();
     }
 
     fn fill_area(&mut self, cx: &mut Context<Self>) {
-        let to = area_fill(self.display_size, self.area_ratio.map(ratio_value));
+        self.select
+            .update(cx, |select, cx| select.set_desktop_area(None, cx));
+        let to = area_fill(
+            self.display_size,
+            self.select.read(cx).area_ratio.map(ratio_value),
+        );
         self.reshape_area(to, cx);
     }
 
@@ -4719,6 +5583,8 @@ impl OverlayWindow {
         if self.area_locked {
             self.unlock_area();
         }
+        self.select
+            .update(cx, |select, cx| select.set_desktop_area(None, cx));
         self.reshape = None;
         self.crop = None;
         self.area_snapped = None;
@@ -4726,12 +5592,25 @@ impl OverlayWindow {
         cx.notify();
     }
 
-    /// Locks drawn and resized areas to `ratio`, reshaping the current one
-    /// around its centre, and remembers the choice for the next picker.
+    /// Locks drawn and resized areas to `ratio`, reshapes existing selections
+    /// around their centres, and remembers the choice for the next picker.
     fn set_area_ratio(&mut self, ratio: Option<(u32, u32)>, cx: &mut Context<Self>) {
-        self.area_ratio = ratio;
+        self.select.update(cx, |select, cx| {
+            select.area_ratio = ratio;
+            cx.notify();
+        });
         self.area_snapped = None;
         store_area_ratio(ratio);
+        app_windows::reshape_other_area_selections(&self.display_id, ratio, cx);
+        if let (Some(ratio), Some(shared)) = (ratio, self.select.read(cx).desktop_area.clone()) {
+            let monitors = self.select.read(cx).desktop_monitors.clone();
+            if let Some(union_bounds) = desktop_union_bounds(&monitors) {
+                let reshaped =
+                    desktop_area_with_ratio(shared.bounds, ratio_value(ratio), union_bounds);
+                self.apply_classified_desktop_rect(reshaped, None, false, cx);
+                return;
+            }
+        }
         if let (Some(ratio), Some(crop)) = (ratio, self.crop) {
             self.reshape_area(
                 area_with_ratio(crop, ratio_value(ratio), self.display_size),
@@ -5175,6 +6054,60 @@ enum AreaZone {
 }
 
 impl OverlayWindow {
+    fn apply_classified_desktop_rect(
+        &mut self,
+        raw_rect: AreaRect,
+        pointer: Option<(f32, f32)>,
+        dragging: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let monitors = self.select.read(cx).desktop_monitors.clone();
+        match classify_desktop_selection(raw_rect, &monitors) {
+            DesktopSelectionKind::MultiMonitor { bounds, screens } => {
+                let controls_display =
+                    choose_controls_display(pointer, bounds, &screens, &monitors);
+                self.crop = None;
+                self.snap_guides.clear();
+                self.area_snapped = None;
+                self.select.update(cx, |select, cx| {
+                    select.set_desktop_area(
+                        Some(SharedDesktopArea {
+                            bounds,
+                            screens,
+                            controls_display,
+                            dragging,
+                            recording: false,
+                            snapped_ratio: None,
+                        }),
+                        cx,
+                    );
+                });
+            }
+            DesktopSelectionKind::SingleMonitor {
+                display_id,
+                local_rect,
+            } => {
+                self.select
+                    .update(cx, |select, cx| select.set_desktop_area(None, cx));
+                if display_id == self.display_id {
+                    self.crop = Some(local_rect.clamped(self.display_size));
+                } else {
+                    self.crop = None;
+                    if !dragging {
+                        cx.defer(move |cx| {
+                            app_windows::seed_area_selection(Some(display_id), local_rect, cx);
+                        });
+                    }
+                }
+            }
+            DesktopSelectionKind::Empty => {
+                self.crop = None;
+                self.select
+                    .update(cx, |select, cx| select.set_desktop_area(None, cx));
+            }
+        }
+    }
+
     fn area_hover_at(
         &mut self,
         position: Point<Pixels>,
@@ -5182,7 +6115,17 @@ impl OverlayWindow {
         cx: &mut Context<Self>,
     ) {
         let hover = (self.drag.is_none() && !self.area_locked && !self.recording_area)
-            .then(|| self.area_zone_at((f32::from(position.x), f32::from(position.y))))
+            .then(|| {
+                let point = (f32::from(position.x), f32::from(position.y));
+                if let Some(shared) = self.select.read(cx).desktop_area.as_ref()
+                    && let Some(monitor) = self.monitor_rect()
+                {
+                    let desktop_point = local_to_desktop_physical(point, &monitor);
+                    let grab_px = AREA_HANDLE_GRAB * monitor.scale_xy().0.max(monitor.scale_xy().1);
+                    return desktop_area_zone_at(desktop_point, shared.bounds, grab_px);
+                }
+                self.area_zone_at(point)
+            })
             .flatten();
         if hover != self.area_hover {
             self.area_hover = hover;
@@ -5242,6 +6185,45 @@ impl OverlayWindow {
             ));
         }
         self.aspect_menu = None;
+
+        if self.desktop_area_enabled(cx)
+            && let Some(shared) = self.select.read(cx).desktop_area.clone()
+            && let Some(monitor) = self.monitor_rect()
+        {
+            let desktop_point = local_to_desktop_physical(point, &monitor);
+            let grab_px = AREA_HANDLE_GRAB * monitor.scale_xy().0.max(monitor.scale_xy().1);
+            self.drag = match desktop_area_zone_at(desktop_point, shared.bounds, grab_px) {
+                Some(AreaZone::Handle(handle)) => Some(AreaDrag::DesktopResize {
+                    handle,
+                    start: shared.bounds,
+                    previous_shared: shared,
+                }),
+                Some(AreaZone::Inside) => Some(AreaDrag::DesktopMove {
+                    grab: desktop_point,
+                    start: shared.bounds,
+                    previous_shared: shared,
+                }),
+                None => {
+                    let previous_local = self.crop.replace(AreaRect {
+                        x: point.0,
+                        y: point.1,
+                        width: 0.,
+                        height: 0.,
+                    });
+                    self.area_snapped = None;
+                    self.select
+                        .update(cx, |select, cx| select.set_desktop_area(None, cx));
+                    Some(AreaDrag::DesktopDraw {
+                        anchor: desktop_point,
+                        previous_local,
+                        previous_shared: Some(shared),
+                    })
+                }
+            };
+            self.sync_area_camera(cx);
+            cx.notify();
+            return;
+        }
 
         self.drag = match self.area_zone_at(point) {
             Some(AreaZone::Handle(handle)) => Some(AreaDrag::Resize {
@@ -5303,15 +6285,106 @@ impl OverlayWindow {
         }
     }
 
-    fn area_mouse_move(&mut self, position: Point<Pixels>, free: bool, cx: &mut Context<Self>) {
+    fn area_mouse_move(
+        &mut self,
+        position: Point<Pixels>,
+        free: bool,
+        dragging: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.recording_area {
             return;
         }
-        let Some(drag) = &self.drag else { return };
-        let x = f32::from(position.x).clamp(0., self.display_size.0);
-        let y = f32::from(position.y).clamp(0., self.display_size.1);
+        let raw_x = f32::from(position.x);
+        let raw_y = f32::from(position.y);
+        let outside_self =
+            raw_x < 0. || raw_x > self.display_size.0 || raw_y < 0. || raw_y > self.display_size.1;
 
-        let ratio = self.area_ratio.map(ratio_value);
+        if self.desktop_area_enabled(cx)
+            && let Some(monitor) = self.monitor_rect()
+        {
+            let monitors = self.select.read(cx).desktop_monitors.clone();
+            if let Some(union_bounds) = desktop_union_bounds(&monitors) {
+                let desktop_point = local_to_desktop_physical((raw_x, raw_y), &monitor);
+                let ratio = self.select.read(cx).area_ratio.map(ratio_value);
+                let desktop_rect = match &self.drag {
+                    Some(AreaDrag::DesktopDraw { anchor, .. }) => Some(desktop_draw_rect(
+                        *anchor,
+                        desktop_point,
+                        ratio,
+                        union_bounds,
+                    )),
+                    Some(AreaDrag::DesktopMove { grab, start, .. }) => Some(desktop_move_rect(
+                        *start,
+                        (desktop_point.0 - grab.0, desktop_point.1 - grab.1),
+                        union_bounds,
+                    )),
+                    Some(AreaDrag::DesktopResize { handle, start, .. }) => Some(
+                        desktop_resize_rect(*handle, *start, desktop_point, ratio, union_bounds),
+                    ),
+                    Some(AreaDrag::Draw { anchor, .. })
+                        if outside_self || self.select.read(cx).desktop_area.is_some() =>
+                    {
+                        let desktop_anchor = local_to_desktop_physical(*anchor, &monitor);
+                        Some(desktop_draw_rect(
+                            desktop_anchor,
+                            desktop_point,
+                            ratio,
+                            union_bounds,
+                        ))
+                    }
+                    Some(AreaDrag::Move { grab, start })
+                        if self.select.read(cx).desktop_area.is_some()
+                            || start.x + (raw_x - grab.0) < 0.
+                            || start.x + (raw_x - grab.0) + start.width > self.display_size.0
+                            || start.y + (raw_y - grab.1) < 0.
+                            || start.y + (raw_y - grab.1) + start.height > self.display_size.1 =>
+                    {
+                        let desktop_start = local_rect_to_desktop_physical(*start, &monitor);
+                        let desktop_grab = local_to_desktop_physical(*grab, &monitor);
+                        Some(desktop_move_rect(
+                            desktop_start,
+                            (
+                                desktop_point.0 - desktop_grab.0,
+                                desktop_point.1 - desktop_grab.1,
+                            ),
+                            union_bounds,
+                        ))
+                    }
+                    Some(AreaDrag::Resize { handle, start })
+                        if outside_self || self.select.read(cx).desktop_area.is_some() =>
+                    {
+                        let desktop_start = local_rect_to_desktop_physical(*start, &monitor);
+                        Some(desktop_resize_rect(
+                            *handle,
+                            desktop_start,
+                            desktop_point,
+                            ratio,
+                            union_bounds,
+                        ))
+                    }
+                    _ => None,
+                };
+
+                if let Some(desktop_rect) = desktop_rect {
+                    self.apply_classified_desktop_rect(
+                        desktop_rect,
+                        Some(desktop_point),
+                        dragging,
+                        cx,
+                    );
+                    self.area_camera_pending = true;
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+
+        let Some(drag) = &self.drag else { return };
+        let x = raw_x.clamp(0., self.display_size.0);
+        let y = raw_y.clamp(0., self.display_size.1);
+
+        let ratio = self.select.read(cx).area_ratio.map(ratio_value);
         let moving = matches!(drag, AreaDrag::Move { .. });
         let mut snapped = None;
         let (next, guides) = match (drag, ratio) {
@@ -5417,6 +6490,12 @@ impl OverlayWindow {
                     (rect, guides)
                 }
             }
+            (
+                AreaDrag::DesktopDraw { .. }
+                | AreaDrag::DesktopMove { .. }
+                | AreaDrag::DesktopResize { .. },
+                _,
+            ) => return,
         };
 
         self.crop = Some(next);
@@ -5434,20 +6513,49 @@ impl OverlayWindow {
         if self.recording_area {
             return;
         }
-        self.area_mouse_move(position, free, cx);
+        self.area_mouse_move(position, free, false, cx);
         let Some(drag) = self.drag.take() else {
             return;
         };
         self.snap_guides.clear();
-        // Measured from the pointer, not the crop: snapping can stretch a
-        // stationary click into a few points of selection.
-        let clicked = match drag {
+        let clicked = match &drag {
             AreaDrag::Draw { anchor, .. } => {
                 (f32::from(position.x) - anchor.0).abs() < 3.
                     && (f32::from(position.y) - anchor.1).abs() < 3.
             }
+            AreaDrag::DesktopDraw { anchor, .. } => self
+                .monitor_rect()
+                .map(|monitor| {
+                    let point = local_to_desktop_physical(
+                        (f32::from(position.x), f32::from(position.y)),
+                        &monitor,
+                    );
+                    let threshold = 3. * monitor.scale_xy().0.max(monitor.scale_xy().1);
+                    (point.0 - anchor.0).abs() < threshold && (point.1 - anchor.1).abs() < threshold
+                })
+                .unwrap_or(false),
             _ => false,
         };
+
+        if let Some(shared) = self.select.read(cx).desktop_area.clone() {
+            if clicked || shared.bounds.width < 2. || shared.bounds.height < 2. {
+                self.select
+                    .update(cx, |select, cx| select.set_desktop_area(None, cx));
+                if clicked {
+                    self.fit_area_to_window_at((f32::from(position.x), f32::from(position.y)), cx);
+                }
+            }
+            if matches!(drag, AreaDrag::Draw { .. } | AreaDrag::DesktopDraw { .. })
+                && !clicked
+                && self.select.read(cx).recording_mode == Mode::Screenshot
+                && let Some(target) = self.target(cx)
+            {
+                cx.defer(move |cx: &mut App| crate::screenshot::take_screenshot(target, cx));
+            }
+            cx.notify();
+            return;
+        }
+
         if let Some(crop) = self.crop {
             // A click with no drag is not a selection: it fits the area to
             // the window under it instead.
@@ -5462,13 +6570,7 @@ impl OverlayWindow {
             }
         }
         self.sync_area_camera(cx);
-        // Releasing a fresh draw in screenshot mode captures immediately --
-        // the screenshot area picker has no confirm step
-        // (`target-select-overlay.tsx`'s area mouse-up). Move/resize grabs
-        // keep the crop for the Start button, same as recording mode.
-        // A click fitted to a window waits for the button instead, so a stray
-        // click never takes a screenshot.
-        if matches!(drag, AreaDrag::Draw { .. })
+        if matches!(drag, AreaDrag::Draw { .. } | AreaDrag::DesktopDraw { .. })
             && !clicked
             && self.select.read(cx).recording_mode == Mode::Screenshot
             && let Some(target) = self.target(cx)
@@ -6446,5 +7548,140 @@ mod snap_to_ratio_tests {
         assert!(status.success());
         assert_eq!(legacy_area_selection_in(&root), Ok(Some(legacy_060())));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn test_monitor(
+        id: &str,
+        phys_x: f32,
+        phys_y: f32,
+        phys_w: f32,
+        phys_h: f32,
+        scale: f32,
+    ) -> DesktopMonitorRect {
+        DesktopMonitorRect {
+            display_id: id.parse().unwrap(),
+            physical: AreaRect {
+                x: phys_x,
+                y: phys_y,
+                width: phys_w,
+                height: phys_h,
+            },
+            logical_size: (phys_w / scale, phys_h / scale),
+        }
+    }
+
+    #[test]
+    fn mixed_dpi_setcapture_drag_maps_exact_desktop_coordinates_and_slices() {
+        let left_150 = test_monitor("1", -2560., -120., 2560., 1440., 1.5);
+        let right_100 = test_monitor("2", 0., 180., 1920., 1080., 1.0);
+        let monitors = vec![left_150.clone(), right_100.clone()];
+        let union = desktop_union_bounds(&monitors).unwrap();
+
+        let anchor_local = (1280., 120.);
+        let release_local_under_setcapture = (3200. / 1.5, 920. / 1.5);
+        let anchor_phys = local_to_desktop_physical(anchor_local, &left_150);
+        let release_phys = local_to_desktop_physical(release_local_under_setcapture, &left_150);
+        assert!((anchor_phys.0 - (-640.)).abs() < 0.01);
+        assert!((anchor_phys.1 - 60.).abs() < 0.01);
+        assert!((release_phys.0 - 640.).abs() < 0.01);
+        assert!((release_phys.1 - 800.).abs() < 0.01);
+
+        let raw_rect = desktop_draw_rect(anchor_phys, release_phys, None, union);
+        let classified = classify_desktop_selection(raw_rect, &monitors);
+        let DesktopSelectionKind::MultiMonitor { bounds, screens } = classified else {
+            panic!("expected multi-monitor selection, got {classified:?}");
+        };
+        assert_eq!(
+            screens,
+            vec![
+                "1".parse::<DisplayId>().unwrap(),
+                "2".parse::<DisplayId>().unwrap()
+            ]
+        );
+        assert_eq!(
+            (bounds.x, bounds.y, bounds.width, bounds.height),
+            (-640., 60., 1280., 740.)
+        );
+
+        let slice_left = desktop_physical_to_local_slice(bounds, &left_150).unwrap();
+        assert!(!slice_left.open_left);
+        assert!(slice_left.open_right);
+        assert!(!slice_left.open_top);
+        assert!(!slice_left.open_bottom);
+        assert!((slice_left.rect.x - 1280.).abs() < 0.05);
+        assert!((slice_left.rect.y - 120.).abs() < 0.05);
+        assert!((slice_left.rect.right() - left_150.logical_size.0).abs() < 0.05);
+
+        let slice_right = desktop_physical_to_local_slice(bounds, &right_100).unwrap();
+        assert!(slice_right.open_left);
+        assert!(!slice_right.open_right);
+        assert!(slice_right.open_top);
+        assert!(!slice_right.open_bottom);
+        assert!((slice_right.rect.x - 0.).abs() < 0.05);
+        assert!((slice_right.rect.y - 0.).abs() < 0.05);
+        assert!((slice_right.rect.width - 640.).abs() < 0.05);
+        assert!((slice_right.rect.height - 620.).abs() < 0.05);
+
+        assert_eq!(
+            choose_controls_display(Some(release_phys), bounds, &screens, &monitors),
+            "2".parse::<DisplayId>().unwrap()
+        );
+    }
+
+    #[test]
+    fn desktop_selection_collapses_back_to_single_monitor_and_supports_move_resize_ratio() {
+        let left = test_monitor("1", 0., 0., 1920., 1080., 1.0);
+        let right = test_monitor("2", 1920., 0., 1920., 1080., 1.25);
+        let monitors = vec![left, right];
+        let union = desktop_union_bounds(&monitors).unwrap();
+
+        let single = classify_desktop_selection(
+            AreaRect {
+                x: 100.,
+                y: 100.,
+                width: 800.,
+                height: 600.,
+            },
+            &monitors,
+        );
+        assert!(matches!(
+            single,
+            DesktopSelectionKind::SingleMonitor { ref display_id, .. }
+                if *display_id == "1".parse::<DisplayId>().unwrap()
+        ));
+
+        let spanned = AreaRect {
+            x: 1500.,
+            y: 200.,
+            width: 800.,
+            height: 450.,
+        };
+        assert_eq!(
+            desktop_area_zone_at((1505., 205.), spanned, 18.),
+            Some(AreaZone::Handle(AreaHandle::NorthWest))
+        );
+        assert_eq!(
+            desktop_area_zone_at((1900., 400.), spanned, 18.),
+            Some(AreaZone::Inside)
+        );
+
+        let moved = desktop_move_rect(spanned, (100., 50.), union);
+        assert_eq!(
+            (moved.x, moved.y, moved.width, moved.height),
+            (1600., 250., 800., 450.)
+        );
+
+        let resized = desktop_resize_rect(
+            AreaHandle::East,
+            spanned,
+            (2500., 400.),
+            Some(16. / 9.),
+            union,
+        );
+        assert!((resized.width - 1000.).abs() < 0.5);
+        assert!((resized.width / resized.height - 16. / 9.).abs() < 0.01);
+
+        let reshaped = desktop_area_with_ratio(spanned, 1., union);
+        assert!((reshaped.width - reshaped.height).abs() < 0.5);
     }
 }

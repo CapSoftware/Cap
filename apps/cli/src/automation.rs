@@ -42,7 +42,9 @@ fn capture_target_kind(target: &ScreenCaptureTarget) -> Option<cap_automation::C
     match target {
         ScreenCaptureTarget::Window { .. } => Some(cap_automation::CaptureTargetKind::Window),
         ScreenCaptureTarget::Display { .. } => Some(cap_automation::CaptureTargetKind::Display),
-        ScreenCaptureTarget::Area { .. } => Some(cap_automation::CaptureTargetKind::Area),
+        ScreenCaptureTarget::Area { .. } | ScreenCaptureTarget::DesktopArea { .. } => {
+            Some(cap_automation::CaptureTargetKind::Area)
+        }
         ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => None,
     }
 }

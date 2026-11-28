@@ -1,20 +1,26 @@
 use crate::{
     AudioFrame, SetupCtx, output_pipeline,
     screen_capture::{
-        CropBounds, ScreenCaptureConfig, ScreenCaptureFormat, cadence::FrameCadenceGate,
+        CropBounds, DesktopAreaPlan, ScreenCaptureConfig, ScreenCaptureFormat,
+        cadence::FrameCadenceGate,
     },
 };
 use ::windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11Texture2D,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_CPU_ACCESS_READ,
+    D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
+    ID3D11Texture2D,
 };
-use ::windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+use ::windows::Win32::Graphics::Dxgi::{
+    Common::DXGI_SAMPLE_DESC, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET,
+};
+use ::windows::core::Interface;
 use anyhow::anyhow;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::{PerformanceCounterTimestamp, Timestamp};
 use cpal::traits::{DeviceTrait, HostTrait};
 use futures::{
-    FutureExt, StreamExt,
+    FutureExt, SinkExt, StreamExt,
     channel::{mpsc, oneshot},
 };
 use scap_ffmpeg::*;
@@ -22,7 +28,7 @@ use scap_targets::{Display, DisplayId, Window, WindowId, bounds::PhysicalSize};
 use std::{
     sync::{
         Arc, Mutex,
-        atomic::{self, AtomicBool, AtomicU32},
+        atomic::{self, AtomicBool, AtomicU32, AtomicUsize},
     },
     time::Duration,
 };
@@ -97,7 +103,333 @@ impl ScreenCaptureFormat for Direct3DCapture {
 
 pub enum ScreenFrame {
     Captured(scap_direct3d::Frame),
+    Composited(CompositedScreenFrame),
     Scaled(ScaledScreenFrame),
+}
+
+const COMPOSITED_STAGING_POOL_SIZE: usize = 3;
+
+struct CompositedStagingPool {
+    textures: Mutex<Vec<ID3D11Texture2D>>,
+    d3d_device: ID3D11Device,
+    width: u32,
+    height: u32,
+    pixel_format: scap_direct3d::PixelFormat,
+    next_index: AtomicUsize,
+}
+
+impl CompositedStagingPool {
+    fn new(
+        d3d_device: ID3D11Device,
+        width: u32,
+        height: u32,
+        pixel_format: scap_direct3d::PixelFormat,
+    ) -> Self {
+        Self {
+            textures: Mutex::new(Vec::with_capacity(COMPOSITED_STAGING_POOL_SIZE)),
+            d3d_device,
+            width,
+            height,
+            pixel_format,
+            next_index: AtomicUsize::new(0),
+        }
+    }
+
+    fn get_or_create(&self) -> ::windows::core::Result<ID3D11Texture2D> {
+        let mut textures = self
+            .textures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let index =
+            self.next_index.fetch_add(1, atomic::Ordering::Relaxed) % COMPOSITED_STAGING_POOL_SIZE;
+        if let Some(existing) = textures.get(index) {
+            return Ok(existing.clone());
+        }
+
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: self.width,
+            Height: self.height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: self.pixel_format.as_dxgi(),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            MiscFlags: 0,
+        };
+        let mut texture = None;
+        unsafe {
+            self.d3d_device
+                .CreateTexture2D(&desc, None, Some(&mut texture))?;
+        }
+        let texture = texture.ok_or_else(::windows::core::Error::from_win32)?;
+        textures.push(texture.clone());
+        Ok(texture)
+    }
+}
+
+fn create_composited_texture(
+    d3d_device: &ID3D11Device,
+    width: u32,
+    height: u32,
+    pixel_format: scap_direct3d::PixelFormat,
+    initial_rgba: Option<&[u8]>,
+) -> ::windows::core::Result<ID3D11Texture2D> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: pixel_format.as_dxgi(),
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+
+    let init = initial_rgba.map(|bytes| D3D11_SUBRESOURCE_DATA {
+        pSysMem: bytes.as_ptr().cast(),
+        SysMemPitch: width * 4,
+        SysMemSlicePitch: 0,
+    });
+
+    let mut texture = None;
+    unsafe {
+        d3d_device.CreateTexture2D(
+            &desc,
+            init.as_ref()
+                .map(|data| data as *const D3D11_SUBRESOURCE_DATA),
+            Some(&mut texture),
+        )?;
+    }
+    texture.ok_or_else(::windows::core::Error::from_win32)
+}
+
+pub struct CompositedScreenFrame {
+    texture: ID3D11Texture2D,
+    width: u32,
+    height: u32,
+    pixel_format: scap_direct3d::PixelFormat,
+    d3d_context: ID3D11DeviceContext,
+    staging_pool: Arc<CompositedStagingPool>,
+}
+
+unsafe impl Send for CompositedScreenFrame {}
+
+impl CompositedScreenFrame {
+    fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, ::windows::core::Error> {
+        let staging_texture = self.staging_pool.get_or_create()?;
+        unsafe {
+            self.d3d_context
+                .CopyResource(&staging_texture, &self.texture);
+        }
+
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            self.d3d_context
+                .Map(&staging_texture, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
+        }
+
+        let ffmpeg_pixel = match self.pixel_format {
+            scap_direct3d::PixelFormat::R8G8B8A8Unorm => ffmpeg::format::Pixel::RGBA,
+            scap_direct3d::PixelFormat::B8G8R8A8Unorm => ffmpeg::format::Pixel::BGRA,
+        };
+        let mut ff_frame = ffmpeg::frame::Video::new(ffmpeg_pixel, self.width, self.height);
+        let dest_stride = ff_frame.stride(0);
+        let dest_bytes = ff_frame.data_mut(0);
+        let src_stride = mapped.RowPitch as usize;
+        let row_length = (self.width * 4) as usize;
+        let src_bytes = unsafe {
+            std::slice::from_raw_parts(mapped.pData.cast::<u8>(), self.height as usize * src_stride)
+        };
+
+        for row in 0..self.height as usize {
+            let src_start = row * src_stride;
+            let dst_start = row * dest_stride;
+            let copy_len = row_length.min(
+                src_bytes
+                    .len()
+                    .saturating_sub(src_start)
+                    .min(dest_bytes.len().saturating_sub(dst_start)),
+            );
+            if copy_len > 0 {
+                dest_bytes[dst_start..dst_start + copy_len]
+                    .copy_from_slice(&src_bytes[src_start..src_start + copy_len]);
+            }
+        }
+
+        unsafe {
+            self.d3d_context.Unmap(&staging_texture, 0);
+        }
+
+        Ok(ff_frame)
+    }
+}
+
+enum CompositorStep {
+    WaitingForAllRegions,
+    Decimated,
+    Emit(CompositedScreenFrame, i64),
+}
+
+struct DesktopCompositor {
+    d3d_device: ID3D11Device,
+    d3d_context: ID3D11DeviceContext,
+    pixel_format: scap_direct3d::PixelFormat,
+    plan: DesktopAreaPlan,
+    staging_canvas: ID3D11Texture2D,
+    received_mask: Vec<bool>,
+    last_emitted_hns: Option<i64>,
+    cadence_gate: Option<FrameCadenceGate>,
+    staging_pool: Arc<CompositedStagingPool>,
+}
+
+unsafe impl Send for DesktopCompositor {}
+
+impl DesktopCompositor {
+    fn new(
+        d3d_device: ID3D11Device,
+        pixel_format: scap_direct3d::PixelFormat,
+        plan: DesktopAreaPlan,
+        cadence_interval_hns: Option<i64>,
+    ) -> anyhow::Result<Self> {
+        if let Ok(multithread) = d3d_device.cast::<ID3D11Multithread>() {
+            unsafe {
+                let _ = multithread.SetMultithreadProtected(true);
+            }
+        }
+        let d3d_context = unsafe { d3d_device.GetImmediateContext() }
+            .map_err(|e| anyhow!("Failed to get D3D11 immediate context: {e}"))?;
+
+        let pixel_count = (plan.canvas_width as usize)
+            .checked_mul(plan.canvas_height as usize)
+            .ok_or_else(|| anyhow!("Desktop area canvas size overflow"))?;
+        let mut opaque_black = vec![0u8; pixel_count * 4];
+        for px in opaque_black.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+
+        let staging_canvas = create_composited_texture(
+            &d3d_device,
+            plan.canvas_width,
+            plan.canvas_height,
+            pixel_format,
+            Some(&opaque_black),
+        )
+        .map_err(|e| anyhow!("Failed to create desktop area staging canvas: {e}"))?;
+
+        let staging_pool = Arc::new(CompositedStagingPool::new(
+            d3d_device.clone(),
+            plan.canvas_width,
+            plan.canvas_height,
+            pixel_format,
+        ));
+        let received_mask = vec![false; plan.regions.len()];
+
+        Ok(Self {
+            d3d_device,
+            d3d_context,
+            pixel_format,
+            plan,
+            staging_canvas,
+            received_mask,
+            last_emitted_hns: None,
+            cadence_gate: cadence_interval_hns.map(FrameCadenceGate::new),
+            staging_pool,
+        })
+    }
+
+    fn composite_texture(
+        &mut self,
+        region_index: usize,
+        texture: &ID3D11Texture2D,
+        frame_width: u32,
+        frame_height: u32,
+        capture_time_hns: i64,
+    ) -> ::windows::core::Result<CompositorStep> {
+        let Some(region) = self.plan.regions.get(region_index) else {
+            return Ok(CompositorStep::WaitingForAllRegions);
+        };
+        let copy_width = frame_width
+            .min(region.source_width)
+            .min(self.plan.canvas_width.saturating_sub(region.dest_x));
+        let copy_height = frame_height
+            .min(region.source_height)
+            .min(self.plan.canvas_height.saturating_sub(region.dest_y));
+        if copy_width == 0 || copy_height == 0 {
+            return Ok(CompositorStep::WaitingForAllRegions);
+        }
+
+        let src_box = D3D11_BOX {
+            left: 0,
+            top: 0,
+            front: 0,
+            right: copy_width,
+            bottom: copy_height,
+            back: 1,
+        };
+        unsafe {
+            self.d3d_context.CopySubresourceRegion(
+                &self.staging_canvas,
+                0,
+                region.dest_x,
+                region.dest_y,
+                0,
+                texture,
+                0,
+                Some(&src_box),
+            );
+        }
+
+        if let Some(slot) = self.received_mask.get_mut(region_index) {
+            *slot = true;
+        }
+        if !self.received_mask.iter().all(|&seen| seen) {
+            return Ok(CompositorStep::WaitingForAllRegions);
+        }
+
+        let ts_hns = self
+            .last_emitted_hns
+            .map_or(capture_time_hns, |prev| capture_time_hns.max(prev + 1));
+        if let Some(gate) = self.cadence_gate.as_mut()
+            && !gate.admit(ts_hns)
+        {
+            return Ok(CompositorStep::Decimated);
+        }
+        self.last_emitted_hns = Some(ts_hns);
+
+        let output_texture = create_composited_texture(
+            &self.d3d_device,
+            self.plan.canvas_width,
+            self.plan.canvas_height,
+            self.pixel_format,
+            None,
+        )?;
+        unsafe {
+            self.d3d_context
+                .CopyResource(&output_texture, &self.staging_canvas);
+        }
+
+        Ok(CompositorStep::Emit(
+            CompositedScreenFrame {
+                texture: output_texture,
+                width: self.plan.canvas_width,
+                height: self.plan.canvas_height,
+                pixel_format: self.pixel_format,
+                d3d_context: self.d3d_context.clone(),
+                staging_pool: self.staging_pool.clone(),
+            },
+            ts_hns,
+        ))
+    }
 }
 
 pub struct ScaledScreenFrame {
@@ -114,6 +446,7 @@ impl ScreenFrame {
     pub fn texture(&self) -> &ID3D11Texture2D {
         match self {
             ScreenFrame::Captured(frame) => frame.texture(),
+            ScreenFrame::Composited(composited) => &composited.texture,
             ScreenFrame::Scaled(scaled) => &scaled.texture,
         }
     }
@@ -121,6 +454,7 @@ impl ScreenFrame {
     pub fn width(&self) -> u32 {
         match self {
             ScreenFrame::Captured(frame) => frame.width(),
+            ScreenFrame::Composited(composited) => composited.width,
             ScreenFrame::Scaled(scaled) => scaled.width,
         }
     }
@@ -128,6 +462,7 @@ impl ScreenFrame {
     pub fn height(&self) -> u32 {
         match self {
             ScreenFrame::Captured(frame) => frame.height(),
+            ScreenFrame::Composited(composited) => composited.height,
             ScreenFrame::Scaled(scaled) => scaled.height,
         }
     }
@@ -138,6 +473,7 @@ impl ScreenFrame {
                 use scap_ffmpeg::AsFFmpeg;
                 frame.as_ffmpeg()
             }
+            ScreenFrame::Composited(composited) => composited.as_ffmpeg(),
             ScreenFrame::Scaled(scaled) => {
                 let ffmpeg_pixel = match scaled.pixel_format {
                     scap_direct3d::PixelFormat::R8G8B8A8Unorm => ffmpeg::format::Pixel::RGBA,
@@ -208,9 +544,14 @@ impl WindowsFrameScaler {
         self.state = None;
     }
 
-    fn scale_frame(&mut self, frame: &scap_direct3d::Frame) -> Option<ScreenFrame> {
-        let src_width = frame.width();
-        let src_height = frame.height();
+    fn scale_ffmpeg_frame(&mut self, src_frame: &ffmpeg::frame::Video) -> Option<ScreenFrame> {
+        let src_width = src_frame.width();
+        let src_height = src_frame.height();
+
+        let src_pixel = match self.pixel_format {
+            scap_direct3d::PixelFormat::R8G8B8A8Unorm => ffmpeg::format::Pixel::RGBA,
+            scap_direct3d::PixelFormat::B8G8R8A8Unorm => ffmpeg::format::Pixel::BGRA,
+        };
 
         let needs_reinit = self
             .state
@@ -218,11 +559,6 @@ impl WindowsFrameScaler {
             .is_none_or(|s| s.source_width != src_width || s.source_height != src_height);
 
         if needs_reinit {
-            let src_pixel = match self.pixel_format {
-                scap_direct3d::PixelFormat::R8G8B8A8Unorm => ffmpeg::format::Pixel::RGBA,
-                scap_direct3d::PixelFormat::B8G8R8A8Unorm => ffmpeg::format::Pixel::BGRA,
-            };
-
             let context = ffmpeg::software::scaling::Context::get(
                 src_pixel,
                 src_width,
@@ -241,41 +577,10 @@ impl WindowsFrameScaler {
             });
         }
 
-        let buffer = frame.as_buffer().ok()?;
-        let src_data = buffer.data();
-        let src_stride = buffer.stride() as usize;
-        let row_length = (src_width * 4) as usize;
-
-        let src_pixel = match self.pixel_format {
-            scap_direct3d::PixelFormat::R8G8B8A8Unorm => ffmpeg::format::Pixel::RGBA,
-            scap_direct3d::PixelFormat::B8G8R8A8Unorm => ffmpeg::format::Pixel::BGRA,
-        };
-
-        let mut src_frame = ffmpeg::frame::Video::new(src_pixel, src_width, src_height);
-        let ff_stride = src_frame.stride(0);
-        let ff_data = src_frame.data_mut(0);
-
-        for row in 0..src_height as usize {
-            let s_start = row * src_stride;
-            let d_start = row * ff_stride;
-            let copy_len = row_length.min(
-                src_data
-                    .len()
-                    .saturating_sub(s_start)
-                    .min(ff_data.len().saturating_sub(d_start)),
-            );
-            if copy_len > 0 {
-                ff_data[d_start..d_start + copy_len]
-                    .copy_from_slice(&src_data[s_start..s_start + copy_len]);
-            }
-        }
-
-        drop(buffer);
-
         let state = self.state.as_mut()?;
         let mut dst_frame =
             ffmpeg::frame::Video::new(src_pixel, self.target_width, self.target_height);
-        state.context.run(&src_frame, &mut dst_frame).ok()?;
+        state.context.run(src_frame, &mut dst_frame).ok()?;
 
         let dst_stride = dst_frame.stride(0);
         let dst_row_length = (self.target_width * 4) as usize;
@@ -298,14 +603,7 @@ impl WindowsFrameScaler {
             }
         }
 
-        let dxgi_format = match self.pixel_format {
-            scap_direct3d::PixelFormat::R8G8B8A8Unorm => {
-                ::windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM
-            }
-            scap_direct3d::PixelFormat::B8G8R8A8Unorm => {
-                ::windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM
-            }
-        };
+        let dxgi_format = self.pixel_format.as_dxgi();
 
         let texture_desc = D3D11_TEXTURE2D_DESC {
             Width: self.target_width,
@@ -344,6 +642,20 @@ impl WindowsFrameScaler {
             height: self.target_height,
             pixel_format: self.pixel_format,
         }))
+    }
+
+    fn scale_frame(&mut self, frame: &scap_direct3d::Frame) -> Option<ScreenFrame> {
+        use scap_ffmpeg::AsFFmpeg;
+        let src_frame = frame.as_ffmpeg().ok()?;
+        self.scale_ffmpeg_frame(&src_frame)
+    }
+
+    fn scale_composited(
+        &mut self,
+        frame: &CompositedScreenFrame,
+    ) -> windows::core::Result<Option<ScreenFrame>> {
+        let src_frame = frame.as_ffmpeg()?;
+        Ok(self.scale_ffmpeg_frame(&src_frame))
     }
 }
 
@@ -450,6 +762,7 @@ impl ScreenCaptureConfig<Direct3DCapture> {
                 video_info: self.video_info,
                 display_id: self.config.display.clone(),
                 window_id: self.config.window.clone(),
+                desktop_area: self.config.desktop_area.clone(),
                 settings,
                 d3d_device: self.d3d_device.clone(),
             },
@@ -468,6 +781,7 @@ pub struct VideoSourceConfig {
     video_info: VideoInfo,
     display_id: DisplayId,
     window_id: Option<WindowId>,
+    desktop_area: Option<DesktopAreaPlan>,
     settings: scap_direct3d::Settings,
     pub d3d_device: ID3D11Device,
 }
@@ -540,6 +854,7 @@ struct CaptureClosureEvent {
 struct CreateCapturerParams<'a> {
     display_id: &'a DisplayId,
     window_id: Option<&'a WindowId>,
+    desktop_area: Option<&'a DesktopAreaPlan>,
     settings: &'a scap_direct3d::Settings,
     d3d_device: &'a ID3D11Device,
     video_tx: &'a mpsc::Sender<VideoFrame>,
@@ -558,6 +873,255 @@ struct CreateCapturerParams<'a> {
     scaled_frame_count: Arc<AtomicU32>,
     stall_health_tx: output_pipeline::HealthSender,
     first_frame: FirstScreenFrame,
+}
+
+enum ActiveCapturer {
+    Single(scap_direct3d::Capturer),
+    Multi(Vec<scap_direct3d::Capturer>),
+}
+
+impl ActiveCapturer {
+    fn start(&mut self) -> anyhow::Result<()> {
+        match self {
+            Self::Single(capturer) => capturer.start().map_err(Into::into),
+            Self::Multi(capturers) => {
+                for (index, capturer) in capturers.iter_mut().enumerate() {
+                    if let Err(error) = capturer.start() {
+                        for started in &mut capturers[..index] {
+                            let _ = started.stop();
+                        }
+                        return Err(error.into());
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn stop(&mut self) -> anyhow::Result<()> {
+        match self {
+            Self::Single(capturer) => capturer.stop().map_err(Into::into),
+            Self::Multi(capturers) => {
+                let mut first_err = None;
+                for capturer in capturers {
+                    if let Err(error) = capturer.stop()
+                        && first_err.is_none()
+                    {
+                        first_err = Some(anyhow::Error::from(error));
+                    }
+                }
+                match first_err {
+                    Some(err) => Err(err),
+                    None => Ok(()),
+                }
+            }
+        }
+    }
+}
+
+fn map_new_capturer_error(error: scap_direct3d::NewCapturerError) -> anyhow::Error {
+    match &error {
+        scap_direct3d::NewCapturerError::CaptureSession(inner)
+            if inner.code() == windows::Win32::Foundation::E_ACCESSDENIED =>
+        {
+            anyhow!(
+                "Windows denied Cap access to screen capture. Check that screen capture is allowed for desktop apps in Windows privacy settings and that no security software is blocking it ({error})"
+            )
+        }
+        _ => anyhow!("{error}"),
+    }
+}
+
+fn create_active_capturer(
+    params: &CreateCapturerParams,
+    error_tx: &mpsc::Sender<CaptureClosureEvent>,
+) -> anyhow::Result<ActiveCapturer> {
+    if let Some(plan) = params.desktop_area {
+        create_multi_d3d_capturer(plan, params, error_tx).map(ActiveCapturer::Multi)
+    } else {
+        create_d3d_capturer(params, error_tx).map(ActiveCapturer::Single)
+    }
+}
+
+fn create_multi_d3d_capturer(
+    plan: &DesktopAreaPlan,
+    params: &CreateCapturerParams,
+    error_tx: &mpsc::Sender<CaptureClosureEvent>,
+) -> anyhow::Result<Vec<scap_direct3d::Capturer>> {
+    let compositor = Arc::new(Mutex::new(DesktopCompositor::new(
+        params.d3d_device.clone(),
+        params.settings.pixel_format,
+        plan.clone(),
+        params.cadence_interval_hns,
+    )?));
+
+    let mut capturers = Vec::with_capacity(plan.regions.len());
+    for (region_index, region) in plan.regions.iter().enumerate() {
+        let capture_item = Display::from_id(&region.display_id)
+            .ok_or_else(|| anyhow!("Display not found for ID: {:?}", region.display_id))?
+            .raw_handle()
+            .try_as_capture_item()
+            .map_err(|e| anyhow!("Failed to create GraphicsCaptureItem: {}", e))?;
+
+        let mut region_settings = params.settings.clone();
+        region_settings.crop = Some(D3D11_BOX {
+            left: region.source_left,
+            top: region.source_top,
+            right: region.source_left + region.source_width,
+            bottom: region.source_top + region.source_height,
+            front: 0,
+            back: 1,
+        });
+        region_settings.even_dimensions = false;
+        region_settings.follow_item_size = false;
+
+        let capturer = scap_direct3d::Capturer::new(
+            capture_item,
+            region_settings,
+            {
+                let compositor = compositor.clone();
+                let video_frame_counter = params.video_frame_counter.clone();
+                let video_drop_counter = params.video_drop_counter.clone();
+                let video_decimated_counter = params.video_decimated_counter.clone();
+                let mut tx = params.video_tx.clone();
+                let expected_width = params.expected_width;
+                let expected_height = params.expected_height;
+                let frame_scaler = params.frame_scaler.clone();
+                let scaling_logged = params.scaling_logged.clone();
+                let scaled_frame_count = params.scaled_frame_count.clone();
+                let stall_health_tx = params.stall_health_tx.clone();
+                let first_frame = params.first_frame.clone();
+                let mut frame_error_tx = error_tx.clone();
+                let frame_device = params.d3d_device.clone();
+                move |frame| {
+                    let result = (|| {
+                        let capture_time = frame.inner().SystemRelativeTime()?;
+                        if frame.width() == 0 || frame.height() == 0 {
+                            return Err(windows::core::Error::new(
+                                windows::Win32::Foundation::E_INVALIDARG,
+                                "Empty screen frame",
+                            ));
+                        }
+
+                        let mut compositor = compositor
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let step = compositor.composite_texture(
+                            region_index,
+                            frame.texture(),
+                            frame.width(),
+                            frame.height(),
+                            capture_time.Duration,
+                        )?;
+
+                        let (composited, ts_hns) = match step {
+                            CompositorStep::WaitingForAllRegions => return Ok(()),
+                            CompositorStep::Decimated => {
+                                video_decimated_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                return Ok(());
+                            }
+                            CompositorStep::Emit(composited, ts_hns) => (composited, ts_hns),
+                        };
+
+                        let timestamp = Timestamp::PerformanceCounter(
+                            PerformanceCounterTimestamp::from_100ns(ts_hns),
+                        );
+
+                        let screen_frame = if composited.width != expected_width
+                            || composited.height != expected_height
+                        {
+                            let Ok(mut scaler_guard) = frame_scaler.lock() else {
+                                video_drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                return Ok(());
+                            };
+                            if !scaling_logged.load(atomic::Ordering::Relaxed) {
+                                info!(
+                                    expected_width,
+                                    expected_height,
+                                    frame_width = composited.width,
+                                    frame_height = composited.height,
+                                    "Scaling composited desktop area frames to output dimensions"
+                                );
+                                scaling_logged.store(true, atomic::Ordering::Relaxed);
+                            }
+                            match scaler_guard.scale_composited(&composited)? {
+                                Some(scaled) => {
+                                    scaled_frame_count.fetch_add(1, atomic::Ordering::Relaxed);
+                                    scaled
+                                }
+                                None => {
+                                    video_drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                    return Ok(());
+                                }
+                            }
+                        } else {
+                            ScreenFrame::Composited(composited)
+                        };
+
+                        match output_pipeline::send_with_stall_budget_futures(
+                            &mut tx,
+                            VideoFrame {
+                                frame: screen_frame,
+                                timestamp,
+                            },
+                            "screen-video",
+                            &stall_health_tx,
+                        ) {
+                            output_pipeline::StallSendOutcome::Sent => {
+                                video_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                first_frame.complete(Ok(()));
+                            }
+                            output_pipeline::StallSendOutcome::StalledAndDropped { .. }
+                            | output_pipeline::StallSendOutcome::Disconnected => {
+                                video_drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                            }
+                        }
+                        Ok(())
+                    })();
+                    if let Err(error) = &result {
+                        let message = format!("Windows desktop area frame failed: {error}");
+                        first_frame.complete(Err(message.clone()));
+                        let kind = match error.code() {
+                            DXGI_ERROR_DEVICE_REMOVED | DXGI_ERROR_DEVICE_RESET => {
+                                CaptureClosureKind::DeviceRemoved {
+                                    hresult: error.code().0,
+                                }
+                            }
+                            _ => classify_capture_closure(&frame_device),
+                        };
+                        if matches!(kind, CaptureClosureKind::DeviceRemoved { .. }) {
+                            let _ = frame_error_tx.try_send(CaptureClosureEvent { kind, message });
+                        }
+                    }
+                    result
+                }
+            },
+            {
+                let first_frame = params.first_frame.clone();
+                let mut err_tx = error_tx.clone();
+                let device_for_callback = params.d3d_device.clone();
+                move || {
+                    let kind = classify_capture_closure(&device_for_callback);
+                    let message = match kind {
+                        CaptureClosureKind::DeviceRemoved { hresult } => {
+                            format!("d3d11 device removed (hresult=0x{hresult:08x})")
+                        }
+                        CaptureClosureKind::TargetLost => "capture target lost".to_string(),
+                        CaptureClosureKind::Transient => "capture closed".to_string(),
+                    };
+                    first_frame.complete(Err(message.clone()));
+                    drop(err_tx.try_send(CaptureClosureEvent { kind, message }));
+                    Ok(())
+                }
+            },
+            Some(params.d3d_device.clone()),
+        )
+        .map_err(map_new_capturer_error)?;
+
+        capturers.push(capturer);
+    }
+
+    Ok(capturers)
 }
 
 fn create_d3d_capturer(
@@ -734,6 +1298,7 @@ impl output_pipeline::VideoSource for VideoSource {
             video_info,
             display_id,
             window_id,
+            desktop_area,
             settings,
             d3d_device,
         }: Self::Config,
@@ -775,6 +1340,7 @@ impl output_pipeline::VideoSource for VideoSource {
             (fps > 0).then(|| 10_000_000i64 / fps as i64)
         };
 
+        let is_desktop_area = desktop_area.is_some();
         let stats_health_tx = ctx.health_tx().clone();
         ctx.tasks().spawn_thread("d3d-capture-thread", {
             let restart_counter = restart_counter.clone();
@@ -797,6 +1363,7 @@ impl output_pipeline::VideoSource for VideoSource {
                         CreateCapturerParams {
                             display_id: &display_id,
                             window_id: window_id.as_ref(),
+                            desktop_area: desktop_area.as_ref(),
                             settings: &settings,
                             d3d_device: $device,
                             video_tx: &video_tx,
@@ -815,19 +1382,20 @@ impl output_pipeline::VideoSource for VideoSource {
                     };
                 }
 
-                let mut capturer = match create_d3d_capturer(&build_params!(&d3d_device), &error_tx) {
-                    Ok(c) => {
-                        trace!("D3D capturer created successfully");
-                        Some(c)
-                    }
-                    Err(e) => {
-                        error!("Failed to create D3D capturer: {}", e);
-                        // `start` reads why from here: its reply channel only
-                        // says the thread is gone.
-                        first_frame.complete(Err(format!("{e:#}")));
-                        return Err(e);
-                    }
-                };
+                let mut capturer =
+                    match create_active_capturer(&build_params!(&d3d_device), &error_tx) {
+                        Ok(c) => {
+                            trace!("D3D capturer created successfully");
+                            Some(c)
+                        }
+                        Err(e) => {
+                            error!("Failed to create D3D capturer: {}", e);
+                            // `start` reads why from here: its reply channel only
+                            // says the thread is gone.
+                            first_frame.complete(Err(format!("{e:#}")));
+                            return Err(e);
+                        }
+                    };
 
                 let Ok(VideoControl::Start(reply)) = ctrl_rx.recv() else {
                     error!("Failed to receive Start control message - channel disconnected");
@@ -842,9 +1410,25 @@ impl output_pipeline::VideoSource for VideoSource {
                         let restart_counter = restart_counter.clone();
                         let scaled_frame_count = scaled_frame_count.clone();
                         let stats_health_tx = stats_health_tx.clone();
+                        let desktop_device = desktop_area.as_ref().map(|_| d3d_device.clone());
+                        let mut device_error_tx = error_tx.clone();
+                        let first_frame = first_frame.clone();
                         async move {
                             loop {
                                 tokio::time::sleep(Duration::from_secs(5)).await;
+                                if let Some(device) = &desktop_device
+                                    && let kind @ CaptureClosureKind::DeviceRemoved { hresult } =
+                                        classify_capture_closure(device)
+                                {
+                                    let message = format!(
+                                        "d3d11 desktop area device removed (hresult=0x{hresult:08x})"
+                                    );
+                                    first_frame.complete(Err(message.clone()));
+                                    let _ = device_error_tx
+                                        .send(CaptureClosureEvent { kind, message })
+                                        .await;
+                                    break;
+                                }
                                 let captured = video_frame_counter.load(atomic::Ordering::Relaxed);
                                 let dropped = video_drop_counter.load(atomic::Ordering::Relaxed);
                                 let decimated =
@@ -897,7 +1481,7 @@ impl output_pipeline::VideoSource for VideoSource {
                 trace!("Starting D3D capturer");
                 let start_result = capturer
                     .as_mut()
-                    .map(|c| c.start().map_err(Into::into))
+                    .map(ActiveCapturer::start)
                     .unwrap_or(Err(anyhow!("No capturer available")));
                 if let Err(ref e) = start_result {
                     error!("Failed to start D3D capturer: {}", e);
@@ -911,7 +1495,7 @@ impl output_pipeline::VideoSource for VideoSource {
                     match ctrl_rx.recv() {
                         Ok(VideoControl::Stop(reply)) => {
                             if let Some(mut cap) = capturer.take() {
-                                let _ = reply.send(cap.stop().map_err(Into::into));
+                                let _ = reply.send(cap.stop());
                             } else {
                                 let _ = reply.send(Ok(()));
                             }
@@ -941,7 +1525,7 @@ impl output_pipeline::VideoSource for VideoSource {
                                     continue;
                                 }
                             }
-                            match create_d3d_capturer(&build_params!(&d3d_device), &error_tx) {
+                            match create_active_capturer(&build_params!(&d3d_device), &error_tx) {
                                 Ok(mut new_cap) => match new_cap.start() {
                                     Ok(()) => {
                                         info!(
@@ -981,7 +1565,7 @@ impl output_pipeline::VideoSource for VideoSource {
                                 drop(old);
                             }
 
-                            match create_d3d_capturer(&build_params!(&d3d_device), &error_tx) {
+                            match create_active_capturer(&build_params!(&d3d_device), &error_tx) {
                                 Ok(mut new_cap) => match new_cap.start() {
                                     Ok(()) => {
                                         let count = restart_counter
@@ -1056,6 +1640,13 @@ impl output_pipeline::VideoSource for VideoSource {
                         return Err(anyhow!("Windows capture target lost: {}", event.message));
                     }
                     CaptureClosureKind::Transient => {}
+                }
+
+                if is_device_lost && is_desktop_area {
+                    return Err(anyhow!(
+                        "Windows desktop area capture lost its device: {}",
+                        event.message
+                    ));
                 }
 
                 if restart_count < MAX_CAPTURE_RESTARTS {
@@ -1812,5 +2403,281 @@ mod frame_scaler_tests {
                 .unwrap(),
             recreated.cast::<IUnknown>().unwrap()
         );
+    }
+}
+
+#[cfg(test)]
+mod desktop_compositor_tests {
+    use super::*;
+    use crate::screen_capture::resolve_desktop_area_plan;
+    use scap_targets::bounds::{PhysicalBounds, PhysicalPosition, PhysicalSize};
+
+    fn solid_texture(
+        device: &ID3D11Device,
+        width: u32,
+        height: u32,
+        rgba: [u8; 4],
+    ) -> ID3D11Texture2D {
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        for px in pixels.chunks_exact_mut(4) {
+            px.copy_from_slice(&rgba);
+        }
+        create_composited_texture(
+            device,
+            width,
+            height,
+            Direct3DCapture::PIXEL_FORMAT,
+            Some(&pixels),
+        )
+        .expect("solid texture")
+    }
+
+    fn pixel_at(frame: &ffmpeg::frame::Video, x: u32, y: u32) -> [u8; 4] {
+        let stride = frame.stride(0);
+        let offset = y as usize * stride + x as usize * 4;
+        let data = frame.data(0);
+        [
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]
+    }
+
+    #[test]
+    fn composites_two_offset_mixed_dpi_monitors_into_one_desktop_layout_frame() {
+        let device = crate::capture_pipeline::create_d3d_device().expect("d3d11 device");
+        let monitors = vec![
+            (
+                "1".parse().unwrap(),
+                PhysicalBounds::new(
+                    PhysicalPosition::new(-2560.0, -120.0),
+                    PhysicalSize::new(2560.0, 1440.0),
+                ),
+            ),
+            (
+                "2".parse().unwrap(),
+                PhysicalBounds::new(
+                    PhysicalPosition::new(0.0, 180.0),
+                    PhysicalSize::new(1920.0, 1080.0),
+                ),
+            ),
+        ];
+        let plan = resolve_desktop_area_plan(
+            PhysicalBounds::new(
+                PhysicalPosition::new(-160.0, 60.0),
+                PhysicalSize::new(320.0, 240.0),
+            ),
+            &monitors,
+        )
+        .expect("desktop area plan");
+
+        assert_eq!((plan.canvas_width, plan.canvas_height), (320, 240));
+        assert_eq!(plan.regions.len(), 2);
+        assert_eq!(
+            (
+                plan.regions[0].dest_x,
+                plan.regions[0].dest_y,
+                plan.regions[0].source_width,
+                plan.regions[0].source_height
+            ),
+            (0, 0, 160, 240)
+        );
+        assert_eq!(
+            (
+                plan.regions[1].dest_x,
+                plan.regions[1].dest_y,
+                plan.regions[1].source_width,
+                plan.regions[1].source_height
+            ),
+            (160, 120, 160, 120)
+        );
+
+        let mut compositor =
+            DesktopCompositor::new(device.clone(), Direct3DCapture::PIXEL_FORMAT, plan, None)
+                .expect("compositor");
+
+        let left_tex = solid_texture(&device, 160, 240, [220, 40, 60, 255]);
+        let right_tex = solid_texture(&device, 160, 120, [30, 180, 90, 255]);
+
+        let first = compositor
+            .composite_texture(0, &left_tex, 160, 240, 1_000_000)
+            .expect("first monitor");
+        assert!(matches!(first, CompositorStep::WaitingForAllRegions));
+
+        let second = compositor
+            .composite_texture(1, &right_tex, 160, 120, 1_000_000)
+            .expect("second monitor");
+        let CompositorStep::Emit(composited, ts1) = second else {
+            panic!("expected emitted composited frame");
+        };
+        assert_eq!(ts1, 1_000_000);
+        assert_eq!((composited.width, composited.height), (320, 240));
+
+        let retained_texture = composited.texture.clone();
+        let ff = ScreenFrame::Composited(composited)
+            .as_ffmpeg()
+            .expect("ffmpeg readback");
+        assert_eq!(pixel_at(&ff, 10, 10), [220, 40, 60, 255]);
+        assert_eq!(pixel_at(&ff, 159, 239), [220, 40, 60, 255]);
+        assert_eq!(pixel_at(&ff, 160, 10), [0, 0, 0, 255]);
+        assert_eq!(pixel_at(&ff, 319, 119), [0, 0, 0, 255]);
+        assert_eq!(pixel_at(&ff, 160, 120), [30, 180, 90, 255]);
+        assert_eq!(pixel_at(&ff, 319, 239), [30, 180, 90, 255]);
+
+        let updated_left = solid_texture(&device, 160, 240, [50, 90, 240, 255]);
+        let third = compositor
+            .composite_texture(0, &updated_left, 160, 240, 900_000)
+            .expect("out-of-order timestamp");
+        let CompositorStep::Emit(composited2, ts2) = third else {
+            panic!("expected second emitted frame");
+        };
+        assert!(ts2 > ts1);
+        assert_ne!(composited2.texture, retained_texture);
+
+        let ff2 = ScreenFrame::Composited(composited2)
+            .as_ffmpeg()
+            .expect("ffmpeg readback 2");
+        assert_eq!(pixel_at(&ff2, 80, 120), [50, 90, 240, 255]);
+        assert_eq!(pixel_at(&ff2, 240, 180), [30, 180, 90, 255]);
+        assert_eq!(pixel_at(&ff2, 240, 40), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn composited_frame_scales_on_recreated_device_and_encodes_into_one_video_segment() {
+        use ::windows::core::{IUnknown, Interface};
+        use cap_enc_ffmpeg::h264::H264Preset;
+        use cap_enc_ffmpeg::segmented_stream::{
+            SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
+        };
+
+        let initial_device = crate::capture_pipeline::create_d3d_device().expect("initial d3d11");
+        let recreated_device =
+            crate::capture_pipeline::create_d3d_device().expect("recreated d3d11");
+        let monitors = vec![
+            (
+                "1".parse().unwrap(),
+                PhysicalBounds::new(
+                    PhysicalPosition::new(-2560.0, -120.0),
+                    PhysicalSize::new(2560.0, 1440.0),
+                ),
+            ),
+            (
+                "2".parse().unwrap(),
+                PhysicalBounds::new(
+                    PhysicalPosition::new(0.0, 180.0),
+                    PhysicalSize::new(1920.0, 1080.0),
+                ),
+            ),
+        ];
+        let plan = resolve_desktop_area_plan(
+            PhysicalBounds::new(
+                PhysicalPosition::new(-160.0, 60.0),
+                PhysicalSize::new(320.0, 240.0),
+            ),
+            &monitors,
+        )
+        .expect("desktop area plan");
+
+        let mut compositor = DesktopCompositor::new(
+            recreated_device.clone(),
+            Direct3DCapture::PIXEL_FORMAT,
+            plan,
+            None,
+        )
+        .expect("compositor on recreated device");
+        let left = solid_texture(&recreated_device, 160, 240, [220, 40, 60, 255]);
+        let right = solid_texture(&recreated_device, 160, 120, [30, 180, 90, 255]);
+
+        assert!(matches!(
+            compositor
+                .composite_texture(0, &left, 160, 240, 1_000_000)
+                .expect("left initial"),
+            CompositorStep::WaitingForAllRegions
+        ));
+        let CompositorStep::Emit(composited, _) = compositor
+            .composite_texture(1, &right, 160, 120, 1_100_000)
+            .expect("right initial")
+        else {
+            panic!("expected composited frame");
+        };
+
+        let mut scaler =
+            WindowsFrameScaler::new(160, 120, Direct3DCapture::PIXEL_FORMAT, initial_device);
+        scaler.replace_device(recreated_device.clone());
+        let scaled = scaler
+            .scale_composited(&composited)
+            .expect("read composited frame")
+            .expect("scale composited frame");
+        assert_eq!((scaled.width(), scaled.height()), (160, 120));
+        let scaled_device = unsafe { scaled.texture().GetDevice() }.expect("scaled device");
+        assert_eq!(
+            scaled_device.cast::<IUnknown>().unwrap(),
+            recreated_device.cast::<IUnknown>().unwrap()
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let video_info = VideoInfo::from_raw_ffmpeg(Direct3DCapture::pixel_format(), 320, 240, 30);
+        let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
+            dir.path().to_path_buf(),
+            video_info,
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_secs(2),
+                preset: H264Preset::Ultrafast,
+                bpp: 0.15,
+                output_size: Some((320, 240)),
+                prefer_videotoolbox_hw_input: false,
+            },
+            true,
+        )
+        .expect("init segmented video encoder");
+
+        for i in 0..3u64 {
+            let right_updated = solid_texture(
+                &recreated_device,
+                160,
+                120,
+                [30, (180 + i * 10) as u8, 90, 255],
+            );
+            let CompositorStep::Emit(frame, _) = compositor
+                .composite_texture(1, &right_updated, 160, 120, 2_000_000 + i as i64 * 333_333)
+                .expect("composite frame")
+            else {
+                panic!("expected composited frame {i}");
+            };
+            let ff = ScreenFrame::Composited(frame)
+                .as_ffmpeg()
+                .expect("ffmpeg readback");
+            encoder
+                .queue_frame(ff, Duration::from_millis(i * 33))
+                .expect("queue composited frame");
+        }
+        encoder
+            .finish_with_timestamp(Duration::from_millis(100))
+            .expect("finish segmented encoder");
+
+        let init_path = dir.path().join("init.mp4");
+        assert!(init_path.exists());
+        assert!(std::fs::metadata(&init_path).unwrap().len() > 0);
+        let has_segment = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry.path().extension().and_then(|e| e.to_str()) == Some("m4s")
+                    && entry.metadata().map(|m| m.len() > 0).unwrap_or(false)
+            });
+        assert!(has_segment, "expected at least one non-empty .m4s segment");
+
+        let probe = ffmpeg::format::input(&init_path).expect("probe init.mp4");
+        let stream = probe
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .expect("video stream");
+        let decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+            .expect("codec context")
+            .decoder()
+            .video()
+            .expect("video decoder");
+        assert_eq!((decoder.width(), decoder.height()), (320, 240));
     }
 }
