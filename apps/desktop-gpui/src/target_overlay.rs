@@ -575,6 +575,8 @@ impl TargetSelect {
             crate::foreign_window::put_back_all(self.take_arranged(), cx.background_executor());
             self.focus_window = saved_focus();
             self.focus_center = crate::store::GeneralSettings::load().focus_center;
+            #[cfg(target_os = "macos")]
+            import_legacy_area_selection();
             self.area_ratio = stored_area_ratio();
         }
         if self.mode == mode {
@@ -2239,8 +2241,6 @@ impl OverlayWindow {
                 height: logical.1,
             })
             .clamped(logical);
-        #[cfg(target_os = "macos")]
-        import_legacy_area_selection();
         let area_screen = AreaScreen::of(&display.id(), cx);
         let locked_area = locked_area_for(
             &area_screen,
@@ -5533,6 +5533,12 @@ impl OverlayWindow {
     }
 
     fn reshape_area(&mut self, to: AreaRect, cx: &mut Context<Self>) {
+        self.set_area_reshape(to);
+        self.sync_area_camera(cx);
+        cx.notify();
+    }
+
+    fn set_area_reshape(&mut self, to: AreaRect) {
         let from = match (self.crop, self.reshape) {
             (Some(crop), Some((from, started))) => area_between(
                 from,
@@ -5546,7 +5552,20 @@ impl OverlayWindow {
         self.crop = Some(to.clamped(self.display_size));
         self.area_snapped = None;
         self.persist_locked_area();
-        self.sync_area_camera(cx);
+    }
+
+    pub(crate) fn reshape_local_area_for_ratio(
+        &mut self,
+        ratio: Option<(u32, u32)>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.recording_area {
+            return;
+        }
+        self.area_snapped = None;
+        if let (Some(ratio), Some(crop)) = (ratio, self.crop) {
+            self.set_area_reshape(area_with_ratio(crop, ratio_value(ratio), self.display_size));
+        }
         cx.notify();
     }
 
@@ -5573,8 +5592,8 @@ impl OverlayWindow {
         cx.notify();
     }
 
-    /// Locks drawn and resized areas to `ratio`, reshaping the current one
-    /// around its centre, and remembers the choice for the next picker.
+    /// Locks drawn and resized areas to `ratio`, reshapes existing selections
+    /// around their centres, and remembers the choice for the next picker.
     fn set_area_ratio(&mut self, ratio: Option<(u32, u32)>, cx: &mut Context<Self>) {
         self.select.update(cx, |select, cx| {
             select.area_ratio = ratio;
@@ -5582,6 +5601,7 @@ impl OverlayWindow {
         });
         self.area_snapped = None;
         store_area_ratio(ratio);
+        app_windows::reshape_other_area_selections(&self.display_id, ratio, cx);
         if let (Some(ratio), Some(shared)) = (ratio, self.select.read(cx).desktop_area.clone()) {
             let monitors = self.select.read(cx).desktop_monitors.clone();
             if let Some(union_bounds) = desktop_union_bounds(&monitors) {

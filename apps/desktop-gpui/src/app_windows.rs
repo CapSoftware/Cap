@@ -2862,6 +2862,23 @@ pub fn release_other_area_locks(display: &DisplayId, cx: &mut App) {
     }
 }
 
+pub(crate) fn reshape_other_area_selections(
+    display: &DisplayId,
+    ratio: Option<(u32, u32)>,
+    cx: &mut App,
+) {
+    let overlays = cx.global::<AppWindows>().overlays.clone();
+    for (id, overlay) in overlays {
+        if &id != display {
+            overlay
+                .update(cx, |view, _, cx| {
+                    view.reshape_local_area_for_ratio(ratio, cx)
+                })
+                .ok();
+        }
+    }
+}
+
 /// Seed an area selection on the overlay for a display (harness path -- the
 /// real one is a mouse drag, and unprivileged synthetic drags are dropped).
 pub fn seed_area_selection(display: Option<DisplayId>, crop: AreaRect, cx: &mut App) -> bool {
