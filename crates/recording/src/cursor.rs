@@ -86,6 +86,89 @@ fn macos_window_crop(
     Some(CursorCropBounds::new_macos(frame))
 }
 
+/// When a window recording reads the window's bounds again. Each read is a
+/// `CGWindowListCopyWindowInfo` round trip to WindowServer (0.1-0.3 ms on an
+/// idle Mac, about 1 ms on a busy one), so the 60 Hz loop reads every tick only
+/// while a button is held, which is how windows are dragged, and while a moved
+/// window settles; otherwise a window moved from the keyboard is picked up
+/// within `WINDOW_CROP_IDLE_INTERVAL`.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct WindowCropPolling {
+    last_read: Option<Instant>,
+    last_moved: Option<Instant>,
+}
+
+#[cfg(target_os = "macos")]
+const WINDOW_CROP_IDLE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+#[cfg(target_os = "macos")]
+const WINDOW_CROP_SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
+
+#[cfg(target_os = "macos")]
+impl WindowCropPolling {
+    fn due(&self, now: Instant, button_held: bool) -> bool {
+        let since = |at: Option<Instant>| at.map(|at| now.saturating_duration_since(at));
+        button_held
+            || since(self.last_read).is_none_or(|elapsed| elapsed >= WINDOW_CROP_IDLE_INTERVAL)
+            || since(self.last_moved).is_some_and(|elapsed| elapsed < WINDOW_CROP_SETTLE)
+    }
+
+    fn read(&mut self, now: Instant, moved: bool) {
+        self.last_read = Some(now);
+        if moved {
+            self.last_moved = Some(now);
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod window_crop_polling_tests {
+    use super::*;
+
+    const TICK: std::time::Duration = std::time::Duration::from_millis(16);
+
+    #[test]
+    fn the_first_tick_reads_the_window() {
+        assert!(WindowCropPolling::default().due(Instant::now(), false));
+    }
+
+    #[test]
+    fn a_still_window_is_read_at_the_idle_interval() {
+        let start = Instant::now();
+        let mut polling = WindowCropPolling::default();
+        polling.read(start, true);
+        let settled = start + WINDOW_CROP_SETTLE;
+        polling.read(settled, false);
+        assert!(!polling.due(settled + TICK, false));
+        assert!(!polling.due(
+            settled + WINDOW_CROP_IDLE_INTERVAL.saturating_sub(TICK),
+            false
+        ));
+        assert!(polling.due(settled + WINDOW_CROP_IDLE_INTERVAL, false));
+    }
+
+    #[test]
+    fn a_held_button_reads_every_tick() {
+        let start = Instant::now();
+        let mut polling = WindowCropPolling::default();
+        polling.read(start, false);
+        assert!(polling.due(start + TICK, true));
+    }
+
+    #[test]
+    fn a_moved_window_is_read_every_tick_until_it_settles() {
+        let start = Instant::now();
+        let mut polling = WindowCropPolling::default();
+        polling.read(start, true);
+        let moved = start + TICK;
+        polling.read(moved, false);
+        assert!(polling.due(moved + TICK, false));
+        assert!(polling.due(start + WINDOW_CROP_SETTLE.saturating_sub(TICK), false));
+        polling.read(start + WINDOW_CROP_SETTLE.saturating_sub(TICK), false);
+        assert!(!polling.due(start + WINDOW_CROP_SETTLE, false));
+    }
+}
+
 #[cfg(windows)]
 fn windows_window_crop(
     window: &scap_targets::WindowId,
@@ -755,6 +838,8 @@ pub fn spawn_cursor_recorder(
             .frame_size
             .filter(|(width, height)| *width > 0 && *height > 0)
             .map(|(width, height)| f64::from(width) / f64::from(height));
+        #[cfg(target_os = "macos")]
+        let mut window_crop_polling = WindowCropPolling::default();
         // device_query's `DeviceState::new` asserts Accessibility trust on
         // macOS (and prompts for it). From macOS 27.3 Cap no longer needs that
         // grant: cursor position and mouse buttons read fine without it, and
@@ -868,10 +953,16 @@ pub fn spawn_cursor_recorder(
                 .as_ref()
                 .and_then(|window| windows_window_crop(window, &display));
             #[cfg(target_os = "macos")]
-            let window_crop = target
-                .window
-                .as_ref()
-                .and_then(|window| macos_window_crop(window, &display, window_frame_aspect));
+            let window_crop = target.window.as_ref().and_then(|window| {
+                let now = Instant::now();
+                let button_held = mouse_state.button_pressed.iter().any(|&pressed| pressed);
+                if !window_crop_polling.due(now, button_held) {
+                    return None;
+                }
+                let crop = macos_window_crop(window, &display, window_frame_aspect);
+                window_crop_polling.read(now, crop.is_some() && crop != last_window_crop);
+                crop
+            });
             #[cfg(any(windows, target_os = "macos"))]
             let position_changed =
                 position_changed || (window_crop.is_some() && window_crop != last_window_crop);
