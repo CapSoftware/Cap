@@ -79,6 +79,7 @@ fn guide_of(recording: &Recording) -> Guide {
     let events = ClipEvents {
         clip: 0,
         stopped_at: Some(recording.duration).filter(|duration| *duration > 0.0),
+        breaks: &[],
         moves: &recording.moves,
         buttons: &recording.buttons,
     };
@@ -371,6 +372,7 @@ fn clicks_cut_from_the_timeline_are_left_out_before_actions_are_read() {
     let events = ClipEvents {
         clip: 3,
         stopped_at: None,
+        breaks: &[],
         moves: &recording.moves,
         buttons: &recording.buttons,
     };
@@ -391,6 +393,7 @@ fn steps_from_several_clips_are_put_in_output_order() {
             &ClipEvents {
                 clip,
                 stopped_at: None,
+                breaks: &[],
                 moves: &recording.moves,
                 buttons: &recording.buttons,
             },
@@ -402,6 +405,88 @@ fn steps_from_several_clips_are_put_in_output_order() {
     let guide = build_guide(steps, &[], &[]);
     let order: Vec<u32> = guide.steps.iter().map(|step| step.source.clip).collect();
     assert_eq!(order, [1, 0]);
+}
+
+fn clicks_at(times: &[f64]) -> Recording {
+    let mut recording = click_at(times[0], 0.5, 0.5);
+    for &time in &times[1..] {
+        for (time, down) in [(time, true), (time + 0.08, false)] {
+            recording.buttons.push(ButtonEvent {
+                time,
+                button: LEFT_BUTTON,
+                down,
+            });
+        }
+    }
+    recording
+}
+
+fn steps_with_breaks(
+    recording: &Recording,
+    breaks: &[f64],
+    output_time: impl Fn(f64) -> Option<f64>,
+) -> Vec<Step> {
+    clip_steps(
+        &ClipEvents {
+            clip: 0,
+            stopped_at: None,
+            breaks,
+            moves: &recording.moves,
+            buttons: &recording.buttons,
+        },
+        output_time,
+    )
+}
+
+#[test]
+fn two_clicks_either_side_of_a_break_are_two_steps_each_at_its_own_time() {
+    let recording = clicks_at(&[4.9, 5.1]);
+    let second_piece_first = |time: f64| Some(if time < 5.0 { time + 5.0 } else { time - 5.0 });
+    let steps = steps_with_breaks(&recording, &[0.0, 5.0, 5.0, 10.0], second_piece_first);
+    let guide = build_guide(steps, &[], &[]);
+
+    assert_eq!(guide.steps.len(), 2, "{}", describe(&guide));
+    for (step, (time, source)) in guide.steps.iter().zip([(0.1, 5.1), (9.9, 4.9)]) {
+        assert_eq!(step.action, Action::Click, "{}", describe(&guide));
+        assert_eq!(step.repeat, 1, "{}", describe(&guide));
+        assert!((step.time - time).abs() < 1e-9, "{}", describe(&guide));
+        assert!((step.source.time - source).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn repeated_clicks_are_counted_within_one_piece_of_the_clip() {
+    let recording = clicks_at(&[4.0, 4.7, 5.4, 6.1]);
+    let steps = steps_with_breaks(&recording, &[0.0, 5.0, 5.0, 10.0], Some);
+
+    let found: Vec<(Action, u32, f64)> = steps
+        .iter()
+        .map(|step| (step.action, step.repeat, step.time))
+        .collect();
+    assert_eq!(
+        found,
+        [(Action::Click, 2, 4.0), (Action::Click, 2, 5.4)],
+        "{steps:?}"
+    );
+}
+
+#[test]
+fn a_press_on_a_break_belongs_to_the_piece_that_starts_there() {
+    let recording = clicks_at(&[4.9, 5.1]);
+    let actions = |breaks: &[f64]| -> Vec<Action> {
+        steps_with_breaks(&recording, breaks, Some)
+            .iter()
+            .map(|step| step.action)
+            .collect()
+    };
+
+    assert_eq!(actions(&[0.0, 4.0, 4.0, 10.0]), [Action::DoubleClick]);
+    assert_eq!(actions(&[0.0, 4.9, 4.9, 10.0]), [Action::DoubleClick]);
+    assert_eq!(actions(&[0.0, 5.2, 5.2, 10.0]), [Action::DoubleClick]);
+    assert_eq!(
+        actions(&[0.0, 5.1, 5.1, 10.0]),
+        [Action::Click, Action::Click]
+    );
 }
 
 #[test]

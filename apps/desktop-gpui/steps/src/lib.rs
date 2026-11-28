@@ -59,6 +59,10 @@ pub struct Source {
 pub struct ClipEvents<'a> {
     pub clip: u32,
     pub stopped_at: Option<f64>,
+    /// On the clip's clock, where each piece of this clip on the timeline
+    /// starts and ends. Presses on either side of one are separate actions:
+    /// the pieces may play in another order, or with other footage between.
+    pub breaks: &'a [f64],
     pub moves: &'a [PointerMove],
     pub buttons: &'a [ButtonEvent],
 }

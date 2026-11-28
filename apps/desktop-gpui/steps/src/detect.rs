@@ -31,7 +31,7 @@ pub fn clip_steps(events: &ClipEvents, output_time: impl Fn(f64) -> Option<f64>)
     if let Some(stopped_at) = events.stopped_at.filter(|time| time.is_finite()) {
         presses.retain(|press| press.time <= stopped_at - STOP_CLICK_WINDOW);
     }
-    pointer_steps(events.clip, &presses, output_time)
+    pointer_steps(events.clip, &presses, events.breaks, output_time)
 }
 
 pub fn build_guide(mut steps: Vec<Step>, markers: &[Marker], words: &[Word]) -> Guide {
@@ -84,9 +84,14 @@ fn same_spot(a: Option<Point>, b: Option<Point>) -> bool {
     }
 }
 
+fn parted(breaks: &[f64], earlier: f64, later: f64) -> bool {
+    breaks.iter().any(|at| earlier < *at && *at <= later)
+}
+
 fn pointer_steps(
     clip: u32,
     presses: &[Press],
+    breaks: &[f64],
     output_time: impl Fn(f64) -> Option<f64>,
 ) -> Vec<Step> {
     let mut steps = Vec::new();
@@ -99,7 +104,8 @@ fn pointer_steps(
                 && first.drag_to.is_none()
                 && next.drag_to.is_none()
                 && next.time - previous <= REPEAT_GAP
-                && same_spot(first.position, next.position);
+                && same_spot(first.position, next.position)
+                && !parted(breaks, previous, next.time);
             if !continues {
                 break;
             }

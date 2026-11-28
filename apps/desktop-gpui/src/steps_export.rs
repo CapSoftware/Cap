@@ -169,6 +169,18 @@ impl<'a> Playback<'a> {
         }
     }
 
+    fn breaks(&self, clip: u32) -> Vec<f64> {
+        match self {
+            Self::Edited(timeline) => timeline
+                .segments
+                .iter()
+                .filter(|segment| segment.recording_clip == clip && segment.end > segment.start)
+                .flat_map(|segment| [segment.start, segment.end])
+                .collect(),
+            Self::BackToBack(_) => Vec::new(),
+        }
+    }
+
     fn output_time(&self, clip: u32, source_time: f64) -> Option<f64> {
         match self {
             Self::Edited(timeline) => timeline.output_time_for_source(clip, source_time),
@@ -256,11 +268,13 @@ fn guide(project: &ProjectConfiguration, clips: &[Clip], playback: &Playback) ->
                 !(event.down && pointer_at(&moves, event.time).is_some_and(outside_frame))
             })
             .collect();
+        let breaks = playback.breaks(clip_index);
         let events = ClipEvents {
             clip: clip_index,
             stopped_at: (index + 1 == clips.len())
                 .then(|| source_length(clip))
                 .filter(|length| *length > 0.0),
+            breaks: &breaks,
             moves: &moves,
             buttons: &buttons,
         };

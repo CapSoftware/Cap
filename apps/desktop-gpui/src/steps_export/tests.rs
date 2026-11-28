@@ -610,6 +610,74 @@ fn a_sped_up_clip_keeps_its_clicks_apart() {
     );
 }
 
+fn split(project: &mut Project, at: f64) {
+    let timeline = project.config.timeline.as_mut().unwrap();
+    let mut after = timeline.segments[0].clone();
+    timeline.segments[0].end = at;
+    after.start = at;
+    timeline.segments.push(after);
+}
+
+fn placed_clicks(project: &Project) -> Vec<(Action, u32, f64, f64)> {
+    project_guide(&project.meta, &project.config)
+        .steps
+        .iter()
+        .map(|step| {
+            (
+                step.action,
+                step.repeat,
+                (step.time * 1000.0).round() / 1000.0,
+                step.source.time,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_double_click_is_read_when_no_split_falls_inside_it() {
+    let mut whole = project(&[(3.9, 0.5, 0.5), (4.1, 0.5, 0.5)]);
+    assert_eq!(placed_clicks(&whole), [(Action::DoubleClick, 1, 3.9, 3.9)]);
+    split(&mut whole, 5.0);
+    assert_eq!(placed_clicks(&whole), [(Action::DoubleClick, 1, 3.9, 3.9)]);
+}
+
+#[test]
+fn clicks_either_side_of_a_split_are_separate_steps() {
+    let mut project = project(&[(3.9, 0.5, 0.5), (4.1, 0.5, 0.5)]);
+    split(&mut project, 4.0);
+    assert_eq!(
+        placed_clicks(&project),
+        [(Action::Click, 1, 3.9, 3.9), (Action::Click, 1, 4.1, 4.1)]
+    );
+}
+
+#[test]
+fn clicks_in_reordered_pieces_each_keep_their_own_place_on_the_timeline() {
+    let mut project = project(&[(3.9, 0.5, 0.5), (4.1, 0.5, 0.5)]);
+    split(&mut project, 4.0);
+    let timeline = project.config.timeline.as_mut().unwrap();
+    timeline.segments.swap(0, 1);
+    let moved_back = ((timeline.segments[0].duration() + 3.9) * 1000.0).round() / 1000.0;
+
+    assert_eq!(
+        placed_clicks(&project),
+        [
+            (Action::Click, 1, 0.1, 4.1),
+            (Action::Click, 1, moved_back, 3.9)
+        ]
+    );
+
+    export(&project).unwrap();
+    let data = guide_data(&project);
+    let steps = data["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2, "{data}");
+    for step in steps {
+        assert_eq!(step["action"], "click", "{data}");
+        assert_eq!(step["repeat"], 1, "{data}");
+    }
+    assert_ne!(step_image(&project, 1), step_image(&project, 2));
+}
+
 #[test]
 fn a_shorter_re_export_leaves_no_screenshots_from_the_longer_one() {
     let longer = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25), (6.0, 0.5, 0.9)]);
