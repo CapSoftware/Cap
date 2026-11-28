@@ -4820,7 +4820,7 @@ impl EditorWindow {
             .transform
             .update_zoom(zoom * factor, origin, total);
         self.note_transform("zoom", Some(origin));
-        cx.notify();
+        self.invalidate_hover_chrome(cx);
     }
 
     fn minimap_mouse_down(
@@ -4874,7 +4874,7 @@ impl EditorWindow {
     /// straight onto a scroll offset that is negative when scrolled down), so
     /// it is negated back into the source's convention before any of the
     /// source's arithmetic touches it.
-    fn timeline_wheel(
+    pub(crate) fn timeline_wheel(
         &mut self,
         event: &gpui::ScrollWheelEvent,
         window: &mut Window,
@@ -4920,7 +4920,7 @@ impl EditorWindow {
             return;
         }
         self.note_transform("wheel", None);
-        cx.notify();
+        self.invalidate_hover_chrome(cx);
     }
 
     /// Pinch-to-zoom. In the webview a trackpad pinch arrives as `ctrl+wheel`
@@ -4942,7 +4942,7 @@ impl EditorWindow {
         let zoom = self.view.transform.zoom;
         self.view.transform.update_zoom(zoom + delta, origin, total);
         self.note_transform("pinch", Some(origin));
-        cx.notify();
+        self.invalidate_hover_chrome(cx);
     }
 
     pub(crate) fn invalidate_playback_chrome(
@@ -5151,10 +5151,17 @@ impl EditorWindow {
     /// and sidebar on every pointer move, because each section observes the
     /// editor. Notifying a child view marks its ancestors dirty instead, so
     /// this window and its canvas overlay still re-render while the untouched
-    /// sections are reused from their cache.
+    /// sections are reused from their cache. The timeline's zoom and scroll
+    /// are the same kind of state: the transport's zoom slider is their only
+    /// reader outside the timeline.
     fn invalidate_hover_chrome(&mut self, cx: &mut Context<Self>) {
-        self.timeline_view.update(cx, |_, cx| cx.notify());
+        self.invalidate_timeline(cx);
         self.transport_controls.update(cx, |_, cx| cx.notify());
+    }
+
+    /// State only the timeline section draws, such as a lane drag in flight.
+    fn invalidate_timeline(&mut self, cx: &mut Context<Self>) {
+        self.timeline_view.update(cx, |_, cx| cx.notify());
     }
 
     /// State only the sidebar draws, such as a caption model download's
@@ -5826,7 +5833,11 @@ impl EditorWindow {
             reorder.paused = true;
         }
         self.schedule_lane_reorder_autoscroll(window, cx);
-        cx.notify();
+        if promote {
+            cx.notify();
+        } else {
+            self.invalidate_timeline(cx);
+        }
     }
 
     fn lane_reorder_autoscroll_delta(&self) -> f32 {
@@ -5892,8 +5903,7 @@ impl EditorWindow {
         if let Some(reorder) = self.lane_reorder.as_mut() {
             reorder.target_index = target_index;
         }
-        cx.notify();
-        window.refresh();
+        self.invalidate_timeline(cx);
         self.schedule_lane_reorder_autoscroll(window, cx);
     }
 
@@ -12308,7 +12318,7 @@ impl EditorWindow {
         let origin = self.playhead;
         self.view.transform.apply_slider(fraction, origin, total);
         self.note_transform("slider", Some(origin));
-        cx.notify();
+        self.invalidate_hover_chrome(cx);
     }
 
     /// The player's transport bar: the clock on the left, the transport cluster
@@ -14022,7 +14032,7 @@ impl Render for EditorWindow {
                                             this.total_duration(),
                                         );
                                         this.view.preview_time = None;
-                                        cx.notify();
+                                        this.invalidate_hover_chrome(cx);
                                         return;
                                     }
                                     this.timeline_mouse_move(&event, window, cx);

@@ -23,6 +23,10 @@ const FOLLOW_START_FRACTION: f64 = 0.82;
 /// A generated transcript for a few minutes of speech, every segment of which
 /// has been selected once, so each has its three sidebar fields.
 const SEEDED_CAPTION_SEGMENTS: usize = 300;
+/// A trackpad pan's per-event step, and how many events go each way before
+/// it turns, so the zoomed-in view never pins against an end.
+const WHEEL_STEP_PX: f32 = 24.;
+const WHEEL_SWEEP_EVENTS: usize = 20;
 
 #[derive(Clone, Copy)]
 enum Scenario {
@@ -33,6 +37,7 @@ enum Scenario {
     Clean,
     CaptionDownload,
     TickFields,
+    Wheel,
 }
 
 impl Scenario {
@@ -45,6 +50,7 @@ impl Scenario {
             Self::Clean => "clean",
             Self::CaptionDownload => "caption-download",
             Self::TickFields => "tick-fields",
+            Self::Wheel => "wheel",
         }
     }
 
@@ -98,6 +104,13 @@ impl Scenario {
                 cx.notify();
                 view.toggle_play(window, cx);
             }
+            Self::Wheel => {
+                if view.playing {
+                    view.stop_for_measurement(cx);
+                }
+                view.bench_zoom_to(view.total_duration() / 4., cx);
+                view.seek_fraction(0.5, window, cx);
+            }
         }
     }
 
@@ -122,13 +135,34 @@ impl Scenario {
             Self::Clean => {}
             Self::CaptionDownload if self.control(iteration) => cx.notify(),
             Self::CaptionDownload => view.repaint_caption_download(cx),
+            Self::Wheel => {
+                let direction = if (iteration / WHEEL_SWEEP_EVENTS).is_multiple_of(2) {
+                    -1.
+                } else {
+                    1.
+                };
+                let event = gpui::ScrollWheelEvent {
+                    position: gpui::point(gpui::px(400.), gpui::px(600.)),
+                    delta: gpui::ScrollDelta::Pixels(gpui::point(
+                        gpui::px(direction * WHEEL_STEP_PX),
+                        gpui::px(0.),
+                    )),
+                    modifiers: gpui::Modifiers::default(),
+                    touch_phase: gpui::TouchPhase::Moved,
+                };
+                view.timeline_wheel(&event, window, cx);
+                if self.control(iteration) {
+                    cx.notify();
+                }
+            }
         }
     }
 
     /// Frames interleaved with the measured ones as an in-process reference:
-    /// a whole-editor notify, which is what a download tick used to cost.
+    /// a whole-editor notify, which is what a download tick or a timeline
+    /// wheel event used to cost.
     fn control(self, iteration: usize) -> bool {
-        matches!(self, Self::CaptionDownload) && iteration % 2 == 1
+        matches!(self, Self::CaptionDownload | Self::Wheel) && iteration % 2 == 1
     }
 }
 
@@ -225,6 +259,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         Scenario::Clean,
         Scenario::CaptionDownload,
         Scenario::TickFields,
+        Scenario::Wheel,
     ] {
         if handle
             .update(cx, |view, window, cx| scenario.prepare(view, window, cx))
