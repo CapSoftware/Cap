@@ -10,6 +10,7 @@ use crate::{theme::Theme, ui};
 enum ScrollAxis {
     Vertical,
     Horizontal,
+    Both,
 }
 
 const BEHAVIORS: [(OverscrollBehavior, &str, &str); 4] = [
@@ -451,6 +452,167 @@ impl ScrollRubberBandingTestView {
                     )
             }))
     }
+    fn render_both_demo(&self, theme: &Theme) -> impl IntoElement {
+        let accent: Hsla = rgb(Theme::SETTINGS_ACCENT).into();
+        let card_bg = theme.settings_card_bg();
+        let card_border = theme.settings_border();
+        let muted = theme.settings_muted();
+        let text = theme.settings_text();
+        let selected = self.behavior;
+
+        div()
+            .id("overscroll-demo-outer-2d")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_scroll()
+            .overscroll_behavior(OverscrollBehavior::Auto)
+            .track_scroll(&self.outer_scroll)
+            .rounded(px(12.))
+            .bg(card_bg)
+            .border_1()
+            .border_color(card_border)
+            .p(px(16.))
+            .child(
+                div()
+                    .w(px(1200.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(muted)
+                            .child("OUTER 2D SCROLL CANVAS (AUTO · CONCURRENT X & Y)"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_start()
+                            .gap(px(14.))
+                            .child(
+                                div()
+                                    .w(px(280.))
+                                    .h(px(260.))
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(8.))
+                                    .p(px(10.))
+                                    .rounded(px(10.))
+                                    .bg(theme.settings_content_bg())
+                                    .border_2()
+                                    .border_color(accent.opacity(0.55))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(accent)
+                                            .child("INNER 2D SCROLL CANVAS"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("overscroll-demo-inner-2d")
+                                            .flex_1()
+                                            .w_full()
+                                            .min_w_0()
+                                            .min_h_0()
+                                            .overflow_scroll()
+                                            .overscroll_behavior(selected)
+                                            .track_scroll(&self.inner_scroll)
+                                            .child(
+                                                div()
+                                                    .w(px(620.))
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap(px(8.))
+                                                    .children((1..=6).map(|row| {
+                                                        div()
+                                                            .flex()
+                                                            .flex_row()
+                                                            .gap(px(8.))
+                                                            .children((1..=5).map(|col| {
+                                                                div()
+                                                                    .w(px(112.))
+                                                                    .h(px(64.))
+                                                                    .flex_shrink_0()
+                                                                    .p(px(8.))
+                                                                    .rounded(px(7.))
+                                                                    .bg(card_bg)
+                                                                    .border_1()
+                                                                    .border_color(card_border)
+                                                                    .flex()
+                                                                    .flex_col()
+                                                                    .justify_between()
+                                                                    .child(
+                                                                        div()
+                                                                            .text_size(px(12.))
+                                                                            .font_weight(
+                                                                                FontWeight::MEDIUM,
+                                                                            )
+                                                                            .text_color(text)
+                                                                            .child(format!(
+                                                                                "Cell {row},{col}"
+                                                                            )),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .text_size(px(10.))
+                                                                            .text_color(muted)
+                                                                            .child("2D inner"),
+                                                                    )
+                                                            }))
+                                                    })),
+                                            ),
+                                    ),
+                            )
+                            .children((1..=5).map(|col| {
+                                div()
+                                    .w(px(160.))
+                                    .h(px(260.))
+                                    .flex_shrink_0()
+                                    .p(px(12.))
+                                    .rounded(px(10.))
+                                    .bg(theme.settings_content_bg())
+                                    .border_1()
+                                    .border_color(card_border)
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(text)
+                                            .child(format!("Outer Col {col}")),
+                                    )
+                            })),
+                    )
+                    .children((2..=5).map(|row| {
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(12.))
+                            .children((1..=6).map(|col| {
+                                div()
+                                    .w(px(180.))
+                                    .h(px(110.))
+                                    .flex_shrink_0()
+                                    .p(px(12.))
+                                    .rounded(px(10.))
+                                    .bg(theme.settings_content_bg())
+                                    .border_1()
+                                    .border_color(card_border)
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(text)
+                                            .child(format!("Outer {row},{col}")),
+                                    )
+                            }))
+                    })),
+            )
+    }
 }
 
 impl Render for ScrollRubberBandingTestView {
@@ -462,19 +624,30 @@ impl Render for ScrollRubberBandingTestView {
         let card_border = theme.settings_border();
         let text = theme.settings_text();
         let muted = theme.settings_muted();
-        let thumb_fill = if theme.is_dark() {
-            rgb(0xffffff).into()
-        } else {
-            rgb(0xffffff).into()
-        };
+        let thumb_fill: Hsla = rgb(0xffffff).into();
 
         let selected = self.behavior;
         let axis = self.axis;
         let outer_offset = self.outer_scroll.offset();
         let inner_offset = self.inner_scroll.offset();
-        let (axis_label, outer_val, inner_val) = match axis {
-            ScrollAxis::Vertical => ("y", f32::from(outer_offset.y), f32::from(inner_offset.y)),
-            ScrollAxis::Horizontal => ("x", f32::from(outer_offset.x), f32::from(inner_offset.x)),
+        let offset_readout = match axis {
+            ScrollAxis::Vertical => format!(
+                "Outer y: {:.1}px   ·   Inner y: {:.1}px",
+                f32::from(outer_offset.y),
+                f32::from(inner_offset.y)
+            ),
+            ScrollAxis::Horizontal => format!(
+                "Outer x: {:.1}px   ·   Inner x: {:.1}px",
+                f32::from(outer_offset.x),
+                f32::from(inner_offset.x)
+            ),
+            ScrollAxis::Both => format!(
+                "Outer ({:.1}, {:.1})   ·   Inner ({:.1}, {:.1})",
+                f32::from(outer_offset.x),
+                f32::from(outer_offset.y),
+                f32::from(inner_offset.x),
+                f32::from(inner_offset.y)
+            ),
         };
 
         div()
@@ -508,9 +681,7 @@ impl Render for ScrollRubberBandingTestView {
                                 div()
                                     .text_size(px(11.))
                                     .text_color(muted)
-                                    .child(format!(
-                                        "Outer {axis_label}: {outer_val:.1}px   ·   Inner {axis_label}: {inner_val:.1}px"
-                                    )),
+                                    .child(offset_readout),
                             ),
                     )
                     .child(
@@ -531,16 +702,19 @@ impl Render for ScrollRubberBandingTestView {
                                             "Horizontal",
                                             axis == ScrollAxis::Horizontal,
                                         ),
+                                        ui::SegmentOption::new("Both", axis == ScrollAxis::Both),
                                     ],
                                 )
-                                .on_select(cx.listener(|this, index, _, cx| {
-                                    let next = if *index == 0 {
-                                        ScrollAxis::Vertical
-                                    } else {
-                                        ScrollAxis::Horizontal
-                                    };
-                                    this.set_axis(next, cx);
-                                })),
+                                .on_select(cx.listener(
+                                    |this, index, _, cx| {
+                                        let next = match *index {
+                                            0 => ScrollAxis::Vertical,
+                                            1 => ScrollAxis::Horizontal,
+                                            _ => ScrollAxis::Both,
+                                        };
+                                        this.set_axis(next, cx);
+                                    },
+                                )),
                             )
                             .child(
                                 ui::Button::settings(
@@ -735,10 +909,13 @@ impl Render for ScrollRubberBandingTestView {
                             ),
                     )
                     .child(match axis {
-                        ScrollAxis::Vertical => self.render_vertical_demo(&theme).into_any_element(),
+                        ScrollAxis::Vertical => {
+                            self.render_vertical_demo(&theme).into_any_element()
+                        }
                         ScrollAxis::Horizontal => {
                             self.render_horizontal_demo(&theme).into_any_element()
                         }
+                        ScrollAxis::Both => self.render_both_demo(&theme).into_any_element(),
                     }),
             )
             .when_some(self.drag.active(), |this, active_index| {

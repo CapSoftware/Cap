@@ -1,12 +1,13 @@
 diff --git a/crates/gpui/Cargo.toml b/crates/gpui/Cargo.toml
-index 0702650..36f6816 100644
+index 0702650..484332a 100644
 --- a/crates/gpui/Cargo.toml
 +++ b/crates/gpui/Cargo.toml
-@@ -39,6 +39,7 @@ screen-capture = [
+@@ -39,6 +39,8 @@ screen-capture = [
  windows-manifest = ["dep:embed-resource"]
  input-latency-histogram = ["dep:hdrhistogram"]
  profiler = []
 +scroll-rubber-banding = []
++scroll-rubber-banding-tuning = ["scroll-rubber-banding"]
  
  [lib]
  path = "src/gpui.rs"
@@ -23,10 +24,10 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..0f80040 100644
+index c02bd16..8006c46 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
-@@ -43,6 +43,11 @@ use std::{
+@@ -43,6 +43,32 @@ use std::{
      time::Duration,
  };
  
@@ -35,25 +36,35 @@ index c02bd16..0f80040 100644
 +    static SCROLL_NEST_DEPTH: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 +}
 +
++#[cfg(feature = "scroll-rubber-banding")]
++struct ScrollNestGuard((usize, usize));
++
++#[cfg(feature = "scroll-rubber-banding")]
++impl ScrollNestGuard {
++    fn push(overflow: Point<Overflow>) -> Self {
++        let prev = SCROLL_NEST_DEPTH.get();
++        let dx = usize::from(overflow.x == Overflow::Scroll);
++        let dy = usize::from(overflow.y == Overflow::Scroll);
++        SCROLL_NEST_DEPTH.set((prev.0 + dx, prev.1 + dy));
++        Self(prev)
++    }
++}
++
++#[cfg(feature = "scroll-rubber-banding")]
++impl Drop for ScrollNestGuard {
++    fn drop(&mut self) {
++        SCROLL_NEST_DEPTH.set(self.0);
++    }
++}
++
  use super::ImageCacheProvider;
  
  const DRAG_THRESHOLD: f64 = 2.;
-@@ -997,6 +1002,56 @@ pub trait InteractiveElement: Sized {
+@@ -997,6 +1023,45 @@ pub trait InteractiveElement: Sized {
          self.interactivity().capture_pinch(listener);
          self
      }
-+    /// Enable or disable macOS-style rubber-band overscroll on both axes.
-+    #[cfg(feature = "scroll-rubber-banding")]
-+    fn scroll_rubber_band(self, enabled: bool) -> Self {
-+        let behavior = if enabled {
-+            crate::OverscrollBehavior::Auto
-+        } else {
-+            crate::OverscrollBehavior::None
-+        };
-+        self.overscroll_behavior(behavior)
-+    }
-+
-+    /// Set overscroll rubber-banding behavior on both axes (CSS `overscroll-behavior`).
++    /// Set overscroll rubber-banding behavior on both axes.
 +    #[cfg(feature = "scroll-rubber-banding")]
 +    fn overscroll_behavior(mut self, behavior: crate::OverscrollBehavior) -> Self {
 +        self.interactivity().overscroll_behavior = point(behavior, behavior);
@@ -95,7 +106,7 @@ index c02bd16..0f80040 100644
      /// Capture the given action, before normal action dispatch can fire.
      /// The fluent API equivalent to [`Interactivity::capture_action`].
      ///
-@@ -1963,6 +2018,10 @@ pub struct Interactivity {
+@@ -1963,6 +2028,10 @@ pub struct Interactivity {
      pub(crate) tracked_scroll_handle: Option<ScrollHandle>,
      pub(crate) scroll_anchor: Option<ScrollAnchor>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
@@ -106,7 +117,7 @@ index c02bd16..0f80040 100644
      pub(crate) group: Option<SharedString>,
      /// The base style of the element, before any modifications are applied
      /// by focus, active, etc.
-@@ -2097,6 +2156,18 @@ impl Interactivity {
+@@ -2097,6 +2166,18 @@ impl Interactivity {
                      );
                  }
  
@@ -125,7 +136,7 @@ index c02bd16..0f80040 100644
                  let style = self.compute_style_internal(None, element_state.as_mut(), window, cx);
                  let layout_id = f(style, window, cx);
                  (layout_id, element_state)
-@@ -2269,13 +2340,80 @@ impl Interactivity {
+@@ -2269,13 +2350,84 @@ impl Interactivity {
                  .max(&Default::default());
              // Clamp scroll offset in case scroll max is smaller now (e.g., if children
              // were removed or the bounds became larger).
@@ -184,9 +195,13 @@ index c02bd16..0f80040 100644
 +                    if keep_animating {
 +                        window.request_animation_frame();
 +                    }
-+                } else if rb.x.raw_overscroll == 0.0 && rb.y.raw_overscroll == 0.0 {
-+                    scroll_offset.x = scroll_offset.x.clamp(-scroll_max.x, px(0.));
-+                    scroll_offset.y = scroll_offset.y.clamp(-scroll_max.y, px(0.));
++                } else {
++                    if rb.x.raw_overscroll == 0.0 {
++                        scroll_offset.x = scroll_offset.x.clamp(-scroll_max.x, px(0.));
++                    }
++                    if rb.y.raw_overscroll == 0.0 {
++                        scroll_offset.y = scroll_offset.y.clamp(-scroll_max.y, px(0.));
++                    }
 +                }
 +                rb.last_applied_offset = Some(*scroll_offset);
              } else {
@@ -210,34 +225,20 @@ index c02bd16..0f80040 100644
              }
  
              if let Some(mut scroll_handle_state) = tracked_scroll_handle {
-@@ -2406,8 +2544,26 @@ impl Interactivity {
+@@ -2406,6 +2558,12 @@ impl Interactivity {
                                              }
                                          }
  
 +                                        #[cfg(feature = "scroll-rubber-banding")]
-+                                        let prev_scroll_depth = if self.scroll_offset.is_some() {
-+                                            let prev = SCROLL_NEST_DEPTH.get();
-+                                            let dx =
-+                                                usize::from(style.overflow.x == Overflow::Scroll);
-+                                            let dy =
-+                                                usize::from(style.overflow.y == Overflow::Scroll);
-+                                            SCROLL_NEST_DEPTH.set((prev.0 + dx, prev.1 + dy));
-+                                            Some(prev)
-+                                        } else {
-+                                            None
-+                                        };
++                                        let _scroll_nest_guard = self
++                                            .scroll_offset
++                                            .is_some()
++                                            .then(|| ScrollNestGuard::push(style.overflow));
 +
                                          f(&style, window, cx);
  
-+                                        #[cfg(feature = "scroll-rubber-banding")]
-+                                        if let Some(prev) = prev_scroll_depth {
-+                                            SCROLL_NEST_DEPTH.set(prev);
-+                                        }
-+
                                          if let Some(_hitbox) = hitbox {
-                                             #[cfg(any(feature = "inspector", debug_assertions))]
-                                             window.insert_inspector_hitbox(
-@@ -3091,17 +3247,30 @@ impl Interactivity {
+@@ -3091,17 +3249,30 @@ impl Interactivity {
              let line_height = window.line_height();
              let hitbox = hitbox.clone();
              let current_view = window.current_view();
@@ -269,7 +270,7 @@ index c02bd16..0f80040 100644
                              delta_x = delta.y;
                          }
                      }
-@@ -3109,21 +3278,172 @@ impl Interactivity {
+@@ -3109,21 +3280,211 @@ impl Interactivity {
                      if overflow.y == Overflow::Scroll {
                          if !delta.y.is_zero() {
                              delta_y = delta.y;
@@ -299,15 +300,19 @@ index c02bd16..0f80040 100644
 +                            } else {
 +                                delta_x = Pixels::ZERO;
 +                            }
-                         }
-                     }
--                    scroll_offset.y += delta_y;
--                    scroll_offset.x += delta_x;
++                        }
++                    }
 +                    #[cfg(feature = "scroll-rubber-banding")]
 +                    if let Some(rb_state) = rubber_band_state.as_ref()
 +                        && event.is_precise_trackpad_scroll()
 +                    {
 +                        let mut rb = rb_state.borrow_mut();
++                        if rb
++                            .last_applied_offset
++                            .is_some_and(|last| last != *scroll_offset)
++                        {
++                            rb.reset_motion();
++                        }
 +                        let config = crate::rubber_band_config();
 +                        let now = std::time::Instant::now();
 +                        let dt = rb
@@ -315,20 +320,35 @@ index c02bd16..0f80040 100644
 +                            .map(|last| now.saturating_duration_since(last).as_secs_f32())
 +                            .unwrap_or(1.0 / 60.0);
 +                        rb.last_event_at = Some(now);
-+                        let scroll_phase = event.effective_scroll_phase();
++                        let scroll_phase = event.scroll_phase;
 +                        let w: f32 = rb.bounds_size.width.into();
 +                        let h: f32 = rb.bounds_size.height.into();
 +                        if matches!(
 +                            scroll_phase,
 +                            crate::ScrollPhase::Began | crate::ScrollPhase::MayBegin
 +                        ) {
-+                            if overscroll_behavior.x == crate::OverscrollBehavior::Contain {
++                            if overscroll_behavior.x == crate::OverscrollBehavior::Contain
++                                || (!nested_x
++                                    && matches!(
++                                        overscroll_behavior.x,
++                                        crate::OverscrollBehavior::Auto
++                                            | crate::OverscrollBehavior::Chain
++                                    ))
++                            {
 +                                rb.x.catch_spring(w, now, &config);
 +                            }
-+                            if overscroll_behavior.y == crate::OverscrollBehavior::Contain {
++                            if overscroll_behavior.y == crate::OverscrollBehavior::Contain
++                                || (!nested_y
++                                    && matches!(
++                                        overscroll_behavior.y,
++                                        crate::OverscrollBehavior::Auto
++                                            | crate::OverscrollBehavior::Chain
++                                    ))
++                            {
 +                                rb.y.catch_spring(h, now, &config);
 +                            }
-+                            rb.momentum_bounced = false;
++                            rb.x.momentum_bounced = false;
++                            rb.y.momentum_bounced = false;
 +                            rb.chain_to_parent_x = None;
 +                            rb.chain_to_parent_y = None;
 +                        }
@@ -340,8 +360,12 @@ index c02bd16..0f80040 100644
 +                        let dx: f32 = delta_x.into();
 +                        let dy: f32 = delta_y.into();
 +
-+                        let was_springing = rb.is_springing();
-+                        let momentum_locked = is_momentum && (was_springing || rb.momentum_bounced);
++                        let was_springing_x = rb.x.spring.is_some();
++                        let was_springing_y = rb.y.spring.is_some();
++                        let momentum_locked_x =
++                            is_momentum && (was_springing_x || rb.x.momentum_bounced);
++                        let momentum_locked_y =
++                            is_momentum && (was_springing_y || rb.y.momentum_bounced);
 +                        let mut x_axis = rb.x;
 +                        let mut y_axis = rb.y;
 +                        let mut chain_x = rb.chain_to_parent_x;
@@ -357,7 +381,7 @@ index c02bd16..0f80040 100644
 +                            w,
 +                            dt,
 +                            is_momentum,
-+                            momentum_locked,
++                            momentum_locked_x,
 +                            now,
 +                            &config,
 +                        );
@@ -372,7 +396,7 @@ index c02bd16..0f80040 100644
 +                            h,
 +                            dt,
 +                            is_momentum,
-+                            momentum_locked,
++                            momentum_locked_y,
 +                            now,
 +                            &config,
 +                        );
@@ -383,10 +407,15 @@ index c02bd16..0f80040 100644
 +                        scroll_offset.x = px(ox);
 +                        scroll_offset.y = px(oy);
 +
-+                        if !was_springing && rb.is_springing() {
-+                            if is_momentum {
-+                                rb.momentum_bounced = true;
-+                            }
++                        let started_spring_x = !was_springing_x && rb.x.spring.is_some();
++                        let started_spring_y = !was_springing_y && rb.y.spring.is_some();
++                        if started_spring_x && is_momentum {
++                            rb.x.momentum_bounced = true;
++                        }
++                        if started_spring_y && is_momentum {
++                            rb.y.momentum_bounced = true;
++                        }
++                        if started_spring_x || started_spring_y {
 +                            cx.notify(current_view);
 +                        }
 +
@@ -399,20 +428,29 @@ index c02bd16..0f80040 100644
 +                            crate::ScrollPhase::Ended | crate::ScrollPhase::Cancelled
 +                        );
 +                        if momentum_ended {
-+                            rb.momentum_bounced = false;
++                            rb.x.momentum_bounced = false;
++                            rb.y.momentum_bounced = false;
 +                            rb.chain_to_parent_x = None;
 +                            rb.chain_to_parent_y = None;
 +                        }
-+                        if (gesture_ended || momentum_ended) && rb.start_springs(now, &config) {
++                        if gesture_ended || momentum_ended {
++                            let (sx, sy) = rb.start_springs(now, &config);
 +                            if gesture_ended {
-+                                rb.momentum_bounced = true;
++                                if sx {
++                                    rb.x.momentum_bounced = true;
++                                }
++                                if sy {
++                                    rb.y.momentum_bounced = true;
++                                }
 +                            }
-+                            cx.notify(current_view);
++                            if sx || sy {
++                                cx.notify(current_view);
++                            }
 +                        }
 +                        rb.last_applied_offset = Some(*scroll_offset);
 +                        if stopped_x || stopped_y {
 +                            cx.stop_propagation();
-+                        }
+                         }
 +                    } else {
 +                        scroll_offset.y += delta_y;
 +                        scroll_offset.x += delta_x;
@@ -442,7 +480,9 @@ index c02bd16..0f80040 100644
 +                    {
 +                        scroll_offset.y += delta_y;
 +                        scroll_offset.x += delta_x;
-+                    }
+                     }
+-                    scroll_offset.y += delta_y;
+-                    scroll_offset.x += delta_x;
                      if *scroll_offset != old_scroll_offset {
                          cx.notify(current_view);
 +                        #[cfg(feature = "scroll-rubber-banding")]
@@ -450,7 +490,7 @@ index c02bd16..0f80040 100644
                      }
                  }
              });
-@@ -3360,6 +3680,8 @@ pub struct InteractiveElementState {
+@@ -3360,6 +3721,8 @@ pub struct InteractiveElementState {
      /// blur). `None` means no activation key is pending.
      pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
@@ -482,7 +522,7 @@ index a143fab..2b8f282 100644
  pub use shared_uri::*;
  use std::{any::Any, future::Future};
 diff --git a/crates/gpui/src/interactive.rs b/crates/gpui/src/interactive.rs
-index 1feee49..35cb872 100644
+index 1feee49..1c95a05 100644
 --- a/crates/gpui/src/interactive.rs
 +++ b/crates/gpui/src/interactive.rs
 @@ -508,6 +508,24 @@ impl MouseMoveEvent {
@@ -510,7 +550,7 @@ index 1feee49..35cb872 100644
  /// A mouse wheel event from the platform.
  #[derive(Clone, Debug, Default)]
  pub struct ScrollWheelEvent {
-@@ -522,6 +540,39 @@ pub struct ScrollWheelEvent {
+@@ -522,6 +540,21 @@ pub struct ScrollWheelEvent {
  
      /// The phase of the touch event.
      pub touch_phase: TouchPhase,
@@ -523,65 +563,45 @@ index 1feee49..35cb872 100644
 +}
 +
 +impl ScrollWheelEvent {
-+    /// Returns the effective scroll gesture phase, falling back to `touch_phase`
-+    /// on non-macOS platforms where precise trackpad events report `TouchPhase`.
-+    pub fn effective_scroll_phase(&self) -> ScrollPhase {
-+        if self.scroll_phase != ScrollPhase::None || self.momentum_phase != ScrollPhase::None {
-+            return self.scroll_phase;
-+        }
-+        if !cfg!(target_os = "macos") && matches!(self.delta, ScrollDelta::Pixels(_)) {
-+            return match self.touch_phase {
-+                TouchPhase::Started => ScrollPhase::Began,
-+                TouchPhase::Moved => ScrollPhase::Changed,
-+                TouchPhase::Ended => ScrollPhase::Ended,
-+                TouchPhase::Cancelled => ScrollPhase::Cancelled,
-+            };
-+        }
-+        ScrollPhase::None
-+    }
-+
 +    /// Returns true if this event originated from a precise trackpad gesture or momentum phase
 +    /// rather than a discrete mouse wheel.
 +    pub fn is_precise_trackpad_scroll(&self) -> bool {
 +        matches!(self.delta, ScrollDelta::Pixels(_))
-+            && (self.effective_scroll_phase() != ScrollPhase::None
-+                || self.momentum_phase != ScrollPhase::None)
++            && (self.scroll_phase != ScrollPhase::None || self.momentum_phase != ScrollPhase::None)
 +    }
  }
  
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..4043dd9
+index 0000000..6da0667
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,966 @@
+@@ -0,0 +1,1092 @@
 +use std::f32::consts::PI;
++#[cfg(feature = "scroll-rubber-banding-tuning")]
 +use std::sync::RwLock;
 +use std::time::Instant;
 +
 +use crate::{Pixels, Point, Size};
 +
 +/// Controls whether a scrollable container bounces past its scroll bounds and
-+/// whether scroll gestures chain to scrollable ancestors (CSS `overscroll-behavior`).
++/// whether scroll gestures chain to scrollable ancestors.
 +#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 +pub enum OverscrollBehavior {
-+    /// WebKit / CSS `overscroll-behavior: auto`: rubber-bands locally when a gesture
-+    /// starts inside this container (never chaining mid-gesture or during momentum),
-+    /// and chains to a scrollable ancestor when a new gesture starts already at the boundary.
++    /// Rubber-bands locally when a gesture starts inside this container (never
++    /// chaining mid-gesture or during momentum), and chains to a scrollable
++    /// ancestor when a new gesture starts already at the boundary.
 +    #[default]
 +    Auto,
-+    /// Only allow rubber-band overscroll when content overflows on that axis;
-+    /// uses the same gesture-latched chaining semantics as `Auto`.
-+    WhenScrollable,
-+    /// CSS `overscroll-behavior: contain`: rubber-bands locally at boundaries and
-+    /// never chains scroll gestures to scrollable ancestors.
++    /// Rubber-bands locally at boundaries and never chains scroll gestures to
++    /// scrollable ancestors.
 +    Contain,
-+    /// Immediately chain excess scroll to a scrollable ancestor once a boundary is reached,
-+    /// even within the same gesture.
++    /// Immediately chains excess scroll to a scrollable ancestor once a boundary
++    /// is reached, even within the same gesture.
 +    Chain,
-+    /// CSS `overscroll-behavior: none`: disables both rubber-band overscroll and
-+    /// scroll chaining to scrollable ancestors.
++    /// Disables both rubber-band overscroll and scroll chaining to scrollable
++    /// ancestors.
 +    None,
 +}
 +
@@ -621,16 +641,25 @@ index 0000000..4043dd9
 +    }
 +}
 +
++#[cfg(feature = "scroll-rubber-banding-tuning")]
 +static RUBBER_BAND_CONFIG: RwLock<RubberBandConfig> = RwLock::new(RubberBandConfig::DEFAULT);
 +
-+/// Reads the process-wide rubber-band tuning parameters applied to all scroll views.
++/// Reads the rubber-band tuning parameters applied to all scroll views.
++#[cfg(feature = "scroll-rubber-banding-tuning")]
 +pub fn rubber_band_config() -> RubberBandConfig {
 +    *RUBBER_BAND_CONFIG
 +        .read()
 +        .unwrap_or_else(|poisoned| poisoned.into_inner())
 +}
 +
++/// Reads the rubber-band tuning parameters applied to all scroll views.
++#[cfg(not(feature = "scroll-rubber-banding-tuning"))]
++pub const fn rubber_band_config() -> RubberBandConfig {
++    RubberBandConfig::DEFAULT
++}
++
 +/// Overrides the process-wide rubber-band tuning parameters at runtime for live calibration.
++#[cfg(feature = "scroll-rubber-banding-tuning")]
 +pub fn set_rubber_band_config(config: RubberBandConfig) {
 +    if let Ok(mut guard) = RUBBER_BAND_CONFIG.write() {
 +        *guard = config;
@@ -720,6 +749,7 @@ index 0000000..4043dd9
 +pub(crate) struct RubberBandAxisState {
 +    pub(crate) raw_overscroll: f32,
 +    pub(crate) spring: Option<SpringState>,
++    pub(crate) momentum_bounced: bool,
 +}
 +
 +impl RubberBandAxisState {
@@ -774,7 +804,6 @@ index 0000000..4043dd9
 +    pub(crate) y: RubberBandAxisState,
 +    pub(crate) scroll_max: Point<Pixels>,
 +    pub(crate) bounds_size: Size<Pixels>,
-+    pub(crate) momentum_bounced: bool,
 +    pub(crate) last_event_at: Option<Instant>,
 +    pub(crate) chain_to_parent_x: Option<bool>,
 +    pub(crate) chain_to_parent_y: Option<bool>,
@@ -786,21 +815,26 @@ index 0000000..4043dd9
 +    pub(crate) fn reset_motion(&mut self) {
 +        self.x.raw_overscroll = 0.0;
 +        self.x.spring = None;
++        self.x.momentum_bounced = false;
 +        self.y.raw_overscroll = 0.0;
 +        self.y.spring = None;
-+        self.momentum_bounced = false;
++        self.y.momentum_bounced = false;
 +        self.chain_to_parent_x = None;
 +        self.chain_to_parent_y = None;
 +    }
 +
-+    pub(crate) fn start_springs(&mut self, now: Instant, config: &RubberBandConfig) -> bool {
++    pub(crate) fn start_springs(
++        &mut self,
++        now: Instant,
++        config: &RubberBandConfig,
++    ) -> (bool, bool) {
 +        let x = self
 +            .x
 +            .start_spring(self.bounds_size.width.into(), now, config);
 +        let y = self
 +            .y
 +            .start_spring(self.bounds_size.height.into(), now, config);
-+        x || y
++        (x, y)
 +    }
 +
 +    pub(crate) fn is_springing(&self) -> bool {
@@ -940,7 +974,7 @@ index 0000000..4043dd9
 +            }
 +            true
 +        }
-+        OverscrollBehavior::Auto | OverscrollBehavior::WhenScrollable => {
++        OverscrollBehavior::Auto => {
 +            if chain_to_parent.is_none() {
 +                let can_scroll = max_scroll > 0.0
 +                    && ((delta > 0.0 && *offset < -0.5)
@@ -956,10 +990,6 @@ index 0000000..4043dd9
 +                return false;
 +            }
 +            if !momentum_locked {
-+                let allow_overscroll = match behavior {
-+                    OverscrollBehavior::Auto => true,
-+                    _ => max_scroll > 0.0,
-+                };
 +                apply_scroll_delta(
 +                    axis,
 +                    offset,
@@ -968,7 +998,7 @@ index 0000000..4043dd9
 +                    dim,
 +                    dt,
 +                    is_momentum,
-+                    allow_overscroll,
++                    max_scroll > 0.0,
 +                    now,
 +                    config,
 +                );
@@ -989,6 +1019,7 @@ index 0000000..4043dd9
 +                }
 +            } else {
 +                if !momentum_locked {
++                    axis.catch_spring(dim, now, config);
 +                    apply_scroll_delta(
 +                        axis,
 +                        offset,
@@ -1521,7 +1552,156 @@ index 0000000..4043dd9
 +            "new gesture at inner edge must chain to outer, got {ox_after}"
 +        );
 +    }
++
++    #[crate::test]
++    fn concurrent_2d_scroll_keeps_axes_independent_and_discrete_wheel_respects_contain(
++        cx: &mut crate::TestAppContext,
++    ) {
++        use crate::{
++            Context, InteractiveElement, IntoElement, Modifiers, ParentElement, Render,
++            ScrollDelta, ScrollHandle, ScrollPhase, ScrollWheelEvent, StatefulInteractiveElement,
++            Styled, TouchPhase, Window, div, point, px,
++        };
++
++        struct Grid2D {
++            inner_behavior: OverscrollBehavior,
++            outer: ScrollHandle,
++            inner: ScrollHandle,
++        }
++
++        impl Render for Grid2D {
++            fn render(
++                &mut self,
++                _window: &mut Window,
++                _cx: &mut Context<Self>,
++            ) -> impl IntoElement {
++                div().w(px(500.)).h(px(400.)).flex().child(
++                    div()
++                        .id("outer-2d")
++                        .size_full()
++                        .overflow_scroll()
++                        .overscroll_behavior(OverscrollBehavior::Auto)
++                        .track_scroll(&self.outer)
++                        .child(
++                            div().w(px(1000.)).h(px(900.)).flex_shrink_0().child(
++                                div()
++                                    .id("inner-2d")
++                                    .w(px(260.))
++                                    .h(px(220.))
++                                    .overflow_scroll()
++                                    .overscroll_behavior(self.inner_behavior)
++                                    .track_scroll(&self.inner)
++                                    .child(div().w(px(600.)).h(px(600.)).flex_shrink_0()),
++                            ),
++                        ),
++                )
++            }
++        }
++
++        let (view, cx) = cx.add_window_view(|_, _| Grid2D {
++            inner_behavior: OverscrollBehavior::Contain,
++            outer: ScrollHandle::new(),
++            inner: ScrollHandle::new(),
++        });
++        cx.run_until_parked();
++
++        let (pt, inner_max) =
++            view.read_with(cx, |v, _| (v.inner.bounds().center(), v.inner.max_offset()));
++        assert!(f32::from(inner_max.x) > 100.0 && f32::from(inner_max.y) > 100.0);
++
++        view.update(cx, |v, cx| {
++            v.inner.set_offset(point(px(0.), px(-100.)));
++            cx.notify();
++        });
++        cx.run_until_parked();
++
++        cx.simulate_event(ScrollWheelEvent {
++            position: pt,
++            delta: ScrollDelta::Pixels(point(px(60.), px(0.))),
++            modifiers: Modifiers::none(),
++            touch_phase: TouchPhase::Moved,
++            scroll_phase: ScrollPhase::None,
++            momentum_phase: ScrollPhase::Began,
++        });
++        cx.simulate_event(ScrollWheelEvent {
++            position: pt,
++            delta: ScrollDelta::Pixels(point(px(0.), px(-90.))),
++            modifiers: Modifiers::none(),
++            touch_phase: TouchPhase::Moved,
++            scroll_phase: ScrollPhase::None,
++            momentum_phase: ScrollPhase::Changed,
++        });
++        cx.run_until_parked();
++
++        let (ix, iy, ox, oy) = view.read_with(cx, |v, _| {
++            (
++                f32::from(v.inner.offset().x),
++                f32::from(v.inner.offset().y),
++                f32::from(v.outer.offset().x),
++                f32::from(v.outer.offset().y),
++            )
++        });
++        assert!(ix > 0.0, "X should bounce past 0, got {ix}");
++        assert!(
++            iy < -180.0,
++            "Y momentum must keep scrolling while X bounces, got {iy}"
++        );
++        assert_eq!((ox, oy), (0.0, 0.0));
++
++        view.update(cx, |v, cx| {
++            v.inner.set_offset(point(px(0.), px(0.)));
++            cx.notify();
++        });
++        cx.run_until_parked();
++
++        cx.simulate_event(ScrollWheelEvent {
++            position: pt,
++            delta: ScrollDelta::Lines(point(0.0, 3.0)),
++            modifiers: Modifiers::none(),
++            touch_phase: TouchPhase::Moved,
++            scroll_phase: ScrollPhase::None,
++            momentum_phase: ScrollPhase::None,
++        });
++        cx.run_until_parked();
++
++        let (ox_wheel, oy_wheel) = view.read_with(cx, |v, _| {
++            (f32::from(v.outer.offset().x), f32::from(v.outer.offset().y))
++        });
++        assert_eq!((ox_wheel, oy_wheel), (0.0, 0.0));
++    }
 +}
+diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
+index c52fd34..766a2bd 100644
+--- a/crates/gpui_linux/src/linux/wayland/client.rs
++++ b/crates/gpui_linux/src/linux/wayland/client.rs
+@@ -2298,6 +2298,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+                                 delta: ScrollDelta::Pixels(continuous),
+                                 modifiers: state.modifiers,
+                                 touch_phase: TouchPhase::Moved,
++                                ..Default::default()
+                             });
+                             drop(state);
+                             window.handle_input(input);
+@@ -2310,6 +2311,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+                             delta: ScrollDelta::Lines(discrete),
+                             modifiers: state.modifiers,
+                             touch_phase: TouchPhase::Moved,
++                            ..Default::default()
+                         });
+                         drop(state);
+                         window.handle_input(input);
+diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
+index 701ae28..9dea289 100644
+--- a/crates/gpui_linux/src/linux/x11/client.rs
++++ b/crates/gpui_linux/src/linux/x11/client.rs
+@@ -2524,6 +2524,7 @@ fn make_scroll_wheel_event(
+         delta: ScrollDelta::Lines(delta),
+         modifiers,
+         touch_phase: TouchPhase::default(),
++        ..Default::default()
+     }
+ }
+ 
 diff --git a/crates/gpui_macos/src/events.rs b/crates/gpui_macos/src/events.rs
 index 71bcb10..931769f 100644
 --- a/crates/gpui_macos/src/events.rs
@@ -1576,23 +1756,121 @@ index 71bcb10..931769f 100644
                  })
              }),
              NSEventType::NSLeftMouseDragged
+diff --git a/crates/gpui_web/src/events.rs b/crates/gpui_web/src/events.rs
+index 08434aa..8a61d6b 100644
+--- a/crates/gpui_web/src/events.rs
++++ b/crates/gpui_web/src/events.rs
+@@ -266,6 +266,7 @@ impl WebWindowInner {
+                 delta,
+                 modifiers,
+                 touch_phase: TouchPhase::Moved,
++                ..Default::default()
+             }));
+         })
+     }
 diff --git a/crates/gpui_windows/src/direct_manipulation.rs b/crates/gpui_windows/src/direct_manipulation.rs
-index 9adcbed..b98e2a3 100644
+index 9adcbed..b3892a2 100644
 --- a/crates/gpui_windows/src/direct_manipulation.rs
 +++ b/crates/gpui_windows/src/direct_manipulation.rs
-@@ -175,6 +175,7 @@ impl DirectManipulationEventHandler {
+@@ -142,6 +142,8 @@ struct DirectManipulationEventHandler {
+     last_x_offset: Cell<f32>,
+     last_y_offset: Cell<f32>,
+     scroll_phase: Cell<TouchPhase>,
++    in_inertia: Cell<bool>,
++    momentum_began: Cell<bool>,
+     pending_events: Rc<RefCell<Vec<PlatformInput>>>,
+ }
+ 
+@@ -159,6 +161,8 @@ impl DirectManipulationEventHandler {
+             last_x_offset: Cell::new(0.0),
+             last_y_offset: Cell::new(0.0),
+             scroll_phase: Cell::new(TouchPhase::Started),
++            in_inertia: Cell::new(false),
++            momentum_began: Cell::new(false),
+             pending_events,
+         }
+     }
+@@ -166,8 +170,15 @@ impl DirectManipulationEventHandler {
+     fn end_gesture(&self) {
+         let position = self.mouse_position();
+         let modifiers = current_modifiers();
++        let was_inertia = self.in_inertia.replace(false);
++        self.momentum_began.set(false);
+         match self.gesture_kind.get() {
+             GestureKind::Scroll => {
++                let (scroll_phase, momentum_phase) = if was_inertia {
++                    (gpui::ScrollPhase::None, gpui::ScrollPhase::Ended)
++                } else {
++                    (gpui::ScrollPhase::Ended, gpui::ScrollPhase::None)
++                };
+                 self.pending_events
+                     .borrow_mut()
+                     .push(PlatformInput::ScrollWheel(ScrollWheelEvent {
+@@ -175,6 +186,8 @@ impl DirectManipulationEventHandler {
                          delta: ScrollDelta::Pixels(point(px(0.0), px(0.0))),
                          modifiers,
                          touch_phase: TouchPhase::Ended,
-+                        ..Default::default()
++                        scroll_phase,
++                        momentum_phase,
                      }));
              }
              GestureKind::Pinch => {
-@@ -329,6 +330,7 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
+@@ -214,6 +227,25 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
+             return Ok(());
+         }
+ 
++        if current == DIRECTMANIPULATION_INERTIA && previous == DIRECTMANIPULATION_RUNNING {
++            if self.gesture_kind.get() == GestureKind::Scroll {
++                let position = self.mouse_position();
++                let modifiers = current_modifiers();
++                self.pending_events
++                    .borrow_mut()
++                    .push(PlatformInput::ScrollWheel(ScrollWheelEvent {
++                        position,
++                        delta: ScrollDelta::Pixels(point(px(0.0), px(0.0))),
++                        modifiers,
++                        touch_phase: TouchPhase::Ended,
++                        scroll_phase: gpui::ScrollPhase::Ended,
++                        momentum_phase: gpui::ScrollPhase::None,
++                    }));
++                self.in_inertia.set(true);
++                self.momentum_began.set(false);
++            }
++        }
++
+         // A new gesture interrupted inertia, so end the old sequence.
+         if current == DIRECTMANIPULATION_RUNNING && previous == DIRECTMANIPULATION_INERTIA {
+             self.end_gesture();
+@@ -320,8 +352,21 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
+             GestureKind::Scroll => {
+                 let dx = x_offset - last_x;
+                 let dy = y_offset - last_y;
+-                let touch_phase = self.scroll_phase.get();
+-                self.scroll_phase.set(TouchPhase::Moved);
++                let (touch_phase, scroll_phase, momentum_phase) = if self.in_inertia.get() {
++                    let phase = if self.momentum_began.replace(true) {
++                        gpui::ScrollPhase::Changed
++                    } else {
++                        gpui::ScrollPhase::Began
++                    };
++                    (TouchPhase::Moved, gpui::ScrollPhase::None, phase)
++                } else {
++                    let touch_phase = self.scroll_phase.replace(TouchPhase::Moved);
++                    let scroll_phase = match touch_phase {
++                        TouchPhase::Started => gpui::ScrollPhase::Began,
++                        _ => gpui::ScrollPhase::Changed,
++                    };
++                    (touch_phase, scroll_phase, gpui::ScrollPhase::None)
++                };
+                 self.pending_events
+                     .borrow_mut()
+                     .push(PlatformInput::ScrollWheel(ScrollWheelEvent {
+@@ -329,6 +374,8 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
                          delta: ScrollDelta::Pixels(point(px(dx), px(dy))),
                          modifiers,
                          touch_phase,
-+                        ..Default::default()
++                        scroll_phase,
++                        momentum_phase,
                      }));
              }
              GestureKind::Pinch => {
