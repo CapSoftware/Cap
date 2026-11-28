@@ -51,7 +51,7 @@ const TUNING_SPECS: [TuningSpec; 5] = [
         unit: "",
         min: 0.02,
         max: 0.50,
-        step: 0.02,
+        step: 0.01,
         get: |c| c.resistance,
         set: |c, v| c.resistance = v,
     },
@@ -69,7 +69,7 @@ const TUNING_SPECS: [TuningSpec; 5] = [
         unit: "",
         min: 0.0,
         max: 0.80,
-        step: 0.05,
+        step: 0.02,
         get: |c| c.momentum_carry,
         set: |c, v| c.momentum_carry = v,
     },
@@ -78,7 +78,7 @@ const TUNING_SPECS: [TuningSpec; 5] = [
         unit: "×",
         min: 0.10,
         max: 0.80,
-        step: 0.05,
+        step: 0.02,
         get: |c| c.max_overscroll_ratio,
         set: |c, v| c.max_overscroll_ratio = v,
     },
@@ -99,6 +99,8 @@ struct ScrollRubberBandingTestView {
     config: RubberBandConfig,
     outer_scroll: ScrollHandle,
     inner_scroll: ScrollHandle,
+    tracks: [ui::SliderTrack; 5],
+    drag: ui::SliderDrag<usize>,
 }
 
 impl ScrollRubberBandingTestView {
@@ -109,6 +111,8 @@ impl ScrollRubberBandingTestView {
             config: gpui::rubber_band_config(),
             outer_scroll: ScrollHandle::new(),
             inner_scroll: ScrollHandle::new(),
+            tracks: std::array::from_fn(|_| ui::SliderTrack::default()),
+            drag: ui::SliderDrag::new(),
         }
     }
 
@@ -125,10 +129,25 @@ impl ScrollRubberBandingTestView {
         }
     }
 
-    fn adjust_tuning(&mut self, index: usize, delta: f32, cx: &mut Context<Self>) {
+    fn apply_slider_position(
+        &mut self,
+        index: usize,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         let spec = &TUNING_SPECS[index];
-        let next = ((spec.get)(&self.config) + delta).clamp(spec.min, spec.max);
-        (spec.set)(&mut self.config, next);
+        let Some(track) = self.tracks[index].get() else {
+            return;
+        };
+        let width = f32::from(track.size.width);
+        if width <= 0.0 {
+            return;
+        }
+        let fraction = ((f32::from(position.x) - f32::from(track.origin.x)) / width).clamp(0., 1.);
+        let raw = spec.min + fraction * (spec.max - spec.min);
+        let steps = ((raw - spec.min) / spec.step).round();
+        let value = (spec.min + steps * spec.step).clamp(spec.min, spec.max);
+        (spec.set)(&mut self.config, value);
         gpui::set_rubber_band_config(self.config);
         cx.notify();
     }
@@ -297,6 +316,8 @@ impl ScrollRubberBandingTestView {
         let text = theme.settings_text();
         let selected = self.behavior;
 
+        // Taffy computes horizontal scroll overflow from a flex-row direct child whose
+        // shrink-disabled items exceed the scroll container's width.
         div()
             .id("overscroll-demo-outer-h")
             .flex_1()
@@ -310,123 +331,77 @@ impl ScrollRubberBandingTestView {
             .border_1()
             .border_color(card_border)
             .p(px(16.))
-            .child(
+            .flex()
+            .flex_row()
+            .items_start()
+            .gap(px(12.))
+            .children((1..=2).map(|i| {
                 div()
+                    .w(px(140.))
+                    .h(px(230.))
+                    .flex_shrink_0()
+                    .p(px(12.))
+                    .rounded(px(10.))
+                    .bg(theme.settings_content_bg())
+                    .border_1()
+                    .border_color(card_border)
                     .flex()
                     .flex_col()
-                    .gap(px(14.))
+                    .justify_between()
                     .child(
                         div()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(muted)
-                            .child("OUTER HORIZONTAL SCROLL VIEW (AUTO)"),
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(text)
+                            .child(format!("Outer Tile {i}")),
                     )
                     .child(
                         div()
+                            .text_size(px(11.))
+                            .text_color(muted)
+                            .child("Scroll horizontally"),
+                    )
+            }))
+            .child(
+                div()
+                    .w(px(300.))
+                    .h(px(230.))
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .p(px(10.))
+                    .rounded(px(10.))
+                    .bg(theme.settings_content_bg())
+                    .border_2()
+                    .border_color(accent.opacity(0.55))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(accent)
+                            .child("INNER HORIZONTAL SCROLL VIEW"),
+                    )
+                    .child(
+                        div()
+                            .id("overscroll-demo-inner-h")
+                            .flex_1()
+                            .w_full()
+                            .min_w_0()
+                            .overflow_x_scroll()
+                            .overscroll_behavior(selected)
+                            .track_scroll(&self.inner_scroll)
                             .flex()
                             .flex_row()
-                            .items_stretch()
-                            .gap(px(12.))
-                            .children((1..=3).map(|i| {
+                            .gap(px(8.))
+                            .children((1..=8).map(|i| {
                                 div()
-                                    .w(px(140.))
-                                    .h(px(210.))
+                                    .w(px(105.))
+                                    .h_full()
                                     .flex_shrink_0()
-                                    .p(px(12.))
-                                    .rounded(px(10.))
-                                    .bg(theme.settings_content_bg())
-                                    .border_1()
-                                    .border_color(card_border)
-                                    .flex()
-                                    .flex_col()
-                                    .justify_between()
-                                    .child(
-                                        div()
-                                            .text_size(px(13.))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(text)
-                                            .child(format!("Outer Tile {i}")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .text_color(muted)
-                                            .child("Scroll horizontally"),
-                                    )
-                            }))
-                            .child(
-                                div()
-                                    .w(px(290.))
-                                    .h(px(210.))
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(8.))
                                     .p(px(10.))
-                                    .rounded(px(10.))
-                                    .bg(theme.settings_content_bg())
-                                    .border_2()
-                                    .border_color(accent.opacity(0.55))
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(accent)
-                                            .child("INNER HORIZONTAL SCROLL VIEW"),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("overscroll-demo-inner-h")
-                                            .flex_1()
-                                            .w_full()
-                                            .overflow_x_scroll()
-                                            .overscroll_behavior(selected)
-                                            .track_scroll(&self.inner_scroll)
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .flex_row()
-                                                    .gap(px(8.))
-                                                    .h_full()
-                                                    .children((1..=8).map(|i| {
-                                                        div()
-                                                            .w(px(105.))
-                                                            .h_full()
-                                                            .flex_shrink_0()
-                                                            .p(px(10.))
-                                                            .rounded(px(8.))
-                                                            .bg(card_bg)
-                                                            .border_1()
-                                                            .border_color(card_border)
-                                                            .flex()
-                                                            .flex_col()
-                                                            .justify_between()
-                                                            .child(
-                                                                div()
-                                                                    .text_size(px(12.))
-                                                                    .font_weight(FontWeight::MEDIUM)
-                                                                    .text_color(text)
-                                                                    .child(format!("Item {i}")),
-                                                            )
-                                                            .child(
-                                                                div()
-                                                                    .text_size(px(11.))
-                                                                    .text_color(muted)
-                                                                    .child(format!("#{i:02}")),
-                                                            )
-                                                    })),
-                                            ),
-                                    ),
-                            )
-                            .children((4..=8).map(|i| {
-                                div()
-                                    .w(px(140.))
-                                    .h(px(210.))
-                                    .flex_shrink_0()
-                                    .p(px(12.))
-                                    .rounded(px(10.))
-                                    .bg(theme.settings_content_bg())
+                                    .rounded(px(8.))
+                                    .bg(card_bg)
                                     .border_1()
                                     .border_color(card_border)
                                     .flex()
@@ -434,20 +409,47 @@ impl ScrollRubberBandingTestView {
                                     .justify_between()
                                     .child(
                                         div()
-                                            .text_size(px(13.))
+                                            .text_size(px(12.))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(text)
-                                            .child(format!("Outer Tile {i}")),
+                                            .child(format!("Item {i}")),
                                     )
                                     .child(
                                         div()
                                             .text_size(px(11.))
                                             .text_color(muted)
-                                            .child("Scroll horizontally"),
+                                            .child(format!("#{i:02}")),
                                     )
                             })),
                     ),
             )
+            .children((3..=8).map(|i| {
+                div()
+                    .w(px(140.))
+                    .h(px(230.))
+                    .flex_shrink_0()
+                    .p(px(12.))
+                    .rounded(px(10.))
+                    .bg(theme.settings_content_bg())
+                    .border_1()
+                    .border_color(card_border)
+                    .flex()
+                    .flex_col()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(text)
+                            .child(format!("Outer Tile {i}")),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(muted)
+                            .child("Scroll horizontally"),
+                    )
+            }))
     }
 }
 
@@ -460,6 +462,11 @@ impl Render for ScrollRubberBandingTestView {
         let card_border = theme.settings_border();
         let text = theme.settings_text();
         let muted = theme.settings_muted();
+        let thumb_fill = if theme.is_dark() {
+            rgb(0xffffff).into()
+        } else {
+            rgb(0xffffff).into()
+        };
 
         let selected = self.behavior;
         let axis = self.axis;
@@ -471,6 +478,7 @@ impl Render for ScrollRubberBandingTestView {
         };
 
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -549,6 +557,8 @@ impl Render for ScrollRubberBandingTestView {
             .child(
                 div()
                     .flex_1()
+                    .w_full()
+                    .min_w_0()
                     .min_h_0()
                     .flex()
                     .flex_row()
@@ -664,7 +674,6 @@ impl Render for ScrollRubberBandingTestView {
                                             let fraction = ((value - spec.min)
                                                 / (spec.max - spec.min))
                                                 .clamp(0.0, 1.0);
-                                            let step = spec.step;
                                             let formatted = if spec.unit.is_empty() {
                                                 format!("{value:.2}")
                                             } else {
@@ -673,7 +682,7 @@ impl Render for ScrollRubberBandingTestView {
                                             div()
                                                 .flex()
                                                 .flex_col()
-                                                .gap(px(5.))
+                                                .gap(px(4.))
                                                 .child(
                                                     div()
                                                         .flex()
@@ -687,88 +696,39 @@ impl Render for ScrollRubberBandingTestView {
                                                         )
                                                         .child(
                                                             div()
-                                                                .flex()
-                                                                .items_center()
-                                                                .gap(px(4.))
-                                                                .child(
-                                                                    div()
-                                                                        .id((
-                                                                            "tuning-dec",
-                                                                            index,
-                                                                        ))
-                                                                        .w(px(20.))
-                                                                        .h(px(20.))
-                                                                        .rounded(px(5.))
-                                                                        .bg(bg)
-                                                                        .border_1()
-                                                                        .border_color(card_border)
-                                                                        .flex()
-                                                                        .items_center()
-                                                                        .justify_center()
-                                                                        .text_size(px(12.))
-                                                                        .cursor_pointer()
-                                                                        .on_click(cx.listener(
-                                                                            move |this, _, _, cx| {
-                                                                                this.adjust_tuning(
-                                                                                    index, -step,
-                                                                                    cx,
-                                                                                );
-                                                                            },
-                                                                        ))
-                                                                        .child("−"),
-                                                                )
-                                                                .child(
-                                                                    div()
-                                                                        .w(px(44.))
-                                                                        .text_size(px(11.))
-                                                                        .text_color(muted)
-                                                                        .flex()
-                                                                        .justify_center()
-                                                                        .child(formatted),
-                                                                )
-                                                                .child(
-                                                                    div()
-                                                                        .id((
-                                                                            "tuning-inc",
-                                                                            index,
-                                                                        ))
-                                                                        .w(px(20.))
-                                                                        .h(px(20.))
-                                                                        .rounded(px(5.))
-                                                                        .bg(bg)
-                                                                        .border_1()
-                                                                        .border_color(card_border)
-                                                                        .flex()
-                                                                        .items_center()
-                                                                        .justify_center()
-                                                                        .text_size(px(12.))
-                                                                        .cursor_pointer()
-                                                                        .on_click(cx.listener(
-                                                                            move |this, _, _, cx| {
-                                                                                this.adjust_tuning(
-                                                                                    index, step,
-                                                                                    cx,
-                                                                                );
-                                                                            },
-                                                                        ))
-                                                                        .child("+"),
-                                                                ),
+                                                                .text_size(px(11.))
+                                                                .text_color(muted)
+                                                                .child(formatted),
                                                         ),
                                                 )
                                                 .child(
-                                                    div()
-                                                        .w_full()
-                                                        .h(px(4.))
-                                                        .rounded_full()
-                                                        .bg(muted.opacity(0.22))
-                                                        .overflow_hidden()
-                                                        .child(
-                                                            div()
-                                                                .h_full()
-                                                                .w(gpui::relative(fraction))
-                                                                .rounded_full()
-                                                                .bg(accent),
-                                                        ),
+                                                    ui::Slider::new(
+                                                        ("overscroll-tuning-slider", index),
+                                                        fraction,
+                                                        self.tracks[index].clone(),
+                                                    )
+                                                    .flex()
+                                                    .track(px(4.), muted.opacity(0.22))
+                                                    .fill(accent)
+                                                    .thumb(
+                                                        px(14.),
+                                                        thumb_fill,
+                                                        Some(card_border),
+                                                    )
+                                                    .thumb_shadow()
+                                                    .on_drag_start(cx.listener(
+                                                        move |this,
+                                                              event: &gpui::MouseDownEvent,
+                                                              _,
+                                                              cx| {
+                                                            this.drag.begin(index, || {});
+                                                            this.apply_slider_position(
+                                                                index,
+                                                                event.position,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )),
                                                 )
                                         },
                                     )),
@@ -781,11 +741,23 @@ impl Render for ScrollRubberBandingTestView {
                         }
                     }),
             )
+            .when_some(self.drag.active(), |this, active_index| {
+                this.child(ui::Slider::drag_layer(
+                    "overscroll-tuning-drag-layer",
+                    cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
+                        this.apply_slider_position(active_index, event.position, cx);
+                    }),
+                    cx.listener(|this, _, _, cx| {
+                        this.drag.end(|| {});
+                        cx.notify();
+                    }),
+                ))
+            })
     }
 }
 
 pub fn open(cx: &mut App) {
-    let bounds = Bounds::centered(None, size(px(940.), px(620.)), cx);
+    let bounds = Bounds::centered(None, size(px(940.), px(640.)), cx);
     let _ = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -797,4 +769,202 @@ pub fn open(cx: &mut App) {
         },
         |_window, cx| cx.new(|_| ScrollRubberBandingTestView::new()),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{
+        Modifiers, ScrollDelta, ScrollPhase, ScrollWheelEvent, TestAppContext, TouchPhase,
+        VisualTestContext,
+    };
+
+    use super::*;
+
+    fn trackpad_scroll(
+        position: gpui::Point<gpui::Pixels>,
+        delta: gpui::Point<gpui::Pixels>,
+        scroll_phase: ScrollPhase,
+        momentum_phase: ScrollPhase,
+    ) -> ScrollWheelEvent {
+        let touch_phase = match scroll_phase {
+            ScrollPhase::Began | ScrollPhase::MayBegin => TouchPhase::Started,
+            ScrollPhase::Ended | ScrollPhase::Cancelled => TouchPhase::Ended,
+            _ => TouchPhase::Moved,
+        };
+        ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(delta),
+            modifiers: Modifiers::none(),
+            touch_phase,
+            scroll_phase,
+            momentum_phase,
+        }
+    }
+
+    #[gpui::test]
+    fn vertical_and_horizontal_nested_scrolling_end_to_end(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, _| ScrollRubberBandingTestView::new());
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+
+        // 1. Vertical Auto: verify inner actually scrolls, rubber-bands at bottom, and does NOT move outer.
+        let (inner_v_pt, inner_max_y) = view.read_with(cx, |v, _| {
+            (
+                v.inner_scroll.bounds().center(),
+                f32::from(v.inner_scroll.max_offset().y),
+            )
+        });
+        assert!(
+            inner_max_y > 50.0,
+            "vertical inner must have vertical overflow, got max_y={inner_max_y}"
+        );
+
+        cx.simulate_event(trackpad_scroll(
+            inner_v_pt,
+            point(px(0.), px(-80.)),
+            ScrollPhase::Began,
+            ScrollPhase::None,
+        ));
+        cx.simulate_event(trackpad_scroll(
+            inner_v_pt,
+            point(px(0.), px(-400.)),
+            ScrollPhase::Changed,
+            ScrollPhase::None,
+        ));
+        cx.simulate_event(trackpad_scroll(
+            inner_v_pt,
+            point(px(0.), px(-200.)),
+            ScrollPhase::Changed,
+            ScrollPhase::None,
+        ));
+        cx.run_until_parked();
+
+        let (outer_y, inner_y) = view.read_with(cx, |v, _| {
+            (
+                f32::from(v.outer_scroll.offset().y),
+                f32::from(v.inner_scroll.offset().y),
+            )
+        });
+        assert!(
+            inner_y < -inner_max_y,
+            "vertical inner should rubber-band past -{inner_max_y}, got {inner_y}"
+        );
+        assert_eq!(
+            outer_y, 0.0,
+            "vertical outer must not move during owned inner gesture"
+        );
+
+        // 2. Switch to Horizontal mode and verify BOTH outer and inner actually have horizontal overflow & scroll.
+        view.update(cx, |v, cx| v.set_axis(ScrollAxis::Horizontal, cx));
+        cx.refresh();
+        cx.run_until_parked();
+
+        let (inner_h_pt, inner_max_x, outer_max_x) = view.read_with(cx, |v, _| {
+            (
+                v.inner_scroll.bounds().center(),
+                f32::from(v.inner_scroll.max_offset().x),
+                f32::from(v.outer_scroll.max_offset().x),
+            )
+        });
+        assert!(
+            outer_max_x > 100.0,
+            "horizontal outer must have real horizontal overflow, got max_x={outer_max_x}"
+        );
+        assert!(
+            inner_max_x > 100.0,
+            "horizontal inner must have real horizontal overflow, got max_x={inner_max_x}"
+        );
+
+        cx.simulate_event(trackpad_scroll(
+            inner_h_pt,
+            point(px(-120.), px(0.)),
+            ScrollPhase::Began,
+            ScrollPhase::None,
+        ));
+        cx.simulate_event(trackpad_scroll(
+            inner_h_pt,
+            point(px(-120.), px(0.)),
+            ScrollPhase::Changed,
+            ScrollPhase::None,
+        ));
+        cx.simulate_event(trackpad_scroll(
+            inner_h_pt,
+            point(px(0.), px(0.)),
+            ScrollPhase::Ended,
+            ScrollPhase::None,
+        ));
+        cx.run_until_parked();
+
+        let (outer_x, inner_x) = view.read_with(cx, |v, _| {
+            (
+                f32::from(v.outer_scroll.offset().x),
+                f32::from(v.inner_scroll.offset().x),
+            )
+        });
+        assert!(
+            inner_x < -100.0,
+            "horizontal inner must actually scroll left, got inner_x={inner_x}"
+        );
+        assert_eq!(
+            outer_x, 0.0,
+            "horizontal outer must not move during owned inner gesture"
+        );
+
+        // Scroll inner to right edge, then start a NEW gesture to verify Auto chains to outer X.
+        view.update(cx, |v, cx| {
+            let max_x = v.inner_scroll.max_offset().x;
+            v.inner_scroll.set_offset(point(-max_x, px(0.)));
+            cx.notify();
+        });
+        cx.refresh();
+        cx.run_until_parked();
+
+        cx.simulate_event(trackpad_scroll(
+            inner_h_pt,
+            point(px(-100.), px(0.)),
+            ScrollPhase::Began,
+            ScrollPhase::None,
+        ));
+        cx.run_until_parked();
+
+        let outer_x_after = view.read_with(cx, |v, _| f32::from(v.outer_scroll.offset().x));
+        assert!(
+            outer_x_after < -50.0,
+            "new horizontal gesture at inner edge must chain to outer, got outer_x={outer_x_after}"
+        );
+
+        // Verify Contain blocks chaining to outer X even on a new gesture at the edge.
+        view.update(cx, |v, cx| {
+            v.behavior = OverscrollBehavior::Contain;
+            v.outer_scroll.set_offset(point(px(0.), px(0.)));
+            let max_x = v.inner_scroll.max_offset().x;
+            v.inner_scroll.set_offset(point(-max_x, px(0.)));
+            cx.notify();
+        });
+        cx.refresh();
+        cx.run_until_parked();
+
+        cx.simulate_event(trackpad_scroll(
+            inner_h_pt,
+            point(px(-100.), px(0.)),
+            ScrollPhase::Began,
+            ScrollPhase::None,
+        ));
+        cx.run_until_parked();
+
+        let (outer_x_contain, inner_x_contain) = view.read_with(cx, |v, _| {
+            (
+                f32::from(v.outer_scroll.offset().x),
+                f32::from(v.inner_scroll.offset().x),
+            )
+        });
+        assert_eq!(
+            outer_x_contain, 0.0,
+            "Contain must never chain horizontal scroll to outer"
+        );
+        assert!(
+            inner_x_contain < -inner_max_x,
+            "Contain should rubber-band inner horizontally past -{inner_max_x}, got {inner_x_contain}"
+        );
+    }
 }

@@ -552,10 +552,10 @@ index 1feee49..35cb872 100644
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..0652f04
+index 0000000..4043dd9
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,839 @@
+@@ -0,0 +1,966 @@
 +use std::f32::consts::PI;
 +use std::sync::RwLock;
 +use std::time::Instant;
@@ -1393,6 +1393,133 @@ index 0000000..0652f04
 +            &config,
 +        ));
 +        assert!(x > 0.0, "top-level horizontal Auto should rubber-band");
++    }
++
++    #[crate::test]
++    fn nested_horizontal_and_vertical_div_scroll_end_to_end(cx: &mut crate::TestAppContext) {
++        use crate::{
++            Context, InteractiveElement, IntoElement, Modifiers, ParentElement, Render,
++            ScrollDelta, ScrollHandle, ScrollPhase, ScrollWheelEvent, StatefulInteractiveElement,
++            Styled, TouchPhase, Window, div, point, px,
++        };
++
++        struct NestedHorizontal {
++            behavior: OverscrollBehavior,
++            outer: ScrollHandle,
++            inner: ScrollHandle,
++        }
++
++        impl Render for NestedHorizontal {
++            fn render(
++                &mut self,
++                _window: &mut Window,
++                _cx: &mut Context<Self>,
++            ) -> impl IntoElement {
++                div().w(px(500.)).h(px(300.)).flex().flex_row().child(
++                    div()
++                        .id("outer-h")
++                        .flex_1()
++                        .min_w_0()
++                        .h_full()
++                        .overflow_x_scroll()
++                        .overscroll_behavior(OverscrollBehavior::Auto)
++                        .track_scroll(&self.outer)
++                        .flex()
++                        .flex_row()
++                        .gap(px(10.))
++                        .child(div().w(px(200.)).h(px(200.)).flex_shrink_0())
++                        .child(
++                            div()
++                                .id("inner-h")
++                                .w(px(220.))
++                                .h(px(200.))
++                                .flex_shrink_0()
++                                .overflow_x_scroll()
++                                .overscroll_behavior(self.behavior)
++                                .track_scroll(&self.inner)
++                                .flex()
++                                .flex_row()
++                                .gap(px(8.))
++                                .children(
++                                    (0..6).map(|_| div().w(px(100.)).h(px(180.)).flex_shrink_0()),
++                                ),
++                        )
++                        .children((0..5).map(|_| div().w(px(200.)).h(px(200.)).flex_shrink_0())),
++                )
++            }
++        }
++
++        let (view, cx) = cx.add_window_view(|_, _| NestedHorizontal {
++            behavior: OverscrollBehavior::Auto,
++            outer: ScrollHandle::new(),
++            inner: ScrollHandle::new(),
++        });
++        cx.run_until_parked();
++
++        let (_outer_bounds, inner_bounds, outer_max, inner_max) = view.read_with(cx, |v, _| {
++            (
++                v.outer.bounds(),
++                v.inner.bounds(),
++                v.outer.max_offset(),
++                v.inner.max_offset(),
++            )
++        });
++        assert!(
++            f32::from(outer_max.x) > 100.0,
++            "outer_max.x={:?}",
++            outer_max.x
++        );
++        assert!(
++            f32::from(inner_max.x) > 100.0,
++            "inner_max.x={:?}",
++            inner_max.x
++        );
++
++        let pt = inner_bounds.center();
++        let make_ev = |dx: f32, scroll_phase: ScrollPhase| ScrollWheelEvent {
++            position: pt,
++            delta: ScrollDelta::Pixels(point(px(dx), px(0.))),
++            modifiers: Modifiers::none(),
++            touch_phase: match scroll_phase {
++                ScrollPhase::Began => TouchPhase::Started,
++                ScrollPhase::Ended => TouchPhase::Ended,
++                _ => TouchPhase::Moved,
++            },
++            scroll_phase,
++            momentum_phase: ScrollPhase::None,
++        };
++
++        // Owned gesture inside inner: scrolls inner, then bounces past right edge without moving outer.
++        cx.simulate_event(make_ev(-120.0, ScrollPhase::Began));
++        cx.simulate_event(make_ev(-400.0, ScrollPhase::Changed));
++        cx.simulate_event(make_ev(-200.0, ScrollPhase::Changed));
++        cx.run_until_parked();
++
++        let (ox, ix) = view.read_with(cx, |v, _| {
++            (f32::from(v.outer.offset().x), f32::from(v.inner.offset().x))
++        });
++        assert!(
++            ix < -f32::from(inner_max.x),
++            "inner should rubber-band past max, got {ix}"
++        );
++        assert_eq!(ox, 0.0, "outer must stay at 0 during owned inner gesture");
++
++        // Reset inner to exact right edge, then NEW gesture must chain to outer.
++        view.update(cx, |v, cx| {
++            let m = v.inner.max_offset().x;
++            v.inner.set_offset(point(-m, px(0.)));
++            cx.notify();
++        });
++        cx.run_until_parked();
++
++        cx.simulate_event(make_ev(-100.0, ScrollPhase::Began));
++        cx.run_until_parked();
++
++        let ox_after = view.read_with(cx, |v, _| f32::from(v.outer.offset().x));
++        assert!(
++            ox_after < -50.0,
++            "new gesture at inner edge must chain to outer, got {ox_after}"
++        );
 +    }
 +}
 diff --git a/crates/gpui_macos/src/events.rs b/crates/gpui_macos/src/events.rs
