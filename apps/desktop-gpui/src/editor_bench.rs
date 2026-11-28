@@ -23,6 +23,10 @@ const FOLLOW_START_FRACTION: f64 = 0.82;
 /// A generated transcript for a few minutes of speech, every segment of which
 /// has been selected once, so each has its three sidebar fields.
 const SEEDED_CAPTION_SEGMENTS: usize = 300;
+/// The end handle of the first clip is dragged inwards by one more step each
+/// frame, then starts over, so every frame moves the ghost trim.
+const CLIP_TRIM_STEP_SECS: f64 = 0.02;
+const CLIP_TRIM_STEPS: usize = 60;
 
 #[derive(Clone, Copy)]
 enum Scenario {
@@ -31,8 +35,10 @@ enum Scenario {
     Hover,
     Follow,
     Clean,
+    ClipTrim,
     CaptionDownload,
     TickFields,
+    ClipTrimFields,
 }
 
 impl Scenario {
@@ -43,8 +49,10 @@ impl Scenario {
             Self::Hover => "hover",
             Self::Follow => "follow",
             Self::Clean => "clean",
+            Self::ClipTrim => "clip-trim",
             Self::CaptionDownload => "caption-download",
             Self::TickFields => "tick-fields",
+            Self::ClipTrimFields => "clip-trim-fields",
         }
     }
 
@@ -76,7 +84,7 @@ impl Scenario {
                 view.seek_fraction(FOLLOW_START_FRACTION, window, cx);
                 view.toggle_play(window, cx);
             }
-            Self::Clean => {
+            Self::Clean | Self::ClipTrim | Self::ClipTrimFields => {
                 if view.playing {
                     view.stop_for_measurement(cx);
                 }
@@ -122,13 +130,47 @@ impl Scenario {
             Self::Clean => {}
             Self::CaptionDownload if self.control(iteration) => cx.notify(),
             Self::CaptionDownload => view.repaint_caption_download(cx),
+            Self::ClipTrim | Self::ClipTrimFields => {
+                let Some(end) = view
+                    .project
+                    .timeline
+                    .as_ref()
+                    .and_then(|timeline| timeline.segments.first())
+                    .map(|segment| segment.end)
+                else {
+                    return;
+                };
+                let viewport_width: f32 = window.viewport_size().width.into();
+                let secs_per_pixel = view
+                    .view
+                    .transform
+                    .secs_per_pixel(editor_timeline::content_width(viewport_width));
+                let delta = -CLIP_TRIM_STEP_SECS * (1 + iteration % CLIP_TRIM_STEPS) as f64;
+                view.clip_trim(0, end, delta, false, secs_per_pixel, true, window, cx);
+                if self.control(iteration) {
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    /// Drops the ghost trim without committing it, so the scenarios after it
+    /// draw the real timeline again.
+    fn finish(self, view: &mut EditorWindow, window: &mut Window, cx: &mut Context<EditorWindow>) {
+        if matches!(self, Self::ClipTrim | Self::ClipTrimFields) {
+            view.drag_mouse_up(window, cx);
+            cx.notify();
         }
     }
 
     /// Frames interleaved with the measured ones as an in-process reference:
-    /// a whole-editor notify, which is what a download tick used to cost.
+    /// a whole-editor notify, which is what a download tick or a clip trim
+    /// move used to cost.
     fn control(self, iteration: usize) -> bool {
-        matches!(self, Self::CaptionDownload) && iteration % 2 == 1
+        matches!(
+            self,
+            Self::CaptionDownload | Self::ClipTrim | Self::ClipTrimFields
+        ) && iteration % 2 == 1
     }
 }
 
@@ -223,8 +265,10 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         Scenario::Hover,
         Scenario::Follow,
         Scenario::Clean,
+        Scenario::ClipTrim,
         Scenario::CaptionDownload,
         Scenario::TickFields,
+        Scenario::ClipTrimFields,
     ] {
         if handle
             .update(cx, |view, window, cx| scenario.prepare(view, window, cx))
@@ -292,6 +336,13 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
             scenario.label(),
             draw_us.len()
         );
+        if handle
+            .update(cx, |view, window, cx| scenario.finish(view, window, cx))
+            .is_err()
+        {
+            eprintln!("timeline-bench: the editor window closed");
+            std::process::exit(1);
+        }
     }
 
     // The visible case models the production sidebar on the Captions tab with
