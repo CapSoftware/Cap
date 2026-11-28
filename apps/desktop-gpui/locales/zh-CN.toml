@@ -1090,6 +1090,17 @@ screenshots_description = "你的截图会显示在这里。截一张图开始�
 view_all_recordings = "查看所有录制"
 view_all_screenshots = "查看所有截图"
 
+[main.link_start]
+camera = "摄像头：{name}"
+instant = "Instant 模式：{target}"
+microphone = "麦克风：{name}"
+none = "无"
+requested = "某个链接请求开始录制。"
+start = "开始录制"
+studio = "Studio 模式：{target}"
+system_audio = "系统音频：开启"
+title = "开始录制？"
+
 [main.mic_warning]
 body = "这段录制不会包含你的声音。请选择一个麦克风，或在没有麦克风的情况下继续。"
 dont_show_again = "不再显示"
@@ -1564,6 +1575,10 @@ screenshot = "即时截图并添加标注。"
 studio = "最高画质的本地录制，便于稍后编辑。"
 subtitle = "选择你想如何捕获屏幕"
 title = "选择录制模式"
+
+[dialog.saving]
+in_background = "你的录制仍在保存，完成后会显示在你的资料库中。你现在可以开始新的录制。"
+title = "仍在保存"
 
 [dialog.storage]
 stopped_kept = "存储空间不足，录制已停止。录制文件已保留。请释放空间，然后在下方恢复录制。"
@@ -2870,6 +2885,7 @@ position = "位置"
 refining_word_timings = "正在优化单词时间…"
 regenerate = "重新生成字幕"
 reset_position = "重置位置"
+show_existing = "显示字幕"
 show_filler_words = "显示语气词"
 size_label = "大小"
 style = "样式"
@@ -4306,11 +4322,6 @@ try_free = "登录免费试用"
 write = "写纪要"
 too_short = "这次通话太短，无法写纪要。"
 unavailable_title = "此服务器不提供 Cap AI 笔记"
-free_left = { other = "还剩 {count} 次免费" }
-
-[cap_ai.footer]
-last = "由 Cap AI 撰写。这是你最后一次免费使用"
-left = { other = "由 Cap AI 撰写。还剩 {count} 次免费" }
 
 [cap_ai.live]
 sign_in = "登录后，会议结束时 Cap AI 会写好纪要"
@@ -4321,6 +4332,11 @@ upgrade = "有了 Cap Pro，会议结束时 Cap AI 会写好纪要"
 several = "{a}、{b} 等人"
 three = "{a}、{b} 和 {c}"
 two = "{a} 和 {b}"
+
+[cap_ai.row]
+left = { other = "还剩 {count} 次免费 Cap\u00A0AI 笔记" }
+pro = "Cap\u00A0AI 笔记是 Cap\u00A0Pro 的功能"
+signed_out = "免费试用 Cap\u00A0AI 笔记"
 
 [cap_ai.settings]
 get_pro = "获取 Cap Pro"

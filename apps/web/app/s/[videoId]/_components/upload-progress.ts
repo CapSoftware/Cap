@@ -28,7 +28,11 @@ export type UploadProgress =
 			status: "error";
 			lastUpdated: Date;
 			errorMessage: string | null;
-			errorKind?: "source-unavailable" | "retryable" | null;
+			errorKind?:
+				| "source-unavailable"
+				| "retryable"
+				| "upgrade-required"
+				| null;
 			hasRawFallback: boolean;
 	  }
 	| {
@@ -91,7 +95,11 @@ export function canRetryFailedProcessing(
 	uploadProgress: UploadProgress | null,
 	canRetryProcessing: boolean,
 ): boolean {
-	return canRetryProcessing && uploadProgress?.status === "error";
+	return (
+		canRetryProcessing &&
+		uploadProgress?.status === "error" &&
+		uploadProgress.errorKind !== "upgrade-required"
+	);
 }
 
 export function getUploadFailureMessage(
@@ -99,6 +107,11 @@ export function getUploadFailureMessage(
 	canRetryProcessing: boolean,
 ): string {
 	if (uploadProgress?.status === "error") {
+		if (uploadProgress.errorKind === "upgrade-required") {
+			return canRetryProcessing
+				? "Recording exceeds the free plan duration limit. Upgrade to Cap Pro to upload longer recordings."
+				: "This recording exceeds the free plan duration limit.";
+		}
 		if (canRetryFailedProcessing(uploadProgress, canRetryProcessing)) {
 			return uploadProgress.errorMessage || "Processing failed.";
 		}

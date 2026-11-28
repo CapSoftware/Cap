@@ -1215,19 +1215,23 @@ impl SettingsWindow {
                 cx,
             ),
         )];
-        rows.push(self.setting_row(
-            tr::settings::meetings::transcription::app_names(),
-            Some(tr::settings::meetings::transcription::app_names_description()),
-            self.meetings_flag(
-                "meetings-app-names",
+        // Only where a meeting app is known to say who is talking.
+        if cap_meeting_platform::NAMES_FROM_MEETING_APPS {
+            rows.push(self.setting_row(
                 tr::settings::meetings::transcription::app_names(),
-                Flag::AppNames,
-                cx,
-            ),
-        ));
+                Some(tr::settings::meetings::transcription::app_names_description()),
+                self.meetings_flag(
+                    "meetings-app-names",
+                    tr::settings::meetings::transcription::app_names(),
+                    Flag::AppNames,
+                    cx,
+                ),
+            ));
+        }
         // From macOS 27.3 the grant lives under System & App Protection
         // Override, per meeting app (issue #4410): say so, and show how.
-        if crate::permissions::grants_are_settings_only()
+        if cap_meeting_platform::NAMES_FROM_MEETING_APPS
+            && crate::permissions::grants_are_settings_only()
             && !cap_meeting_platform::accessibility_trusted()
         {
             rows.push(

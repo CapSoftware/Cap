@@ -11,7 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorageMonitor};
+use cap_utils::disk_space::{
+    DiskSpaceStatus, FinalizationKind, RecordingStorage, RecordingStorageMonitor,
+};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 use crate::app_sounds::AppSound;
@@ -418,6 +420,15 @@ async fn run_clean_control(
     CleanControlOutcome { paused, error }
 }
 
+fn log_storage(storage: RecordingStorage, event: &'static str) {
+    tracing::warn!(
+        available_bytes = storage.available_bytes,
+        recording_bytes = storage.recording_bytes,
+        finalization_bytes = storage.finalization_bytes(),
+        "{event}"
+    );
+}
+
 pub struct RecordingSession {
     pub phase: Phase,
     active: Option<ActiveRecording>,
@@ -427,6 +438,8 @@ pub struct RecordingSession {
     pub storage_notice: Option<String>,
     /// The last recording stopped because what it captured went away.
     pub capture_source_lost: bool,
+    /// Stop handed the app back while the last recording was still saving.
+    pub recording_still_saving: bool,
     stopped_for_low_storage: bool,
     stopped_elapsed: Option<Duration>,
     /// The config of the live (or last) recording, kept for restart.
@@ -466,6 +479,11 @@ pub struct RecordingSession {
     paused_accum: Duration,
     paused_since: Option<Instant>,
     storage_monitor: Option<Task<()>>,
+    limit_monitor: Option<Task<()>>,
+    limit_owner: LimitOwner,
+    /// The server said, for the live recording, that its limit no longer
+    /// applies (an upgrade of its owner or organization).
+    limit_lifted: bool,
     failure_monitor: Option<Task<()>>,
     recording_generation: u64,
     countdown_remaining: Option<u32>,
@@ -515,6 +533,7 @@ impl RecordingSession {
             storage_warning: false,
             storage_notice: None,
             capture_source_lost: false,
+            recording_still_saving: false,
             stopped_for_low_storage: false,
             stopped_elapsed: None,
             last_config: None,
@@ -530,6 +549,9 @@ impl RecordingSession {
             paused_accum: Duration::ZERO,
             paused_since: None,
             storage_monitor: None,
+            limit_monitor: None,
+            limit_owner: LimitOwner::default(),
+            limit_lifted: false,
             failure_monitor: None,
             recording_generation: 0,
             countdown_remaining: None,
@@ -787,6 +809,7 @@ impl RecordingSession {
             return;
         }
         self.storage_monitor = None;
+        self.limit_monitor = None;
         self.failure_monitor = None;
         self.recording_generation = self.recording_generation.wrapping_add(1);
         self.preparing_studio_editor = None;
@@ -821,6 +844,7 @@ impl RecordingSession {
         self.storage_warning = false;
         self.storage_notice = None;
         self.capture_source_lost = false;
+        self.recording_still_saving = false;
         self.stopped_for_low_storage = false;
         self.stopped_elapsed = None;
         self.last_config = Some(config.clone());
@@ -1082,6 +1106,21 @@ impl RecordingSession {
         if self.mode() == Some(recording::RecordingMode::Studio) {
             crate::app_windows::prewarm_shared_wgpu_device(cx);
         }
+        if self
+            .active
+            .as_ref()
+            .and_then(ActiveRecording::recording_limit)
+            .is_some()
+        {
+            let auth = crate::store::auth_snapshot();
+            self.limit_lifted = false;
+            self.limit_owner = LimitOwner {
+                started_at: chrono::Utc::now().timestamp(),
+                server_url: auth.server_url,
+                user_id: auth.user_id,
+            };
+            self.monitor_recording_limit(project_dir.clone(), Duration::ZERO, cx);
+        }
         self.monitor_storage(project_dir, cx);
         self.monitor_recording_failure(done, cx);
         self.start_input_watch(cx);
@@ -1159,11 +1198,129 @@ impl RecordingSession {
         }));
     }
 
+    pub fn recording_time_left(&self) -> Option<Duration> {
+        let limit = self.active.as_ref()?.recording_limit()?;
+        if self.limit_lifted
+            || upgrade_lifts_limit(&crate::store::auth_snapshot(), &self.limit_owner)
+        {
+            return None;
+        }
+        Some(limit.saturating_sub(self.elapsed()))
+    }
+
+    /// Starts the limit monitor again for the live recording: after a resume,
+    /// so an upgrade made while paused is fetched before the limit, and after
+    /// a stop or discard that capture did not confirm, waiting a little first
+    /// so a stop that keeps failing is not retried in a tight loop.
+    fn rearm_recording_limit(&mut self, first_check_after: Duration, cx: &mut Context<Self>) {
+        if !matches!(self.phase, Phase::Recording { .. }) {
+            return;
+        }
+        let Some(project_dir) = self
+            .active
+            .as_ref()
+            .filter(|active| active.recording_limit().is_some())
+            .map(|active| active.project_dir.clone())
+        else {
+            return;
+        };
+        self.monitor_recording_limit(project_dir, first_check_after, cx);
+    }
+
+    fn monitor_recording_limit(
+        &mut self,
+        project_dir: std::path::PathBuf,
+        first_check_after: Duration,
+        cx: &mut Context<Self>,
+    ) {
+        self.limit_monitor = None;
+        let Some(left) = self.recording_time_left() else {
+            return;
+        };
+        let generation = self.recording_generation;
+        let task = cx.spawn(async move |this, cx| {
+            let mut plan_checked = false;
+            let mut wait = left
+                .saturating_sub(PLAN_CHECK_BEFORE_LIMIT)
+                .max(first_check_after);
+            loop {
+                cx.background_executor()
+                    .timer(wait.max(Duration::from_millis(50)))
+                    .await;
+                let Ok(next) = this.update(cx, |this, cx| {
+                    let current = this.recording_generation == generation
+                        && matches!(this.phase, Phase::Recording { .. })
+                        && this
+                            .active
+                            .as_ref()
+                            .is_some_and(|active| active.project_dir == project_dir);
+                    if !current {
+                        return None;
+                    }
+                    let left = this.recording_time_left()?;
+                    if !left.is_zero() {
+                        return Some(left);
+                    }
+                    tracing::info!("stopping at the plan's recording limit");
+                    this.stop(cx);
+                    None
+                }) else {
+                    return;
+                };
+                let Some(left) = next else {
+                    return;
+                };
+                if !plan_checked && left <= PLAN_CHECK_BEFORE_LIMIT {
+                    // An upgrade made elsewhere mid-recording only reaches the
+                    // app through a plan fetch, so one runs shortly before the
+                    // limit; the stop itself never waits on the network.
+                    plan_checked = true;
+                    let video_id = this
+                        .update(cx, |this, _| {
+                            this.active
+                                .as_ref()
+                                .and_then(|active| active.instant_video_id().map(str::to_string))
+                        })
+                        .ok()
+                        .flatten();
+                    let check =
+                        gpui_tokio::Tokio::spawn(cx, crate::auth::update_plan_only(video_id));
+                    let session = this.clone();
+                    cx.spawn(async move |cx| {
+                        if let Ok(Ok(Some(false))) = check.await {
+                            session
+                                .update(cx, |this, cx| {
+                                    if this.recording_generation == generation {
+                                        tracing::info!("the server lifted this recording's limit");
+                                        this.limit_lifted = true;
+                                        cx.notify();
+                                    }
+                                })
+                                .ok();
+                        }
+                    })
+                    .detach();
+                }
+                wait = if plan_checked {
+                    left
+                } else {
+                    left.saturating_sub(PLAN_CHECK_BEFORE_LIMIT)
+                };
+            }
+        });
+        self.limit_monitor = Some(task);
+    }
+
     fn monitor_storage(&mut self, project_dir: std::path::PathBuf, cx: &mut Context<Self>) {
         self.storage_monitor = None;
+        let kind = if self.mode() == Some(recording::RecordingMode::Studio) {
+            FinalizationKind::Studio
+        } else {
+            FinalizationKind::Instant
+        };
         let task = cx.spawn(async move |this, cx| {
             let mut check_failed = false;
-            let mut storage_monitor = RecordingStorageMonitor::default();
+            let mut storage_monitor = RecordingStorageMonitor::new(kind);
             loop {
                 cx.background_executor().timer(Duration::from_secs(2)).await;
                 let is_current = |session: &Self| {
@@ -1205,6 +1362,10 @@ impl RecordingSession {
                         }
                         match storage.status() {
                             DiskSpaceStatus::Exhausted => {
+                                log_storage(
+                                    storage,
+                                    "Recording storage is low; stopping to save the recording",
+                                );
                                 this.storage_warning = true;
                                 this.stopped_for_low_storage = true;
                                 this.storage_notice = Some(tr::dialog::storage::stopping().into());
@@ -1214,6 +1375,14 @@ impl RecordingSession {
                             status => {
                                 let warning = status == DiskSpaceStatus::Low;
                                 if warning != this.storage_warning {
+                                    log_storage(
+                                        storage,
+                                        if warning {
+                                            "Recording storage is low; stopping soon to save the recording"
+                                        } else {
+                                            "Recording storage warning cleared"
+                                        },
+                                    );
                                     this.storage_warning = warning;
                                     cx.notify();
                                 }
@@ -1284,6 +1453,7 @@ impl RecordingSession {
             return;
         }
         self.storage_monitor = None;
+        self.limit_monitor = None;
         #[cfg(not(windows))]
         {
             self.failure_monitor = None;
@@ -1291,6 +1461,8 @@ impl RecordingSession {
         let Some(active) = self.active.as_ref() else {
             return;
         };
+        #[cfg(windows)]
+        active.mark_stop_requested();
         let instant_share_url = active.instant_share_url().map(ToString::to_string);
         let instant_video_id = active.instant_video_id().map(ToString::to_string);
         let instant_rules_hold = instant_share_url
@@ -1471,6 +1643,7 @@ impl RecordingSession {
                     {
                         this.monitor_storage(active.project_dir.clone(), cx);
                     }
+                    this.rearm_recording_limit(LIMIT_CHECK_AFTER_FAILED_STOP, cx);
                     #[cfg(windows)]
                     let message = if this.mode() == Some(recording::RecordingMode::Studio) {
                         format!("{error}. Studio shutdown remains unconfirmed; recording and files retained.")
@@ -1532,6 +1705,16 @@ impl RecordingSession {
                             }
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
                         }
+                    }
+                    #[cfg(windows)]
+                    Ok(Err(error))
+                        if error
+                            .chain()
+                            .any(|cause| cause.is::<crate::recording::StudioStillSaving>()) =>
+                    {
+                        tracing::warn!("Studio recording is still saving; the app is free for a new recording");
+                        this.capture_source_lost = false;
+                        this.recording_still_saving = true;
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to stop cleanly: {error:#}");
@@ -1615,6 +1798,7 @@ impl RecordingSession {
                         if let Some(since) = this.paused_since.take() {
                             this.paused_accum += since.elapsed();
                         }
+                        this.rearm_recording_limit(Duration::ZERO, cx);
                     } else if !was_paused && paused {
                         this.paused_since = Some(Instant::now());
                     }
@@ -1834,6 +2018,7 @@ impl RecordingSession {
                         if let Some(since) = this.paused_since.take() {
                             this.paused_accum += since.elapsed();
                         }
+                        this.rearm_recording_limit(Duration::ZERO, cx);
                     } else if !was_paused && paused {
                         this.paused_since = Some(Instant::now());
                     }
@@ -1883,6 +2068,7 @@ impl RecordingSession {
             return;
         }
         self.storage_monitor = None;
+        self.limit_monitor = None;
         let Some(active) = self.active.take() else {
             return;
         };
@@ -1953,6 +2139,7 @@ impl RecordingSession {
         #[cfg(target_os = "linux")]
         let restart_generation = self.recording_generation;
         self.storage_monitor = None;
+        self.limit_monitor = None;
         let Some(active) = self.active.take() else {
             return;
         };
@@ -2042,6 +2229,7 @@ impl RecordingSession {
         let generation = self.recording_generation;
         let phase = self.phase;
         self.storage_monitor = None;
+        self.limit_monitor = None;
         self.phase = Phase::Stopping;
         cx.notify();
         let task = gpui_tokio::Tokio::spawn(cx, future);
@@ -2079,6 +2267,7 @@ impl RecordingSession {
                         if matches!(this.phase, Phase::Recording { .. }) {
                             this.monitor_storage(directory.clone(), cx);
                         }
+                        this.rearm_recording_limit(LIMIT_CHECK_AFTER_FAILED_STOP, cx);
                         this.error = Some(match result {
                             Ok((_, Err(error))) => format!(
                                 "{error:#}; discard/restart stopped, local recording retained"
@@ -2116,6 +2305,7 @@ impl RecordingSession {
             operation,
         };
         self.storage_monitor = None;
+        self.limit_monitor = None;
         self.failure_monitor = None;
         self.clean_control.invalidate();
         self.phase = Phase::Stopping;
@@ -2141,6 +2331,7 @@ impl RecordingSession {
                     result => {
                         this.phase = Phase::Recording { paused: false };
                         this.clean_control.uncertain = true;
+                        this.rearm_recording_limit(LIMIT_CHECK_AFTER_FAILED_STOP, cx);
                         this.error = Some(match result {
                             Ok((_, Err(error))) => format!("{error:#}. Cleanup is unconfirmed; retry Stop."),
                             Err(error) => format!("Cancel task failed: {error}. Cleanup is unconfirmed; retry Stop."),
@@ -2211,6 +2402,7 @@ impl RecordingSession {
         self.paused_for_sleep = false;
         self.pipeline_failed = false;
         self.storage_monitor = None;
+        self.limit_monitor = None;
         self.countdown_remaining = None;
         self.phase = Phase::Idle;
         self.mic_muted = false;
@@ -2249,14 +2441,14 @@ fn sleep_action(
     }
 }
 
-/// On macOS a pipeline only finishes cleanly before Stop when ScreenCaptureKit
-/// lost what it was capturing: the display slept or went away, the window
-/// closed, or sharing was stopped from the menu bar. Everything captured so far
-/// is intact, so the recording is stopped and saved instead of failed.
+/// A pipeline that finishes with Ok before Stop lost its capture source:
+/// macOS ScreenCaptureKit (display asleep, window closed, sharing stopped) or
+/// a Linux Audio Only output monitor. Everything captured so far is intact,
+/// so the recording is stopped and saved instead of failed.
 fn capture_ended_cleanly<E>(
     outcome: &Result<Result<(), cap_recording::PipelineDoneError>, E>,
 ) -> bool {
-    cfg!(target_os = "macos") && matches!(outcome, Ok(Ok(())))
+    cfg!(any(target_os = "macos", target_os = "linux")) && matches!(outcome, Ok(Ok(())))
 }
 
 fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> bool {
@@ -2862,7 +3054,10 @@ mod recording_failure_tests {
     #[test]
     fn a_capture_that_ends_cleanly_before_stop_is_saved_not_failed() {
         let ended: Result<Result<(), cap_recording::PipelineDoneError>, ()> = Ok(Ok(()));
-        assert_eq!(capture_ended_cleanly(&ended), cfg!(target_os = "macos"));
+        assert_eq!(
+            capture_ended_cleanly(&ended),
+            cfg!(any(target_os = "macos", target_os = "linux"))
+        );
         let task_died: Result<Result<(), cap_recording::PipelineDoneError>, ()> = Err(());
         assert!(!capture_ended_cleanly(&task_died));
     }
@@ -3099,5 +3294,94 @@ mod studio_editor_presentation_tests {
         assert_eq!(state, StudioEditorPresentation::Opened(2));
         state.closed(2);
         assert_eq!(state, StudioEditorPresentation::Dismissed);
+    }
+}
+
+const PLAN_CHECK_BEFORE_LIMIT: Duration = Duration::from_secs(15);
+const LIMIT_CHECK_AFTER_FAILED_STOP: Duration = Duration::from_secs(10);
+
+/// The account a limited recording started under, and when (Unix seconds).
+#[derive(Default)]
+struct LimitOwner {
+    started_at: i64,
+    server_url: String,
+    user_id: Option<String>,
+}
+
+/// The server only sets a recording limit for a free account, so a Pro plan
+/// saved before the recording started is out of date. Only a plan fetched
+/// after it started, for the account it started under, can lift the limit.
+fn upgrade_lifts_limit(auth: &crate::store::AuthSnapshot, owner: &LimitOwner) -> bool {
+    auth.plan_upgraded
+        && auth.signed_in()
+        && auth.user_id.is_some()
+        && auth.user_id == owner.user_id
+        && auth.server_url == owner.server_url
+        && auth
+            .plan_checked_at
+            .is_some_and(|checked_at| checked_at > owner.started_at)
+}
+
+#[cfg(test)]
+mod recording_limit_tests {
+    use super::{LimitOwner, upgrade_lifts_limit};
+    use crate::store::AuthSnapshot;
+
+    fn owner() -> LimitOwner {
+        LimitOwner {
+            started_at: 1_000,
+            server_url: "https://cap.so".into(),
+            user_id: Some("free-account".into()),
+        }
+    }
+
+    fn plan(upgraded: bool, checked_at: Option<i64>) -> AuthSnapshot {
+        AuthSnapshot {
+            server_url: "https://cap.so".into(),
+            user_id: Some("free-account".into()),
+            token: Some("credential".into()),
+            plan_upgraded: upgraded,
+            plan_checked_at: checked_at,
+            ..AuthSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn only_a_pro_plan_fetched_after_the_start_lifts_the_limit() {
+        let owner = owner();
+        assert!(!upgrade_lifts_limit(&plan(true, Some(900)), &owner));
+        assert!(!upgrade_lifts_limit(&plan(true, None), &owner));
+        assert!(!upgrade_lifts_limit(&plan(false, Some(1_010)), &owner));
+        assert!(upgrade_lifts_limit(&plan(true, Some(1_010)), &owner));
+        let manual = AuthSnapshot {
+            plan_manual: true,
+            ..plan(false, None)
+        };
+        assert!(!upgrade_lifts_limit(&manual, &owner));
+    }
+
+    #[test]
+    fn only_the_account_the_recording_started_under_lifts_the_limit() {
+        let owner = owner();
+        let other_account = AuthSnapshot {
+            user_id: Some("pro-account".into()),
+            ..plan(true, Some(1_010))
+        };
+        assert!(!upgrade_lifts_limit(&other_account, &owner));
+        let signed_in_again = AuthSnapshot {
+            token: Some("new-credential".into()),
+            ..plan(true, Some(1_010))
+        };
+        assert!(upgrade_lifts_limit(&signed_in_again, &owner));
+        let signed_out = AuthSnapshot {
+            token: None,
+            ..plan(true, Some(1_010))
+        };
+        assert!(!upgrade_lifts_limit(&signed_out, &owner));
+        let other_server = AuthSnapshot {
+            server_url: "https://cap.example.com".into(),
+            ..plan(true, Some(1_010))
+        };
+        assert!(!upgrade_lifts_limit(&other_server, &owner));
     }
 }

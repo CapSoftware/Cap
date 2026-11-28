@@ -32,6 +32,8 @@ pub(crate) struct FramePacer {
     interval: Duration,
     last: Option<LastFrame>,
     paused_since: Option<Instant>,
+    #[cfg(windows)]
+    stop_cut: Option<super::core::StopCut>,
 }
 
 struct LastFrame {
@@ -46,7 +48,17 @@ impl FramePacer {
             interval: Duration::from_secs_f64(1.0 / f64::from(frame_rate.max(1))),
             last: None,
             paused_since: None,
+            #[cfg(windows)]
+            stop_cut: None,
         }
+    }
+
+    /// Stops repeating once the recording has been asked to stop: a repeat
+    /// then would carry the last frame past the stop request.
+    #[cfg(windows)]
+    pub(crate) fn stopping_at(mut self, stop_cut: Option<super::core::StopCut>) -> Self {
+        self.stop_cut = stop_cut;
+        self
     }
 
     /// Blocks until a frame arrives, the source has been silent long enough
@@ -78,9 +90,18 @@ impl FramePacer {
                 .last
                 .as_ref()
                 .map(|last| last.arrived + self.interval * (STALL_INTERVALS + last.repeats));
+            // A repeat fires about two intervals after the slot it fills, so
+            // past this point it would fill a slot after the stop request.
+            #[cfg(windows)]
+            let stopped = self
+                .stop_cut
+                .as_ref()
+                .is_some_and(|cut| cut.excludes(Instant::now(), self.interval * STALL_INTERVALS));
+            #[cfg(not(windows))]
+            let stopped = false;
             let received = match due {
                 None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
-                Some(_) if is_paused => rx.recv_timeout(slice),
+                Some(_) if is_paused || stopped => rx.recv_timeout(slice),
                 Some(due) => {
                     rx.recv_timeout(due.saturating_duration_since(Instant::now()).min(slice))
                 }
@@ -99,7 +120,7 @@ impl FramePacer {
                 }
                 Ok(None) | Err(RecvTimeoutError::Disconnected) => return Paced::End,
                 Err(RecvTimeoutError::Timeout) => {
-                    if is_paused || due.is_some_and(|due| Instant::now() < due) {
+                    if is_paused || stopped || due.is_some_and(|due| Instant::now() < due) {
                         continue;
                     }
                     let Some(last) = self.last.as_mut() else {
@@ -177,6 +198,38 @@ mod tests {
         // The source resumes with a frame captured after the stall.
         tx.send(Some((8, at(16)))).unwrap();
         assert!(matches!(pacer.next(&rx, &paused), Paced::Frame(8, ts) if ts == at(16)));
+    }
+
+    /// Once the recording was asked to stop, a stalled source is not carried
+    /// past the request with repeats while Stop has yet to reach the encoder.
+    #[cfg(windows)]
+    #[test]
+    fn late_stop_cut_stops_repeating_the_last_frame_after_the_stop_request() {
+        let (tx, rx) = sync_channel(4);
+        let cut = super::super::core::StopCut::default();
+        let mut pacer = FramePacer::new(FPS).stopping_at(Some(cut.clone()));
+        let paused = AtomicBool::new(false);
+        tx.send(Some((7u32, at(10)))).unwrap();
+        assert!(matches!(pacer.next(&rx, &paused), Paced::Frame(7, ts) if ts == at(10)));
+        assert!(cut.mark());
+        let ender = std::thread::spawn(move || {
+            std::thread::sleep(INTERVAL * (STALL_INTERVALS + 6));
+            tx.send(None).unwrap();
+        });
+        let mut repeats = Vec::new();
+        loop {
+            match pacer.next(&rx, &paused) {
+                Paced::Repeat(ts) => repeats.push(ts),
+                Paced::End => break,
+                Paced::Frame(..) => panic!("no frame was sent"),
+            }
+        }
+        ender.join().unwrap();
+        // Without the cut this stall repeats the frame about six times.
+        assert!(
+            repeats.len() <= 1,
+            "repeats after the stop request: {repeats:?}"
+        );
     }
 
     #[test]

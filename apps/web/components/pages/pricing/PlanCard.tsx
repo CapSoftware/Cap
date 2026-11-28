@@ -12,11 +12,15 @@ export type PlanToggle = {
 	onToggle: () => void;
 };
 
+const FRAME_SHADOW = "shadow-[0_28px_56px_-36px_rgba(61,119,194,0.55)]";
+
 export const PlanCard = ({
+	id,
 	name,
 	tag,
 	theme,
 	featured,
+	frameShadow = FRAME_SHADOW,
 	blurb,
 	price,
 	cadence,
@@ -32,13 +36,15 @@ export const PlanCard = ({
 	collapsed = false,
 	onToggle,
 }: {
+	id?: string;
 	name: string;
 	tag: string;
 	theme: ModeTheme;
 	featured?: boolean;
+	frameShadow?: string;
 	blurb: string;
 	price?: ReactNode;
-	cadence?: string;
+	cadence?: ReactNode;
 	note?: ReactNode;
 	lede?: ReactNode;
 	controls: ReactNode;
@@ -53,8 +59,10 @@ export const PlanCard = ({
 }) => {
 	const card = (
 		<article
+			id={featured ? undefined : id}
 			className={classNames(
 				"relative flex h-full flex-col bg-white p-6 lg:p-8",
+				!featured && id && "scroll-mt-24",
 				featured
 					? "rounded-[18px]"
 					: "rounded-[22px] shadow-[0_0_0_1px_rgba(17,17,17,0.06),0_24px_48px_-32px_rgba(17,17,17,0.28)]",
@@ -179,7 +187,12 @@ export const PlanCard = ({
 
 	return (
 		<div
-			className="flex rounded-[24px] p-[6px] shadow-[0_28px_56px_-36px_rgba(61,119,194,0.55)]"
+			id={id}
+			className={classNames(
+				"flex rounded-[24px] p-[6px]",
+				frameShadow,
+				id && "scroll-mt-24",
+			)}
 			style={meshStyle(theme)}
 		>
 			<div className="flex-1">{card}</div>

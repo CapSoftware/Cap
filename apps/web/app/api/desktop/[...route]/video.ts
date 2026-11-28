@@ -24,6 +24,7 @@ import { after } from "next/server";
 import { z } from "zod";
 import { readInstantCleanupReport } from "@/lib/desktop-instant-cleanup";
 import { getDesktopShareUrl } from "@/lib/desktop-share-url";
+import { getFreePlanRecordingLimit } from "@/lib/free-plan-duration";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { maybeStartLiveTranscription } from "@/lib/live-transcribe";
 import { runPromise } from "@/lib/server";
@@ -80,6 +81,12 @@ app.get(
 			isScreenshot: z.coerce.boolean().default(false),
 			videoId: z.string().optional(),
 			createWithId: z.coerce.boolean().default(false),
+			// Set by a desktop retrying the upload of a cap it created earlier:
+			// a missing row means the owner deleted it, so it is not made again.
+			requireExisting: z
+				.literal("true")
+				.optional()
+				.transform((value) => value === "true"),
 			name: z.string().optional(),
 			durationInSecs: stringOrNumberOptional,
 			width: stringOrNumberOptional,
@@ -102,6 +109,7 @@ app.get(
 				isScreenshot,
 				videoId,
 				createWithId,
+				requireExisting,
 				name,
 				durationInSecs,
 				width,
@@ -191,6 +199,9 @@ app.get(
 						aws_bucket: "n/a",
 					});
 				}
+
+				if (requireExisting)
+					return c.json({ error: "Video not found" }, { status: 404 });
 			}
 
 			const [ownedOrganizations, memberOrganizations] = await Promise.all([
@@ -259,6 +270,23 @@ app.get(
 				videoOrgId = userOrganizations[0].id;
 			}
 
+			const recordingLimitSecs = isScreenshot
+				? null
+				: await getFreePlanRecordingLimit(user.id, videoOrgId).catch(
+						(error) => {
+							console.error("Error reading the recording limit:", error);
+							return null;
+						},
+					);
+
+			// Legacy HLS recordings declare their own length and are only made
+			// by very old clients, so the free plan cannot create them.
+			if (
+				recordingLimitSecs !== null &&
+				(recordingMode === undefined || recordingMode === "hls")
+			)
+				return c.json({ error: "upgrade_required" }, { status: 403 });
+
 			const idToUse = Video.VideoId.make(
 				createWithId && videoId ? videoId : nanoId(),
 			);
@@ -310,12 +338,12 @@ app.get(
 					ownerId: user.id,
 					orgId: videoOrgId,
 					source:
-						recordingMode === "hls"
-							? { type: "local" as const }
-							: recordingMode === "desktopMP4"
+						recordingMode === "desktopSegments"
+							? { type: "desktopSegments" as const }
+							: recordingMode === "desktopMP4" || isScreenshot
 								? { type: "desktopMP4" as const }
-								: recordingMode === "desktopSegments"
-									? { type: "desktopSegments" as const }
+								: recordingMode === "hls"
+									? { type: "local" as const }
 									: undefined,
 					isScreenshot,
 					bucket: Option.getOrNull(writable.bucketId),
@@ -386,6 +414,9 @@ app.get(
 			return c.json({
 				id: idToUse,
 				share_url: await getDesktopShareUrl(videoOrgId, idToUse),
+				...(recordingLimitSecs === null
+					? {}
+					: { recording_limit_secs: recordingLimitSecs }),
 				// All deprecated
 				user_id: user.id,
 				aws_region: "n/a",

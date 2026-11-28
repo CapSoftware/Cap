@@ -40,6 +40,70 @@ pub use preparing_projection::{
     PreparingAudioInput, PreparingCursorImage, PreparingStudioSegment, PreparingVideoInput,
 };
 
+/// Studio projects whose stop returned while their tracks were still
+/// writing. Recovery leaves them alone until the stop completes, since it
+/// would otherwise publish media that is still being written.
+#[cfg(windows)]
+pub mod finishing {
+    use std::{
+        path::{Path, PathBuf},
+        sync::{Mutex, MutexGuard, PoisonError},
+    };
+
+    static PROJECTS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    fn projects() -> MutexGuard<'static, Vec<PathBuf>> {
+        PROJECTS.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn key(project_path: &Path) -> PathBuf {
+        project_path
+            .canonicalize()
+            .unwrap_or_else(|_| project_path.to_path_buf())
+    }
+
+    #[must_use]
+    pub struct FinishingProject {
+        key: PathBuf,
+        path: PathBuf,
+    }
+
+    impl FinishingProject {
+        pub fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for FinishingProject {
+        fn drop(&mut self) {
+            let mut projects = projects();
+            if let Some(index) = projects.iter().position(|key| *key == self.key) {
+                projects.swap_remove(index);
+            }
+        }
+    }
+
+    pub fn register(project_path: &Path) -> FinishingProject {
+        let key = key(project_path);
+        projects().push(key.clone());
+        FinishingProject {
+            key,
+            path: project_path.to_path_buf(),
+        }
+    }
+
+    pub fn contains(project_path: &Path) -> bool {
+        let key = key(project_path);
+        projects().contains(&key)
+    }
+
+    pub(super) fn busy() -> super::RecoveryError {
+        super::RecoveryError::Io(std::io::Error::other(
+            "The recording is still finishing in this app; recovery waits until it completes",
+        ))
+    }
+}
+
 macro_rules! finalization_info {
     ($($arg:tt)*) => {
         tracing::info!(target: "cap_recording::recording_finalization", $($arg)*)
@@ -224,6 +288,10 @@ impl RecoveryManager {
         if !project_path.is_dir() {
             return None;
         }
+        #[cfg(windows)]
+        if finishing::contains(project_path) {
+            return None;
+        }
 
         let _lock = RecoveryLock::acquire(project_path).ok()?;
 
@@ -238,6 +306,10 @@ impl RecoveryManager {
 
     pub fn find_incomplete_single(project_path: &Path) -> Option<IncompleteRecording> {
         if !project_path.is_dir() {
+            return None;
+        }
+        #[cfg(windows)]
+        if finishing::contains(project_path) {
             return None;
         }
 
@@ -325,6 +397,10 @@ impl RecoveryManager {
         if !project_path.join("recording-meta.json").is_file() {
             return Ok(());
         }
+        #[cfg(windows)]
+        if finishing::contains(project_path) {
+            return Ok(());
+        }
         RecoveryLock::acquire(project_path).map(drop)
     }
 
@@ -338,6 +414,10 @@ impl RecoveryManager {
     ) -> Result<bool, RecoveryError> {
         if !project_path.is_dir() {
             return Ok(false);
+        }
+        #[cfg(windows)]
+        if finishing::contains(project_path) {
+            return Err(finishing::busy());
         }
         let incomplete = {
             let _lock = RecoveryLock::acquire(project_path)?;
@@ -406,6 +486,10 @@ impl RecoveryManager {
             }
 
             if !path.join("recording-meta.json").exists() {
+                continue;
+            }
+            #[cfg(windows)]
+            if finishing::contains(&path) {
                 continue;
             }
 
@@ -1386,6 +1470,10 @@ impl RecoveryManager {
         preparing: Option<PreparingStudioJob>,
     ) -> Result<RecoveredRecording, RecoveryError> {
         let started = Instant::now();
+        #[cfg(windows)]
+        if finishing::contains(&recording.project_path) {
+            return Err(finishing::busy());
+        }
         if purpose.keeps_failed_tracks_out() {
             Self::require_no_track_failure(&recording.project_path)?;
         }
@@ -5912,6 +6000,7 @@ mod clean_studio_snapshot_tests {
             meta: metadata.studio_meta().unwrap().clone(),
             cursor_data: Default::default(),
             clean_stopped: CleanStoppedStudio::for_test(metadata, configuration),
+            screen_frames: None,
         }
     }
 
@@ -5954,6 +6043,7 @@ mod clean_studio_snapshot_tests {
                     metadata,
                     configuration,
                 ),
+                screen_frames: None,
             };
             PreparingStudioJob::claim(&alternate_completed, 73).unwrap()
         } else {

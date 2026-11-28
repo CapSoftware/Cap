@@ -1,3 +1,4 @@
+use super::frame_accounting::{CaptureGapCounter, FrameLossCarry, ScreenFrameAccounting};
 use super::*;
 use crate::{
     ChannelAudioSourceConfig,
@@ -25,10 +26,21 @@ use tokio_util::{
 };
 use tracing::{debug, error, info, warn};
 
+mod hidden_sink;
+
 const MAX_CAPTURE_RESTARTS: u32 = 3;
 const RESTART_DELAY: Duration = Duration::from_secs(2);
+// Each check is a WindowServer round trip that measured several percent of an
+// Instant recording's CPU at 100 ms, so a still window is checked less often and
+// the fast interval only runs while the window is changing.
+const WINDOW_FOLLOW_INTERVAL: Duration = Duration::from_millis(100);
+const WINDOW_FOLLOW_IDLE_INTERVAL: Duration = Duration::from_millis(500);
+const WINDOW_FOLLOW_ACTIVE_FOR: Duration = Duration::from_secs(2);
 const WINDOW_WATCH_INTERVAL: Duration = Duration::from_secs(1);
 const WINDOW_GONE_CHECKS: u32 = 2;
+// How often a window excluded to leave out a hidden audio sink's app is
+// checked; once it is shown, the exclusion moves so the video stays complete.
+const HIDDEN_SINK_WATCH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The window server still lists a minimized, hidden or off-Space window; only
 /// a closed window (or one whose app quit) disappears.
@@ -99,6 +111,53 @@ fn configure_window_capture(settings: &mut sc::StreamCfg) {
             settings.set_preserves_aspect_ratio(true);
         }
     }
+}
+
+fn stream_settings(
+    config: &Config,
+    video_info: &VideoInfo,
+    system_audio: bool,
+    captures_window: bool,
+    crop_bounds: Option<super::CropBounds>,
+) -> arc::R<sc::StreamCfg> {
+    let max_queue_depth = get_max_queue_depth();
+    let queue_depth = ((config.fps as f32 / 30.0 * 5.0).ceil() as isize).clamp(3, max_queue_depth);
+    debug!(
+        queue_depth,
+        max_queue_depth,
+        ?crop_bounds,
+        "Screen capture queue depth"
+    );
+
+    let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
+        .with_width(video_info.width as usize)
+        .with_height(video_info.height as usize)
+        .with_fps(config.fps as f32)
+        .with_shows_cursor(config.show_cursor)
+        .with_captures_audio(system_audio)
+        .with_queue_depth(queue_depth)
+        .build();
+
+    settings.set_pixel_format(cv::PixelFormat::_420V);
+    settings.set_color_space_name(cg::color_space::names::srgb());
+    if captures_window {
+        configure_window_capture(&mut settings);
+    }
+    if let Some(crop_bounds) = crop_bounds {
+        settings.set_src_rect(source_rect(captures_window, crop_bounds));
+    }
+    settings
+}
+
+/// What a window-only capture of `window` reads now: the whole window, sized
+/// as the recording's own crop is when it starts. The window can be resized
+/// while it is recorded, and a source rect left at its first size would cut
+/// off whatever grew past it.
+fn current_window_crop(window: &WindowId, scale: f64) -> Option<super::CropBounds> {
+    let bounds = scap_targets::Window::from_id_direct(window)?
+        .raw_handle()
+        .logical_bounds()?;
+    Some(super::even_pixel_crop(bounds, scale))
 }
 
 /// What the stream reads. A display capture crops to `crop_bounds` on the
@@ -299,6 +358,7 @@ pub enum SourceError {
 pub struct VideoFrame {
     pub sample_buf: arc::R<cm::SampleBuf>,
     pub timestamp: Timestamp,
+    pub capture: Option<FrameLossCarry>,
 }
 
 impl output_pipeline::VideoFrame for VideoFrame {
@@ -310,7 +370,75 @@ impl output_pipeline::VideoFrame for VideoFrame {
         Some(Self {
             sample_buf: self.sample_buf.clone(),
             timestamp: self.timestamp,
+            capture: None,
         })
+    }
+}
+
+struct CaptureLossTracker {
+    gaps: CaptureGapCounter,
+    display: Display,
+    accounting: Arc<ScreenFrameAccounting>,
+    tick_numer: u64,
+    tick_denom: u64,
+}
+
+impl CaptureLossTracker {
+    fn new(fps: u32, display: Display, accounting: Arc<ScreenFrameAccounting>) -> Self {
+        let timebase = cidre::mach::TimeBaseInfo::new();
+        Self {
+            gaps: CaptureGapCounter::for_display(fps, display.raw_handle().refresh_rate()),
+            display,
+            accounting,
+            tick_numer: u64::from(timebase.numer.max(1)),
+            tick_denom: u64::from(timebase.denom.max(1)),
+        }
+    }
+
+    fn status(&mut self, frame: &scap_screencapturekit::VideoFrame) {
+        self.skipped_before(frame, false);
+    }
+
+    fn frame(&mut self, frame: &scap_screencapturekit::VideoFrame) -> FrameLossCarry {
+        FrameLossCarry {
+            capture_skipped: self.skipped_before(frame, true),
+        }
+    }
+
+    fn skipped_before(
+        &mut self,
+        frame: &scap_screencapturekit::VideoFrame,
+        has_image: bool,
+    ) -> u64 {
+        let info = frame.info();
+        match (info.status, info.display_time) {
+            (Some(sc::FrameStatus::Complete), Some(ticks)) if has_image => {
+                let display_time_ns = ticks.saturating_mul(self.tick_numer) / self.tick_denom;
+                let display = self.display;
+                let skipped = self
+                    .gaps
+                    .complete_on_display(display_time_ns, || display.raw_handle().refresh_rate());
+                if skipped > 0 {
+                    debug!(
+                        display_time_ns,
+                        skipped, "Screen capture skipped display frames"
+                    );
+                }
+                skipped
+            }
+            (Some(sc::FrameStatus::Idle), _) => {
+                self.gaps.idle();
+                0
+            }
+            _ => {
+                self.gaps.interrupted();
+                0
+            }
+        }
+    }
+
+    fn dropped(&self, carry: FrameLossCarry) {
+        self.accounting.record_callback_dropped(carry);
     }
 }
 
@@ -343,14 +471,31 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             .transpose()?;
         let captures_window = window_filter.is_some();
 
+        let mut hidden_sink = HiddenSinkExclusion::default();
         let content_filter = match window_filter {
             Some(filter) => filter,
             None => {
-                let excluded_sc_windows = excluded_shareable_windows(
+                let mut excluded_sc_windows = excluded_shareable_windows(
                     &self.excluded_windows,
                     &self.shareable_content,
                     "initial",
                 );
+                if self.system_audio && self.leave_out_hidden_sinks {
+                    let writers = hidden_sink::writers();
+                    let windows =
+                        hidden_sink::off_screen_windows(&self.shareable_content, &writers, true);
+                    hidden_sink = HiddenSinkExclusion::new(writers, &windows);
+                    if !windows.is_empty() {
+                        hidden_sink.fallback = display
+                            .raw_handle()
+                            .as_content_filter_excluding_windows(
+                                self.shareable_content.clone(),
+                                excluded_sc_windows.clone(),
+                            )
+                            .map(FallbackFilter);
+                    }
+                    excluded_sc_windows.extend(windows);
+                }
 
                 display
                     .raw_handle()
@@ -364,38 +509,13 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         debug!("SCK content filter: {:?}", content_filter);
 
-        let size = PhysicalSize::new(self.video_info.width as f64, self.video_info.height as f64);
-
-        debug!("size: {:?}", size);
-
-        let max_queue_depth = get_max_queue_depth();
-        let queue_depth =
-            ((self.config.fps as f32 / 30.0 * 5.0).ceil() as isize).clamp(3, max_queue_depth);
-        debug!(
-            queue_depth = queue_depth,
-            max_queue_depth = max_queue_depth,
-            "Screen capture queue depth"
+        let settings = stream_settings(
+            &self.config,
+            &self.video_info,
+            self.system_audio,
+            captures_window,
+            self.config.crop_bounds,
         );
-
-        let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
-            .with_width(size.width() as usize)
-            .with_height(size.height() as usize)
-            .with_fps(self.config.fps as f32)
-            .with_shows_cursor(self.config.show_cursor)
-            .with_captures_audio(self.system_audio)
-            .with_queue_depth(queue_depth)
-            .build();
-
-        settings.set_pixel_format(cv::PixelFormat::_420V);
-        settings.set_color_space_name(cg::color_space::names::srgb());
-        if captures_window {
-            configure_window_capture(&mut settings);
-        }
-
-        if let Some(crop_bounds) = self.config.crop_bounds {
-            debug!("crop bounds: {:?}", crop_bounds);
-            settings.set_src_rect(source_rect(captures_window, crop_bounds));
-        }
         cap_fail::fail_err!(
             "macos::ScreenCaptureActor::new",
             ns::Error::with_domain(ns::ErrorDomain::os_status(), 69420, None)
@@ -411,11 +531,13 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         let (stall_health_tx, stall_health_rx) =
             tokio::sync::mpsc::channel::<output_pipeline::PipelineHealthEvent>(32);
+        let frame_accounting = Arc::new(ScreenFrameAccounting::default());
 
         let rebuild_params = Arc::new(CapturerRebuildParams {
             display_id: self.config.display.clone(),
             config: self.config.clone(),
             system_audio: self.system_audio,
+            leave_out_hidden_sinks: self.leave_out_hidden_sinks,
             excluded_windows: self.excluded_windows.clone(),
             video_info: self.video_info,
             video_tx: video_tx.clone(),
@@ -429,15 +551,19 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             scaling_logged: scaling_logged.clone(),
             scaled_frame_count: scaled_frame_count.clone(),
             stall_health_tx: stall_health_tx.clone(),
+            frame_accounting: frame_accounting.clone(),
         });
 
         let builder = scap_screencapturekit::Capturer::builder(content_filter, settings)
+            .with_screen_status_samples()
             .with_output_sample_buf_cb({
                 let video_frame_count = video_frame_counter.clone();
                 let drop_counter = drop_counter.clone();
                 let sys_audio_drop_counter = system_audio_drop_counter.clone();
                 let sys_audio_frame_counter = system_audio_frame_counter.clone();
                 let stall_health_tx = stall_health_tx.clone();
+                let mut loss =
+                    CaptureLossTracker::new(self.config.fps, display, frame_accounting.clone());
                 move |frame| {
                     let sample_buffer = frame.sample_buf();
 
@@ -448,11 +574,17 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                     );
 
                     match &frame {
+                        scap_screencapturekit::Frame::ScreenStatus(frame) => {
+                            loss.status(frame);
+                        }
                         scap_screencapturekit::Frame::Screen(frame) => {
+                            let carry = loss.frame(frame);
                             let Some(image_buf) = frame.image_buf() else {
+                                loss.dropped(carry);
                                 return;
                             };
                             if image_buf.height() == 0 || image_buf.width() == 0 {
+                                loss.dropped(carry);
                                 return;
                             }
 
@@ -464,6 +596,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 {
                                     let Ok(mut scaler_guard) = frame_scaler.lock() else {
                                         drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                        loss.dropped(carry);
                                         return;
                                     };
 
@@ -489,11 +622,13 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
                                     let Some(scaler) = scaler_guard.as_ref() else {
                                         drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                        loss.dropped(carry);
                                         return;
                                     };
 
                                     let Some(scaled) = scaler.scale_frame(sample_buffer) else {
                                         drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                        loss.dropped(carry);
                                         return;
                                     };
 
@@ -530,13 +665,17 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 VideoFrame {
                                     sample_buf: final_sample_buf,
                                     timestamp,
+                                    capture: Some(carry),
                                 },
                                 "screen-video",
                                 &stall_health_tx,
                             ) {
                                 output_pipeline::StallSendOutcome::Sent => {}
-                                output_pipeline::StallSendOutcome::StalledAndDropped { .. }
-                                | output_pipeline::StallSendOutcome::Disconnected => {
+                                output_pipeline::StallSendOutcome::StalledAndDropped { .. } => {
+                                    drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                    loss.dropped(carry);
+                                }
+                                output_pipeline::StallSendOutcome::Disconnected => {
                                     drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
                                 }
                             }
@@ -617,7 +756,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             });
 
         let cancel_token = CancellationToken::new();
-        let capturer = Capturer::new(Arc::new(builder.build()?));
+        let capturer = Capturer::new(Arc::new(builder.build()?), self.config.crop_bounds);
 
         Ok((
             VideoSourceConfig {
@@ -630,6 +769,8 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 drop_guard: cancel_token.drop_guard(),
                 rebuild_params: rebuild_params.clone(),
                 stall_health_rx: Some(stall_health_rx),
+                frame_accounting,
+                hidden_sink,
             },
             audio_rx.map(|rx| {
                 SystemAudioSourceConfig(
@@ -661,6 +802,10 @@ pub struct CaptureError(pub arc::R<ns::Error>);
 struct Capturer {
     started: Arc<AtomicBool>,
     capturer: Arc<scap_screencapturekit::Capturer>,
+    /// The size of the source rect this stream reads now. A restart builds
+    /// a new stream for the window's size at that moment, so this is kept
+    /// per stream rather than per recording.
+    source_size: Arc<Mutex<Option<LogicalSize>>>,
 }
 
 impl Clone for Capturer {
@@ -668,17 +813,26 @@ impl Clone for Capturer {
         Self {
             started: self.started.clone(),
             capturer: self.capturer.clone(),
+            source_size: self.source_size.clone(),
             // error_rx: self.error_rx.resubscribe(),
         }
     }
 }
 
 impl Capturer {
-    fn new(capturer: Arc<scap_screencapturekit::Capturer>) -> Self {
+    fn new(
+        capturer: Arc<scap_screencapturekit::Capturer>,
+        crop_bounds: Option<super::CropBounds>,
+    ) -> Self {
         Self {
             started: Arc::new(AtomicBool::new(false)),
             capturer,
+            source_size: Arc::new(Mutex::new(crop_bounds.map(|bounds| bounds.size()))),
         }
+    }
+
+    fn source_size(&self) -> Option<LogicalSize> {
+        self.source_size.lock().ok().and_then(|size| *size)
     }
 
     fn mark_stopped(&self) {
@@ -733,7 +887,16 @@ pub struct VideoSourceConfig {
     drop_counter: Arc<AtomicU64>,
     rebuild_params: Arc<CapturerRebuildParams>,
     stall_health_rx: Option<tokio::sync::mpsc::Receiver<output_pipeline::PipelineHealthEvent>>,
+    frame_accounting: Arc<ScreenFrameAccounting>,
+    hidden_sink: HiddenSinkExclusion,
 }
+
+impl VideoSourceConfig {
+    pub fn frame_accounting(&self) -> Arc<ScreenFrameAccounting> {
+        self.frame_accounting.clone()
+    }
+}
+
 pub struct VideoSource {
     inner: ChannelVideoSource<VideoFrame>,
     capturer: Capturer,
@@ -767,6 +930,8 @@ impl output_pipeline::VideoSource for VideoSource {
             drop_counter,
             rebuild_params,
             stall_health_rx,
+            frame_accounting: _,
+            hidden_sink,
         } = config;
 
         let monitor_cancel = cancel_token.clone();
@@ -793,15 +958,139 @@ impl output_pipeline::VideoSource for VideoSource {
         let active_capturer: Arc<Mutex<Option<Capturer>>> = Arc::new(Mutex::new(None));
         let active_capturer_for_stop = active_capturer.clone();
         let original_capturer = capturer.clone();
+
+        if let Some(window) = capturable_window(
+            &rebuild_params.config,
+            &rebuild_params.excluded_windows,
+            "follow",
+        )
+        .cloned()
+        {
+            let follow_cancel = cancel_token.clone();
+            let params = rebuild_params.clone();
+            let active_capturer = active_capturer.clone();
+            let original_capturer = capturer.clone();
+            ctx.tasks()
+                .spawn("screen-capture-window-follow", async move {
+                    let mut display_scale: Option<f64> = None;
+                    let mut last_change: Option<Instant> = None;
+                    loop {
+                        let interval = if last_change
+                            .is_some_and(|at| at.elapsed() < WINDOW_FOLLOW_ACTIVE_FOR)
+                        {
+                            WINDOW_FOLLOW_INTERVAL
+                        } else {
+                            WINDOW_FOLLOW_IDLE_INTERVAL
+                        };
+                        select! {
+                            _ = follow_cancel.cancelled() => break Ok(()),
+                            _ = tokio::time::sleep(interval) => {}
+                        }
+                        let capturer = active_capturer
+                            .lock()
+                            .ok()
+                            .and_then(|active| active.clone())
+                            .unwrap_or_else(|| original_capturer.clone());
+                        // A stopped stream, paused or waiting on a restart, takes
+                        // the window's size when it is rebuilt.
+                        if !capturer.started.load(atomic::Ordering::Relaxed) {
+                            continue;
+                        }
+                        if display_scale.is_none() {
+                            display_scale = Display::from_id(&params.display_id)
+                                .map(|display| display.raw_handle().scale().unwrap_or(1.0));
+                        }
+                        let Some(scale) = display_scale else {
+                            continue;
+                        };
+                        let Some(crop) = current_window_crop(&window, scale) else {
+                            continue;
+                        };
+                        if capturer.source_size() == Some(crop.size()) {
+                            continue;
+                        }
+                        last_change = Some(Instant::now());
+                        let update = capturer.capturer.update_cfg(&stream_settings(
+                            &params.config,
+                            &params.video_info,
+                            params.system_audio,
+                            true,
+                            Some(crop),
+                        ));
+                        match update.await {
+                            Ok(()) => {
+                                debug!(?crop, "Window capture follows the window's new size");
+                                if let Ok(mut size) = capturer.source_size.lock() {
+                                    *size = Some(crop.size());
+                                }
+                            }
+                            Err(error) => warn!(%error, "Could not resize the window capture"),
+                        }
+                    }
+                });
+        }
+
         ctx.tasks().spawn("screen-capture-monitor", async move {
             let mut restart_count = 0u32;
             let mut window_watch =
                 window_to_watch(&rebuild_params.config, &rebuild_params.excluded_windows)
                     .map(|window| (window, tokio::time::interval(WINDOW_WATCH_INTERVAL), 0u32));
+            let mut hidden_sink_watch = hidden_sink.watch();
 
             loop {
                 select! {
                     _ = monitor_cancel.cancelled() => break Ok(()),
+                    _ = async {
+                        match hidden_sink_watch.as_mut() {
+                            Some(watch) => watch.interval.tick().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        let Some(watch) = hidden_sink_watch.as_mut() else {
+                            continue;
+                        };
+                        if !hidden_sink::any_shown_or_closed(&watch.exclusion.windows) {
+                            watch.retry.reset();
+                            continue;
+                        }
+                        let capturer = active_capturer
+                            .lock()
+                            .ok()
+                            .and_then(|guard| guard.clone())
+                            .unwrap_or_else(|| original_capturer.clone());
+                        let released = match move_hidden_sink_exclusion(
+                            &rebuild_params,
+                            &capturer,
+                            watch,
+                        )
+                        .await
+                        {
+                            HiddenSinkMove::Moved => {
+                                info!(
+                                    excluded = watch.exclusion.windows.len(),
+                                    "Moved the hidden audio sink exclusion off a window that is now shown"
+                                );
+                                watch.retry.reset();
+                                false
+                            }
+                            HiddenSinkMove::Released => {
+                                info!(
+                                    "Hidden audio sink exclusion released; no window is left out of the video"
+                                );
+                                true
+                            }
+                            HiddenSinkMove::Waiting | HiddenSinkMove::NeedsFallback => false,
+                            HiddenSinkMove::Failed(error) => {
+                                if watch.retry.failed() {
+                                    warn!(%error, "Could not move the hidden audio sink exclusion; retrying");
+                                }
+                                false
+                            }
+                        };
+                        if released {
+                            hidden_sink_watch = None;
+                        }
+                    }
                     _ = async {
                         match window_watch.as_mut() {
                             Some((_, interval, _)) => interval.tick().await,
@@ -943,11 +1232,16 @@ impl output_pipeline::VideoSource for VideoSource {
                                 ));
                             }
 
-                            match rebuild_capturer(&rebuild_params).await {
-                                Ok(new_capturer) => {
+                            let writers = hidden_sink_watch
+                                .take()
+                                .map(|watch| watch.exclusion.writers)
+                                .unwrap_or_default();
+                            match rebuild_capturer(&rebuild_params, writers).await {
+                                Ok((new_capturer, exclusion)) => {
                                     if let Ok(mut guard) = active_capturer.lock() {
                                         *guard = Some(new_capturer);
                                     }
+                                    hidden_sink_watch = exclusion.watch();
                                     info!(
                                         restart_count,
                                         "macOS screen capture restarted successfully"
@@ -1133,6 +1427,7 @@ struct CapturerRebuildParams {
     display_id: DisplayId,
     config: Config,
     system_audio: bool,
+    leave_out_hidden_sinks: bool,
     excluded_windows: Vec<WindowId>,
     video_info: VideoInfo,
     video_tx: flume::Sender<VideoFrame>,
@@ -1146,12 +1441,143 @@ struct CapturerRebuildParams {
     scaling_logged: Arc<AtomicBool>,
     scaled_frame_count: Arc<AtomicU64>,
     stall_health_tx: output_pipeline::HealthSender,
+    frame_accounting: Arc<ScreenFrameAccounting>,
 }
 
 unsafe impl Send for CapturerRebuildParams {}
 unsafe impl Sync for CapturerRebuildParams {}
 
-async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capturer> {
+/// The display filter without hidden-sink exclusions, as `main` builds it.
+/// Applying it needs no fresh shareable content, so it still works when a
+/// refresh cannot get one.
+struct FallbackFilter(arc::R<sc::ContentFilter>);
+
+// Only handed to ScreenCaptureKit from the monitor task, never mutated.
+unsafe impl Send for FallbackFilter {}
+unsafe impl Sync for FallbackFilter {}
+
+#[derive(Default)]
+struct HiddenSinkExclusion {
+    writers: Vec<sys::Pid>,
+    windows: Vec<u32>,
+    fallback: Option<FallbackFilter>,
+}
+
+impl HiddenSinkExclusion {
+    fn new(writers: Vec<sys::Pid>, windows: &[arc::R<sc::Window>]) -> Self {
+        Self {
+            writers,
+            windows: windows.iter().map(|window| window.id()).collect(),
+            fallback: None,
+        }
+    }
+
+    /// Watched while a window is excluded, so the exclusion can move off it
+    /// once it is shown.
+    fn watch(self) -> Option<HiddenSinkWatch> {
+        (!self.windows.is_empty()).then(|| {
+            let mut interval = tokio::time::interval(HIDDEN_SINK_WATCH_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            HiddenSinkWatch {
+                exclusion: self,
+                interval,
+                retry: hidden_sink::Retry::default(),
+            }
+        })
+    }
+}
+
+struct HiddenSinkWatch {
+    exclusion: HiddenSinkExclusion,
+    interval: tokio::time::Interval,
+    retry: hidden_sink::Retry,
+}
+
+enum HiddenSinkMove {
+    Waiting,
+    Moved,
+    /// A filter without hidden-sink exclusions is in place; nothing to watch.
+    Released,
+    NeedsFallback,
+    Failed(anyhow::Error),
+}
+
+/// One watcher tick while an excluded window is shown or closed.
+async fn move_hidden_sink_exclusion(
+    params: &CapturerRebuildParams,
+    capturer: &Capturer,
+    watch: &mut HiddenSinkWatch,
+) -> HiddenSinkMove {
+    let attempt = match watch.retry.step() {
+        hidden_sink::Step::Wait => return HiddenSinkMove::Waiting,
+        hidden_sink::Step::Refresh => {
+            match refresh_hidden_sink_filter(params, capturer, watch.exclusion.writers.clone())
+                .await
+            {
+                Ok(next) if next.windows.is_empty() => HiddenSinkMove::Released,
+                Ok(next) => {
+                    // The filter excluding these windows is applied now, so they
+                    // are what the watcher checks even if the fallback fails.
+                    watch.exclusion.windows = next.windows;
+                    if hidden_sink::any_shown_or_closed(&watch.exclusion.windows) {
+                        // The window server and ScreenCaptureKit disagree on
+                        // what is shown; never leave a shown window excluded.
+                        HiddenSinkMove::NeedsFallback
+                    } else {
+                        HiddenSinkMove::Moved
+                    }
+                }
+                Err(error) => HiddenSinkMove::Failed(error),
+            }
+        }
+        hidden_sink::Step::Fallback => HiddenSinkMove::NeedsFallback,
+    };
+    let HiddenSinkMove::NeedsFallback = attempt else {
+        return attempt;
+    };
+    let Some(fallback) = watch.exclusion.fallback.as_ref() else {
+        return HiddenSinkMove::Failed(anyhow!("No filter without the hidden-sink exclusion"));
+    };
+    let update = capturer.capturer.update_content_filter(&fallback.0);
+    match update.await {
+        Ok(()) => HiddenSinkMove::Released,
+        Err(e) => HiddenSinkMove::Failed(anyhow!("Failed to update content filter: {e}")),
+    }
+}
+
+async fn refresh_hidden_sink_filter(
+    params: &CapturerRebuildParams,
+    capturer: &Capturer,
+    writers: Vec<sys::Pid>,
+) -> anyhow::Result<HiddenSinkExclusion> {
+    let shareable_content = sc::ShareableContent::current()
+        .await
+        .map_err(|e| anyhow!("Failed to get shareable content: {e}"))?;
+    let (exclusion, update) = {
+        let display = Display::from_id(&params.display_id)
+            .ok_or_else(|| anyhow!("Display not found: {:?}", params.display_id))?;
+        let windows = hidden_sink::off_screen_windows(&shareable_content, &writers, false);
+        let exclusion = HiddenSinkExclusion::new(writers, &windows);
+        let mut excluded_sc_windows =
+            excluded_shareable_windows(&params.excluded_windows, &shareable_content, "hidden-sink");
+        excluded_sc_windows.extend(windows);
+        let filter = display
+            .raw_handle()
+            .as_content_filter_excluding_windows(shareable_content, excluded_sc_windows)
+            .ok_or_else(|| anyhow!("Failed to create content filter"))?;
+        (exclusion, capturer.capturer.update_content_filter(&filter))
+    };
+    update
+        .await
+        .map_err(|e| anyhow!("Failed to update content filter: {e}"))?;
+    Ok(exclusion)
+}
+
+/// `writers` are the apps already left out of System Audio; they stay left out.
+async fn rebuild_capturer(
+    params: &CapturerRebuildParams,
+    mut writers: Vec<sys::Pid>,
+) -> anyhow::Result<(Capturer, HiddenSinkExclusion)> {
     let shareable_content = sc::ShareableContent::current()
         .await
         .map_err(|e| anyhow!("Failed to get shareable content during restart: {e}"))?;
@@ -1159,7 +1585,8 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
     let display = Display::from_id(&params.display_id)
         .ok_or_else(|| anyhow!("Display not found during restart: {:?}", params.display_id))?;
 
-    let window_filter = capturable_window(&params.config, &params.excluded_windows, "restart")
+    let window = capturable_window(&params.config, &params.excluded_windows, "restart");
+    let window_filter = window
         .map(|id| {
             window_content_filter(id, &shareable_content, "restart").ok_or_else(|| {
                 anyhow!("Capture window {id} is gone; not falling back to the display")
@@ -1167,12 +1594,35 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
         })
         .transpose()?;
     let captures_window = window_filter.is_some();
+    let crop_bounds = window
+        .and_then(|id| current_window_crop(id, display.raw_handle().scale().unwrap_or(1.0)))
+        .or(params.config.crop_bounds);
 
+    let mut hidden_sink = HiddenSinkExclusion::default();
     let content_filter = match window_filter {
         Some(filter) => filter,
         None => {
-            let excluded_sc_windows =
+            let mut excluded_sc_windows =
                 excluded_shareable_windows(&params.excluded_windows, &shareable_content, "restart");
+            if params.system_audio && params.leave_out_hidden_sinks {
+                for pid in hidden_sink::writers() {
+                    if !writers.contains(&pid) {
+                        writers.push(pid);
+                    }
+                }
+                let windows = hidden_sink::off_screen_windows(&shareable_content, &writers, true);
+                hidden_sink = HiddenSinkExclusion::new(writers, &windows);
+                if !windows.is_empty() {
+                    hidden_sink.fallback = display
+                        .raw_handle()
+                        .as_content_filter_excluding_windows(
+                            shareable_content.clone(),
+                            excluded_sc_windows.clone(),
+                        )
+                        .map(FallbackFilter);
+                }
+                excluded_sc_windows.extend(windows);
+            }
 
             display
                 .raw_handle()
@@ -1181,33 +1631,13 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
         }
     };
 
-    let size = PhysicalSize::new(
-        params.video_info.width as f64,
-        params.video_info.height as f64,
+    let settings = stream_settings(
+        &params.config,
+        &params.video_info,
+        params.system_audio,
+        captures_window,
+        crop_bounds,
     );
-
-    let max_queue_depth = get_max_queue_depth();
-    let queue_depth =
-        ((params.config.fps as f32 / 30.0 * 5.0).ceil() as isize).clamp(3, max_queue_depth);
-
-    let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
-        .with_width(size.width() as usize)
-        .with_height(size.height() as usize)
-        .with_fps(params.config.fps as f32)
-        .with_shows_cursor(params.config.show_cursor)
-        .with_captures_audio(params.system_audio)
-        .with_queue_depth(queue_depth)
-        .build();
-
-    settings.set_pixel_format(cv::PixelFormat::_420V);
-    settings.set_color_space_name(cg::color_space::names::srgb());
-    if captures_window {
-        configure_window_capture(&mut settings);
-    }
-
-    if let Some(crop_bounds) = params.config.crop_bounds {
-        settings.set_src_rect(source_rect(captures_window, crop_bounds));
-    }
 
     let expected_width = params.video_info.width as usize;
     let expected_height = params.video_info.height as usize;
@@ -1217,6 +1647,7 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
     let error_tx = params.error_tx.clone();
 
     let builder = scap_screencapturekit::Capturer::builder(content_filter, settings)
+        .with_screen_status_samples()
         .with_output_sample_buf_cb({
             let video_frame_count = params.video_frame_counter.clone();
             let drop_counter = params.drop_counter.clone();
@@ -1226,6 +1657,8 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
             let sys_audio_drop_counter = params.system_audio_drop_counter.clone();
             let sys_audio_frame_counter = params.system_audio_frame_counter.clone();
             let stall_health_tx = params.stall_health_tx.clone();
+            let mut loss =
+                CaptureLossTracker::new(params.config.fps, display, params.frame_accounting.clone());
             move |frame| {
                 let sample_buffer = frame.sample_buf();
 
@@ -1236,11 +1669,17 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
                 );
 
                 match &frame {
+                    scap_screencapturekit::Frame::ScreenStatus(frame) => {
+                        loss.status(frame);
+                    }
                     scap_screencapturekit::Frame::Screen(frame) => {
+                        let carry = loss.frame(frame);
                         let Some(image_buf) = frame.image_buf() else {
+                            loss.dropped(carry);
                             return;
                         };
                         if image_buf.height() == 0 || image_buf.width() == 0 {
+                            loss.dropped(carry);
                             return;
                         }
 
@@ -1251,6 +1690,7 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
                             if frame_width != expected_width || frame_height != expected_height {
                                 let Ok(mut scaler_guard) = frame_scaler.lock() else {
                                     drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                    loss.dropped(carry);
                                     return;
                                 };
 
@@ -1276,11 +1716,13 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
 
                                 let Some(scaler) = scaler_guard.as_ref() else {
                                     drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                    loss.dropped(carry);
                                     return;
                                 };
 
                                 let Some(scaled) = scaler.scale_frame(sample_buffer) else {
                                     drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                    loss.dropped(carry);
                                     return;
                                 };
 
@@ -1316,13 +1758,17 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
                             VideoFrame {
                                 sample_buf: final_sample_buf,
                                 timestamp,
+                                capture: Some(carry),
                             },
                             "screen-video",
                             &stall_health_tx,
                         ) {
                             output_pipeline::StallSendOutcome::Sent => {}
-                            output_pipeline::StallSendOutcome::StalledAndDropped { .. }
-                            | output_pipeline::StallSendOutcome::Disconnected => {
+                            output_pipeline::StallSendOutcome::StalledAndDropped { .. } => {
+                                drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+                                loss.dropped(carry);
+                            }
+                            output_pipeline::StallSendOutcome::Disconnected => {
                                 drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
                             }
                         }
@@ -1391,9 +1837,9 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
             }
         });
 
-    let capturer = Capturer::new(Arc::new(builder.build()?));
+    let capturer = Capturer::new(Arc::new(builder.build()?), crop_bounds);
     capturer.start().await?;
-    Ok(capturer)
+    Ok((capturer, hidden_sink))
 }
 
 pub struct SystemAudioSourceConfig(

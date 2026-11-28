@@ -2433,6 +2433,7 @@ impl SettingsWindow {
                 this.plan_refresh_pending = false;
                 this.plan_refresh_failed = !matches!(result, Ok(Ok(())));
                 this.has_cap_pro = store::auth_snapshot().is_upgraded();
+                crate::meetings_ui::cap_ai::account_changed(cx);
                 cx.notify();
                 window.refresh();
             })
@@ -2447,6 +2448,7 @@ impl SettingsWindow {
             tracing::error!("failed to clear the auth session");
             return false;
         }
+        crate::meetings_ui::cap_ai::account_changed(cx);
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
         self.instant_quality_notice = None;
         if !store::set_store_value("user_profile", Value::Null) {

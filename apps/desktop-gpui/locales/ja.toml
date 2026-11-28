@@ -1090,6 +1090,17 @@ screenshots_description = "スクリーンショットはここに表示され�
 view_all_recordings = "すべての録画を表示"
 view_all_screenshots = "すべてのスクリーンショットを表示"
 
+[main.link_start]
+camera = "カメラ: {name}"
+instant = "Instant モード: {target}"
+microphone = "マイク: {name}"
+none = "なし"
+requested = "リンクが録画の開始を求めています。"
+start = "録画を開始"
+studio = "Studio モード: {target}"
+system_audio = "システムオーディオ: オン"
+title = "録画を開始しますか？"
+
 [main.mic_warning]
 body = "この録画には声が入りません。マイクを選択するか、マイクなしで続けてください。"
 dont_show_again = "今後表示しない"
@@ -1564,6 +1575,10 @@ screenshot = "スクリーンショットを撮ってすぐに注釈を付けら
 studio = "あとで編集するための最高画質のローカル録画です。"
 subtitle = "画面のキャプチャ方法を選んでください"
 title = "録画モードを選択"
+
+[dialog.saving]
+in_background = "録画はまだ保存中です。完了するとライブラリに表示されます。新しい録画をすぐに開始できます。"
+title = "保存中です"
 
 [dialog.storage]
 stopped_kept = "ストレージが不足しているため録画を停止しました。録画ファイルは残されています。空き容量を確保してから、下で録画を復元してください。"
@@ -2870,6 +2885,7 @@ position = "位置"
 refining_word_timings = "単語のタイミングを調整中…"
 regenerate = "字幕を再生成"
 reset_position = "位置をリセット"
+show_existing = "字幕を表示"
 show_filler_words = "フィラーを表示"
 size_label = "サイズ"
 style = "スタイル"
@@ -4306,11 +4322,6 @@ try_free = "サインインして無料で試す"
 write = "メモを書く"
 too_short = "この通話は短すぎてまとめられません。"
 unavailable_title = "このサーバーではCap AIのメモを利用できません"
-free_left = { other = "無料であと{count}件" }
-
-[cap_ai.footer]
-last = "Cap AIが作成。無料で使えるのはこれが最後でした"
-left = { other = "Cap AIが作成。無料であと{count}件" }
 
 [cap_ai.live]
 sign_in = "サインインすると、会議の終了時にCap AIがまとめます"
@@ -4321,6 +4332,11 @@ upgrade = "Cap Proなら、会議の終了時にCap AIがまとめます"
 several = "{a}、{b}ほか"
 three = "{a}、{b}、{c}"
 two = "{a}、{b}"
+
+[cap_ai.row]
+left = { other = "Cap\u00A0AIメモは無料であと{count}件" }
+pro = "Cap\u00A0AIメモはCap\u00A0Proの機能です"
+signed_out = "Cap\u00A0AIメモを無料で試す"
 
 [cap_ai.settings]
 get_pro = "Cap Proにする"

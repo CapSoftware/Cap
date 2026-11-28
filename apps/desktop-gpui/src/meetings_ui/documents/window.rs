@@ -415,6 +415,11 @@ impl DocumentsWindow {
                 self.store.update(cx, |store, cx| store.open(Some(id), cx));
             }
             SidebarEvent::Start(choice) => self.start(*choice, window, cx),
+            SidebarEvent::ProChanged => {
+                if !self.sidebar_open() {
+                    cx.notify();
+                }
+            }
         }
     }
 
@@ -843,6 +848,27 @@ impl Render for DocumentsWindow {
                 .clone()
                 .cached(StyleRefinement::default().flex_1().min_w_0().h_full())
                 .into_any_element()
+        };
+
+        // With the sidebar hidden, its Cap Pro row sits in a strip under the
+        // page instead: home, a note and a live meeting alike.
+        let strip = (!sidebar_open)
+            .then(|| self.sidebar.read(cx).pro())
+            .flatten()
+            .map(|row| {
+                super::cap_ai::render_pro_row(&palette, row, super::cap_ai::RowPlace::Strip)
+            });
+        let main = match strip {
+            Some(strip) => div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .flex()
+                .flex_col()
+                .child(div().flex_1().min_h_0().w_full().flex().child(main))
+                .child(strip)
+                .into_any_element(),
+            None => main,
         };
 
         let body = div()

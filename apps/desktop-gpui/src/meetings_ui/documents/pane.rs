@@ -317,6 +317,9 @@ pub struct Pane {
     writing_at: Instant,
     access: AiAccess,
     trial_remaining: Option<u32>,
+    /// Ask's answer is open over the dock bar: the dock's stacked line steps
+    /// aside so it never rides up over the page.
+    ask_open: bool,
     typed_at: Option<Instant>,
     write_after_sign_in: bool,
     too_short: bool,
@@ -529,6 +532,13 @@ impl Pane {
                     this.store.update(cx, |store, cx| store.open(Some(id), cx));
                 }
             }),
+            cx.observe(&ask, |this, ask, cx| {
+                let open = ask.read(cx).is_open();
+                if open != this.ask_open {
+                    this.ask_open = open;
+                    cx.notify();
+                }
+            }),
             cx.subscribe(&ask, |this, _, event: &AskEvent, cx| match event {
                 AskEvent::WriteNotes => this.write_notes(None, cx),
                 AskEvent::Upgrade(question) => {
@@ -618,6 +628,7 @@ impl Pane {
             writing_at: Instant::now(),
             access: AiAccess::Unavailable,
             trial_remaining: None,
+            ask_open: false,
             typed_at: None,
             write_after_sign_in: false,
             too_short: false,
@@ -1352,7 +1363,7 @@ impl Pane {
                 let doc = self.doc_id();
                 cx.defer(move |cx| cap_ai::open_upgrade(doc, Host::Documents, cx));
             }
-            CardKind::Write { .. } => self.write_notes(None, cx),
+            CardKind::Write => self.write_notes(None, cx),
             CardKind::Unavailable => {}
         }
     }
@@ -4023,30 +4034,7 @@ impl Pane {
                 Some(dismiss),
             ));
         }
-        let written_on_trial = self.doc_id().is_some_and(|id| {
-            Meetings::try_global(cx).is_some_and(|m| m.read(cx).written_on_trial(&id))
-        });
-        let footer = ai_note::footer(
-            self.access,
-            self.trial_remaining,
-            written_on_trial,
-            self.has_enhanced(),
-            self.streaming,
-        )?;
-        if self.view != View::Generated {
-            return None;
-        }
-        let doc = self.doc_id();
-        let upgrade: ai_note::Handler = Box::new(move |_, _, cx| {
-            let doc = doc.clone();
-            cx.defer(move |cx| cap_ai::open_upgrade(doc, Host::Documents, cx));
-        });
-        Some(ai_note::dock_line(
-            &palette,
-            ai_note::footer_text(footer),
-            Some((tr::cap_ai::card::get_pro(), upgrade)),
-            None,
-        ))
+        None
     }
 
     fn live_line(&self, cx: &App) -> Option<ai_note::LiveLine> {
@@ -4735,7 +4723,13 @@ impl Render for Pane {
         // room of their own: the page fades out under them and its last line
         // can always scroll clear of them.
         let docked = !meta.is_trashed() && !self.panel_open;
-        let ai_line = (docked && meeting).then(|| self.render_ai_line(cx)).flatten();
+        // Ask's answer opens above the bar in the same column: a line stacked
+        // over it would be pushed up over the page, so it waits until the
+        // answer closes.
+        let answer_inline = self.ask_open && !self.ask_sheet && !closing_sheet;
+        let ai_line = (docked && meeting && !answer_inline)
+            .then(|| self.render_ai_line(cx))
+            .flatten();
         let banner = (!meta.is_trashed())
             .then(|| self.bar.update(cx, |bar, cx| bar.banner(cx)))
             .flatten();

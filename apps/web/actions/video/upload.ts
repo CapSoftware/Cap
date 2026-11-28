@@ -114,6 +114,7 @@ async function getVideoUploadPresignedUrl({
 }
 
 const VIDEO_ID_PATTERN = /^[0-9A-Za-z_-]{1,15}$/;
+const NEW_VIDEO_ID_PATTERN = /^[0-9abcdefghjkmnpqrstvwxyz]{15}$/;
 
 export async function createVideoAndGetUploadUrl({
 	videoId,
@@ -148,8 +149,7 @@ export async function createVideoAndGetUploadUrl({
 		throw new Error("Invalid video id");
 
 	try {
-		if (!userIsPro(user) && duration && duration > 300)
-			throw new Error("upgrade_required");
+		if (!userIsPro(user)) throw new Error("upgrade_required");
 
 		await requireOrganizationAccess(user.id, orgId);
 
@@ -199,6 +199,9 @@ export async function createVideoAndGetUploadUrl({
 				};
 			}
 		}
+
+		if (videoId && !NEW_VIDEO_ID_PATTERN.test(videoId))
+			throw new Error("Invalid video id");
 
 		const idToUse = Video.VideoId.make(videoId || nanoId());
 		if (folderId) await requirePersonalFolder(user.id, orgId, folderId);

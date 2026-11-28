@@ -99,6 +99,25 @@ const STANDARD_SAMPLE_RATES: [u32; 13] = [
 ];
 
 #[cfg(target_os = "linux")]
+fn sample_follows_route_resume(
+    resume: &RouteResume,
+    callback_received: Instant,
+    capture_delay: Option<Duration>,
+) -> bool {
+    let not_before_nanos = resume.not_before_nanos.load(Ordering::Acquire);
+    if not_before_nanos == 0 {
+        return true;
+    }
+    let captured_at = capture_delay
+        .and_then(|delay| callback_received.checked_sub(delay))
+        .unwrap_or(callback_received);
+    captured_at
+        .saturating_duration_since(resume.base)
+        .as_nanos()
+        >= u128::from(not_before_nanos)
+}
+
+#[cfg(target_os = "linux")]
 fn audio_follows_confirmed_route(
     callback_received: Instant,
     capture_delay: Option<Duration>,
@@ -360,6 +379,8 @@ pub struct MicrophoneSamples {
     pub channels: u16,
     pub info: InputCallbackInfo,
     pub timestamp: Timestamp,
+    #[cfg(target_os = "linux")]
+    pub(crate) capture_epoch: u64,
 }
 
 /// Debounces sample-rate changes: a freshly-inferred rate is only adopted after it is
@@ -714,6 +735,148 @@ fn enqueue_microphone_samples(
     }
 }
 
+#[cfg(target_os = "linux")]
+fn release_staged_system_audio(
+    staging: &Arc<
+        std::sync::Mutex<crate::sources::screen_capture::SystemAudioStaging<MicrophoneSamples>>,
+    >,
+    event: crate::sources::screen_capture::SystemAudioWatch,
+) -> Vec<MicrophoneSamples> {
+    use crate::sources::screen_capture::{
+        SystemAudioRouteCheck, SystemAudioRoutePlan, SystemAudioWatch,
+    };
+    let mut staging = staging.lock().unwrap();
+    match event {
+        SystemAudioWatch::Checked {
+            plan: SystemAudioRoutePlan::Keep,
+            check_started,
+        } => staging.observe(SystemAudioRouteCheck::OnMonitor { check_started }),
+        SystemAudioWatch::Checked {
+            plan: SystemAudioRoutePlan::Reattach | SystemAudioRoutePlan::Lost,
+            ..
+        } => staging.observe(SystemAudioRouteCheck::NotOnMonitor {
+            observed_at: Instant::now(),
+        }),
+        SystemAudioWatch::Checked {
+            plan: SystemAudioRoutePlan::Ignore,
+            ..
+        } => Vec::new(),
+        SystemAudioWatch::Reattached { at } => {
+            staging.note_attached(at);
+            Vec::new()
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn on_system_audio_route_event(
+    staging: &Arc<
+        std::sync::Mutex<crate::sources::screen_capture::SystemAudioStaging<MicrophoneSamples>>,
+    >,
+    health: Option<&RecordingSourceHealth>,
+    stream_id: u32,
+    event: crate::sources::screen_capture::SystemAudioWatch,
+) -> Vec<MicrophoneSamples> {
+    use crate::sources::screen_capture::{SystemAudioRoutePlan, SystemAudioWatch};
+    let released = release_staged_system_audio(staging, event);
+    if let Some(health) = health {
+        match event {
+            SystemAudioWatch::Checked { plan, .. } => {
+                health.apply_system_audio_route(stream_id, plan);
+            }
+            SystemAudioWatch::Reattached { .. } => {
+                health.apply_system_audio_route(stream_id, SystemAudioRoutePlan::Keep);
+            }
+        }
+    }
+    released
+}
+
+#[cfg(target_os = "linux")]
+struct SystemAudioRouteWatchSlot {
+    cancel: tokio_util::sync::CancellationToken,
+    generation: u64,
+    running: Option<u64>,
+}
+
+#[cfg(target_os = "linux")]
+struct SystemAudioRouteWatch {
+    slot: std::sync::Mutex<SystemAudioRouteWatchSlot>,
+    health: Arc<std::sync::Mutex<Option<RecordingSourceHealth>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl SystemAudioRouteWatch {
+    fn new() -> Self {
+        Self {
+            slot: std::sync::Mutex::new(SystemAudioRouteWatchSlot {
+                cancel: tokio_util::sync::CancellationToken::new(),
+                generation: 0,
+                running: None,
+            }),
+            health: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    fn set_health(&self, health: Option<RecordingSourceHealth>) {
+        *self.health.lock().unwrap() = health;
+    }
+
+    fn stop(&self) {
+        let mut slot = self.slot.lock().unwrap();
+        slot.cancel.cancel();
+        slot.running = None;
+        drop(slot);
+        self.set_health(None);
+    }
+
+    fn ensure_started(
+        &self,
+        actor: ActorRef<MicrophoneFeed>,
+        staging: Arc<
+            std::sync::Mutex<crate::sources::screen_capture::SystemAudioStaging<MicrophoneSamples>>,
+        >,
+        route: Arc<
+            std::sync::Mutex<Option<crate::sources::screen_capture::SystemAudioCaptureRoute>>,
+        >,
+        dropped: Arc<AtomicU64>,
+    ) {
+        let cancel = {
+            let mut slot = self.slot.lock().unwrap();
+            if slot.running.is_some() && !slot.cancel.is_cancelled() {
+                return;
+            }
+            slot.cancel.cancel();
+            slot.cancel = tokio_util::sync::CancellationToken::new();
+            slot.generation = slot.generation.wrapping_add(1);
+            slot.running = Some(slot.generation);
+            slot.cancel.clone()
+        };
+        let health = self.health.clone();
+        let _ = std::thread::Builder::new()
+            .name("system-audio-route".into())
+            .spawn(move || {
+                let mut failure_log = EnqueueFailureLog::default();
+                crate::sources::screen_capture::watch_system_audio_route(
+                    cancel,
+                    route,
+                    move |stream_id, event| {
+                        let attached = health.lock().unwrap().clone();
+                        let released = on_system_audio_route_event(
+                            &staging,
+                            attached.as_ref(),
+                            stream_id,
+                            event,
+                        );
+                        for sample in released {
+                            enqueue_microphone_samples(&actor, &dropped, &mut failure_log, sample);
+                        }
+                    },
+                );
+            });
+    }
+}
+
 #[cfg(any(target_os = "linux", windows))]
 struct StreamHealth {
     id: u32,
@@ -772,6 +935,11 @@ struct RecordingSourceHealthState {
     pending: Option<Arc<StreamHealth>>,
     recovery_origin: Option<u32>,
     terminal: Option<String>,
+    deferred: Option<(std::time::Instant, String)>,
+    defer_for: std::time::Duration,
+    capture_blocked: bool,
+    capture_gate: Arc<SystemCaptureGate>,
+    route_lost_until: Option<(std::time::Instant, String)>,
     last_frame: Option<Instant>,
     /// Since the last frame before a rebuild found no device to open.
     missing_since: Option<Instant>,
@@ -779,8 +947,82 @@ struct RecordingSourceHealthState {
 }
 
 #[cfg(target_os = "linux")]
+struct RouteResume {
+    base: Instant,
+    not_before_nanos: AtomicU64,
+}
+
+#[cfg(target_os = "linux")]
+struct SystemCaptureGate {
+    open: AtomicBool,
+    epoch: AtomicU64,
+    resume: RouteResume,
+}
+
+#[cfg(target_os = "linux")]
+impl SystemCaptureGate {
+    fn open() -> Self {
+        Self {
+            open: AtomicBool::new(true),
+            epoch: AtomicU64::new(0),
+            resume: RouteResume {
+                base: Instant::now(),
+                not_before_nanos: AtomicU64::new(0),
+            },
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl RecordingSourceHealthState {
+    fn remember_loss(&mut self, error: String) {
+        if self.terminal.is_some() {
+            return;
+        }
+        if self.defer_for.is_zero() {
+            self.terminal.get_or_insert(error);
+            return;
+        }
+        if self.deferred.is_none() {
+            self.deferred = Some((std::time::Instant::now(), error));
+        }
+    }
+
+    fn promote_deferred_loss(&mut self) {
+        let ready = self
+            .deferred
+            .as_ref()
+            .is_some_and(|(since, _)| since.elapsed() >= self.defer_for);
+        if ready && let Some((_, error)) = self.deferred.take() {
+            self.terminal.get_or_insert(error);
+        }
+        let route_ready = self
+            .route_lost_until
+            .as_ref()
+            .is_some_and(|(deadline, _)| std::time::Instant::now() >= *deadline);
+        if route_ready && let Some((_, error)) = self.route_lost_until.take() {
+            self.terminal.get_or_insert(error);
+        }
+    }
+}
+
+// Same window as the audio-only reconnect grace. A monitor that returns is
+// captured again. One that stays gone ends the system-audio track.
+#[cfg(target_os = "linux")]
+const SYSTEM_AUDIO_ROUTE_GRACE: Duration = Duration::from_secs(3);
+
+#[cfg(target_os = "linux")]
 impl RecordingSourceHealth {
+    #[cfg(test)]
     fn new(generation: u64, current: Arc<StreamHealth>) -> Self {
+        Self::with_capture_gate(generation, current, Arc::new(SystemCaptureGate::open()))
+    }
+
+    fn with_capture_gate(
+        generation: u64,
+        current: Arc<StreamHealth>,
+        capture_gate: Arc<SystemCaptureGate>,
+    ) -> Self {
         Self(Arc::new(std::sync::Mutex::new(
             RecordingSourceHealthState {
                 generation,
@@ -788,11 +1030,94 @@ impl RecordingSourceHealth {
                 pending: None,
                 recovery_origin: None,
                 terminal: None,
+                deferred: None,
+                defer_for: std::time::Duration::ZERO,
+                capture_blocked: false,
+                capture_gate,
+                route_lost_until: None,
                 last_frame: None,
                 missing_since: None,
                 missing_total: Duration::ZERO,
             },
         )))
+    }
+
+    fn invalidate_system_audio_capture(state: &mut RecordingSourceHealthState) {
+        state.capture_gate.open.store(false, Ordering::Release);
+        state.capture_blocked = true;
+        state.capture_gate.epoch.fetch_add(1, Ordering::Release);
+    }
+
+    pub(crate) fn capture_epoch_current(&self, epoch: u64) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .capture_gate
+            .epoch
+            .load(Ordering::Acquire)
+            == epoch
+    }
+
+    fn apply_system_audio_route(
+        &self,
+        stream_id: u32,
+        plan: crate::sources::screen_capture::SystemAudioRoutePlan,
+    ) {
+        use crate::sources::screen_capture::SystemAudioRoutePlan;
+        match plan {
+            SystemAudioRoutePlan::Keep => self.restore_system_audio_capture(stream_id),
+            SystemAudioRoutePlan::Reattach => self.block_system_audio_capture(stream_id),
+            SystemAudioRoutePlan::Lost => {
+                self.note_system_audio_route_loss(stream_id, SYSTEM_AUDIO_ROUTE_GRACE)
+            }
+            SystemAudioRoutePlan::Ignore => {}
+        }
+    }
+
+    fn block_system_audio_capture(&self, stream_id: u32) {
+        let mut state = self.0.lock().unwrap();
+        if state.terminal.is_some() || state.current.id != stream_id {
+            return;
+        }
+        Self::invalidate_system_audio_capture(&mut state);
+    }
+
+    fn note_system_audio_route_loss(&self, stream_id: u32, grace: Duration) {
+        let mut state = self.0.lock().unwrap();
+        if state.terminal.is_some() || state.current.id != stream_id {
+            return;
+        }
+        Self::invalidate_system_audio_capture(&mut state);
+        if state.route_lost_until.is_none() {
+            state.route_lost_until = Some((
+                std::time::Instant::now() + grace,
+                "System audio capture left the output monitor".into(),
+            ));
+        }
+    }
+
+    fn restore_system_audio_capture(&self, stream_id: u32) {
+        let mut state = self.0.lock().unwrap();
+        if state.terminal.is_some() || state.current.id != stream_id {
+            return;
+        }
+        let was_blocked = state.capture_blocked;
+        state.capture_blocked = false;
+        if was_blocked {
+            state.route_lost_until = None;
+            let elapsed = Instant::now()
+                .saturating_duration_since(state.capture_gate.resume.base)
+                .as_nanos();
+            state.capture_gate.resume.not_before_nanos.store(
+                u64::try_from(elapsed).unwrap_or(u64::MAX),
+                Ordering::Release,
+            );
+        }
+        state.capture_gate.open.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn defer_loss(&self, defer_for: std::time::Duration) {
+        self.0.lock().unwrap().defer_for = defer_for;
     }
 
     #[cfg(test)]
@@ -875,9 +1200,10 @@ impl RecordingSourceHealth {
             return;
         };
         if pending.failed.load(Ordering::Acquire) {
-            state.terminal = Some("Replacement audio stream failed before acceptance".into());
+            state.remember_loss("Replacement audio stream failed before acceptance".into());
             return;
         }
+        state.deferred = None;
         if state.current.failed.load(Ordering::Acquire) || state.recovery_origin.is_some() {
             state.recovery_origin = Some(state.current.id);
         }
@@ -901,7 +1227,7 @@ impl RecordingSourceHealth {
                 .as_ref()
                 .is_some_and(|pending| pending.id == id)
         {
-            state.terminal.get_or_insert(error);
+            state.remember_loss(error);
         }
     }
 
@@ -934,12 +1260,29 @@ impl RecordingSourceHealth {
     }
 
     pub(crate) fn terminal_error(&self) -> Option<String> {
-        self.0.lock().unwrap().terminal.clone()
+        let mut state = self.0.lock().unwrap();
+        state.promote_deferred_loss();
+        state.terminal.clone()
+    }
+
+    pub(crate) fn reconnectable_frame(&self, id: u32) -> bool {
+        let state = self.0.lock().unwrap();
+        state.terminal.is_none()
+            && state.current.id == id
+            && !state.capture_blocked
+            && !state.current.failed.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_recover_backend(&self) {
+        let mut state = self.0.lock().unwrap();
+        state.current.failed.store(false, Ordering::Release);
+        state.deferred = None;
     }
 
     pub(crate) fn frame_is_current(&self, id: u32) -> bool {
         let mut state = self.0.lock().unwrap();
-        if state.current.id != id || state.terminal.is_some() {
+        if state.current.id != id || state.terminal.is_some() || state.capture_blocked {
             return false;
         }
         if state.current.failed.load(Ordering::Acquire) {
@@ -974,7 +1317,8 @@ impl RecordingSourceHealth {
     }
 
     pub(crate) fn stop_error(&self) -> Option<String> {
-        let state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap();
+        state.promote_deferred_loss();
         if state.terminal.is_none()
             && let Some(since) = state.missing_since
         {
@@ -1217,6 +1561,19 @@ pub struct MicrophoneFeed {
     system_failed_input: Option<u32>,
     #[cfg(target_os = "linux")]
     system_reconnect: Option<SystemReconnect>,
+    #[cfg(target_os = "linux")]
+    system_capture_route:
+        Arc<std::sync::Mutex<Option<crate::sources::screen_capture::SystemAudioCaptureRoute>>>,
+    #[cfg(target_os = "linux")]
+    system_capture_gate: Arc<std::sync::Mutex<Arc<SystemCaptureGate>>>,
+    #[cfg(target_os = "linux")]
+    system_audio_staging: Option<
+        Arc<
+            std::sync::Mutex<crate::sources::screen_capture::SystemAudioStaging<MicrophoneSamples>>,
+        >,
+    >,
+    #[cfg(target_os = "linux")]
+    route_watch: Arc<SystemAudioRouteWatch>,
     input_id_counter: u32,
     lock_generation: u64,
     state: State,
@@ -1238,7 +1595,10 @@ struct SystemReconnect {
 impl Drop for MicrophoneFeed {
     fn drop(&mut self) {
         #[cfg(target_os = "linux")]
-        self.system_stream_cancel.cancel();
+        {
+            self.system_stream_cancel.cancel();
+            self.route_watch.stop();
+        }
     }
 }
 
@@ -1562,6 +1922,16 @@ impl MicrophoneFeed {
             system_failed_input: None,
             #[cfg(target_os = "linux")]
             system_reconnect: None,
+            #[cfg(target_os = "linux")]
+            system_capture_route: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(target_os = "linux")]
+            system_capture_gate: Arc::new(std::sync::Mutex::new(Arc::new(
+                SystemCaptureGate::open(),
+            ))),
+            #[cfg(target_os = "linux")]
+            system_audio_staging: None,
+            #[cfg(target_os = "linux")]
+            route_watch: Arc::new(SystemAudioRouteWatch::new()),
             #[cfg(any(target_os = "linux", windows))]
             stream_health: std::collections::HashMap::new(),
             #[cfg(target_os = "linux")]
@@ -1587,7 +1957,25 @@ impl MicrophoneFeed {
     pub(crate) fn new_system_audio(error_sender: flume::Sender<StreamError>) -> Self {
         let mut feed = Self::new(error_sender);
         feed.pulse_input_role = crate::sources::screen_capture::PulseInputRole::SystemAudio;
+        feed.system_audio_staging = Some(Arc::new(std::sync::Mutex::new(
+            crate::sources::screen_capture::SystemAudioStaging::new(
+                crate::sources::screen_capture::SYSTEM_AUDIO_STAGING_HOLD,
+            ),
+        )));
         feed
+    }
+
+    #[cfg(target_os = "linux")]
+    fn start_system_audio_route_watch(&self, actor: ActorRef<Self>) {
+        let Some(staging) = self.system_audio_staging.clone() else {
+            return;
+        };
+        self.route_watch.ensure_started(
+            actor,
+            staging,
+            self.system_capture_route.clone(),
+            self.dropped_message_count.clone(),
+        );
     }
 
     pub fn default_device() -> Option<(String, Device, SupportedStreamConfig)> {
@@ -1727,6 +2115,14 @@ impl MicrophoneFeed {
             pulse_input_role,
             #[cfg(target_os = "linux")]
             system_stream_cancel,
+            #[cfg(target_os = "linux")]
+            system_capture_gate,
+            #[cfg(target_os = "linux")]
+            system_capture_route,
+            #[cfg(target_os = "linux")]
+            system_audio_staging,
+            #[cfg(target_os = "linux")]
+            route_watch,
             id,
             label,
             settings,
@@ -1864,6 +2260,50 @@ impl MicrophoneFeed {
                 let route_required = input_route.is_some();
                 #[cfg(target_os = "linux")]
                 let routed_at = Arc::new(std::sync::OnceLock::<cap_timestamp::Timestamps>::new());
+                #[cfg(target_os = "linux")]
+                enum PreparedLinuxInput {
+                    Route(crate::sources::screen_capture::PulseInputRoute),
+                    Direct(crate::sources::screen_capture::PendingSystemAudioOutput),
+                    Open,
+                }
+                #[cfg(target_os = "linux")]
+                let prepared_input = {
+                    use crate::sources::screen_capture::{
+                        PendingSystemAudioOutput, SystemAudioStartupAttach,
+                        system_audio_startup_attach,
+                    };
+                    let direct_through_pulse = input_route.is_none()
+                        && pulse_input_role
+                            == crate::sources::screen_capture::PulseInputRole::SystemAudio
+                        && crate::sources::screen_capture::input_runs_through_pulse(&label);
+                    match (
+                        system_audio_startup_attach(
+                            pulse_input_role,
+                            input_route.is_some(),
+                            direct_through_pulse,
+                        ),
+                        input_route,
+                    ) {
+                        (Some(SystemAudioStartupAttach::WatchDirectOutput), _) => {
+                            match PendingSystemAudioOutput::snapshot() {
+                                Ok(pending) => PreparedLinuxInput::Direct(pending),
+                                Err(error) => {
+                                    let _ = ready_tx.send(Err(SetInputError::BuildStream(format!(
+                                        "Could not inspect the Linux system-audio input: {error}"
+                                    ))));
+                                    return;
+                                }
+                            }
+                        }
+                        (_, Some(route)) => PreparedLinuxInput::Route(route),
+                        (_, None) => PreparedLinuxInput::Open,
+                    }
+                };
+                // Only a watched stream holds its samples: nothing would
+                // release them on an input the route watch never follows.
+                #[cfg(target_os = "linux")]
+                let system_audio_staging = system_audio_staging
+                    .filter(|_| !matches!(prepared_input, PreparedLinuxInput::Open));
 
                 if setup_cancel.is_cancelled() || ready_tx.is_canceled() {
                     return;
@@ -1882,6 +2322,14 @@ impl MicrophoneFeed {
                         let routed_at = routed_at.clone();
                         #[cfg(target_os = "linux")]
                         let system_stream_cancel = system_stream_cancel.clone();
+                        #[cfg(target_os = "linux")]
+                        let system_capture_gate = system_capture_gate.clone();
+                        #[cfg(target_os = "linux")]
+                        let system_audio_staging = system_audio_staging.clone();
+                        #[cfg(target_os = "linux")]
+                        let mut pending_capture = VecDeque::new();
+                        #[cfg(target_os = "linux")]
+                        let dropped_message_count = dropped_message_count.clone();
                         let mut callback_count = 0u64;
                         let mut enqueue_failures = EnqueueFailureLog::default();
                         #[cfg(target_os = "linux")]
@@ -1933,6 +2381,42 @@ impl MicrophoneFeed {
                                 return;
                             }
                             #[cfg(target_os = "linux")]
+                            let capture_gate = system_capture_gate.lock().unwrap().clone();
+                            #[cfg(target_os = "linux")]
+                            if !capture_gate.open.load(Ordering::Acquire) {
+                                pending_samples.clear();
+                                pending_capture.clear();
+                                return;
+                            }
+                            #[cfg(target_os = "linux")]
+                            let capture_epoch = capture_gate.epoch.load(Ordering::Acquire);
+                            #[cfg(target_os = "linux")]
+                            if !capture_gate.open.load(Ordering::Acquire)
+                                || capture_gate.epoch.load(Ordering::Acquire) != capture_epoch
+                            {
+                                pending_samples.clear();
+                                pending_capture.clear();
+                                return;
+                            }
+                            #[cfg(target_os = "linux")]
+                            if !sample_follows_route_resume(
+                                &capture_gate.resume,
+                                callback_received,
+                                input_timestamp
+                                    .callback
+                                    .duration_since(&input_timestamp.capture),
+                            ) {
+                                return;
+                            }
+                            #[cfg(target_os = "linux")]
+                            let captured_at = input_timestamp
+                                .callback
+                                .duration_since(&input_timestamp.capture)
+                                .and_then(|delay| callback_received.checked_sub(delay))
+                                .unwrap_or(callback_received);
+                            #[cfg(not(target_os = "linux"))]
+                            let captured_at = Instant::now();
+                            #[cfg(target_os = "linux")]
                             let timestamp = match delivery_clock.as_mut() {
                                 Some(clock) => clock.timestamp(
                                     callback_received,
@@ -1958,20 +2442,40 @@ impl MicrophoneFeed {
                                 channels: callback_channels,
                                 info: info.clone(),
                                 timestamp: timestamp - capture_latency,
+                                #[cfg(target_os = "linux")]
+                                capture_epoch,
+                            };
+
+                            let mut forward = |captured_at: Instant, samples: MicrophoneSamples| {
+                                #[cfg(target_os = "linux")]
+                                if let Some(staging) = &system_audio_staging {
+                                    let _ = staging.lock().unwrap().push(captured_at, samples);
+                                    return;
+                                }
+                                #[cfg(not(target_os = "linux"))]
+                                let _ = captured_at;
+                                enqueue_microphone_samples(
+                                    &actor_ref,
+                                    &dropped_message_count,
+                                    &mut enqueue_failures,
+                                    samples,
+                                );
                             };
 
                             if !effective_sample_rate.settled {
                                 pending_samples.push_back(samples);
+                                #[cfg(target_os = "linux")]
+                                pending_capture.push_back(captured_at);
                                 if pending_samples.len() >= SAMPLE_RATE_ESTIMATE_MAX_PENDING {
                                     let sample_rate = sample_rate_estimator.force_current();
                                     prepare_pending_samples(&mut pending_samples, sample_rate);
                                     while let Some(pending) = pending_samples.pop_front() {
-                                        enqueue_microphone_samples(
-                                            &actor_ref,
-                                            &dropped_message_count,
-                                            &mut enqueue_failures,
-                                            pending,
-                                        );
+                                        #[cfg(target_os = "linux")]
+                                        let pending_at =
+                                            pending_capture.pop_front().unwrap_or(captured_at);
+                                        #[cfg(not(target_os = "linux"))]
+                                        let pending_at = captured_at;
+                                        forward(pending_at, pending);
                                     }
                                 }
                                 return;
@@ -1982,20 +2486,14 @@ impl MicrophoneFeed {
                                 effective_sample_rate.sample_rate,
                             );
                             while let Some(pending) = pending_samples.pop_front() {
-                                enqueue_microphone_samples(
-                                    &actor_ref,
-                                    &dropped_message_count,
-                                    &mut enqueue_failures,
-                                    pending,
-                                );
+                                #[cfg(target_os = "linux")]
+                                let pending_at = pending_capture.pop_front().unwrap_or(captured_at);
+                                #[cfg(not(target_os = "linux"))]
+                                let pending_at = captured_at;
+                                forward(pending_at, pending);
                             }
 
-                            enqueue_microphone_samples(
-                                &actor_ref,
-                                &dropped_message_count,
-                                &mut enqueue_failures,
-                                samples,
-                            );
+                            forward(captured_at, samples);
                         }
                     },
                     microphone_stream_error_handler(error_sender, {
@@ -2034,13 +2532,67 @@ impl MicrophoneFeed {
                 }
 
                 #[cfg(target_os = "linux")]
-                if let Some(route) = input_route
-                    && let Err(error) = route.apply(&input_callback_observed, &system_stream_cancel)
                 {
-                    let _ = ready_tx.send(Err(SetInputError::BuildStream(format!(
-                        "Could not confirm the Linux audio input route: {error}"
-                    ))));
-                    return;
+                    use crate::sources::screen_capture::SystemAudioStartupAttach;
+                    let source_output = match prepared_input {
+                        PreparedLinuxInput::Route(route) => {
+                            match route.apply(&input_callback_observed, &system_stream_cancel) {
+                                Ok(source_output)
+                                    if crate::sources::screen_capture::system_audio_startup_attach(
+                                        pulse_input_role,
+                                        true,
+                                        false,
+                                    ) == Some(SystemAudioStartupAttach::FollowPreparedRoute) =>
+                                {
+                                    Some(source_output)
+                                }
+                                Ok(_) => None,
+                                Err(error) => {
+                                    let _ =
+                                        ready_tx.send(Err(SetInputError::BuildStream(format!(
+                                            "Could not confirm the Linux audio input route: {error}"
+                                        ))));
+                                    return;
+                                }
+                            }
+                        }
+                        PreparedLinuxInput::Direct(pending) => {
+                            match pending
+                                .started_output(&input_callback_observed, &system_stream_cancel)
+                            {
+                                Ok(source_output) => Some(source_output),
+                                Err(error) => {
+                                    let _ =
+                                        ready_tx.send(Err(SetInputError::BuildStream(format!(
+                                            "Could not confirm the Linux system-audio input: {error}"
+                                        ))));
+                                    return;
+                                }
+                            }
+                        }
+                        PreparedLinuxInput::Open => None,
+                    };
+                    if let Some(source_output) = source_output {
+                        *system_capture_route.lock().unwrap() =
+                            Some(crate::sources::screen_capture::SystemAudioCaptureRoute {
+                                stream_id: id,
+                                source_output,
+                            });
+                        if let Some(staging) = system_audio_staging.clone() {
+                            staging.lock().unwrap().note_attached(Instant::now());
+                            // The startup observer waits for a released sample.
+                            // Lock is what used to start these checks, and it
+                            // runs only after that wait, so the watcher has to
+                            // be running before the stream reports ready. A
+                            // named monitor never builds a PulseInputRoute.
+                            route_watch.ensure_started(
+                                actor_ref.clone(),
+                                staging,
+                                system_capture_route.clone(),
+                                dropped_message_count.clone(),
+                            );
+                        }
+                    }
                 }
 
                 #[cfg(target_os = "linux")]
@@ -2283,12 +2835,47 @@ fn latency_ms_to_frames(sample_rate: u32, milliseconds: u32) -> u32 {
     frames.max(1) as u32
 }
 
+#[cfg(target_os = "linux")]
+struct SystemAudioHold {
+    staging: Arc<
+        std::sync::Mutex<crate::sources::screen_capture::SystemAudioStaging<MicrophoneSamples>>,
+    >,
+    route: Arc<std::sync::Mutex<Option<crate::sources::screen_capture::SystemAudioCaptureRoute>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl SystemAudioHold {
+    fn flush_confirmed(&self) -> Vec<MicrophoneSamples> {
+        use crate::sources::screen_capture::{
+            SystemAudioRouteCheck, system_audio_output_is_monitor,
+        };
+        let check_started = Instant::now();
+        let source_output = self
+            .route
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|route| route.source_output);
+        let on_monitor = source_output.is_some_and(system_audio_output_is_monitor);
+        let check = if on_monitor {
+            SystemAudioRouteCheck::OnMonitor { check_started }
+        } else {
+            SystemAudioRouteCheck::NotOnMonitor {
+                observed_at: Instant::now(),
+            }
+        };
+        self.staging.lock().unwrap().observe(check)
+    }
+}
+
 #[derive(Reply)]
 pub struct MicrophoneFeedLock {
     #[cfg(windows)]
     generation: u64,
     #[cfg(target_os = "linux")]
     source_health: RecordingSourceHealth,
+    #[cfg(target_os = "linux")]
+    system_audio_hold: Option<Arc<SystemAudioHold>>,
     actor: ActorRef<MicrophoneFeed>,
     config: SupportedStreamConfig,
     audio_info: AudioInfo,
@@ -2362,6 +2949,24 @@ impl MicrophoneFeedLock {
     #[cfg(target_os = "linux")]
     pub(crate) fn source_health(&self) -> RecordingSourceHealth {
         self.source_health.clone()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn has_system_audio_hold(&self) -> bool {
+        self.system_audio_hold.is_some()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn flush_confirmed_system_audio(&self) {
+        let Some(hold) = self.system_audio_hold.clone() else {
+            return;
+        };
+        let released = tokio::task::spawn_blocking(move || hold.flush_confirmed())
+            .await
+            .unwrap_or_default();
+        for sample in released {
+            let _ = self.actor.tell(sample).await;
+        }
     }
 
     pub fn config(&self) -> &SupportedStreamConfig {
@@ -2526,6 +3131,19 @@ struct StreamSpawnParams {
     pulse_input_role: crate::sources::screen_capture::PulseInputRole,
     #[cfg(target_os = "linux")]
     system_stream_cancel: tokio_util::sync::CancellationToken,
+    #[cfg(target_os = "linux")]
+    system_capture_gate: Arc<std::sync::Mutex<Arc<SystemCaptureGate>>>,
+    #[cfg(target_os = "linux")]
+    system_capture_route:
+        Arc<std::sync::Mutex<Option<crate::sources::screen_capture::SystemAudioCaptureRoute>>>,
+    #[cfg(target_os = "linux")]
+    system_audio_staging: Option<
+        Arc<
+            std::sync::Mutex<crate::sources::screen_capture::SystemAudioStaging<MicrophoneSamples>>,
+        >,
+    >,
+    #[cfg(target_os = "linux")]
+    route_watch: Arc<SystemAudioRouteWatch>,
     id: u32,
     label: String,
     settings: Option<MicrophoneDeviceSettings>,
@@ -2617,6 +3235,14 @@ impl MicrophoneFeed {
                     pulse_input_role: self.pulse_input_role,
                     #[cfg(target_os = "linux")]
                     system_stream_cancel: self.system_stream_cancel.clone(),
+                    #[cfg(target_os = "linux")]
+                    system_capture_gate: self.system_capture_gate.clone(),
+                    #[cfg(target_os = "linux")]
+                    system_capture_route: self.system_capture_route.clone(),
+                    #[cfg(target_os = "linux")]
+                    system_audio_staging: self.system_audio_staging.clone(),
+                    #[cfg(target_os = "linux")]
+                    route_watch: self.route_watch.clone(),
                     id,
                     label: label.clone(),
                     settings: msg.settings,
@@ -2751,6 +3377,14 @@ impl MicrophoneFeed {
                     pulse_input_role: self.pulse_input_role,
                     #[cfg(target_os = "linux")]
                     system_stream_cancel: self.system_stream_cancel.clone(),
+                    #[cfg(target_os = "linux")]
+                    system_capture_gate: self.system_capture_gate.clone(),
+                    #[cfg(target_os = "linux")]
+                    system_capture_route: self.system_capture_route.clone(),
+                    #[cfg(target_os = "linux")]
+                    system_audio_staging: self.system_audio_staging.clone(),
+                    #[cfg(target_os = "linux")]
+                    route_watch: self.route_watch.clone(),
                     id: new_id,
                     label: label.clone(),
                     settings: msg.settings,
@@ -2892,6 +3526,14 @@ impl Message<RemoveInput> for MicrophoneFeed {
         {
             self.selection_generation = self.selection_generation.wrapping_add(1);
             self.recording_reconnect = None;
+        }
+        #[cfg(target_os = "linux")]
+        if self.pulse_input_role == crate::sources::screen_capture::PulseInputRole::SystemAudio {
+            self.route_watch.stop();
+            self.system_stream_cancel.cancel();
+            if let Some(staging) = &self.system_audio_staging {
+                staging.lock().unwrap().clear();
+            }
         }
         state.connecting = None;
 
@@ -3231,6 +3873,23 @@ impl Message<Lock> for MicrophoneFeed {
             state.handle_input_connected(data);
         }
 
+        // A preview stream that already failed would fail the recording when
+        // it attaches. Refusing it here lets the caller open a fresh stream.
+        #[cfg(windows)]
+        if let Some(attached) = &state.attached
+            && self
+                .stream_health
+                .get(&attached.id)
+                .is_some_and(|health| health.failed.load(Ordering::Acquire))
+        {
+            if let Some(failed) = state.attached.take() {
+                let _ = self.stream_health.remove(&failed.id);
+            }
+            return Err(LockFeedError::InitializeFailed(SetInputError::BuildStream(
+                "Microphone stream already failed".into(),
+            )));
+        }
+
         let Some(attached) = state.attached.take() else {
             return Err(LockFeedError::NoInput);
         };
@@ -3246,17 +3905,30 @@ impl Message<Lock> for MicrophoneFeed {
         }
         let generation = self.lock_generation;
         #[cfg(target_os = "linux")]
-        let source_health = RecordingSourceHealth::new(
-            generation,
-            self.stream_health
-                .get(&attached.id)
-                .cloned()
-                .unwrap_or_else(|| Arc::new(StreamHealth::new(attached.id))),
-        );
-        #[cfg(target_os = "linux")]
-        {
+        let (source_health, system_audio_hold) = {
+            let capture_gate = Arc::new(SystemCaptureGate::open());
+            *self.system_capture_gate.lock().unwrap() = capture_gate.clone();
+            let source_health = RecordingSourceHealth::with_capture_gate(
+                generation,
+                self.stream_health
+                    .get(&attached.id)
+                    .cloned()
+                    .unwrap_or_else(|| Arc::new(StreamHealth::new(attached.id))),
+                capture_gate,
+            );
             self.recording_health = Some(source_health.clone());
-        }
+            self.route_watch.set_health(Some(source_health.clone()));
+            let system_audio_hold = self.system_audio_staging.clone().map(|staging| {
+                Arc::new(SystemAudioHold {
+                    staging,
+                    route: self.system_capture_route.clone(),
+                })
+            });
+            if system_audio_hold.is_some() {
+                self.start_system_audio_route_watch(ctx.actor_ref());
+            }
+            (source_health, system_audio_hold)
+        };
         let token = Arc::new(());
         let token_weak = Arc::downgrade(&token);
 
@@ -3286,6 +3958,8 @@ impl Message<Lock> for MicrophoneFeed {
             generation,
             #[cfg(target_os = "linux")]
             source_health,
+            #[cfg(target_os = "linux")]
+            system_audio_hold,
             audio_info,
             actor: ctx.actor_ref(),
             config,
@@ -3630,7 +4304,12 @@ impl Message<Unlock> for MicrophoneFeed {
         #[cfg(target_os = "linux")]
         if self.pulse_input_role == crate::sources::screen_capture::PulseInputRole::SystemAudio {
             self.system_stream_cancel.cancel();
+            self.route_watch.stop();
             self.system_reconnect = None;
+            *self.system_capture_gate.lock().unwrap() = Arc::new(SystemCaptureGate::open());
+            if let Some(staging) = &self.system_audio_staging {
+                staging.lock().unwrap().clear();
+            }
         }
         replace_with_or_abort(&mut self.state, |state| {
             if let State::Locked { inner, .. } = state {
@@ -3756,6 +4435,8 @@ pub mod synthetic {
                     channels: self.channels,
                     info: zero_callback_info(),
                     timestamp,
+                    #[cfg(target_os = "linux")]
+                    capture_epoch: 0,
                 })
                 .await;
         }
@@ -3780,6 +4461,8 @@ pub mod synthetic {
                     channels,
                     info: zero_callback_info(),
                     timestamp,
+                    #[cfg(target_os = "linux")]
+                    capture_epoch: 0,
                 })
                 .await;
         }
@@ -3798,6 +4481,8 @@ pub mod synthetic {
                         channels: self.channels,
                         info: zero_callback_info(),
                         timestamp,
+                        #[cfg(target_os = "linux")]
+                        capture_epoch: 0,
                     })
                     .try_send(),
             )
@@ -3884,6 +4569,8 @@ mod tests {
                     channels: 1,
                     info: synthetic::zero_callback_info(),
                     timestamp: Timestamp::Instant(Instant::now()),
+                    #[cfg(target_os = "linux")]
+                    capture_epoch: 0,
                 },
             );
         }
@@ -4451,6 +5138,36 @@ mod tests {
         let (mut feed, _token, _) = system_recovery_fixture();
         feed.pulse_input_role = crate::sources::screen_capture::PulseInputRole::Microphone;
         assert!(feed.take_system_error_reconnect(7).is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn lost_system_audio_device_records_silence_and_is_reported_at_stop() {
+        let (mut feed, _token, _config) = system_recovery_fixture();
+        let health = RecordingSourceHealth::new(11, Arc::new(StreamHealth::new(7)));
+        feed.recording_health = Some(health.clone());
+        let actor = MicrophoneFeed::spawn(feed);
+        let ready = actor
+            .ask(ReconnectSystemInput {
+                id: 7,
+                generation: 11,
+            })
+            .await
+            .unwrap();
+        let error = ready.await.expect_err("missing monitor must not reopen");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while health.stop_error().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("reconnect error {error} was not reported at Stop"));
+        assert!(
+            health.terminal_error().is_none(),
+            "a device that is gone records silence instead of failing the take"
+        );
+        actor.kill();
+        actor.wait_for_stop().await;
     }
 
     #[cfg(target_os = "linux")]
@@ -5330,6 +6047,65 @@ mod required_recording_health_tests {
     }
 
     #[test]
+    fn system_audio_reconnect_failure_stays_quiet_until_the_grace_ends() {
+        let health = RecordingSourceHealth::new(1, Arc::new(StreamHealth::new(7)));
+        health.defer_loss(Duration::from_millis(40));
+        health.begin_reconnect(1, Arc::new(StreamHealth::new(8)));
+        health.fail_reconnect(1, 8, "DeviceNotFound".into());
+        assert!(health.terminal_error().is_none());
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(health.terminal_error().unwrap().contains("DeviceNotFound"));
+    }
+
+    #[test]
+    fn system_audio_moved_onto_a_microphone_is_dropped_until_the_grace_ends() {
+        let health = RecordingSourceHealth::new(1, Arc::new(StreamHealth::new(7)));
+        health.note_system_audio_route_loss(7, Duration::from_millis(40));
+        assert!(!health.reconnectable_frame(7));
+        assert!(!health.frame_is_current(7));
+        assert!(!health.capture_epoch_current(0));
+        assert!(health.terminal_error().is_none());
+        health.note_system_audio_route_loss(9, Duration::from_millis(40));
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            health
+                .terminal_error()
+                .unwrap()
+                .contains("left the output monitor")
+        );
+        health.restore_system_audio_capture(7);
+        assert!(health.terminal_error().is_some());
+        assert!(!health.reconnectable_frame(7));
+    }
+
+    #[test]
+    fn system_audio_reattach_clears_the_route_loss_before_the_grace_ends() {
+        let health = RecordingSourceHealth::new(1, Arc::new(StreamHealth::new(7)));
+        health.block_system_audio_capture(7);
+        health.note_system_audio_route_loss(7, Duration::from_millis(40));
+        assert!(!health.reconnectable_frame(7));
+        health.restore_system_audio_capture(7);
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(health.terminal_error().is_none());
+        assert!(health.reconnectable_frame(7));
+        health.block_system_audio_capture(8);
+        assert!(health.reconnectable_frame(7));
+    }
+
+    #[test]
+    fn system_audio_reconnect_during_the_grace_clears_the_loss() {
+        let health = RecordingSourceHealth::new(1, Arc::new(StreamHealth::new(7)));
+        health.defer_loss(Duration::from_millis(40));
+        let replacement = Arc::new(StreamHealth::new(8));
+        health.begin_reconnect(1, replacement.clone());
+        health.fail_reconnect(1, 8, "DeviceNotFound".into());
+        health.commit_reconnect(1, 8);
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(health.terminal_error().is_none());
+        assert!(health.reconnectable_frame(8));
+    }
+
+    #[test]
     fn discovery_failure_is_sticky_without_a_silence_threshold() {
         let health = RecordingSourceHealth::test_healthy(7);
         health.fail_current(1, 7, "DeviceNotFound".into());
@@ -5648,6 +6424,45 @@ mod recording_subscription_tests {
         let snapshot = actor.ask(Snapshot).await.unwrap();
         assert_eq!(snapshot, (3, 7, None, 1, 0, 8));
         assert!(matches!(native.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        actor.kill();
+        actor.wait_for_stop().await;
+    }
+
+    #[tokio::test]
+    async fn lock_refuses_a_failed_preview_stream_and_keeps_a_lost_one() {
+        let (feed, token, native) = fixture();
+        feed.stream_health[&7].failed.store(true, Ordering::Release);
+        drop(token);
+        let actor = MicrophoneFeed::spawn(feed);
+        assert!(matches!(
+            actor.ask(Lock).await,
+            Err(kameo::error::SendError::HandlerError(
+                LockFeedError::InitializeFailed(SetInputError::BuildStream(_))
+            ))
+        ));
+        assert!(matches!(
+            native.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        assert!(matches!(
+            actor.ask(Lock).await,
+            Err(kameo::error::SendError::HandlerError(
+                LockFeedError::NoInput
+            ))
+        ));
+        actor.kill();
+        actor.wait_for_stop().await;
+
+        let (feed, token, native) = fixture();
+        feed.stream_health[&7]
+            .device_lost
+            .store(true, Ordering::Release);
+        drop(token);
+        let actor = MicrophoneFeed::spawn(feed);
+        let lock = actor.ask(Lock).await.unwrap();
+        assert_eq!(lock.device_name(), "requested");
+        assert!(matches!(native.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        drop(lock);
         actor.kill();
         actor.wait_for_stop().await;
     }

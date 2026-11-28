@@ -2470,6 +2470,8 @@ impl LibraryWindow {
                         let item = &self.scan.items[i as usize];
                         div()
                             .id(SharedString::from(format!("pin-{i}")))
+                            .role(gpui::Role::Button)
+                            .aria_label(SharedString::from(item.title.clone()))
                             .h(px(32.))
                             .px(px(12.))
                             .flex()
@@ -2641,6 +2643,20 @@ impl LibraryWindow {
         cx: &mut Context<Self>,
         on: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> AnyElement {
+        let label: SharedString = label.into();
+        self.pill_shell(id, label.clone())
+            .role(gpui::Role::Button)
+            .aria_label(label)
+            .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
+            .into_any_element()
+    }
+
+    /// A pill with nothing to change: drawn the same, but not a button.
+    fn pill_shell(
+        &self,
+        id: impl Into<SharedString>,
+        label: SharedString,
+    ) -> gpui::Stateful<gpui::Div> {
         let p = self.palette;
         let dark = p.dark;
         div()
@@ -2659,15 +2675,13 @@ impl LibraryWindow {
             .cursor_pointer()
             .text_size(px(13.))
             .text_color(p.text)
-            .child(label.into())
+            .child(label)
             .child(
                 svg()
                     .path("icons/chevrons-up-down.svg")
                     .size(px(11.))
                     .text_color(p.muted),
             )
-            .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
-            .into_any_element()
     }
 
     fn render_rule_row(&self, index: usize, row: &RuleRow, cx: &mut Context<Self>) -> AnyElement {
@@ -2851,12 +2865,17 @@ impl LibraryWindow {
                 move |this, window, cx| this.cycle_field(index, window, cx),
             ))
             .when(!op.is_empty(), |el| {
-                el.child(self.pill(
-                    format!("rule-op-{index}"),
-                    op,
-                    cx,
-                    move |this, _window, cx| this.cycle_op(index, cx),
-                ))
+                el.child(if matches!(row.rule, Rule::Date { .. }) {
+                    self.pill_shell(format!("rule-op-{index}"), op.into())
+                        .into_any_element()
+                } else {
+                    self.pill(
+                        format!("rule-op-{index}"),
+                        op,
+                        cx,
+                        move |this, _window, cx| this.cycle_op(index, cx),
+                    )
+                })
             })
             .child(div().flex_1().min_w_0().flex().child(value))
             .child(
@@ -3052,6 +3071,8 @@ impl LibraryWindow {
             .child(
                 div()
                     .id("rule-add")
+                    .role(gpui::Role::Button)
+                    .aria_label(tr::library::add_rule())
                     .flex()
                     .items_center()
                     .gap(px(6.))
@@ -3114,6 +3135,8 @@ impl LibraryWindow {
                     .child(
                         div()
                             .id("smart-cancel")
+                            .role(gpui::Role::Button)
+                            .aria_label(tr::common::cancel())
                             .h(px(32.))
                             .px(px(14.))
                             .flex()
@@ -3131,6 +3154,12 @@ impl LibraryWindow {
                     .child(
                         div()
                             .id("smart-save")
+                            .role(gpui::Role::Button)
+                            .aria_label(if editor.editing.is_some() {
+                                tr::common::save()
+                            } else {
+                                tr::library::create()
+                            })
                             .h(px(32.))
                             .px(px(16.))
                             .flex()

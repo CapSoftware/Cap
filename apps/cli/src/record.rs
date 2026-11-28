@@ -5,9 +5,12 @@ use cap_recording::{
     CameraFeed, DoneFut, MicrophoneFeed, PipelineStoppedByUser,
     feeds::{camera, microphone},
     instant_recording,
-    screen_capture::ScreenCaptureTarget,
+    screen_capture::{ScreenCaptureTarget, frame_accounting::ScreenFrameTotals},
     studio_recording::{self, ActorHandle as StudioActorHandle},
     upload_resume::UploadLock,
+};
+use cap_utils::disk_space::{
+    self, DiskSpaceStatus, FinalizationKind, RecordingStorage, RecordingStorageMonitor,
 };
 use clap::{Args, ValueEnum};
 use futures::FutureExt;
@@ -19,7 +22,10 @@ use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::io::AsyncBufReadExt;
@@ -28,7 +34,7 @@ use uuid::Uuid;
 
 use crate::{
     OutputFormat, resolve_format,
-    session::{self, Session, SessionStatus},
+    session::{self, Session, SessionStatus, StopReason},
     write_json, write_json_line,
 };
 
@@ -140,6 +146,154 @@ fn video_bitrate_bps(mbps: f64) -> u32 {
     (mbps * 1_000_000.0).round() as u32
 }
 
+pub(crate) const LOW_STORAGE_EXIT_CODE: i32 = 3;
+const LOW_STORAGE_CODE: &str = "lowStorage";
+const STORAGE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+static LOW_STORAGE_FAILURE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn failure_exit_code() -> i32 {
+    if LOW_STORAGE_FAILURE.load(Ordering::SeqCst) {
+        LOW_STORAGE_EXIT_CODE
+    } else {
+        1
+    }
+}
+
+fn low_storage_error_code() -> Option<&'static str> {
+    LOW_STORAGE_FAILURE
+        .load(Ordering::SeqCst)
+        .then_some(LOW_STORAGE_CODE)
+}
+
+fn mib(bytes: u64) -> u64 {
+    bytes / (1024 * 1024)
+}
+
+fn ensure_storage_to_start(path: &Path) -> Result<(), String> {
+    let probe = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let available_bytes = match disk_space::free_bytes_for_path(&probe) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "Could not check free space before recording");
+            return Ok(());
+        }
+    };
+    let storage = RecordingStorage {
+        available_bytes,
+        recording_bytes: 0,
+        finalization_copies: 3,
+    };
+    if storage.status() != DiskSpaceStatus::Exhausted {
+        return Ok(());
+    }
+    LOW_STORAGE_FAILURE.store(true, Ordering::SeqCst);
+    Err(format!(
+        "Not enough free space to record: {} MB free on the drive for {}. Cap keeps {} MB free so a recording can always be saved. Free up space or pass a --path on another drive",
+        mib(available_bytes),
+        path.display(),
+        mib(disk_space::RECORDING_DISK_RESERVE_BYTES)
+    ))
+}
+
+fn low_storage_stop_message(path: &Path) -> String {
+    format!(
+        "Recording stopped early because the drive is almost full. Everything captured so far was saved to {}",
+        path.display()
+    )
+}
+
+/// Resolves once free space falls to the point where saving the recording
+/// would no longer fit, using the same rule and cadence as the desktop app.
+async fn watch_storage(
+    project_path: PathBuf,
+    mode: RecordMode,
+    mut on_warning: impl FnMut(bool, RecordingStorage),
+) {
+    let kind = match mode {
+        RecordMode::Studio => FinalizationKind::Studio,
+        RecordMode::Instant => FinalizationKind::Instant,
+    };
+    let mut monitor = RecordingStorageMonitor::new(kind);
+    let mut warning = false;
+    let mut check_failed = false;
+    loop {
+        tokio::time::sleep(STORAGE_POLL_INTERVAL).await;
+        let path = project_path.clone();
+        let (next_monitor, result) = match tokio::task::spawn_blocking(move || {
+            let result = monitor.sample(&path);
+            (monitor, result)
+        })
+        .await
+        {
+            Ok(sampled) => sampled,
+            Err(error) => {
+                tracing::warn!(%error, "Recording storage check stopped");
+                return std::future::pending().await;
+            }
+        };
+        monitor = next_monitor;
+        let storage = match result {
+            Ok(storage) => {
+                check_failed = false;
+                storage
+            }
+            Err(error) => {
+                if !check_failed {
+                    tracing::warn!(%error, "Could not check recording storage");
+                    check_failed = true;
+                }
+                continue;
+            }
+        };
+        let status = storage.status();
+        if let Some(low) = storage_warning_change(warning, status) {
+            warning = low;
+            log_storage(
+                storage,
+                if low {
+                    "Recording storage is low; stopping soon to save the recording"
+                } else {
+                    "Recording storage warning cleared"
+                },
+            );
+            on_warning(low, storage);
+        }
+        if status == DiskSpaceStatus::Exhausted {
+            log_storage(
+                storage,
+                "Recording storage is low; stopping to save the recording",
+            );
+            return;
+        }
+    }
+}
+
+fn storage_warning_change(warning: bool, status: DiskSpaceStatus) -> Option<bool> {
+    let low = status != DiskSpaceStatus::Ok;
+    (low != warning).then_some(low)
+}
+
+fn log_storage(storage: RecordingStorage, event: &'static str) {
+    tracing::warn!(
+        available_bytes = storage.available_bytes,
+        recording_bytes = storage.recording_bytes,
+        finalization_bytes = storage.finalization_bytes(),
+        "{event}"
+    );
+}
+
+fn storage_event(low: bool, storage: RecordingStorage) -> RecordEvent<'static> {
+    RecordEvent::Storage {
+        status: if low { "low" } else { "ok" },
+        available_bytes: storage.available_bytes,
+        recording_bytes: storage.recording_bytes,
+        reserved_bytes: storage
+            .finalization_bytes()
+            .saturating_add(disk_space::RECORDING_DISK_RESERVE_BYTES),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum RecordMode {
     Studio,
@@ -200,7 +354,10 @@ impl RecordStart {
             Ok(()) => Ok(()),
             Err(error) => {
                 if format == OutputFormat::Json {
-                    let _ = write_json_line(&RecordEvent::Error { error: &error });
+                    let _ = write_json_line(&RecordEvent::Error {
+                        error: &error,
+                        code: low_storage_error_code(),
+                    });
                 }
                 Err(error)
             }
@@ -234,6 +391,7 @@ async fn run_foreground(params: RecordParams, format: OutputFormat) -> Result<()
     let recording_id = new_recording_id();
     let target = resolve_target(&params)?;
     let path = resolve_path(&params, &recording_id)?;
+    ensure_storage_to_start(&path)?;
     let actor = start_recording(&params, target, path.clone()).await?;
     let path_display = path.display().to_string();
 
@@ -256,13 +414,21 @@ async fn run_foreground(params: RecordParams, format: OutputFormat) -> Result<()
         println!("Press Enter to stop (or send SIGINT/SIGTERM)");
     }
 
-    let completed = finalize(actor, params.duration, interactive, None).await?;
+    let storage = watch_storage(path.clone(), params.mode, |low, storage| {
+        let _ = emit_record_event(format, &storage_event(low, storage));
+    });
+    let (completed, stop_reason) =
+        finalize(actor, params.duration, interactive, None, storage).await?;
     crate::automation::run_recording_finished(
         completed.project_path(),
         automation_mode(params.mode),
     )
     .await;
-    emit_stopped(format, &completed)
+    emit_stopped(format, &completed, stop_reason)?;
+    match stop_reason {
+        Some(StopReason::LowStorage) => Err(low_storage_stop_message(completed.project_path())),
+        None => Ok(()),
+    }
 }
 
 fn automation_mode(mode: RecordMode) -> cap_automation::AutomationRecordingMode {
@@ -289,6 +455,7 @@ async fn run_detached(params: RecordParams, format: OutputFormat) -> Result<(), 
 
     // Validate before spawning so target errors do not surface only in the worker log.
     resolve_target(&params)?;
+    ensure_storage_to_start(&path)?;
 
     let exe =
         std::env::current_exe().map_err(|e| format!("Could not locate the cap executable: {e}"))?;
@@ -436,6 +603,8 @@ impl SessionRunArgs {
                         .or_else(session::now_unix),
                     recording_meta_exists: None,
                     error: Some(error.clone()),
+                    stop_reason: None,
+                    storage_low: prior.as_ref().is_some_and(|s| s.storage_low),
                     recording_id,
                 });
                 Err(error)
@@ -455,7 +624,7 @@ async fn session_worker(params: RecordParams, recording_id: &str) -> Result<(), 
     // Stamp the start time once; reusing it for the Stopped write keeps `startedAt` meaning the start
     // (not the stop), which `list_sessions` relies on to sort recordings newest-first.
     let started_at = session::now_unix();
-    session::write_session(&Session {
+    let recording_session = |storage_low| Session {
         recording_id: recording_id.to_string(),
         pid: std::process::id(),
         path: path.clone(),
@@ -463,10 +632,19 @@ async fn session_worker(params: RecordParams, recording_id: &str) -> Result<(), 
         started_at,
         recording_meta_exists: None,
         error: None,
-    })?;
+        stop_reason: None,
+        storage_low,
+    };
+    session::write_session(&recording_session(false))?;
 
     let stop_path = session::stop_file(recording_id)?;
-    let completed = finalize(actor, params.duration, false, Some(&stop_path)).await?;
+    let storage = watch_storage(path.clone(), params.mode, |low, _| {
+        if let Err(error) = session::write_session(&recording_session(low)) {
+            tracing::warn!(%error, "Could not record the storage warning in the session");
+        }
+    });
+    let (completed, stop_reason) =
+        finalize(actor, params.duration, false, Some(&stop_path), storage).await?;
     crate::automation::run_recording_finished(
         completed.project_path(),
         automation_mode(params.mode),
@@ -485,6 +663,8 @@ async fn session_worker(params: RecordParams, recording_id: &str) -> Result<(), 
         started_at,
         recording_meta_exists: Some(recording_meta_exists),
         error: None,
+        stop_reason,
+        storage_low: stop_reason.is_some(),
     })
 }
 
@@ -495,7 +675,10 @@ impl RecordStopArgs {
             Ok(()) => Ok(()),
             Err(error) => {
                 if format == OutputFormat::Json {
-                    let _ = write_json_line(&RecordEvent::Error { error: &error });
+                    let _ = write_json_line(&RecordEvent::Error {
+                        error: &error,
+                        code: low_storage_error_code(),
+                    });
                 }
                 Err(error)
             }
@@ -508,15 +691,7 @@ impl RecordStopArgs {
         let id = session.recording_id.clone();
 
         if session.status == SessionStatus::Stopped {
-            emit_record_event(
-                format,
-                &RecordEvent::Stopped {
-                    path: &session.path.display().to_string(),
-                    recording_meta_exists: session.recording_meta_exists.unwrap_or(true),
-                },
-            )?;
-            cleanup_session(&id, &session.path);
-            return Ok(());
+            return finish_stopped_session(format, &session);
         }
 
         let deadline = Instant::now()
@@ -528,15 +703,7 @@ impl RecordStopArgs {
             let current = session::read_session(&id).unwrap_or_else(|_| session.clone());
             match current.status {
                 SessionStatus::Stopped => {
-                    emit_record_event(
-                        format,
-                        &RecordEvent::Stopped {
-                            path: &current.path.display().to_string(),
-                            recording_meta_exists: current.recording_meta_exists.unwrap_or(true),
-                        },
-                    )?;
-                    cleanup_session(&id, &current.path);
-                    return Ok(());
+                    return finish_stopped_session(format, &current);
                 }
                 SessionStatus::Error => {
                     cleanup_session(&id, &current.path);
@@ -566,6 +733,8 @@ impl RecordStopArgs {
                     &RecordEvent::Stopped {
                         path: &current.path.display().to_string(),
                         recording_meta_exists: true,
+                        screen_frames: None,
+                        reason: None,
                     },
                 );
             }
@@ -582,6 +751,26 @@ impl RecordStopArgs {
 
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
+    }
+}
+
+fn finish_stopped_session(format: OutputFormat, session: &Session) -> Result<(), String> {
+    emit_record_event(
+        format,
+        &RecordEvent::Stopped {
+            path: &session.path.display().to_string(),
+            recording_meta_exists: session.recording_meta_exists.unwrap_or(true),
+            screen_frames: None,
+            reason: session.stop_reason,
+        },
+    )?;
+    cleanup_session(&session.recording_id, &session.path);
+    match session.stop_reason {
+        Some(StopReason::LowStorage) => {
+            LOW_STORAGE_FAILURE.store(true, Ordering::SeqCst);
+            Err(low_storage_stop_message(&session.path))
+        }
+        None => Ok(()),
     }
 }
 
@@ -661,6 +850,10 @@ struct SessionStatusRow {
     started_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop_reason: Option<StopReason>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    storage_low: bool,
 }
 
 pub fn status(format: OutputFormat) -> Result<(), String> {
@@ -720,6 +913,8 @@ fn session_status_row_with_alive(session: Session, alive: bool) -> SessionStatus
         alive,
         started_at: session.started_at,
         error,
+        stop_reason: session.stop_reason,
+        storage_low: session.storage_low,
     }
 }
 
@@ -741,6 +936,16 @@ impl ActorHandle {
 
     async fn stop(&self) -> Result<CompletedRecording, String> {
         match self {
+            #[cfg(windows)]
+            Self::Studio(actor) => {
+                let outcome = actor.stop_with_outcome().await;
+                let outcome = match outcome.finishing.clone() {
+                    Some(finishing) => wait_for_studio_finish(finishing).await,
+                    None => outcome,
+                };
+                outcome.result.map(Box::new).map(CompletedRecording::Studio)
+            }
+            #[cfg(not(windows))]
             Self::Studio(actor) => actor
                 .stop()
                 .await
@@ -754,6 +959,68 @@ impl ActorHandle {
                 .map_err(|e| format!("{e:#}")),
         }
     }
+}
+
+/// How long `cap record` waits for Studio tracks still finishing after the
+/// stop limit before it exits and leaves the recording to recovery.
+#[cfg(windows)]
+const STUDIO_FINISH_WAIT: Duration = Duration::from_secs(120);
+
+#[cfg(windows)]
+static STUDIO_STILL_FINISHING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(windows)]
+async fn wait_for_studio_finish(
+    finishing: studio_recording::StudioFinishing,
+) -> studio_recording::StudioStopOutcome {
+    let path = finishing.project_path().display().to_string();
+    eprintln!(
+        "Recording is still finishing; waiting up to {}s for it to save: {path}",
+        STUDIO_FINISH_WAIT.as_secs()
+    );
+    match tokio::time::timeout(STUDIO_FINISH_WAIT, finishing.wait()).await {
+        Ok(outcome) => {
+            if outcome.result.is_ok() {
+                eprintln!("Recording finished saving: {path}");
+            }
+            outcome
+        }
+        Err(_) => {
+            STUDIO_STILL_FINISHING.store(true, std::sync::atomic::Ordering::SeqCst);
+            studio_recording::StudioStopOutcome {
+                capture_stopped: false,
+                result: Err(format!(
+                    "Recording is still finishing after {}s. Nothing was discarded; it will be recovered when it is next exported (cap export \"{path}\") or opened in Cap",
+                    STUDIO_FINISH_WAIT.as_secs()
+                )),
+                finishing: None,
+            }
+        }
+    }
+}
+
+/// Ends the process after `report` once `cap record` has given up waiting
+/// for Studio tracks still finishing. A writer still blocked in the OS keeps
+/// both the runtime and the normal process exit waiting on it, so the process
+/// terminates outright; the files are left in the state crash recovery
+/// expects.
+#[cfg(windows)]
+pub(crate) fn terminate_if_studio_still_finishing(report: impl FnOnce()) {
+    if !STUDIO_STILL_FINISHING.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    report();
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    unsafe {
+        let _ = windows::Win32::System::Threading::TerminateProcess(
+            windows::Win32::System::Threading::GetCurrentProcess(),
+            1,
+        );
+    }
+    std::process::exit(1);
 }
 
 enum CompletedRecording {
@@ -1009,14 +1276,24 @@ async fn finalize(
     duration: Option<f64>,
     interactive: bool,
     stop_file: Option<&Path>,
-) -> Result<CompletedRecording, String> {
+    storage: impl Future<Output = ()>,
+) -> Result<(CompletedRecording, Option<StopReason>), String> {
     let outcome = std::panic::AssertUnwindSafe(async {
         finalize_after_stop_trigger(
             actor.done_fut().map(|result| match result {
                 Err(error) if error.is_caused_by::<PipelineStoppedByUser>() => Ok(()),
                 result => result.map_err(|error| error.to_string()),
             }),
-            wait_for_stop(duration, interactive, stop_file),
+            async {
+                tokio::select! {
+                    biased;
+                    _ = wait_for_stop(duration, interactive, stop_file) => None,
+                    _ = storage => {
+                        LOW_STORAGE_FAILURE.store(true, Ordering::SeqCst);
+                        Some(StopReason::LowStorage)
+                    }
+                }
+            },
             async { finalize_completed(actor.stop().await?).await },
         )
         .await
@@ -1031,24 +1308,27 @@ async fn finalize(
                 .stop()
                 .await
                 .map_err(|e| format!("recording panicked; finalize failed: {e}"))?;
-            finalize_completed(completed).await
+            let stop_reason = LOW_STORAGE_FAILURE
+                .load(Ordering::SeqCst)
+                .then_some(StopReason::LowStorage);
+            Ok((finalize_completed(completed).await?, stop_reason))
         }
     }
 }
 
 async fn finalize_after_stop_trigger<T>(
     capture_done: impl Future<Output = Result<(), String>>,
-    stop_requested: impl Future<Output = ()>,
+    stop_requested: impl Future<Output = Option<StopReason>>,
     finalize: impl Future<Output = Result<T, String>>,
-) -> Result<T, String> {
+) -> Result<(T, Option<StopReason>), String> {
     let capture_result = tokio::select! {
         biased;
-        result = capture_done => result,
-        _ = stop_requested => Ok(()),
+        result = capture_done => result.map(|()| None),
+        stop_reason = stop_requested => Ok(stop_reason),
     };
     let finalized = finalize.await;
-    capture_result?;
-    finalized
+    let stop_reason = capture_result?;
+    Ok((finalized?, stop_reason))
 }
 
 async fn finalize_completed(
@@ -1196,7 +1476,11 @@ fn persist_instant_recording_meta(
         .map_err(|e| format!("Failed to save instant project config: {e}"))
 }
 
-fn emit_stopped(format: OutputFormat, completed: &CompletedRecording) -> Result<(), String> {
+fn emit_stopped(
+    format: OutputFormat,
+    completed: &CompletedRecording,
+    reason: Option<StopReason>,
+) -> Result<(), String> {
     let recording_meta_exists = completed
         .project_path()
         .join("recording-meta.json")
@@ -1206,6 +1490,11 @@ fn emit_stopped(format: OutputFormat, completed: &CompletedRecording) -> Result<
         &RecordEvent::Stopped {
             path: &completed.project_path().display().to_string(),
             recording_meta_exists,
+            screen_frames: match completed {
+                CompletedRecording::Studio(recording) => recording.screen_frames,
+                CompletedRecording::Instant(_) => None,
+            },
+            reason,
         },
     )
 }
@@ -1329,9 +1618,21 @@ enum RecordEvent<'a> {
     Stopped {
         path: &'a str,
         recording_meta_exists: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        screen_frames: Option<ScreenFrameTotals>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<StopReason>,
+    },
+    Storage {
+        status: &'static str,
+        available_bytes: u64,
+        recording_bytes: u64,
+        reserved_bytes: u64,
     },
     Error {
         error: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<&'static str>,
     },
 }
 
@@ -1347,13 +1648,38 @@ fn emit_record_event(format: OutputFormat, event: &RecordEvent<'_>) -> Result<()
                 RecordEvent::Stopped {
                     path,
                     recording_meta_exists,
+                    screen_frames,
+                    ..
                 } => {
                     println!("Recording stopped: {path}");
                     if !recording_meta_exists {
                         println!("warning: recording-meta.json was not written");
                     }
+                    if let Some(frames) = screen_frames {
+                        println!(
+                            "Screen frames: {} written, {} lost of {} on screen ({:.2}%)",
+                            frames.written,
+                            frames.lost(),
+                            frames.displayed,
+                            frames.lost_pct()
+                        );
+                    }
                 }
-                RecordEvent::Error { error } => println!("Recording error: {error}"),
+                RecordEvent::Storage {
+                    status,
+                    available_bytes,
+                    ..
+                } => {
+                    if *status == "low" {
+                        println!(
+                            "warning: the drive is almost full ({} MB free); the recording will stop by itself before it runs out",
+                            mib(*available_bytes)
+                        );
+                    } else {
+                        println!("Drive space recovered ({} MB free)", mib(*available_bytes));
+                    }
+                }
+                RecordEvent::Error { error, .. } => println!("Recording error: {error}"),
             }
             Ok(())
         }
@@ -1716,12 +2042,24 @@ mod tests {
     async fn stop_request_finalizes_while_capture_is_running() {
         let result = finalize_after_stop_trigger(
             std::future::pending(),
-            std::future::ready(()),
+            std::future::ready(None),
             std::future::ready(Ok(42)),
         )
         .await;
 
-        assert_eq!(result.unwrap(), 42);
+        assert_eq!(result.unwrap(), (42, None));
+    }
+
+    #[tokio::test]
+    async fn low_storage_stop_finalizes_and_reports_its_reason() {
+        let result = finalize_after_stop_trigger(
+            std::future::pending(),
+            std::future::ready(Some(StopReason::LowStorage)),
+            std::future::ready(Ok(42)),
+        )
+        .await;
+
+        assert_eq!(result.unwrap(), (42, Some(StopReason::LowStorage)));
     }
 
     #[tokio::test]
@@ -1733,14 +2071,14 @@ mod tests {
         )
         .await;
 
-        assert_eq!(result.unwrap(), 42);
+        assert_eq!(result.unwrap(), (42, None));
     }
 
     #[tokio::test]
     async fn finalization_error_is_returned_after_stop_request() {
         let result = finalize_after_stop_trigger(
             std::future::pending(),
-            std::future::ready(()),
+            std::future::ready(None),
             std::future::ready(Err::<(), _>("failed to finalize recording".to_string())),
         )
         .await;
@@ -1763,11 +2101,70 @@ mod tests {
         let stopped = serde_json::to_value(RecordEvent::Stopped {
             path: "p",
             recording_meta_exists: true,
+            screen_frames: None,
+            reason: None,
         })
         .unwrap();
         assert_eq!(stopped["type"], "stopped");
         assert_eq!(stopped["recordingMetaExists"], true);
         assert!(stopped.get("recording_meta_exists").is_none());
+        assert!(stopped.get("screenFrames").is_none());
+        assert!(stopped.get("reason").is_none());
+
+        let low_storage = serde_json::to_value(RecordEvent::Stopped {
+            path: "p",
+            recording_meta_exists: true,
+            screen_frames: None,
+            reason: Some(StopReason::LowStorage),
+        })
+        .unwrap();
+        assert_eq!(low_storage["reason"], "lowStorage");
+
+        let storage = serde_json::to_value(storage_event(
+            true,
+            RecordingStorage {
+                available_bytes: 3_000,
+                recording_bytes: 100,
+                finalization_copies: 3,
+            },
+        ))
+        .unwrap();
+        assert_eq!(storage["type"], "storage");
+        assert_eq!(storage["status"], "low");
+        assert_eq!(storage["availableBytes"], 3_000);
+        assert_eq!(storage["recordingBytes"], 100);
+        assert_eq!(
+            storage["reservedBytes"],
+            300 + disk_space::RECORDING_DISK_RESERVE_BYTES
+        );
+
+        let error = serde_json::to_value(RecordEvent::Error {
+            error: "e",
+            code: None,
+        })
+        .unwrap();
+        assert_eq!(error, serde_json::json!({"type": "error", "error": "e"}));
+        let coded = serde_json::to_value(RecordEvent::Error {
+            error: "e",
+            code: Some(LOW_STORAGE_CODE),
+        })
+        .unwrap();
+        assert_eq!(coded["code"], "lowStorage");
+
+        let counted = serde_json::to_value(RecordEvent::Stopped {
+            path: "p",
+            recording_meta_exists: true,
+            screen_frames: Some(ScreenFrameTotals {
+                displayed: 2400,
+                written: 2390,
+                lost_in_capture: 10,
+                ..Default::default()
+            }),
+            reason: None,
+        })
+        .unwrap();
+        assert_eq!(counted["screenFrames"]["displayed"], 2400);
+        assert_eq!(counted["screenFrames"]["lostInCapture"], 10);
     }
 
     #[test]
@@ -1781,6 +2178,8 @@ mod tests {
                 started_at: Some(1),
                 recording_meta_exists: None,
                 error: None,
+                stop_reason: None,
+                storage_low: false,
             },
             false,
         );
@@ -1791,6 +2190,84 @@ mod tests {
             row.error.as_deref(),
             Some("recording process is not running")
         );
+    }
+
+    #[test]
+    fn storage_warning_is_reported_once_and_before_a_stop() {
+        assert_eq!(storage_warning_change(false, DiskSpaceStatus::Ok), None);
+        assert_eq!(
+            storage_warning_change(false, DiskSpaceStatus::Low),
+            Some(true)
+        );
+        assert_eq!(storage_warning_change(true, DiskSpaceStatus::Low), None);
+        assert_eq!(
+            storage_warning_change(false, DiskSpaceStatus::Exhausted),
+            Some(true)
+        );
+        assert_eq!(
+            storage_warning_change(true, DiskSpaceStatus::Exhausted),
+            None
+        );
+        assert_eq!(
+            storage_warning_change(true, DiskSpaceStatus::Ok),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn low_storage_session_round_trips_and_older_sessions_still_load() {
+        let stopped = Session {
+            recording_id: "abc".to_string(),
+            pid: 123,
+            path: PathBuf::from("recording.cap"),
+            status: SessionStatus::Stopped,
+            started_at: Some(1),
+            recording_meta_exists: Some(true),
+            error: None,
+            stop_reason: Some(StopReason::LowStorage),
+            storage_low: true,
+        };
+        let json = serde_json::to_value(&stopped).unwrap();
+        assert_eq!(json["stopReason"], "lowStorage");
+        assert_eq!(json["storageLow"], true);
+        let loaded: Session = serde_json::from_value(json).unwrap();
+        assert_eq!(loaded.stop_reason, Some(StopReason::LowStorage));
+        assert!(loaded.storage_low);
+        let row = serde_json::to_value(session_status_row_with_alive(loaded, false)).unwrap();
+        assert_eq!(row["stopReason"], "lowStorage");
+        assert_eq!(row["storageLow"], true);
+
+        let older: Session = serde_json::from_value(serde_json::json!({
+            "recordingId": "abc",
+            "pid": 123,
+            "path": "recording.cap",
+            "status": "stopped",
+            "recordingMetaExists": true,
+        }))
+        .unwrap();
+        assert_eq!(older.stop_reason, None);
+        assert!(!older.storage_low);
+        let row = serde_json::to_value(session_status_row_with_alive(older, false)).unwrap();
+        assert!(row.get("stopReason").is_none());
+        assert!(row.get("storageLow").is_none());
+    }
+
+    #[test]
+    fn start_is_refused_only_when_free_space_is_at_the_save_reserve() {
+        let directory = tempfile::tempdir().unwrap();
+        let free = disk_space::free_bytes_for_path(directory.path()).unwrap();
+        let path = directory.path().join("recording.cap");
+        let result = ensure_storage_to_start(&path);
+        if free > disk_space::RECORDING_DISK_RESERVE_BYTES {
+            assert!(result.is_ok());
+            assert!(!path.exists());
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("Not enough free space to record")
+            );
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -1808,6 +2285,8 @@ mod tests {
             started_at: Some(1),
             recording_meta_exists: None,
             error: None,
+            stop_reason: None,
+            storage_low: false,
         };
         let current = Session {
             recording_id: "current".to_string(),

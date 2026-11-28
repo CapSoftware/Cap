@@ -136,6 +136,9 @@ export const meetingAskRequestSchema = z
 		transcript: text(MEETING_TRANSCRIPT_MAX_CHARS).default(""),
 		notesMarkdown: text(100_000).default(""),
 		title: text(300).optional(),
+		// The transcript's label for the person asking, when they have a name.
+		// Without it their lines are labelled "You".
+		selfName: text(200).optional(),
 		vocabulary: z.array(text(100)).max(200).default([]),
 		history: z
 			.array(

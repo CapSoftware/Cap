@@ -2070,9 +2070,12 @@ pub fn mirror_transcription_hints(spellings: &[String]) {
 #[derive(Debug, Clone, Default)]
 pub struct AuthSnapshot {
     pub server_url: String,
+    pub user_id: Option<String>,
     pub token: Option<String>,
     pub plan_upgraded: bool,
     pub plan_manual: bool,
+    /// When the plan was last fetched from the server, in Unix seconds.
+    pub plan_checked_at: Option<i64>,
     pub organizations: Vec<AuthOrganization>,
 }
 
@@ -2119,6 +2122,10 @@ pub fn auth_snapshot() -> AuthSnapshot {
                 .and_then(Value::as_str)
         })
         .map(str::to_string);
+    let user_id = auth
+        .get("user_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let plan = auth.get("plan").and_then(Value::as_object);
     let plan_upgraded = plan
         .and_then(|plan| plan.get("upgraded"))
@@ -2128,6 +2135,9 @@ pub fn auth_snapshot() -> AuthSnapshot {
         .and_then(|plan| plan.get("manual"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let plan_checked_at = plan
+        .and_then(|plan| plan.get("last_checked"))
+        .and_then(Value::as_i64);
     let organizations = auth
         .get("organizations")
         .and_then(Value::as_array)
@@ -2154,9 +2164,11 @@ pub fn auth_snapshot() -> AuthSnapshot {
     }
     AuthSnapshot {
         server_url,
+        user_id,
         token,
         plan_upgraded,
         plan_manual,
+        plan_checked_at,
         organizations,
     }
 }

@@ -133,6 +133,7 @@ pub struct ActiveRecording {
     /// The feed a mid-recording microphone switch opened. Replacing it drops
     /// (and stops) the one before.
     switched_microphone: Arc<Mutex<Option<SwitchedMicrophone>>>,
+    recording_limit: Option<std::time::Duration>,
 }
 
 pub(crate) struct SwitchedMicrophone {
@@ -486,7 +487,10 @@ async fn finalize_studio(
     let claim_progress = progress.clone();
     let completed = tokio::task::spawn_blocking(move || {
         if needs_remux {
-            ensure_finalization_storage(&project_path)?;
+            ensure_finalization_storage(
+                &project_path,
+                cap_utils::disk_space::FinalizationKind::Studio,
+            )?;
         }
         let preparing = claim_progress
             .as_ref()
@@ -640,6 +644,129 @@ where
             (true, result)
         }
         Err(error) => (true, Err(error)),
+    }
+}
+
+/// How long Stop stays in its stopping state once a Studio stop went past the
+/// stop limit, for the tracks to finish and the recording to be finalized.
+/// Late finishes measured 12 to 47 s past the limit; after this the app is
+/// handed back and the recording keeps saving.
+#[cfg(windows)]
+const STUDIO_FINISH_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Stop handed the app back while the recording was still saving.
+#[cfg(windows)]
+#[derive(Debug)]
+pub(crate) struct StudioStillSaving;
+
+#[cfg(windows)]
+impl std::fmt::Display for StudioStillSaving {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("The recording is still saving")
+    }
+}
+
+#[cfg(windows)]
+impl std::error::Error for StudioStillSaving {}
+
+#[cfg(windows)]
+async fn wait_for_studio_finish(
+    outcome: studio_recording::StudioStopOutcome,
+) -> Result<studio_recording::StudioStopOutcome, studio_recording::StudioFinishing> {
+    let Some(finishing) = outcome.finishing.clone() else {
+        return Ok(outcome);
+    };
+    match tokio::time::timeout(STUDIO_FINISH_WAIT, finishing.wait()).await {
+        Ok(outcome) => Ok(outcome),
+        Err(_) => Err(finishing),
+    }
+}
+
+/// Keeps waiting for a failed Studio stop the app stopped waiting for and
+/// refreshes the library. `in_progress` keeps the library from deleting the
+/// folder until then.
+#[cfg(windows)]
+fn finish_studio_in_background(
+    finishing: studio_recording::StudioFinishing,
+    in_progress: Arc<crate::library::RecordingInProgress>,
+) {
+    let path = finishing.project_path().to_path_buf();
+    tracing::warn!(path = %path.display(), "Studio recording is still saving; finishing it in the background");
+    drop(tokio::spawn(async move {
+        let _in_progress = in_progress;
+        match finishing.wait().await.result {
+            Ok(_) => {
+                tracing::info!(path = %path.display(), "Studio recording finished saving in the background");
+            }
+            Err(error) => {
+                tracing::error!(path = %path.display(), "Studio recording failed after saving in the background: {error}");
+            }
+        }
+        refresh_library_after_background_save().await;
+    }));
+}
+
+/// A clean Studio stop that went past the stop limit: the tracks finishing and
+/// the same finalize as an on-time stop run as one task. Stop waits for it up to
+/// `STUDIO_FINISH_WAIT`; past that the app is handed back and the task keeps
+/// saving in the background, holding `in_progress` until it ends.
+#[cfg(windows)]
+async fn finish_late_studio_stop(
+    finishing: studio_recording::StudioFinishing,
+    capture_target: ScreenCaptureTarget,
+    camera_snapshot: Option<StudioCameraSnapshot>,
+    in_progress: Arc<crate::library::RecordingInProgress>,
+) -> (bool, anyhow::Result<PathBuf>) {
+    let path = finishing.project_path().to_path_buf();
+    let mut save = tokio::spawn(async move {
+        let _in_progress = in_progress;
+        finish_after_capture_stop(
+            async move {
+                let outcome = finishing.wait().await;
+                (
+                    outcome.capture_stopped,
+                    outcome.result.map_err(anyhow::Error::msg),
+                )
+            },
+            |completed| finalize_studio(completed, capture_target, None, camera_snapshot),
+        )
+        .await
+    });
+    match tokio::time::timeout(STUDIO_FINISH_WAIT, &mut save).await {
+        Ok(joined) => joined.unwrap_or_else(|error| {
+            (
+                true,
+                Err(anyhow!(
+                    "Studio finalization task failed after capture stopped: {error}"
+                )),
+            )
+        }),
+        Err(_) => {
+            tracing::warn!(path = %path.display(), "Studio recording is still saving; finishing it in the background");
+            drop(tokio::spawn(async move {
+                match save.await {
+                    Ok((_, Ok(project_dir))) => {
+                        tracing::info!(path = %project_dir.display(), "Studio recording finished saving in the background");
+                        crate::automation::studio_recording_finished(project_dir);
+                    }
+                    Ok((_, Err(error))) => {
+                        tracing::error!(path = %path.display(), "Studio recording could not be saved in the background: {error:#}");
+                    }
+                    Err(error) => {
+                        tracing::error!(path = %path.display(), "Studio background save task failed: {error}");
+                    }
+                }
+                refresh_library_after_background_save().await;
+            }));
+            (true, Err(anyhow::Error::new(StudioStillSaving)))
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn refresh_library_after_background_save() {
+    if let Err(error) = crate::automation::refresh_library().await {
+        tracing::warn!("Could not refresh the library after a background save: {error}");
     }
 }
 
@@ -981,6 +1108,10 @@ impl ActiveRecording {
         self.instant_video_id.as_deref()
     }
 
+    pub(crate) fn recording_limit(&self) -> Option<std::time::Duration> {
+        self.recording_limit
+    }
+
     /// Stop and finalize. Returns the project directory.
     ///
     /// Finalization mirrors the CLI's `finalize_completed`: studio projects get
@@ -1062,6 +1193,15 @@ impl ActiveRecording {
         }))
     }
 
+    /// Marks a Windows Studio stop request at the moment it is made, so nothing
+    /// captured after it is saved however late the stop reaches the capture.
+    #[cfg(windows)]
+    pub(crate) fn mark_stop_requested(&self) {
+        if let Handle::Studio(handle) = &self.handle {
+            handle.mark_stop_requested();
+        }
+    }
+
     #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn clean_studio_stop_handle(
         &self,
@@ -1072,11 +1212,27 @@ impl ActiveRecording {
             return None;
         };
         let handle = handle.clone();
+        #[cfg(windows)]
+        let in_progress = self._in_progress.clone();
         Some(Box::pin(async move {
             let capture_target = handle.capture_target.clone();
+            let outcome = handle.stop_with_outcome().await;
+            #[cfg(windows)]
+            if let Some(finishing) = outcome.finishing.clone() {
+                let result = finish_late_studio_stop(
+                    finishing,
+                    capture_target,
+                    camera_snapshot,
+                    in_progress,
+                )
+                .await;
+                if let Some(progress) = progress {
+                    progress.complete(&result.1);
+                }
+                return result;
+            }
             let result = finish_after_capture_stop(
                 async move {
-                    let outcome = handle.stop_with_outcome().await;
                     (
                         outcome.capture_stopped,
                         outcome.result.map_err(anyhow::Error::msg),
@@ -1199,8 +1355,21 @@ impl ActiveRecording {
         {
             Handle::Studio(handle) => {
                 let handle = handle.clone();
+                #[cfg(windows)]
+                let in_progress = self._in_progress.clone();
                 return Box::pin(async move {
                     let outcome = handle.stop_with_outcome().await;
+                    #[cfg(windows)]
+                    let outcome = match wait_for_studio_finish(outcome).await {
+                        Ok(outcome) => outcome,
+                        Err(finishing) => {
+                            finish_studio_in_background(finishing, in_progress);
+                            return (
+                                true,
+                                Err(anyhow!("Recording pipeline failed; local files preserved")),
+                            );
+                        }
+                    };
                     (
                         outcome.capture_stopped,
                         outcome.result.map_err(anyhow::Error::msg).and_then(|_| {
@@ -1450,7 +1619,10 @@ impl ActiveRecording {
                         let muxed = output_path.clone();
                         let project_path = project_path.clone();
                         tokio::task::spawn_blocking(move || {
-                            ensure_finalization_storage(&project_path)?;
+                            ensure_finalization_storage(
+                                &project_path,
+                                cap_utils::disk_space::FinalizationKind::Instant,
+                            )?;
                             match completion {
                                 Some(completion) => cap_recording::recovery::RecoveryManager::finalize_completed_instant_output(
                                     &display_dir,
@@ -1588,13 +1760,17 @@ pub fn available_recording_storage() -> std::io::Result<cap_utils::disk_space::R
     Ok(cap_utils::disk_space::RecordingStorage {
         available_bytes: cap_utils::disk_space::free_bytes_for_path(&recordings_dir())?,
         recording_bytes: 0,
+        finalization_copies: 3,
     })
 }
 
-pub(crate) fn ensure_finalization_storage(project_path: &std::path::Path) -> anyhow::Result<()> {
+pub(crate) fn ensure_finalization_storage(
+    project_path: &std::path::Path,
+    kind: cap_utils::disk_space::FinalizationKind,
+) -> anyhow::Result<()> {
     finalization_storage_verdict(
         project_path,
-        cap_utils::disk_space::recording_storage(project_path),
+        cap_utils::disk_space::recording_storage(project_path, kind),
     )
 }
 
@@ -1618,6 +1794,12 @@ fn finalization_storage_verdict(
         }
     };
     if !storage.can_finalize() {
+        tracing::warn!(
+            available_bytes = storage.available_bytes,
+            recording_bytes = storage.recording_bytes,
+            finalization_bytes = storage.finalization_bytes(),
+            "Not enough storage to save the recording; keeping its files"
+        );
         return Err(anyhow!(
             "Low storage. Your recording files are preserved at {}. Free up space, then recover the recording in Cap.",
             project_path.display()
@@ -1639,7 +1821,10 @@ pub fn recover_instant_recording(project_path: &std::path::Path) -> anyhow::Resu
             "This instant recording is not waiting to be saved."
         ));
     }
-    ensure_finalization_storage(project_path)?;
+    ensure_finalization_storage(
+        project_path,
+        cap_utils::disk_space::FinalizationKind::Instant,
+    )?;
     let output = project_path.join("content/output.mp4");
     cap_recording::recovery::RecoveryManager::finalize_instant_output(
         &project_path.join("content/display"),
@@ -2627,14 +2812,17 @@ async fn start_internal(
         .filter(|organization| !organization.is_empty())
         .map(str::to_string);
 
+    let mut recording_limit = None;
     let pre_created_video = if config.mode == RecordingMode::Instant {
-        let video = crate::upload::prepare_instant_upload(
+        let prepared = crate::upload::prepare_instant_upload(
             matches!(config.target, ScreenCaptureTarget::CameraOnly),
             project_name,
             organization_id,
         )
         .await
         .map_err(anyhow::Error::msg)?;
+        recording_limit = prepared.recording_limit;
+        let video = prepared.video;
         crate::upload::instant_cleanup::begin(&video.id, &project_dir);
         #[cfg(target_os = "linux")]
         if let Some(attempt) = &attempt {
@@ -2652,7 +2840,11 @@ async fn start_internal(
         #[cfg(target_os = "linux")]
         attempt.clone(),
     )
-    .await;
+    .await
+    .map(|mut active| {
+        active.recording_limit = recording_limit;
+        active
+    });
     #[cfg(target_os = "linux")]
     if result.is_err()
         && let Some(attempt) = &attempt
@@ -3063,6 +3255,7 @@ async fn start_attempt_with_upload(
         camera_only: matches!(config.target, ScreenCaptureTarget::CameraOnly),
         microphone_switch,
         switched_microphone: Arc::new(Mutex::new(None)),
+        recording_limit: None,
     })
 }
 
@@ -4863,6 +5056,7 @@ mod studio_finalization_tests {
             .unwrap(),
             cursor_data: Default::default(),
             clean_stopped: None,
+            screen_frames: None,
         }
     }
 
@@ -5145,6 +5339,7 @@ mod studio_finalization_tests {
             meta,
             cursor_data: Default::default(),
             clean_stopped: None,
+            screen_frames: None,
         }
     }
 
@@ -5247,7 +5442,12 @@ mod finalization_storage_tests {
     #[test]
     fn finalization_storage_check_that_cannot_run_does_not_block_the_save() {
         let directory = tempfile::tempdir().unwrap();
-        ensure_finalization_storage(&directory.path().join("missing.cap")).unwrap();
+        for kind in [
+            cap_utils::disk_space::FinalizationKind::Studio,
+            cap_utils::disk_space::FinalizationKind::Instant,
+        ] {
+            ensure_finalization_storage(&directory.path().join("missing.cap"), kind).unwrap();
+        }
         finalization_storage_verdict(
             directory.path(),
             Err(std::io::Error::other(
@@ -5262,24 +5462,28 @@ mod finalization_storage_tests {
         use cap_utils::disk_space::{RECORDING_DISK_RESERVE_BYTES, RecordingStorage};
         let directory = tempfile::tempdir().unwrap();
         let recording_bytes = 1024 * 1024 * 1024;
-        let needed = recording_bytes * 3 + RECORDING_DISK_RESERVE_BYTES / 2;
-        let error = finalization_storage_verdict(
-            directory.path(),
-            Ok(RecordingStorage {
-                available_bytes: needed,
-                recording_bytes,
-            }),
-        )
-        .unwrap_err();
-        assert!(error.to_string().starts_with("Low storage."), "{error}");
-        finalization_storage_verdict(
-            directory.path(),
-            Ok(RecordingStorage {
-                available_bytes: needed + 1,
-                recording_bytes,
-            }),
-        )
-        .unwrap();
+        for finalization_copies in [2, 3] {
+            let needed = recording_bytes * finalization_copies + RECORDING_DISK_RESERVE_BYTES / 2;
+            let error = finalization_storage_verdict(
+                directory.path(),
+                Ok(RecordingStorage {
+                    available_bytes: needed,
+                    recording_bytes,
+                    finalization_copies,
+                }),
+            )
+            .unwrap_err();
+            assert!(error.to_string().starts_with("Low storage."), "{error}");
+            finalization_storage_verdict(
+                directory.path(),
+                Ok(RecordingStorage {
+                    available_bytes: needed + 1,
+                    recording_bytes,
+                    finalization_copies,
+                }),
+            )
+            .unwrap();
+        }
     }
 
     #[cfg(windows)]
@@ -5293,7 +5497,11 @@ mod finalization_storage_tests {
         project.push("content");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("segment_000.m4s"), [0; 128]).unwrap();
-        ensure_finalization_storage(project.parent().unwrap()).unwrap();
+        ensure_finalization_storage(
+            project.parent().unwrap(),
+            cap_utils::disk_space::FinalizationKind::Studio,
+        )
+        .unwrap();
     }
 }
 

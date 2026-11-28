@@ -437,6 +437,13 @@ pub enum PipelineHealthEvent {
     EncoderTailLost {
         encoder: String,
     },
+    FramesLost {
+        source: String,
+        displayed: u64,
+        lost_in_capture: u64,
+        lost_before_encoder: u64,
+        lost_in_encoder: u64,
+    },
 }
 
 pub type HealthSender = tokio::sync::mpsc::Sender<PipelineHealthEvent>;
@@ -504,6 +511,22 @@ pub fn emit_health(tx: &HealthSender, event: PipelineHealthEvent) {
             health_event(14, "microphone_digital_silence", &[])
         }
         PipelineHealthEvent::EncoderTailLost { .. } => health_event(15, "encoder_tail_lost", &[]),
+        PipelineHealthEvent::FramesLost {
+            displayed,
+            lost_in_capture,
+            lost_before_encoder,
+            lost_in_encoder,
+            ..
+        } => health_event(
+            16,
+            "frames_lost",
+            &[
+                Field::number("displayed", *displayed),
+                Field::number("lost_in_capture", *lost_in_capture),
+                Field::number("lost_before_encoder", *lost_before_encoder),
+                Field::number("lost_in_encoder", *lost_in_encoder),
+            ],
+        ),
     }
     let _ = tx.try_send(event);
 }
@@ -3377,6 +3400,62 @@ async fn finish_build(
 /// its other tasks: past the video source's own 5s stop deadline.
 const UNOWNED_TASK_DRAIN_TIMEOUT: Duration = Duration::from_secs(6);
 
+const PIPELINE_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The instant a Windows Studio recording was asked to stop. It is marked
+/// once, before the stop reaches the pipelines, and the pipelines built for
+/// the recording keep nothing captured after it: video frames more than one
+/// frame interval after it, and audio past [`STOP_CUT_AUDIO_TOLERANCE`], are
+/// not written. A stop that reaches the pipelines late therefore cannot add
+/// what was on screen or heard after the request, and what is on disk (and
+/// recovered after a crash) ends at the request too.
+#[cfg(windows)]
+#[derive(Clone, Debug, Default)]
+pub struct StopCut(Arc<OnceLock<Instant>>);
+
+/// How far audio may run past a stop request: one audio buffer.
+#[cfg(windows)]
+pub(crate) const STOP_CUT_AUDIO_TOLERANCE: Duration = Duration::from_millis(20);
+
+#[cfg(windows)]
+tokio::task_local! {
+    static STOP_CUT: StopCut;
+}
+
+#[cfg(windows)]
+impl StopCut {
+    /// Marks the stop request now. Only the first call counts.
+    pub fn mark(&self) -> bool {
+        self.0.set(Instant::now()).is_ok()
+    }
+
+    pub fn instant(&self) -> Option<Instant> {
+        self.0.get().copied()
+    }
+
+    /// Whether something captured at `at` is more than `tolerance` past the
+    /// stop request.
+    pub(crate) fn excludes(&self, at: Instant, tolerance: Duration) -> bool {
+        self.instant().is_some_and(|cut| at > cut + tolerance)
+    }
+
+    /// `stop`, or the stop request plus `tolerance` if that is earlier.
+    pub(crate) fn limit(&self, stop: Instant, tolerance: Duration) -> Instant {
+        self.instant().map_or(stop, |cut| stop.min(cut + tolerance))
+    }
+
+    /// Runs a pipeline build with this cut applying to every pipeline it
+    /// builds.
+    pub(crate) async fn scope<F: Future>(self, future: F) -> F::Output {
+        STOP_CUT.scope(self, future).await
+    }
+
+    /// The cut of the pipeline build running on this task, if any.
+    pub(crate) fn current() -> Option<Self> {
+        STOP_CUT.try_with(Clone::clone).ok()
+    }
+}
+
 /// A muxer whose subprocess was not reaped, or whose encoder or writer thread
 /// did not finish, may still be working, so its pipeline has not fully exited.
 fn muxer_work_may_run(muxer_result: &anyhow::Result<anyhow::Result<()>>) -> bool {
@@ -3566,6 +3645,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     start_gate: Option<RecordingStartGate>,
 ) -> Option<oneshot::Receiver<Result<(), String>>> {
     let frame_duration_ns = estimate_video_frame_duration_ns(&video_info);
+    #[cfg(windows)]
+    let stop_cut = StopCut::current();
     let (start_tx, started) =
         if PipelineBuildScope::current().is_some_and(|scope| scope.0.wait_for_video_start) {
             let (sender, receiver) = oneshot::channel();
@@ -3727,6 +3808,16 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
                     let mut timestamp = frame.timestamp();
 
+                    #[cfg(windows)]
+                    if stop_cut.as_ref().is_some_and(|cut| {
+                        cut.excludes(
+                            timestamps.instant() + timestamp.duration_since(timestamps),
+                            Duration::from_nanos(frame_duration_ns),
+                        )
+                    }) {
+                        continue;
+                    }
+
                     if let Some(gate) = &start_gate {
                         if released_at_arm {
                             let armed = gate.armed_instant().expect("released only once armed");
@@ -3839,6 +3930,17 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         resynced || matches!(remap.outcome, SourceClockOutcome::HardReset),
                     );
                     let duration = shift_from_origin(duration, is_first_frame, origin_lead);
+                    #[cfg(windows)]
+                    if placed_after_stop_cut(
+                        stop_cut.as_ref(),
+                        timestamps,
+                        total_pause_duration,
+                        first_frame_offset,
+                        duration,
+                        Duration::from_nanos(frame_duration_ns),
+                    ) {
+                        continue;
+                    }
                     timestamp_span.record(duration);
 
                     if frame_count.is_multiple_of(300) {
@@ -3872,9 +3974,15 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             .await;
 
         let was_cancelled = res.is_none();
-        let stopped_at = timestamps
-            .instant()
-            .elapsed()
+        let stop_instant = Instant::now();
+        // A still screen is extended to Stop, or to the stop request when Stop
+        // reached the pipeline after it.
+        #[cfg(windows)]
+        let stop_instant = stop_cut.as_ref().map_or(stop_instant, |cut| {
+            cut.limit(stop_instant, Duration::from_nanos(frame_duration_ns))
+        });
+        let stopped_at = stop_instant
+            .saturating_duration_since(timestamps.instant())
             .saturating_sub(shared_pause.total_pause_duration());
 
         if was_cancelled {
@@ -3896,6 +4004,15 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                 match tokio::time::timeout_at(drain_deadline, video_rx.next()).await {
                     Ok(Some(frame)) => {
                         let timestamp = frame.timestamp();
+                        #[cfg(windows)]
+                        if stop_cut.as_ref().is_some_and(|cut| {
+                            cut.excludes(
+                                timestamps.instant() + timestamp.duration_since(timestamps),
+                                Duration::from_nanos(frame_duration_ns),
+                            )
+                        }) {
+                            continue;
+                        }
                         if let Some(gate) = &start_gate {
                             if !gate.admits_video(timestamp) {
                                 continue;
@@ -3985,6 +4102,17 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             resynced || matches!(remap.outcome, SourceClockOutcome::HardReset),
                         );
                         let duration = shift_from_origin(duration, is_first_frame, origin_lead);
+                        #[cfg(windows)]
+                        if placed_after_stop_cut(
+                            stop_cut.as_ref(),
+                            timestamps,
+                            shared_pause.total_pause_duration(),
+                            first_frame_offset,
+                            duration,
+                            Duration::from_nanos(frame_duration_ns),
+                        ) {
+                            continue;
+                        }
                         timestamp_span.record(duration);
 
                         let duplicate = frame.duplicate();
@@ -4137,6 +4265,43 @@ fn clip_to_capture_time(
     Some(frame)
 }
 
+/// Whether a video frame lands on the track more than one frame after the
+/// stop request of `cut`. A frame handed over late can be stamped from the
+/// wall clock instead of its capture time, so a frame captured before the
+/// request can still land after it: placed there it would carry the track past
+/// the stop. `duration` is the frame's position on the track, which starts at
+/// `first_frame_offset` on the recording's paused-time-free timeline.
+#[cfg(windows)]
+fn placed_after_stop_cut(
+    cut: Option<&StopCut>,
+    timestamps: Timestamps,
+    pause: Duration,
+    first_frame_offset: Option<Duration>,
+    duration: Duration,
+    frame: Duration,
+) -> bool {
+    cut.and_then(StopCut::instant).is_some_and(|at| {
+        let cut_on_track = at
+            .saturating_duration_since(timestamps.instant())
+            .saturating_sub(pause)
+            .saturating_sub(first_frame_offset.unwrap_or_default());
+        duration > cut_on_track + frame
+    })
+}
+
+/// Clips `frame` at the stop request of `cut`, plus one audio buffer.
+#[cfg(windows)]
+fn clip_to_stop_cut(
+    cut: Option<&StopCut>,
+    frame: AudioFrame,
+    timestamps: Timestamps,
+) -> Option<AudioFrame> {
+    match cut.and_then(StopCut::instant) {
+        Some(at) => clip_to_capture_time(frame, timestamps, at + STOP_CUT_AUDIO_TOLERANCE),
+        None => Some(frame),
+    }
+}
+
 async fn stop_audio_sources(
     sources: &mut [ErasedAudioSource],
     required_scope: Option<&PipelineBuildScope>,
@@ -4190,6 +4355,8 @@ impl PreparedAudioSources {
         let required_scope =
             PipelineBuildScope::current().filter(PipelineBuildScope::requires_joined_stop);
         let allow_audio_degradation = has_video && required_scope.is_none();
+        #[cfg(windows)]
+        let stop_cut = StopCut::current();
 
         if audio_anchor == AudioAnchor::PipelineEpoch && video_start_gate.is_some() {
             warn!(
@@ -4218,6 +4385,10 @@ impl PreparedAudioSources {
                 let res = stop_token
                     .run_until_cancelled(async {
                         while let Some(frame) = self.audio_rx.next().await {
+                            #[cfg(windows)]
+                            let Some(frame) = clip_to_stop_cut(stop_cut.as_ref(), frame, timestamps) else {
+                                continue;
+                            };
                             match process_audio_frame(
                                 AudioFrameProcessContext {
                                     audio_info: &audio_info,
@@ -4276,6 +4447,12 @@ impl PreparedAudioSources {
                 }
                 let cancelled_at = Instant::now();
                 let pause_at_stop = shared_pause.captured_pause_duration(cancelled_at);
+                // The audio is drained and filled up to Stop, or up to the
+                // stop request when Stop reached the pipeline after it.
+                #[cfg(windows)]
+                let cancelled_at = stop_cut
+                    .as_ref()
+                    .map_or(cancelled_at, |cut| cut.limit(cancelled_at, STOP_CUT_AUDIO_TOLERANCE));
                 let cancellation_target_elapsed = if was_cancelled && !audio_degraded {
                     Some(cancelled_at.saturating_duration_since(timestamps.instant()).saturating_sub(pause_at_stop))
                 } else {
@@ -4315,6 +4492,12 @@ impl PreparedAudioSources {
                     self.erased_audio_sources.clear();
                 }
 
+                if was_cancelled && !mixed_audio {
+                    for source in &mut self.erased_audio_sources {
+                        (source.finish_capture_fn)(source.inner.as_mut()).await;
+                    }
+                }
+
                 if was_cancelled && !audio_degraded {
                     let drain_start = std::time::Instant::now();
                     let drain_deadline = tokio::time::Instant::now() + MIXER_STOP_TIMEOUT;
@@ -4334,7 +4517,11 @@ impl PreparedAudioSources {
                             }
                             .and_then(|frame| clip_to_capture_time(frame, timestamps, cancelled_at))
                         } else {
-                            self.audio_rx.try_next().ok().flatten()
+                            let next = self.audio_rx.try_next().ok().flatten();
+                            #[cfg(windows)]
+                            let next =
+                                next.and_then(|frame| clip_to_stop_cut(stop_cut.as_ref(), frame, timestamps));
+                            next
                         };
                         match next {
                             Some(frame) => match process_audio_frame(
@@ -5201,6 +5388,27 @@ impl OutputPipeline {
         self.first_timestamp.clone()
     }
 
+    /// Stops like [`Self::stop_with_outcome`], but a pipeline still finishing
+    /// at the stop limit calls `late` and is then waited for without a limit,
+    /// so slow work completes instead of being abandoned.
+    #[cfg(windows)]
+    pub(crate) async fn stop_with_outcome_or_late(
+        mut self,
+        late: impl FnOnce(),
+    ) -> anyhow::Result<OutputPipelineStopOutcome> {
+        if !self.joined_stop {
+            drop(self.stop_token.take());
+            if tokio::time::timeout(PIPELINE_STOP_TIMEOUT, self.done_fut.clone())
+                .await
+                .is_err()
+            {
+                late();
+                self.joined_stop = true;
+            }
+        }
+        self.stop_with_outcome().await
+    }
+
     pub async fn stop(self) -> anyhow::Result<FinishedOutputPipeline> {
         let outcome = self.stop_with_outcome().await?;
         match outcome.media_error {
@@ -5227,7 +5435,6 @@ impl OutputPipeline {
                 Ok(()) => None,
             }
         } else {
-            const PIPELINE_STOP_TIMEOUT: Duration = Duration::from_secs(10);
             match tokio::time::timeout(PIPELINE_STOP_TIMEOUT, self.done_fut.clone()).await {
                 Ok(Err(error)) if error.is_caused_by::<PipelineStoppedByUser>() => None,
                 Ok(Err(error)) if error.is_caused_by::<OopMediaFailureAfterJoin>() => {
@@ -5465,6 +5672,7 @@ struct ErasedAudioSource {
     inner: Box<dyn Any + Send>,
     audio_info: AudioInfo,
     start_fn: fn(&mut dyn Any) -> BoxFuture<'_, anyhow::Result<()>>,
+    finish_capture_fn: fn(&mut dyn Any) -> BoxFuture<'_, ()>,
     stop_fn: fn(&mut dyn Any) -> BoxFuture<'_, anyhow::Result<()>>,
 }
 
@@ -5477,6 +5685,12 @@ impl ErasedAudioSource {
                 raw.downcast_mut::<TAudio>()
                     .expect("Wrong type")
                     .start()
+                    .boxed()
+            },
+            finish_capture_fn: |raw| {
+                raw.downcast_mut::<TAudio>()
+                    .expect("Wrong type")
+                    .finish_capture()
                     .boxed()
             },
             stop_fn: |raw| {
@@ -5515,6 +5729,13 @@ pub trait AudioSource: Send + 'static {
 
     fn start(&mut self) -> impl Future<Output = anyhow::Result<()>> + Send {
         async { Ok(()) }
+    }
+
+    /// Hands over everything the source still holds before a single-source
+    /// track takes its final drain at Stop. Sources that send every frame as
+    /// it is captured have nothing to do.
+    fn finish_capture(&mut self) -> impl Future<Output = ()> + Send {
+        async {}
     }
 
     fn stop(&mut self) -> impl Future<Output = anyhow::Result<()>> + Send {
@@ -9156,6 +9377,144 @@ mod tests {
             (timestamps, capture_duration)
         }
 
+        /// A frame captured before the stop request but handed over so late
+        /// that it is stamped from the wall clock would land after the request
+        /// on the track: it is not written there either.
+        #[cfg(windows)]
+        #[tokio::test]
+        async fn late_stop_cut_drops_a_late_frame_stamped_after_the_stop_request() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let cut = StopCut::default();
+            let (sender, receiver) = flume::bounded(16);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = cut
+                .clone()
+                .scope(
+                    OutputPipeline::builder(temp_dir.path().join("late.mp4"))
+                        .with_video::<ChannelVideoSource<StaticFrame>>(
+                            ChannelVideoSourceConfig::new(
+                                VideoInfo::from_raw(
+                                    cap_media_info::RawVideoFormat::Bgra,
+                                    16,
+                                    16,
+                                    30,
+                                ),
+                                receiver,
+                            ),
+                        )
+                        .with_timestamps(Timestamps::now())
+                        .build::<ObservedMuxer>(sent.clone()),
+                )
+                .await
+                .unwrap();
+
+            let first = Instant::now();
+            sender
+                .send_async(StaticFrame {
+                    timestamp: Timestamp::Instant(first),
+                })
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(cut.mark());
+            let request = cut.instant().unwrap();
+            // Captured just before the request, handed over 1.5 s later.
+            tokio::time::sleep(Duration::from_millis(1_500)).await;
+            sender
+                .send_async(StaticFrame {
+                    timestamp: Timestamp::Instant(
+                        request.checked_sub(Duration::from_millis(5)).unwrap(),
+                    ),
+                })
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            pipeline.stop().await.unwrap();
+
+            let muxed = sent.lock().unwrap().clone();
+            let limit = request.duration_since(first) + Duration::from_nanos(33_333_334);
+            assert!(!muxed.is_empty());
+            assert!(
+                muxed.iter().all(|timestamp| *timestamp <= limit),
+                "nothing placed past the request plus one frame ({limit:?}): {muxed:?}"
+            );
+        }
+
+        /// A Stop that reaches the pipeline long after the user asked to stop
+        /// keeps nothing captured after the request: frames captured before it
+        /// are kept even when delivered late, later frames are dropped, and the
+        /// still-screen tail ends at the request instead of at Stop.
+        #[cfg(windows)]
+        #[tokio::test]
+        async fn late_stop_cut_keeps_no_video_captured_after_the_stop_request() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let cut = StopCut::default();
+            let (sender, receiver) = flume::bounded(16);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = cut
+                .clone()
+                .scope(
+                    OutputPipeline::builder(temp_dir.path().join("cut.mp4"))
+                        .with_video::<ChannelVideoSource<StaticFrame>>(
+                            ChannelVideoSourceConfig::new(
+                                VideoInfo::from_raw(
+                                    cap_media_info::RawVideoFormat::Bgra,
+                                    16,
+                                    16,
+                                    30,
+                                ),
+                                receiver,
+                            ),
+                        )
+                        .with_timestamps(Timestamps::now())
+                        .build::<ObservedMuxer>(sent.clone()),
+                )
+                .await
+                .unwrap();
+
+            let first = Instant::now();
+            sender
+                .send_async(StaticFrame {
+                    timestamp: Timestamp::Instant(first),
+                })
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(cut.mark());
+            let request = cut.instant().unwrap();
+            sender
+                .send_async(StaticFrame {
+                    timestamp: Timestamp::Instant(
+                        request.checked_sub(Duration::from_millis(5)).unwrap(),
+                    ),
+                })
+                .await
+                .unwrap();
+            for _ in 0..5 {
+                tokio::time::sleep(Duration::from_millis(60)).await;
+                sender
+                    .send_async(StaticFrame {
+                        timestamp: Timestamp::Instant(Instant::now()),
+                    })
+                    .await
+                    .unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            pipeline.stop().await.unwrap();
+
+            let muxed = sent.lock().unwrap().clone();
+            let frame = Duration::from_nanos(33_333_334);
+            let limit = request.duration_since(first) + frame;
+            assert!(
+                muxed.len() >= 2,
+                "frames before the request are kept: {muxed:?}"
+            );
+            assert!(
+                muxed.iter().all(|timestamp| *timestamp <= limit),
+                "nothing past the request plus one frame ({limit:?}): {muxed:?}"
+            );
+        }
+
         #[tokio::test]
         async fn primed_pipeline_discards_video_captured_before_the_start_gate_arms() {
             let temp_dir = tempfile::tempdir().unwrap();
@@ -10077,6 +10436,127 @@ mod tests {
             assert!(frames.iter().map(|frame| frame.samples).sum::<usize>() >= 4_800);
         }
 
+        struct HeldFrameSource {
+            output: mpsc::Sender<AudioFrame>,
+            held: Option<AudioFrame>,
+        }
+
+        impl AudioSource for HeldFrameSource {
+            type Config = AudioFrame;
+
+            fn setup(
+                held: Self::Config,
+                output: mpsc::Sender<AudioFrame>,
+                _: &mut SetupCtx,
+            ) -> impl Future<Output = anyhow::Result<Self>> + Send + 'static {
+                std::future::ready(Ok(Self {
+                    output,
+                    held: Some(held),
+                }))
+            }
+
+            fn audio_info(&self) -> AudioInfo {
+                AudioMixer::INFO
+            }
+
+            async fn finish_capture(&mut self) {
+                if let Some(frame) = self.held.take() {
+                    self.output.send(frame).await.unwrap();
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn single_source_stop_keeps_audio_the_source_still_held() {
+            let temp = tempfile::tempdir().unwrap();
+            let timestamps = Timestamps::now();
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = OutputPipeline::builder(temp.path().join("held-stop.ogg"))
+                .with_timestamps(timestamps)
+                .with_audio_source::<HeldFrameSource>(AudioFrame::new(
+                    AudioMixer::INFO.empty_frame(4_800),
+                    Timestamp::Instant(timestamps.instant()),
+                ))
+                .build::<RecordingAudioMuxer>(sent.clone())
+                .await
+                .unwrap();
+            tokio::time::sleep_until((timestamps.instant() + Duration::from_millis(150)).into())
+                .await;
+            tokio::time::timeout(Duration::from_secs(3), pipeline.stop())
+                .await
+                .unwrap()
+                .unwrap();
+            let frames = sent.lock().unwrap();
+            assert!(
+                frames.iter().map(|frame| frame.samples).sum::<usize>() >= 4_800,
+                "audio handed over at Stop was not muxed: {:?}",
+                frames.iter().map(|frame| frame.samples).collect::<Vec<_>>()
+            );
+        }
+
+        /// A Stop that reaches the pipeline long after the user asked to stop
+        /// keeps no audio captured after the request, and the silence that
+        /// carries a track out to Stop ends at the request instead.
+        #[cfg(windows)]
+        #[tokio::test]
+        async fn late_stop_cut_keeps_no_audio_captured_after_the_stop_request() {
+            let temp = tempfile::tempdir().unwrap();
+            let timestamps = Timestamps::now();
+            let cut = StopCut::default();
+            let (mut sender, receiver) = mpsc::channel(8);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = cut
+                .clone()
+                .scope(
+                    OutputPipeline::builder(temp.path().join("cut.ogg"))
+                        .with_timestamps(timestamps)
+                        .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                            AudioMixer::INFO,
+                            receiver,
+                        ))
+                        .build::<RecordingAudioMuxer>(sent.clone()),
+                )
+                .await
+                .unwrap();
+
+            sender
+                .send(AudioFrame::new(
+                    AudioMixer::INFO.empty_frame(4_800),
+                    Timestamp::Instant(timestamps.instant()),
+                ))
+                .await
+                .unwrap();
+            tokio::time::sleep_until((timestamps.instant() + Duration::from_millis(150)).into())
+                .await;
+            assert!(cut.mark());
+            let request = cut.instant().unwrap();
+            sender
+                .send(AudioFrame::new(
+                    AudioMixer::INFO.empty_frame(4_800),
+                    Timestamp::Instant(request + Duration::from_millis(300)),
+                ))
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            tokio::time::timeout(Duration::from_secs(3), pipeline.stop())
+                .await
+                .unwrap()
+                .unwrap();
+
+            let frames = sent.lock().unwrap();
+            let rate = f64::from(AudioMixer::INFO.sample_rate);
+            let end = frames
+                .iter()
+                .map(|frame| frame.timestamp + Duration::from_secs_f64(frame.samples as f64 / rate))
+                .max()
+                .unwrap();
+            let limit = request.duration_since(timestamps.instant()) + STOP_CUT_AUDIO_TOLERANCE;
+            assert!(
+                end <= limit + Duration::from_millis(5),
+                "the track ends at the request plus one buffer ({limit:?}), not at Stop: {end:?}"
+            );
+        }
+
         struct AudioTimelineHarness {
             info: AudioInfo,
             timestamps: Timestamps,
@@ -10535,6 +11015,66 @@ mod tests {
                     "{cycles} cycles: encoded {encoded_duration:?}, active {active_duration:?}"
                 );
             }
+        }
+
+        /// What a late Stop writes to disk ends at the stop request, so a
+        /// recovery of the files reads nothing captured after it either.
+        #[cfg(windows)]
+        #[tokio::test]
+        async fn late_stop_cut_ends_the_audio_written_to_disk_at_the_stop_request() {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("cut.ogg");
+            let timestamps = Timestamps::now();
+            let info = test_audio_info();
+            let cut = StopCut::default();
+            let (mut sender, receiver) = mpsc::channel(128);
+            let pipeline = cut
+                .clone()
+                .scope(
+                    OutputPipeline::builder(path.clone())
+                        .with_timestamps(timestamps)
+                        .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                            info, receiver,
+                        ))
+                        .build::<crate::ffmpeg::OggMuxer>(Default::default()),
+                )
+                .await
+                .unwrap();
+            let buffer = Duration::from_millis(10);
+            let samples = (f64::from(info.sample_rate) * buffer.as_secs_f64()) as usize;
+            let frame_at = |at: Duration| {
+                AudioFrame::new(
+                    make_test_frame(&info, samples, 0.25),
+                    Timestamp::Instant(timestamps.instant() + at),
+                )
+            };
+            for index in 0..20u32 {
+                sender.send(frame_at(buffer * index)).await.unwrap();
+            }
+            tokio::time::sleep_until((timestamps.instant() + Duration::from_millis(200)).into())
+                .await;
+            assert!(cut.mark());
+            let request = cut.instant().unwrap().duration_since(timestamps.instant());
+            // Capture carries on for 500 ms before Stop reaches the pipeline.
+            for index in 20..(20 + 50 + request.as_millis() as u32 / 10) {
+                sender.send(frame_at(buffer * index)).await.unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            pipeline.stop().await.unwrap();
+
+            let input = ffmpeg::format::input(&path).unwrap();
+            let stream = input.streams().best(ffmpeg::media::Type::Audio).unwrap();
+            let written = stream.duration() as f64 * f64::from(stream.time_base());
+            let limit = (request + STOP_CUT_AUDIO_TOLERANCE).as_secs_f64();
+            assert!(
+                written <= limit + 0.03,
+                "written {written:.3}s, stop request {:.3}s",
+                request.as_secs_f64()
+            );
+            assert!(
+                written >= request.as_secs_f64() - 0.03,
+                "written {written:.3}s"
+            );
         }
 
         #[tokio::test]
