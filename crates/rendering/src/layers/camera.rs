@@ -923,6 +923,101 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a working native WGPU adapter"]
+    async fn camera_only_scenes_leave_the_hidden_camera_bubble_unprepared() {
+        let constants = constants().await;
+        let mut project = ProjectConfiguration::default();
+        project.camera.hide = false;
+        project.background.source = cap_project::BackgroundSource::Color {
+            value: [0, 255, 0],
+            alpha: 255,
+        };
+        project.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [], "zoomSegments": [],
+                "sceneSegments": [{
+                    "start": 2.0, "end": 5.0, "mode": "cameraOnly",
+                    "transitionIn": 0.0, "transitionOut": 0.0
+                }]
+            }))
+            .unwrap(),
+        );
+        let solid = |color: [u8; 4]| DecodedFrame::new(color.repeat(1920 * 1080), 1920, 1080);
+        let count = |output: &[u8], color: [u8; 4]| {
+            output
+                .chunks_exact(4)
+                .filter(|pixel| matches_color(pixel, color))
+                .count()
+        };
+        let red = [255, 0, 0, 255];
+        let blue = [0, 0, 255, 255];
+        let yellow = [255, 255, 0, 255];
+        for ordinary_prepare in [false, true] {
+            let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+            layers.prepare_for_video_dimensions(
+                &constants.device,
+                320,
+                180,
+                Some(1920),
+                Some(1080),
+            );
+
+            let before_scene = pixels(
+                &constants,
+                &project,
+                frames(Some(solid(red)), 60),
+                &mut layers,
+                ordinary_prepare,
+            )
+            .await;
+            assert!(count(&before_scene, red) > 100);
+            assert!(layers.camera.last_recording_time.is_some());
+
+            let in_scene = pixels(
+                &constants,
+                &project,
+                frames(Some(solid(blue)), 180),
+                &mut layers,
+                ordinary_prepare,
+            )
+            .await;
+            assert!(count(&in_scene, blue) > 100);
+            assert_eq!(count(&in_scene, red), 0);
+            assert!(layers.camera.last_recording_time.is_none());
+            assert!(layers.camera_only.last_recording_time.is_some());
+
+            let after_scene_without_frame = pixels(
+                &constants,
+                &project,
+                frames(None, 330),
+                &mut layers,
+                ordinary_prepare,
+            )
+            .await;
+            assert_eq!(
+                count(&after_scene_without_frame, red),
+                0,
+                "the bubble after the camera-only scene drew the frame from before it"
+            );
+            assert_eq!(count(&after_scene_without_frame, blue), 0);
+            assert!(layers.camera.hidden);
+
+            let after_scene = pixels(
+                &constants,
+                &project,
+                frames(Some(solid(yellow)), 331),
+                &mut layers,
+                ordinary_prepare,
+            )
+            .await;
+            assert!(count(&after_scene, yellow) > 100);
+            assert_eq!(count(&after_scene, red), 0);
+            assert_eq!(count(&after_scene, blue), 0);
+            assert!(layers.camera.last_recording_time.is_some());
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a working native WGPU adapter"]
     async fn camera_placeholders_preserve_pixels_through_frame_state_changes() {
         let constants = constants().await;
         for camera_only in [false, true] {
