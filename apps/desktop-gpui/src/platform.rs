@@ -2969,36 +2969,62 @@ mod mac {
         })
     }
 
-    pub struct ClipboardImage(Vec<u8>);
+    pub struct ClipboardImage(Retained<objc2_foundation::NSData>);
 
+    // SAFETY: the TIFF data is immutable, owned by this value alone, and only
+    // moved from the thread that built it to the main thread.
+    unsafe impl Send for ClipboardImage {}
+
+    // NSImage builds its TIFF pasteboard representation eagerly when it is
+    // written, which decodes the whole PNG on the main thread. Building the
+    // same TIFF here keeps that work on the caller's background thread.
     pub fn prepare_clipboard_image(bytes: Vec<u8>) -> Result<ClipboardImage, String> {
-        Ok(ClipboardImage(bytes))
+        use objc2::rc::autoreleasepool;
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSData;
+
+        autoreleasepool(|_| unsafe {
+            let data = NSData::with_bytes(&bytes);
+            let image: *mut AnyObject = msg_send![class!(NSImage), alloc];
+            let image: *mut AnyObject = msg_send![image, initWithData: &*data];
+            let image = Retained::from_raw(image).ok_or("Failed to load image")?;
+            let tiff: *mut NSData = msg_send![&*image, TIFFRepresentation];
+            Retained::retain(tiff)
+                .map(ClipboardImage)
+                .ok_or_else(|| "Failed to load image".to_string())
+        })
     }
 
     pub fn write_clipboard_image(image: ClipboardImage, _cx: &gpui::App) -> Result<(), String> {
         use objc2::rc::autoreleasepool;
-        use objc2::runtime::Bool;
         use objc2::{class, msg_send};
-        use objc2_foundation::NSData;
 
         autoreleasepool(|_| unsafe {
             let pasteboard: *mut AnyObject = msg_send![class!(NSPasteboard), generalPasteboard];
             if pasteboard.is_null() {
                 return Err(crate::i18n::tr::dialog::clipboard::unavailable().into());
             }
-            let data = NSData::with_bytes(&image.0);
-            let image: *mut AnyObject = msg_send![class!(NSImage), alloc];
-            let image: *mut AnyObject = msg_send![image, initWithData: &*data];
-            let image = Retained::from_raw(image).ok_or("Failed to load image")?;
-            let objects: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: &*image];
+            write_image_to_pasteboard(pasteboard, &image)
+        })
+    }
+
+    pub(super) unsafe fn write_image_to_pasteboard(
+        pasteboard: *mut AnyObject,
+        image: &ClipboardImage,
+    ) -> Result<(), String> {
+        use objc2::msg_send;
+        use objc2::runtime::Bool;
+
+        unsafe {
+            let kind = NSString::from_str("public.tiff");
             let _: isize = msg_send![pasteboard, clearContents];
-            let ok: Bool = msg_send![pasteboard, writeObjects: objects];
+            let ok: Bool = msg_send![pasteboard, setData: &*image.0, forType: &*kind];
             if ok.as_bool() {
                 Ok(())
             } else {
                 Err(crate::i18n::tr::dialog::clipboard::copy_image_failed().into())
             }
-        })
+        }
     }
 
     fn open_file_panel(extensions: &[&str]) -> Option<std::path::PathBuf> {
@@ -3425,6 +3451,9 @@ mod mac {
         item.setImage(image.as_deref());
     }
 }
+
+#[cfg(all(test, target_os = "macos"))]
+mod clipboard_image_tests;
 
 #[cfg(target_os = "windows")]
 mod windows;
