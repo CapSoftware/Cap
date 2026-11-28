@@ -23,6 +23,9 @@ const FOLLOW_START_FRACTION: f64 = 0.82;
 /// A generated transcript for a few minutes of speech, every segment of which
 /// has been selected once, so each has its three sidebar fields.
 const SEEDED_CAPTION_SEGMENTS: usize = 300;
+/// The advanced-shadow section flips this often, so the measured frames keep
+/// landing inside a 200ms height transition.
+const COLLAPSIBLE_TOGGLE_FRAMES: usize = 14;
 
 #[derive(Clone, Copy)]
 enum Scenario {
@@ -33,6 +36,7 @@ enum Scenario {
     Clean,
     CaptionDownload,
     TickFields,
+    Collapsible,
 }
 
 impl Scenario {
@@ -45,6 +49,7 @@ impl Scenario {
             Self::Clean => "clean",
             Self::CaptionDownload => "caption-download",
             Self::TickFields => "tick-fields",
+            Self::Collapsible => "collapsible",
         }
     }
 
@@ -98,6 +103,13 @@ impl Scenario {
                 cx.notify();
                 view.toggle_play(window, cx);
             }
+            Self::Collapsible => {
+                if view.playing {
+                    view.stop_for_measurement(cx);
+                }
+                view.sidebar.tab = SidebarTab::Background;
+                cx.notify();
+            }
         }
     }
 
@@ -122,13 +134,25 @@ impl Scenario {
             Self::Clean => {}
             Self::CaptionDownload if self.control(iteration) => cx.notify(),
             Self::CaptionDownload => view.repaint_caption_download(cx),
+            Self::Collapsible => {
+                if iteration.is_multiple_of(COLLAPSIBLE_TOGGLE_FRAMES) {
+                    view.sidebar.shadow_open.toggle();
+                }
+                if self.control(iteration) {
+                    cx.notify();
+                    window.refresh();
+                } else {
+                    view.invalidate_sidebar(cx);
+                }
+            }
         }
     }
 
     /// Frames interleaved with the measured ones as an in-process reference:
-    /// a whole-editor notify, which is what a download tick used to cost.
+    /// a whole-editor notify, which is what a download tick or a collapsible
+    /// animation tick used to cost.
     fn control(self, iteration: usize) -> bool {
-        matches!(self, Self::CaptionDownload) && iteration % 2 == 1
+        matches!(self, Self::CaptionDownload | Self::Collapsible) && iteration % 2 == 1
     }
 }
 
@@ -225,6 +249,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         Scenario::Clean,
         Scenario::CaptionDownload,
         Scenario::TickFields,
+        Scenario::Collapsible,
     ] {
         if handle
             .update(cx, |view, window, cx| scenario.prepare(view, window, cx))
