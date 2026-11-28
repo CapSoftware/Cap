@@ -22,10 +22,16 @@ vi.mock(
 	"@/app/(org)/dashboard/Contexts",
 	async () => import("@/app/(org)/dashboard/DashboardContext"),
 );
+const wasmUrls = vi.hoisted((): string[] => []);
 vi.mock("@rive-app/react-canvas", () => ({
 	useRive: () => ({ RiveComponent: () => null }),
 	Layout: class {},
 	Fit: { Contain: "contain" },
+	RuntimeLoader: {
+		setWasmUrl: (url: string) => {
+			wasmUrls.push(url);
+		},
+	},
 }));
 
 const newId = Video.VideoId.make("new-video");
@@ -129,6 +135,10 @@ async function renderDialog(
 		);
 	});
 }
+
+it("loads the video card animation from the self-hosted Rive runtime", () => {
+	expect(wasmUrls).toEqual(["/rive/rive.wasm"]);
+});
 
 it.each(["addition", "removal"])(
 	"retries a failed %s without reversing the successful operation",

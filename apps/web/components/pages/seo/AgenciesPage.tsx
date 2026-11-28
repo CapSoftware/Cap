@@ -1,13 +1,13 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { Clapperboard, Minus, Plus, Zap } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useState } from "react";
 import type { SeoPageContent } from "@/components/seo/types";
 import { PRICING } from "@/data/pricing";
+import { Fit, Layout, useRive } from "@/lib/rive";
 
 const PlatformSupportArt = memo(() => {
 	const { RiveComponent: PlatformSupportRive } = useRive({
