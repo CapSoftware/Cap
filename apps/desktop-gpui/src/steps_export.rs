@@ -67,9 +67,56 @@ fn clips(meta: &RecordingMeta) -> Vec<Clip> {
     }
 }
 
+/// A recording that was never remuxed keeps its screen track as a folder of
+/// `init.mp4` and `.m4s` fragments, which the editor plays as it is.
+enum ScreenTrack {
+    File(ffmpeg::format::context::Input),
+    Fragments(cap_enc_ffmpeg::SegmentedInput),
+}
+
+impl ScreenTrack {
+    fn open(path: &Path) -> Result<Self, String> {
+        if path.is_dir() {
+            cap_video_decode::ffmpeg::open_fragmented_input(path).map(Self::Fragments)
+        } else {
+            ffmpeg::format::input(path)
+                .map(Self::File)
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    fn input(&self) -> &ffmpeg::format::context::Input {
+        match self {
+            Self::File(input) => input,
+            Self::Fragments(fragments) => fragments.input(),
+        }
+    }
+
+    fn seek(&mut self, position: i64) -> Result<(), ffmpeg::Error> {
+        match self {
+            Self::File(input) => input.seek(position, ..position),
+            Self::Fragments(fragments) => fragments.seek(position),
+        }
+    }
+
+    fn next_packet(&mut self) -> Result<Option<ffmpeg::Packet>, ffmpeg::Error> {
+        match self {
+            Self::File(input) => Ok(input.packets().next().map(|(_, packet)| packet)),
+            Self::Fragments(fragments) => {
+                let mut packet = ffmpeg::Packet::empty();
+                match fragments.read_packet(&mut packet) {
+                    Ok(()) => Ok(Some(packet)),
+                    Err(ffmpeg::Error::Eof) => Ok(None),
+                    Err(error) => Err(error),
+                }
+            }
+        }
+    }
+}
+
 fn media_duration(path: &Path) -> f64 {
-    ffmpeg::format::input(path)
-        .map(|input| input.duration().max(0) as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE))
+    ScreenTrack::open(path)
+        .map(|track| track.input().duration().max(0) as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE))
         .unwrap_or(0.0)
 }
 
@@ -264,8 +311,9 @@ fn settle(
 fn frame_at(path: &Path, seconds: f64) -> Result<(Size, Vec<u8>), String> {
     use ffmpeg::rescale::{Rescale, TIME_BASE};
 
-    let mut input = ffmpeg::format::input(path).map_err(|error| error.to_string())?;
-    let stream = input
+    let mut track = ScreenTrack::open(path)?;
+    let stream = track
+        .input()
         .streams()
         .best(ffmpeg::media::Type::Video)
         .ok_or("No video stream found")?;
@@ -285,8 +333,8 @@ fn frame_at(path: &Path, seconds: f64) -> Result<(Size, Vec<u8>), String> {
         .map_err(|error| error.to_string())?;
     if seconds > 0.0 {
         let position = target.rescale(time_base, TIME_BASE);
-        input
-            .seek(position, ..position)
+        track
+            .seek(position)
             .map_err(|error| format!("Failed to seek to {seconds:.3}s: {error}"))?;
     }
 
@@ -294,15 +342,18 @@ fn frame_at(path: &Path, seconds: f64) -> Result<(Size, Vec<u8>), String> {
     let mut next = ffmpeg::frame::Video::empty();
     let mut have_shown = false;
     let mut settled = false;
-    for (stream, packet) in input.packets() {
-        if stream.index() != stream_index || decoder.send_packet(&packet).is_err() {
+    while !settled {
+        let Some(packet) = track
+            .next_packet()
+            .map_err(|error| format!("Failed to read {}: {error}", path.display()))?
+        else {
+            break;
+        };
+        if packet.stream() != stream_index || decoder.send_packet(&packet).is_err() {
             continue;
         }
         while !settled && decoder.receive_frame(&mut next).is_ok() {
             settled = settle(&mut shown, &mut next, &mut have_shown, target);
-        }
-        if settled {
-            break;
         }
     }
     if !settled && decoder.send_eof().is_ok() {

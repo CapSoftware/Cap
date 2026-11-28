@@ -90,6 +90,10 @@ cap-rendering = { path = "../../crates/rendering" }
 # Already in this lockfile through cap-rendering, so naming it only makes the
 # edge direct.
 cap-camera-effects = { path = "../../crates/camera-effects" }
+# Opens a screen track left as a folder of fragments (`src/steps_export.rs`).
+# Already in this lockfile through cap-rendering, so naming it only makes the
+# edge direct.
+cap-video-decode = { path = "../../crates/video-decode" }
 # The blur worker's device/queue/texture types. Must stay on cap-rendering's
 # wgpu 25 line (the vendored wgpu-hal `[patch.crates-io]` below applies to
 # it); gpui's own wgpu 29 is a separate tree and never touches these types.

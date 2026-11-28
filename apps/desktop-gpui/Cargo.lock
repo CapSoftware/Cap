@@ -1599,6 +1599,7 @@ dependencies = [
  "cap-timestamp",
  "cap-utils",
  "cap-verify",
+ "cap-video-decode",
  "cc",
  "chrono",
  "cidre",

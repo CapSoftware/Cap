@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use cap_project::{
     CaptionTrackSegment, CaptionWord, ClipTransition, ClipTransitionType, MaskSegment,
@@ -662,6 +663,102 @@ fn a_replacement_that_fails_part_way_puts_the_earlier_guide_back() {
     assert_eq!(
         listing(project.folder.parent().unwrap()),
         [".guide.staging", "guide", "steps.cap"]
+    );
+}
+
+const FRAGMENTS: &str = "content/segments/segment-0/display";
+
+/// A screen track left as a folder of `init.mp4` and `.m4s` fragments, which
+/// the editor opens as it is, and the same footage converted to one file.
+/// Neighbouring frames differ, so a screenshot one frame off does not match.
+fn fragmented_and_converted(clicks: &[(f64, f64, f64)]) -> (Project, Project) {
+    use cap_enc_ffmpeg::segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig};
+
+    let fragmented = project_with(clicks, |meta| {
+        meta["segments"][0]["display"]["path"] = FRAGMENTS.into();
+    });
+    let folder = fragmented.meta.project_path.join(FRAGMENTS);
+    ffmpeg::init().unwrap();
+    let mut encoder = SegmentedVideoEncoder::init(
+        folder.clone(),
+        cap_media_info::VideoInfo {
+            pixel_format: cap_media_info::Pixel::NV12,
+            width: FRAME.width,
+            height: FRAME.height,
+            time_base: ffmpeg::Rational(1, 1_000_000),
+            frame_rate: ffmpeg::Rational(30, 1),
+        },
+        SegmentedVideoEncoderConfig {
+            segment_duration: Duration::from_secs(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for index in 0..(LENGTH * 30.0) as u64 {
+        let mut frame =
+            ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, FRAME.width, FRAME.height);
+        frame.data_mut(0).fill(16 + (index * 7 % 200) as u8);
+        frame.data_mut(1).fill(128);
+        encoder
+            .queue_frame(frame, Duration::from_micros(index * 1_000_000 / 30))
+            .unwrap();
+    }
+    encoder.finish().unwrap();
+
+    let mut fragments: Vec<PathBuf> = std::fs::read_dir(&folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "m4s"))
+        .collect();
+    cap_enc_ffmpeg::fragment_order::sort_fragment_paths(&mut fragments);
+    assert!(fragments.len() >= 4, "{fragments:?}");
+    let converted = project(clicks);
+    cap_enc_ffmpeg::remux::concatenate_m4s_segments_with_init(
+        &folder.join("init.mp4"),
+        &fragments,
+        &converted
+            .meta
+            .project_path
+            .join(FRAGMENTS)
+            .with_extension("mp4"),
+    )
+    .unwrap();
+    (fragmented, converted)
+}
+
+#[test]
+fn a_recording_left_as_fragments_exports_the_screenshots_of_its_one_file_form() {
+    let clicks = [(1.5, 0.5, 0.5), (4.2, 0.5, 0.5), (6.8, 0.5, 0.5)];
+    let (fragmented, converted) = fragmented_and_converted(&clicks);
+    export(&fragmented).unwrap();
+    export(&converted).unwrap();
+
+    for number in 1..=clicks.len() {
+        assert_eq!(
+            step_image(&fragmented, number),
+            step_image(&converted, number),
+            "step {number}"
+        );
+    }
+    assert_ne!(step_image(&fragmented, 1), step_image(&fragmented, 2));
+    assert_ne!(step_image(&fragmented, 2), step_image(&fragmented, 3));
+}
+
+#[test]
+fn a_recording_left_as_fragments_that_was_never_edited_keeps_its_length() {
+    let clicks = [(1.5, 0.5, 0.5), (4.2, 0.5, 0.5), (7.9, 0.5, 0.5)];
+    let (mut fragmented, mut converted) = fragmented_and_converted(&clicks);
+    fragmented.config.timeline = None;
+    converted.config.timeline = None;
+    export(&fragmented).unwrap();
+    export(&converted).unwrap();
+
+    let data = guide_data(&fragmented);
+    assert_eq!(data["steps"], guide_data(&converted)["steps"]);
+    assert_eq!(data["steps"].as_array().unwrap().len(), 2, "{data}");
+    assert!(
+        (data["duration"].as_f64().unwrap() - LENGTH).abs() < 0.05,
+        "{data}"
     );
 }
 
