@@ -1,52 +1,102 @@
 use gpui::{
-    App, Bounds, Context, IntoElement, OverscrollBehavior, ParentElement, Render, ScrollHandle,
-    Styled, TitlebarOptions, Window, WindowBounds, WindowOptions, div, point, prelude::*, px, rgb,
-    rgba, size,
+    App, Bounds, Context, FontWeight, Hsla, IntoElement, OverscrollBehavior, ParentElement, Render,
+    RubberBandConfig, ScrollHandle, Styled, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    div, point, prelude::*, px, rgb, size,
 };
 
-const OPTIONS: [(OverscrollBehavior, &str, &str); 4] = [
+use crate::{theme::Theme, ui};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScrollAxis {
+    Vertical,
+    Horizontal,
+}
+
+const BEHAVIORS: [(OverscrollBehavior, &str, &str); 4] = [
     (
         OverscrollBehavior::Auto,
-        "overscroll-behavior: auto;",
+        "Auto",
         "Inner bounces during an owned gesture; a new gesture at the edge chains to outer.",
     ),
     (
         OverscrollBehavior::Contain,
-        "overscroll-behavior: contain;",
+        "Contain",
         "Inner bounces at its edges and never chains scroll to outer.",
     ),
     (
         OverscrollBehavior::Chain,
-        "overscroll-behavior: chain;",
-        "Excess scroll chains immediately to outer when inner reaches an edge.",
+        "Chain",
+        "Excess scroll chains immediately to outer once inner hits an edge.",
     ),
     (
         OverscrollBehavior::None,
-        "overscroll-behavior: none;",
+        "None",
         "Disables both rubber-band bounce and scroll chaining to outer.",
     ),
 ];
 
-const OUTER_PARAGRAPHS: &[&str] = &[
-    "This is a scrollable container. Michaelmas term lately over, and the Lord Chancellor sitting in Lincoln's Inn Hall. Implacable November weather. As much mud in the streets as if the waters had but newly retired from the face of the earth, and it would not be wonderful to meet a Megalosaurus, forty feet long or so, waddling like an elephantine lizard up Holborn Hill.",
-    "Smoke lowering down from chimney-pots, making a soft black drizzle, with flakes of soot in it as big as full-grown snowflakes — gone into mourning, one might imagine, for the death of the sun.",
-    "Dogs, undistinguishable in mire. Horses, scarcely better; splashed to their very blinkers. Foot passengers, jostling one another's umbrellas in a general infection of ill temper, and losing their foot-hold at street-corners, where tens of thousands of other foot passengers have been slipping and sliding since the day broke.",
-    "Fog everywhere. Fog up the river, where it flows among green aits and meadows; fog down the river, where it rolls defiled among the tiers of shipping and the waterside pollutions of a great and dirty city.",
-    "Fog on the Essex marshes, fog on the Kentish heights. Fog creeping into the cabooses of collier-brigs; fog lying out on the yards and hovering in the rigging of great ships; fog drooping on the gunwales of barges and small boats.",
-    "Chance people on the bridges peeping over the parapets into a nether sky of fog, with fog all round them, as if they were up in a balloon and hanging in the misty clouds.",
-];
+struct TuningSpec {
+    label: &'static str,
+    unit: &'static str,
+    min: f32,
+    max: f32,
+    step: f32,
+    get: fn(&RubberBandConfig) -> f32,
+    set: fn(&mut RubberBandConfig, f32),
+}
 
-const INNER_PARAGRAPHS: &[&str] = &[
-    "This is the inner container. Focus on this container, scroll to the bottom and when you reach the bottom keep scrolling.",
-    "If you have auto selected, the inner container should rubber-band while you stay in the same gesture without moving the outer container. Lift your fingers and scroll again at the boundary to move the outer container.",
-    "With contain selected, the inner container rubber-bands at both edges and the outer container never moves, even when you start a new scroll gesture at the bottom.",
-    "With chain selected, reaching the bottom immediately chains the remaining scroll into the outer container without waiting for a new gesture.",
-    "With none selected, the inner container clamps cleanly at the boundary with no bounce and never scrolls the outer container.",
-    "Keep scrolling past this line to verify momentum flicks do not leak across containers when the inner container owns the gesture.",
+const TUNING_SPECS: [TuningSpec; 5] = [
+    TuningSpec {
+        label: "Resistance",
+        unit: "",
+        min: 0.02,
+        max: 0.50,
+        step: 0.02,
+        get: |c| c.resistance,
+        set: |c, v| c.resistance = v,
+    },
+    TuningSpec {
+        label: "Spring response",
+        unit: "s",
+        min: 0.15,
+        max: 1.00,
+        step: 0.025,
+        get: |c| c.response,
+        set: |c, v| c.response = v,
+    },
+    TuningSpec {
+        label: "Momentum carry",
+        unit: "",
+        min: 0.0,
+        max: 0.80,
+        step: 0.05,
+        get: |c| c.momentum_carry,
+        set: |c, v| c.momentum_carry = v,
+    },
+    TuningSpec {
+        label: "Max overscroll",
+        unit: "×",
+        min: 0.10,
+        max: 0.80,
+        step: 0.05,
+        get: |c| c.max_overscroll_ratio,
+        set: |c, v| c.max_overscroll_ratio = v,
+    },
+    TuningSpec {
+        label: "Settle epsilon",
+        unit: "px",
+        min: 0.05,
+        max: 1.00,
+        step: 0.05,
+        get: |c| c.settle_epsilon,
+        set: |c, v| c.settle_epsilon = v,
+    },
 ];
 
 struct ScrollRubberBandingTestView {
     behavior: OverscrollBehavior,
+    axis: ScrollAxis,
+    config: RubberBandConfig,
     outer_scroll: ScrollHandle,
     inner_scroll: ScrollHandle,
 }
@@ -55,63 +105,445 @@ impl ScrollRubberBandingTestView {
     fn new() -> Self {
         Self {
             behavior: OverscrollBehavior::Auto,
+            axis: ScrollAxis::Vertical,
+            config: gpui::rubber_band_config(),
             outer_scroll: ScrollHandle::new(),
             inner_scroll: ScrollHandle::new(),
         }
     }
 
-    fn reset(&mut self, cx: &mut Context<Self>) {
+    fn reset_scroll(&mut self, cx: &mut Context<Self>) {
         self.outer_scroll.set_offset(point(px(0.), px(0.)));
         self.inner_scroll.set_offset(point(px(0.), px(0.)));
         cx.notify();
     }
+
+    fn set_axis(&mut self, axis: ScrollAxis, cx: &mut Context<Self>) {
+        if self.axis != axis {
+            self.axis = axis;
+            self.reset_scroll(cx);
+        }
+    }
+
+    fn adjust_tuning(&mut self, index: usize, delta: f32, cx: &mut Context<Self>) {
+        let spec = &TUNING_SPECS[index];
+        let next = ((spec.get)(&self.config) + delta).clamp(spec.min, spec.max);
+        (spec.set)(&mut self.config, next);
+        gpui::set_rubber_band_config(self.config);
+        cx.notify();
+    }
+
+    fn reset_tuning(&mut self, cx: &mut Context<Self>) {
+        self.config = RubberBandConfig::DEFAULT;
+        gpui::set_rubber_band_config(self.config);
+        cx.notify();
+    }
+
+    fn render_vertical_demo(&self, theme: &Theme) -> impl IntoElement {
+        let accent: Hsla = rgb(Theme::SETTINGS_ACCENT).into();
+        let card_bg = theme.settings_card_bg();
+        let card_border = theme.settings_border();
+        let muted = theme.settings_muted();
+        let text = theme.settings_text();
+        let selected = self.behavior;
+
+        div()
+            .id("overscroll-demo-outer-v")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_y_scroll()
+            .overscroll_behavior(OverscrollBehavior::Auto)
+            .track_scroll(&self.outer_scroll)
+            .rounded(px(12.))
+            .bg(card_bg)
+            .border_1()
+            .border_color(card_border)
+            .p(px(16.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_start()
+                            .gap(px(14.))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(10.))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(muted)
+                                            .child("OUTER SCROLL VIEW (AUTO)"),
+                                    )
+                                    .children((1..=6).map(|i| {
+                                        div()
+                                            .p(px(12.))
+                                            .rounded(px(8.))
+                                            .bg(theme.settings_content_bg())
+                                            .border_1()
+                                            .border_color(card_border)
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(3.))
+                                            .child(
+                                                div()
+                                                    .text_size(px(13.))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(text)
+                                                    .child(format!("Outer Card {i}")),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .text_color(muted)
+                                                    .child("Scroll inside the inner panel to verify edge bounce and chaining."),
+                                            )
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .w(px(230.))
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(8.))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(accent)
+                                            .child("INNER SCROLL VIEW"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("overscroll-demo-inner-v")
+                                            .w_full()
+                                            .h(px(250.))
+                                            .overflow_y_scroll()
+                                            .overscroll_behavior(selected)
+                                            .track_scroll(&self.inner_scroll)
+                                            .rounded(px(10.))
+                                            .bg(theme.settings_content_bg())
+                                            .border_2()
+                                            .border_color(accent.opacity(0.55))
+                                            .p(px(10.))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap(px(8.))
+                                                    .children((1..=10).map(|i| {
+                                                        div()
+                                                            .px(px(10.))
+                                                            .py(px(8.))
+                                                            .rounded(px(7.))
+                                                            .bg(card_bg)
+                                                            .border_1()
+                                                            .border_color(card_border)
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_between()
+                                                            .child(
+                                                                div()
+                                                                    .text_size(px(12.))
+                                                                    .font_weight(FontWeight::MEDIUM)
+                                                                    .text_color(text)
+                                                                    .child(format!("Inner Row {i}")),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .text_size(px(11.))
+                                                                    .text_color(muted)
+                                                                    .child(format!("#{i:02}")),
+                                                            )
+                                                    })),
+                                            ),
+                                    ),
+                            ),
+                    )
+                    .children((7..=12).map(|i| {
+                        div()
+                            .p(px(12.))
+                            .rounded(px(8.))
+                            .bg(theme.settings_content_bg())
+                            .border_1()
+                            .border_color(card_border)
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(text)
+                                    .child(format!("Outer Card {i}")),
+                            )
+                    })),
+            )
+    }
+
+    fn render_horizontal_demo(&self, theme: &Theme) -> impl IntoElement {
+        let accent: Hsla = rgb(Theme::SETTINGS_ACCENT).into();
+        let card_bg = theme.settings_card_bg();
+        let card_border = theme.settings_border();
+        let muted = theme.settings_muted();
+        let text = theme.settings_text();
+        let selected = self.behavior;
+
+        div()
+            .id("overscroll-demo-outer-h")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_x_scroll()
+            .overscroll_behavior(OverscrollBehavior::Auto)
+            .track_scroll(&self.outer_scroll)
+            .rounded(px(12.))
+            .bg(card_bg)
+            .border_1()
+            .border_color(card_border)
+            .p(px(16.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(muted)
+                            .child("OUTER HORIZONTAL SCROLL VIEW (AUTO)"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_stretch()
+                            .gap(px(12.))
+                            .children((1..=3).map(|i| {
+                                div()
+                                    .w(px(140.))
+                                    .h(px(210.))
+                                    .flex_shrink_0()
+                                    .p(px(12.))
+                                    .rounded(px(10.))
+                                    .bg(theme.settings_content_bg())
+                                    .border_1()
+                                    .border_color(card_border)
+                                    .flex()
+                                    .flex_col()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(text)
+                                            .child(format!("Outer Tile {i}")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(muted)
+                                            .child("Scroll horizontally"),
+                                    )
+                            }))
+                            .child(
+                                div()
+                                    .w(px(290.))
+                                    .h(px(210.))
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(8.))
+                                    .p(px(10.))
+                                    .rounded(px(10.))
+                                    .bg(theme.settings_content_bg())
+                                    .border_2()
+                                    .border_color(accent.opacity(0.55))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(accent)
+                                            .child("INNER HORIZONTAL SCROLL VIEW"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("overscroll-demo-inner-h")
+                                            .flex_1()
+                                            .w_full()
+                                            .overflow_x_scroll()
+                                            .overscroll_behavior(selected)
+                                            .track_scroll(&self.inner_scroll)
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_row()
+                                                    .gap(px(8.))
+                                                    .h_full()
+                                                    .children((1..=8).map(|i| {
+                                                        div()
+                                                            .w(px(105.))
+                                                            .h_full()
+                                                            .flex_shrink_0()
+                                                            .p(px(10.))
+                                                            .rounded(px(8.))
+                                                            .bg(card_bg)
+                                                            .border_1()
+                                                            .border_color(card_border)
+                                                            .flex()
+                                                            .flex_col()
+                                                            .justify_between()
+                                                            .child(
+                                                                div()
+                                                                    .text_size(px(12.))
+                                                                    .font_weight(FontWeight::MEDIUM)
+                                                                    .text_color(text)
+                                                                    .child(format!("Item {i}")),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .text_size(px(11.))
+                                                                    .text_color(muted)
+                                                                    .child(format!("#{i:02}")),
+                                                            )
+                                                    })),
+                                            ),
+                                    ),
+                            )
+                            .children((4..=8).map(|i| {
+                                div()
+                                    .w(px(140.))
+                                    .h(px(210.))
+                                    .flex_shrink_0()
+                                    .p(px(12.))
+                                    .rounded(px(10.))
+                                    .bg(theme.settings_content_bg())
+                                    .border_1()
+                                    .border_color(card_border)
+                                    .flex()
+                                    .flex_col()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(text)
+                                            .child(format!("Outer Tile {i}")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(muted)
+                                            .child("Scroll horizontally"),
+                                    )
+                            })),
+                    ),
+            )
+    }
 }
 
 impl Render for ScrollRubberBandingTestView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::for_window(window, cx, true);
+        let accent: Hsla = rgb(Theme::SETTINGS_ACCENT).into();
+        let bg = theme.settings_content_bg();
+        let card_bg = theme.settings_card_bg();
+        let card_border = theme.settings_border();
+        let text = theme.settings_text();
+        let muted = theme.settings_muted();
+
         let selected = self.behavior;
-        let active_desc = OPTIONS
-            .iter()
-            .find(|(b, _, _)| *b == selected)
-            .map(|(_, _, desc)| *desc)
-            .unwrap_or("");
-        let outer_y = f32::from(self.outer_scroll.offset().y);
-        let inner_y = f32::from(self.inner_scroll.offset().y);
+        let axis = self.axis;
+        let outer_offset = self.outer_scroll.offset();
+        let inner_offset = self.inner_scroll.offset();
+        let (axis_label, outer_val, inner_val) = match axis {
+            ScrollAxis::Vertical => ("y", f32::from(outer_offset.y), f32::from(inner_offset.y)),
+            ScrollAxis::Horizontal => ("x", f32::from(outer_offset.x), f32::from(inner_offset.x)),
+        };
 
         div()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x16161a))
-            .text_color(rgb(0xf4f4f5))
+            .bg(bg)
+            .text_color(text)
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
                     .px(px(20.))
-                    .py(px(14.))
+                    .py(px(12.))
                     .border_b_1()
-                    .border_color(rgba(0xffffff1a))
+                    .border_color(card_border)
                     .child(
                         div()
-                            .text_size(px(15.))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("CSS Demo: overscroll-behavior"),
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Scroll Rubber-Banding"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(muted)
+                                    .child(format!(
+                                        "Outer {axis_label}: {outer_val:.1}px   ·   Inner {axis_label}: {inner_val:.1}px"
+                                    )),
+                            ),
                     )
                     .child(
                         div()
-                            .id("overscroll-demo-reset")
-                            .px(px(12.))
-                            .py(px(5.))
-                            .rounded(px(6.))
-                            .bg(rgba(0xffffff18))
-                            .border_1()
-                            .border_color(rgba(0xffffff22))
-                            .text_size(px(12.))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| this.reset(cx)))
-                            .child("Reset"),
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .child(
+                                ui::SegmentedControl::settings(
+                                    &theme,
+                                    "overscroll-axis-toggle",
+                                    vec![
+                                        ui::SegmentOption::new(
+                                            "Vertical",
+                                            axis == ScrollAxis::Vertical,
+                                        ),
+                                        ui::SegmentOption::new(
+                                            "Horizontal",
+                                            axis == ScrollAxis::Horizontal,
+                                        ),
+                                    ],
+                                )
+                                .on_select(cx.listener(|this, index, _, cx| {
+                                    let next = if *index == 0 {
+                                        ScrollAxis::Vertical
+                                    } else {
+                                        ScrollAxis::Horizontal
+                                    };
+                                    this.set_axis(next, cx);
+                                })),
+                            )
+                            .child(
+                                ui::Button::settings(
+                                    &theme,
+                                    "overscroll-reset-scroll",
+                                    ui::ButtonVariant::Gray,
+                                    ui::ButtonSize::Sm,
+                                )
+                                .label("Reset Scroll")
+                                .on_click(cx.listener(|this, _, _, cx| this.reset_scroll(cx))),
+                            ),
                     ),
             )
             .child(
@@ -120,154 +552,245 @@ impl Render for ScrollRubberBandingTestView {
                     .min_h_0()
                     .flex()
                     .flex_row()
-                    .gap(px(20.))
-                    .p(px(20.))
+                    .gap(px(16.))
+                    .p(px(16.))
                     .child(
                         div()
-                            .w(px(310.))
+                            .id("overscroll-controls-sidebar")
+                            .w(px(300.))
                             .flex_shrink_0()
+                            .h_full()
+                            .overflow_y_scroll()
                             .flex()
                             .flex_col()
-                            .gap(px(10.))
-                            .children(OPTIONS.iter().enumerate().map(|(index, (behavior, label, _))| {
-                                let is_selected = *behavior == selected;
-                                let behavior = *behavior;
-                                div()
-                                    .id(("overscroll-opt", index))
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .px(px(14.))
-                                    .py(px(14.))
-                                    .rounded(px(8.))
-                                    .bg(if is_selected {
-                                        rgb(0x1e2533)
-                                    } else {
-                                        rgb(0x202228)
-                                    })
-                                    .border_2()
-                                    .border_color(if is_selected {
-                                        rgb(0x5b9dff)
-                                    } else {
-                                        rgba(0xffffff18)
-                                    })
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.behavior = behavior;
-                                        cx.notify();
-                                    }))
-                                    .child(
-                                        div()
-                                            .text_size(px(13.))
-                                            .text_color(rgb(0xe8b059))
-                                            .child(*label),
-                                    )
-                                    .when(is_selected, |this| {
-                                        this.child(
-                                            div()
-                                                .text_size(px(14.))
-                                                .text_color(rgb(0x5b9dff))
-                                                .child(">"),
-                                        )
-                                    })
-                            }))
+                            .gap(px(14.))
                             .child(
                                 div()
-                                    .mt(px(8.))
-                                    .p(px(12.))
-                                    .rounded(px(8.))
-                                    .bg(rgba(0xffffff08))
-                                    .border_1()
-                                    .border_color(rgba(0xffffff14))
                                     .flex()
                                     .flex_col()
                                     .gap(px(6.))
                                     .child(
                                         div()
-                                            .text_size(px(12.))
-                                            .text_color(rgba(0xffffffb8))
-                                            .child(active_desc),
-                                    )
-                                    .child(
-                                        div()
                                             .text_size(px(11.))
-                                            .text_color(rgba(0xffffff78))
-                                            .child(format!(
-                                                "outer y: {outer_y:.1}px   |   inner y: {inner_y:.1}px"
-                                            )),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("overscroll-demo-outer")
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .overflow_y_scroll()
-                            .overscroll_behavior(OverscrollBehavior::Auto)
-                            .track_scroll(&self.outer_scroll)
-                            .border_2()
-                            .border_dashed()
-                            .border_color(rgba(0xffffffcc))
-                            .p(px(16.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(muted)
+                                            .child("INNER OVERSCROLL BEHAVIOR"),
+                                    )
+                                    .children(BEHAVIORS.iter().enumerate().map(
+                                        |(index, (behavior, title, desc))| {
+                                            let is_selected = *behavior == selected;
+                                            let behavior = *behavior;
+                                            div()
+                                                .id(("overscroll-behavior-opt", index))
+                                                .p(px(10.))
+                                                .rounded(px(9.))
+                                                .bg(if is_selected {
+                                                    accent.opacity(0.14)
+                                                } else {
+                                                    card_bg
+                                                })
+                                                .border_1()
+                                                .border_color(if is_selected {
+                                                    accent
+                                                } else {
+                                                    card_border
+                                                })
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.behavior = behavior;
+                                                    cx.notify();
+                                                }))
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(3.))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(13.))
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .text_color(if is_selected {
+                                                            accent
+                                                        } else {
+                                                            text
+                                                        })
+                                                        .child(*title),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.))
+                                                        .text_color(muted)
+                                                        .child(*desc),
+                                                )
+                                        },
+                                    )),
+                            )
                             .child(
                                 div()
+                                    .p(px(12.))
+                                    .rounded(px(10.))
+                                    .bg(card_bg)
+                                    .border_1()
+                                    .border_color(card_border)
                                     .flex()
-                                    .flex_row()
-                                    .items_start()
-                                    .gap(px(16.))
+                                    .flex_col()
+                                    .gap(px(10.))
                                     .child(
                                         div()
-                                            .flex_1()
-                                            .min_w_0()
                                             .flex()
-                                            .flex_col()
-                                            .gap(px(14.))
-                                            .text_size(px(15.))
-                                            .line_height(px(22.))
-                                            .children(OUTER_PARAGRAPHS.iter().map(|p| div().child(*p))),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("overscroll-demo-inner")
-                                            .w(px(210.))
-                                            .h(px(230.))
-                                            .flex_shrink_0()
-                                            .overflow_y_scroll()
-                                            .overscroll_behavior(selected)
-                                            .track_scroll(&self.inner_scroll)
-                                            .border_2()
-                                            .border_dashed()
-                                            .border_color(rgb(0x3b82f6))
-                                            .p(px(10.))
+                                            .items_center()
+                                            .justify_between()
                                             .child(
                                                 div()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .gap(px(12.))
-                                                    .text_size(px(14.))
-                                                    .line_height(px(20.))
-                                                    .children(
-                                                        INNER_PARAGRAPHS
-                                                            .iter()
-                                                            .map(|p| div().child(*p)),
-                                                    ),
+                                                    .text_size(px(11.))
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(muted)
+                                                    .child("PHYSICS TUNING"),
+                                            )
+                                            .child(
+                                                ui::Button::settings(
+                                                    &theme,
+                                                    "overscroll-reset-tuning",
+                                                    ui::ButtonVariant::Gray,
+                                                    ui::ButtonSize::Sm,
+                                                )
+                                                .label("Defaults")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.reset_tuning(cx);
+                                                })),
                                             ),
-                                    ),
+                                    )
+                                    .children(TUNING_SPECS.iter().enumerate().map(
+                                        |(index, spec)| {
+                                            let value = (spec.get)(&self.config);
+                                            let fraction = ((value - spec.min)
+                                                / (spec.max - spec.min))
+                                                .clamp(0.0, 1.0);
+                                            let step = spec.step;
+                                            let formatted = if spec.unit.is_empty() {
+                                                format!("{value:.2}")
+                                            } else {
+                                                format!("{value:.2}{}", spec.unit)
+                                            };
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(5.))
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(12.))
+                                                                .text_color(text)
+                                                                .child(spec.label),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap(px(4.))
+                                                                .child(
+                                                                    div()
+                                                                        .id((
+                                                                            "tuning-dec",
+                                                                            index,
+                                                                        ))
+                                                                        .w(px(20.))
+                                                                        .h(px(20.))
+                                                                        .rounded(px(5.))
+                                                                        .bg(bg)
+                                                                        .border_1()
+                                                                        .border_color(card_border)
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .text_size(px(12.))
+                                                                        .cursor_pointer()
+                                                                        .on_click(cx.listener(
+                                                                            move |this, _, _, cx| {
+                                                                                this.adjust_tuning(
+                                                                                    index, -step,
+                                                                                    cx,
+                                                                                );
+                                                                            },
+                                                                        ))
+                                                                        .child("−"),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .w(px(44.))
+                                                                        .text_size(px(11.))
+                                                                        .text_color(muted)
+                                                                        .flex()
+                                                                        .justify_center()
+                                                                        .child(formatted),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .id((
+                                                                            "tuning-inc",
+                                                                            index,
+                                                                        ))
+                                                                        .w(px(20.))
+                                                                        .h(px(20.))
+                                                                        .rounded(px(5.))
+                                                                        .bg(bg)
+                                                                        .border_1()
+                                                                        .border_color(card_border)
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .justify_center()
+                                                                        .text_size(px(12.))
+                                                                        .cursor_pointer()
+                                                                        .on_click(cx.listener(
+                                                                            move |this, _, _, cx| {
+                                                                                this.adjust_tuning(
+                                                                                    index, step,
+                                                                                    cx,
+                                                                                );
+                                                                            },
+                                                                        ))
+                                                                        .child("+"),
+                                                                ),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .w_full()
+                                                        .h(px(4.))
+                                                        .rounded_full()
+                                                        .bg(muted.opacity(0.22))
+                                                        .overflow_hidden()
+                                                        .child(
+                                                            div()
+                                                                .h_full()
+                                                                .w(gpui::relative(fraction))
+                                                                .rounded_full()
+                                                                .bg(accent),
+                                                        ),
+                                                )
+                                        },
+                                    )),
                             ),
-                    ),
+                    )
+                    .child(match axis {
+                        ScrollAxis::Vertical => self.render_vertical_demo(&theme).into_any_element(),
+                        ScrollAxis::Horizontal => {
+                            self.render_horizontal_demo(&theme).into_any_element()
+                        }
+                    }),
             )
     }
 }
 
 pub fn open(cx: &mut App) {
-    let bounds = Bounds::centered(None, size(px(860.), px(520.)), cx);
+    let bounds = Bounds::centered(None, size(px(940.), px(620.)), cx);
     let _ = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
-                title: Some("Overscroll Behavior Test".into()),
+                title: Some("Scroll Rubber-Banding".into()),
                 ..Default::default()
             }),
             ..Default::default()

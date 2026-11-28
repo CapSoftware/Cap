@@ -10,6 +10,18 @@ index 0702650..36f6816 100644
  
  [lib]
  path = "src/gpui.rs"
+diff --git a/crates/gpui/src/app/test_app.rs b/crates/gpui/src/app/test_app.rs
+index 268fa89..920ebe2 100644
+--- a/crates/gpui/src/app/test_app.rs
++++ b/crates/gpui/src/app/test_app.rs
+@@ -451,6 +451,7 @@ impl<V: 'static + Render> TestAppWindow<V> {
+             delta: crate::ScrollDelta::Pixels(delta),
+             modifiers: Default::default(),
+             touch_phase: crate::TouchPhase::Moved,
++            ..Default::default()
+         });
+     }
+ 
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
 index c02bd16..0f80040 100644
 --- a/crates/gpui/src/elements/div.rs
@@ -540,10 +552,10 @@ index 1feee49..35cb872 100644
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..d24bf82
+index 0000000..0652f04
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,673 @@
+@@ -0,0 +1,839 @@
 +use std::f32::consts::PI;
 +use std::sync::RwLock;
 +use std::time::Instant;
@@ -1215,6 +1227,172 @@ index 0000000..d24bf82
 +            &config,
 +        ));
 +        assert_eq!(inner_y, -100.0, "None must not rubber-band");
++    }
++
++    #[test]
++    fn horizontal_auto_nested_owns_gesture_then_chains_on_new_gesture() {
++        let config = RubberBandConfig::DEFAULT;
++        let now = Instant::now();
++        let mut x_axis = RubberBandAxisState::default();
++        let mut chain_x = None;
++        let mut inner_x = -120.0_f32;
++        let max_x = 150.0_f32;
++
++        // Gesture starts while inner can scroll right (negative delta): owns gesture & bounces.
++        assert!(step_trackpad_axis(
++            OverscrollBehavior::Auto,
++            true,
++            &mut x_axis,
++            &mut chain_x,
++            &mut inner_x,
++            max_x,
++            -50.0,
++            240.0,
++            1.0 / 60.0,
++            false,
++            false,
++            now,
++            &config,
++        ));
++        assert_eq!(chain_x, Some(false));
++        assert!(
++            inner_x < -150.0,
++            "inner X should rubber-band past right edge"
++        );
++
++        // Momentum in same horizontal gesture keeps blocking parent.
++        assert!(step_trackpad_axis(
++            OverscrollBehavior::Auto,
++            true,
++            &mut x_axis,
++            &mut chain_x,
++            &mut inner_x,
++            max_x,
++            -35.0,
++            240.0,
++            1.0 / 60.0,
++            true,
++            true,
++            now,
++            &config,
++        ));
++
++        // New horizontal gesture at right edge chains to parent.
++        x_axis = RubberBandAxisState::default();
++        chain_x = None;
++        inner_x = -150.0;
++        assert!(!step_trackpad_axis(
++            OverscrollBehavior::Auto,
++            true,
++            &mut x_axis,
++            &mut chain_x,
++            &mut inner_x,
++            max_x,
++            -30.0,
++            240.0,
++            1.0 / 60.0,
++            false,
++            false,
++            now,
++            &config,
++        ));
++        assert_eq!(chain_x, Some(true));
++        assert_eq!(inner_x, -150.0);
++    }
++
++    #[test]
++    fn horizontal_contain_chain_and_none_nested_behaviors() {
++        let config = RubberBandConfig::DEFAULT;
++        let now = Instant::now();
++
++        // Contain at left edge (0.0) pulling right (+delta): bounces locally, blocks parent.
++        let mut axis = RubberBandAxisState::default();
++        let mut chain = None;
++        let mut x = 0.0_f32;
++        assert!(step_trackpad_axis(
++            OverscrollBehavior::Contain,
++            true,
++            &mut axis,
++            &mut chain,
++            &mut x,
++            150.0,
++            40.0,
++            240.0,
++            1.0 / 60.0,
++            false,
++            false,
++            now,
++            &config,
++        ));
++        assert!(x > 0.0);
++
++        // Chain at left edge: chains immediately to parent without bouncing.
++        axis = RubberBandAxisState::default();
++        chain = None;
++        x = 0.0;
++        assert!(!step_trackpad_axis(
++            OverscrollBehavior::Chain,
++            true,
++            &mut axis,
++            &mut chain,
++            &mut x,
++            150.0,
++            40.0,
++            240.0,
++            1.0 / 60.0,
++            false,
++            false,
++            now,
++            &config,
++        ));
++        assert_eq!(x, 0.0);
++
++        // None at left edge: blocks parent and never bounces.
++        axis = RubberBandAxisState::default();
++        chain = None;
++        x = 0.0;
++        assert!(step_trackpad_axis(
++            OverscrollBehavior::None,
++            true,
++            &mut axis,
++            &mut chain,
++            &mut x,
++            150.0,
++            40.0,
++            240.0,
++            1.0 / 60.0,
++            false,
++            false,
++            now,
++            &config,
++        ));
++        assert_eq!(x, 0.0);
++    }
++
++    #[test]
++    fn horizontal_top_level_auto_rubber_bands_at_left_edge() {
++        let config = RubberBandConfig::DEFAULT;
++        let now = Instant::now();
++        let mut axis = RubberBandAxisState::default();
++        let mut chain = None;
++        let mut x = 0.0_f32;
++
++        assert!(step_trackpad_axis(
++            OverscrollBehavior::Auto,
++            false,
++            &mut axis,
++            &mut chain,
++            &mut x,
++            150.0,
++            45.0,
++            240.0,
++            1.0 / 60.0,
++            false,
++            false,
++            now,
++            &config,
++        ));
++        assert!(x > 0.0, "top-level horizontal Auto should rubber-band");
 +    }
 +}
 diff --git a/crates/gpui_macos/src/events.rs b/crates/gpui_macos/src/events.rs
