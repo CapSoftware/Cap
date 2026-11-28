@@ -1502,6 +1502,7 @@ pub struct EditorWindow {
     analyzing_speech: bool,
     speech_request: Option<silence::SpeechRequest>,
     clip_speech: Option<Arc<Vec<Option<cap_rendering::ClipSpeech>>>>,
+    silence_sync_signature: Option<u64>,
     pub(crate) generating_keyboard: bool,
     pub(crate) keyboard_generation_message: Option<String>,
     clip_speed: Option<ClipSpeedMenu>,
@@ -1788,6 +1789,27 @@ fn transition_clip_keys(
         key(timeline.segments.get(index)?),
     ])
 }
+
+fn hash_clip_time_mapping(timeline: &TimelineConfiguration, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+
+    for segment in &timeline.segments {
+        segment.start.to_bits().hash(hasher);
+        segment.end.to_bits().hash(hasher);
+        segment.timescale.to_bits().hash(hasher);
+        segment.recording_clip.hash(hasher);
+    }
+    for transition in &timeline.transitions {
+        transition.segment_index.hash(hasher);
+        format!("{:?}", transition.kind).hash(hasher);
+        transition.duration.to_bits().hash(hasher);
+    }
+    for (start, end) in timeline.hold_windows() {
+        start.to_bits().hash(hasher);
+        end.to_bits().hash(hasher);
+    }
+}
+
 const TEXT_MENU_WIDTH: f32 = 250.;
 /// Roughly the menu's laid-out height; only decides which side of its anchor
 /// the card opens on.
@@ -2244,6 +2266,7 @@ impl EditorWindow {
             analyzing_speech: false,
             speech_request: None,
             clip_speech: None,
+            silence_sync_signature: None,
             generating_keyboard: false,
             keyboard_generation_message: None,
             clip_speed: None,
@@ -2446,6 +2469,7 @@ impl EditorWindow {
         self.canvas_selection = None;
         self.project = config;
         self.synchronize_caption_track(true);
+        self.trust_loaded_silence_scenes();
         self.transcript.dirty = true;
         self.history = ProjectHistory::new(self.project.clone());
         self.tracks = TrackLanes::from_project(&self.project, self.has_camera);
@@ -2769,6 +2793,7 @@ impl EditorWindow {
             return;
         }
         self.synchronize_caption_track(false);
+        let rebuild_timeline = self.synchronize_silence_scenes(window, cx) || rebuild_timeline;
         self.history.record(&self.project);
         self.transcript.dirty = true;
         self.style_presets.close_menu();
@@ -2844,6 +2869,7 @@ impl EditorWindow {
             self.transcript.hovered_cut = None;
             self.set_selection(None, cx);
             self.canvas_selection = None;
+            self.resynchronize_silence_history(window, cx);
             self.rebuild_timeline();
             self.note_edit("caption-refinement", Some(TrackKind::Clip));
         }
@@ -2880,21 +2906,7 @@ impl EditorWindow {
                 word.end.to_bits().hash(&mut hasher);
             }
         }
-        for segment in &timeline.segments {
-            segment.start.to_bits().hash(&mut hasher);
-            segment.end.to_bits().hash(&mut hasher);
-            segment.timescale.to_bits().hash(&mut hasher);
-            segment.recording_clip.hash(&mut hasher);
-        }
-        for transition in &timeline.transitions {
-            transition.segment_index.hash(&mut hasher);
-            format!("{:?}", transition.kind).hash(&mut hasher);
-            transition.duration.to_bits().hash(&mut hasher);
-        }
-        for (start, end) in timeline.hold_windows() {
-            start.to_bits().hash(&mut hasher);
-            end.to_bits().hash(&mut hasher);
-        }
+        hash_clip_time_mapping(timeline, &mut hasher);
         Some(hasher.finish())
     }
 
@@ -3011,6 +3023,7 @@ impl EditorWindow {
         self.tracks.caption = restored.caption;
         self.tracks.keyboard = restored.keyboard;
         self.synchronize_caption_track(false);
+        self.adopt_restored_silence_scenes();
         self.transcript.dirty = true;
         self.transcript.selection = None;
         self.transcript.hovered_cut = None;
@@ -6583,6 +6596,11 @@ impl EditorWindow {
                 &self.clip_display_durations,
             );
             self.synchronize_caption_track(false);
+            self.rebuild_timeline();
+            self.publish_project();
+        }
+
+        if drag.moved && self.synchronize_silence_scenes(window, cx) {
             self.rebuild_timeline();
             self.publish_project();
         }
