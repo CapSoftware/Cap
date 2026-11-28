@@ -5,9 +5,9 @@ import { users, videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
-import { Policy, type Video } from "@cap/web-domain";
+import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect, Exit } from "effect";
+import { Effect, Exit, Option } from "effect";
 import { isAiConfigured } from "@/lib/ai/provider";
 import {
 	isRetryableDesktopSegmentsFinalizationError,
@@ -49,15 +49,23 @@ export async function getVideoStatus(
 
 	const exit = await Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
-
-		return yield* Effect.promise(() =>
+		const [video] = yield* Effect.promise(() =>
 			db().select().from(videos).where(eq(videos.id, videoId)),
-		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
+		);
+
+		if (video) {
+			yield* videosPolicy.canViewLoaded(
+				video,
+				Option.fromNullable(video.password),
+			);
+		}
+
+		return video;
 	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
 	if (Exit.isFailure(exit)) return { success: false };
 
-	const video = exit.value[0];
+	const video = exit.value;
 	if (!video) return { success: false, reason: "not_found" };
 
 	const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};

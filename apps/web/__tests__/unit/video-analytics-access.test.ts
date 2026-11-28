@@ -1,4 +1,4 @@
-import type { VideosPolicyDeps } from "@cap/web-backend";
+import type { VideosPolicyDeps, ViewableVideo } from "@cap/web-backend";
 import {
 	type CurrentUser,
 	type Organisation,
@@ -90,7 +90,18 @@ vi.mock("@cap/database", () => ({
 		select: () => ({
 			from: () => ({
 				where: () => ({
-					limit: async () => (mocks.scenario.exists ? [{ id: VIDEO_ID }] : []),
+					limit: async () =>
+						mocks.scenario.exists
+							? [
+									{
+										id: VIDEO_ID,
+										ownerId: OWNER_ID,
+										orgId: ORG_ID,
+										public: mocks.scenario.public,
+										password: Option.getOrNull(mocks.scenario.password),
+									},
+								]
+							: [],
 				}),
 			}),
 		}),
@@ -103,7 +114,8 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 	const { CurrentUser, Video } = await import("@cap/web-domain");
 	class VideosPolicy extends Effect.Service<VideosPolicy>()("VideosPolicy", {
 		sync: () => ({
-			canView: (id: Video.VideoId) => actual.buildCanView(makeDeps(), id),
+			canViewLoaded: (video: ViewableVideo, password: Option.Option<string>) =>
+				actual.buildCanViewLoaded(makeDeps(), video, password),
 		}),
 	}) {}
 	return {

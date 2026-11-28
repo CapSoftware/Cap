@@ -29,7 +29,7 @@ vi.mock("@cap/web-backend", async () => {
 	const { Policy } = await import("@cap/web-domain");
 	class VideosPolicy extends Effect.Service<VideosPolicy>()("VideosPolicy", {
 		sync: () => ({
-			canView: () =>
+			canViewLoaded: () =>
 				mocks.allowed
 					? Effect.void
 					: Effect.fail(new Policy.PolicyDeniedError()),
@@ -73,8 +73,10 @@ describe("video status", () => {
 
 	it("keeps access denial separate from a missing video", async () => {
 		mocks.allowed = false;
+		mocks.rows = [{ name: "Recording" }];
 		await expect(getVideoStatus(videoId)).resolves.toEqual({ success: false });
-		expect(mocks.read).not.toHaveBeenCalled();
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+		expect(mocks.generate).not.toHaveBeenCalled();
 	});
 
 	it("preserves metadata for an available video", async () => {
