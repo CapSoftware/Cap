@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 pub use detect::{build_guide, clip_steps};
 pub use document::{
-    Captions, Document, DocumentStep, image_name, instruction, json, markdown, timestamp,
+    Captions, Document, DocumentStep, image_name, instruction, is_image_name, json, listed_images,
+    markdown, timestamp,
 };
 pub use frame::{Rect, Size, StepImage, crop_for, encode_png, render_step_image};
 

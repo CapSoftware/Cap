@@ -3,7 +3,8 @@ use std::path::Path;
 use cap_steps::{
     Action, ButtonEvent, Captions, ClipEvents, Document, DocumentStep, Guide, LEFT_BUTTON, Marker,
     Point, PointerMove, Rect, Size, Source, Step, Word, build_guide, clip_steps, crop_for,
-    encode_png, image_name, json, markdown, render_step_image, timestamp,
+    encode_png, image_name, is_image_name, json, listed_images, markdown, render_step_image,
+    timestamp,
 };
 use serde::Deserialize;
 
@@ -828,6 +829,30 @@ fn image_names_are_zero_padded() {
 }
 
 #[test]
+fn only_names_a_guide_gives_its_screenshots_are_image_names() {
+    for (index, total) in [(1, 1), (9, 9), (12, 12), (7, 120), (1000, 1000)] {
+        let name = image_name(index, total);
+        assert!(is_image_name(&name), "{name}");
+    }
+    for name in [
+        "",
+        "step-.png",
+        "step-01.PNG",
+        "step-01.png.bak",
+        "step-one.png",
+        "step-01.jpg",
+        "my-step-01.png",
+        "step--1.png",
+        "step-01/x.png",
+        "../step-01.png",
+        "step-01.png/..",
+        "diagram.png",
+    ] {
+        assert!(!is_image_name(name), "{name}");
+    }
+}
+
+#[test]
 fn timestamps_read_like_a_player() {
     assert_eq!(timestamp(4.2), "0:04");
     assert_eq!(timestamp(75.0), "1:15");
@@ -1090,4 +1115,38 @@ fn json_lists_every_step_for_tools_to_read() {
     assert_eq!(steps[1]["action"], "drag");
     assert_eq!(steps[1]["dragTo"]["x"], 0.6);
     assert_eq!(steps[1]["heading"], "Tune it");
+}
+
+#[test]
+fn the_screenshots_a_guide_lists_can_be_read_back_from_its_json() {
+    let document = Document {
+        title: "Invite a teammate".into(),
+        duration: 12.5,
+        intro: String::new(),
+        steps: vec![
+            document_step(1, 4.0, Action::Click, "", None),
+            document_step(2, 9.5, Action::Click, "", None),
+        ],
+    };
+    let images: Vec<String> = document
+        .steps
+        .iter()
+        .map(|entry| entry.image.clone())
+        .collect();
+    assert_eq!(listed_images(&json(&document)), images);
+}
+
+#[test]
+fn text_that_is_not_a_guide_lists_no_screenshots() {
+    for text in [
+        "",
+        "not json",
+        "[]",
+        "{}",
+        r#"{"steps": "steps/step-01.png"}"#,
+        r#"{"steps": [{"image": 4}]}"#,
+    ] {
+        assert!(listed_images(text).is_empty(), "{text}");
+    }
+    assert_eq!(listed_images(r#"{"steps": [{"index": 1}]}"#), [""]);
 }

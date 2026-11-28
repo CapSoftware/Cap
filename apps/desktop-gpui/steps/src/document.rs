@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{Action, Point, Step};
 
@@ -39,9 +39,20 @@ impl Default for Captions {
     }
 }
 
+const IMAGE_NAME_START: &str = "step-";
+const IMAGE_NAME_END: &str = ".png";
+
 pub fn image_name(index: usize, total: usize) -> String {
     let digits = total.max(index).to_string().len().max(2);
-    format!("step-{index:0digits$}.png")
+    format!("{IMAGE_NAME_START}{index:0digits$}{IMAGE_NAME_END}")
+}
+
+pub fn is_image_name(name: &str) -> bool {
+    name.strip_prefix(IMAGE_NAME_START)
+        .and_then(|rest| rest.strip_suffix(IMAGE_NAME_END))
+        .is_some_and(|number| {
+            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 pub fn timestamp(seconds: f64) -> String {
@@ -161,6 +172,27 @@ struct StepData<'a> {
     heading: Option<&'a str>,
     narration: &'a str,
     image: &'a str,
+}
+
+#[derive(Deserialize)]
+struct ListedGuide {
+    #[serde(default)]
+    steps: Vec<ListedStep>,
+}
+
+#[derive(Deserialize)]
+struct ListedStep {
+    #[serde(default)]
+    image: String,
+}
+
+/// The `image` of every step in a guide's JSON, exactly as written there:
+/// the text may come from a file someone else has edited, so these are not
+/// yet paths to trust.
+pub fn listed_images(json: &str) -> Vec<String> {
+    serde_json::from_str::<ListedGuide>(json)
+        .map(|guide| guide.steps.into_iter().map(|step| step.image).collect())
+        .unwrap_or_default()
 }
 
 pub fn json(document: &Document) -> String {

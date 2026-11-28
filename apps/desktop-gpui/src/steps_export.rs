@@ -13,7 +13,6 @@ use cap_steps::{
 pub(crate) const GUIDE_FILE: &str = "guide.md";
 pub(crate) const GUIDE_DATA_FILE: &str = "guide.json";
 pub(crate) const STEP_IMAGES_FOLDER: &str = "steps";
-const GUIDE_ENTRIES: [&str; 3] = [GUIDE_FILE, GUIDE_DATA_FILE, STEP_IMAGES_FOLDER];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StepsError {
@@ -502,42 +501,78 @@ fn write_guide(
 
 fn publish(staging: &Path, folder: &Path, names: &[String]) -> Result<Vec<PathBuf>, String> {
     if folder.exists() {
-        replace_guide(staging, folder)?;
+        replace_guide(staging, folder, names)?;
     } else {
         std::fs::rename(staging, folder).map_err(|e| e.to_string())?;
     }
     Ok(names.iter().map(|name| folder.join(name)).collect())
 }
 
-/// Only the guide's own entries are swapped, because the folder is one the
-/// user picked and may hold other files. The entries they replace wait in
-/// `retired` until every new one is in. `retired` is deleted with its
-/// contents only after that, so an entry that could not be put back after a
-/// failed swap is still there.
-fn replace_guide(staging: &Path, folder: &Path) -> Result<(), String> {
+/// `guide.json` is read back from a folder the user owns and may have been
+/// edited, so what it lists counts only under a name an export gives its
+/// screenshots, directly inside the screenshots folder.
+fn earlier_screenshots(folder: &Path) -> Vec<String> {
+    let screenshots = format!("{STEP_IMAGES_FOLDER}/");
+    std::fs::read_to_string(folder.join(GUIDE_DATA_FILE))
+        .map(|data| cap_steps::listed_images(&data))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|image| {
+            image
+                .strip_prefix(&screenshots)
+                .is_some_and(cap_steps::is_image_name)
+        })
+        .collect()
+}
+
+fn retire(file: &Path, retired: &Path) -> std::io::Result<bool> {
+    match std::fs::symlink_metadata(file) {
+        Ok(found) if found.is_dir() => Err(std::io::Error::new(
+            std::io::ErrorKind::IsADirectory,
+            format!("{} is a folder", file.display()),
+        )),
+        Ok(_) => std::fs::rename(file, retired).map(|()| true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// The folder is one the user picked, and it and its screenshots folder may
+/// hold other files. Only the guide's own files are swapped: the ones this
+/// export writes, and the screenshots the earlier guide's `guide.json`
+/// lists. The files they replace wait in `retired` until every new one is
+/// in. `retired` is deleted with its contents only after that, so a file
+/// that could not be put back after a failed swap is still there.
+fn replace_guide(staging: &Path, folder: &Path, names: &[String]) -> Result<(), String> {
     let mut retired = staging.as_os_str().to_owned();
     retired.push(".replaced");
     let retired = PathBuf::from(retired);
-    std::fs::create_dir(&retired).map_err(|e| e.to_string())?;
+
+    let mut outgoing = names.to_vec();
+    for image in earlier_screenshots(folder) {
+        if !outgoing.contains(&image) {
+            outgoing.push(image);
+        }
+    }
+    let screenshots = folder.join(STEP_IMAGES_FOLDER);
+    let made_screenshots_folder = !screenshots.exists();
 
     let mut moved_out = Vec::new();
     let mut moved_in = Vec::new();
-    let swapped = GUIDE_ENTRIES
-        .iter()
-        .try_for_each(
-            |entry| match std::fs::rename(folder.join(entry), retired.join(entry)) {
-                Ok(()) => {
-                    moved_out.push(entry);
-                    Ok(())
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error),
-            },
-        )
+    let swapped = std::fs::create_dir_all(retired.join(STEP_IMAGES_FOLDER))
         .and_then(|()| {
-            GUIDE_ENTRIES.iter().try_for_each(|entry| {
-                std::fs::rename(staging.join(entry), folder.join(entry))?;
-                moved_in.push(entry);
+            outgoing.iter().try_for_each(|name| {
+                if retire(&folder.join(name), &retired.join(name))? {
+                    moved_out.push(name);
+                }
+                Ok(())
+            })
+        })
+        .and_then(|()| std::fs::create_dir_all(&screenshots))
+        .and_then(|()| {
+            names.iter().try_for_each(|name| {
+                std::fs::rename(staging.join(name), folder.join(name))?;
+                moved_in.push(name);
                 Ok(())
             })
         });
@@ -546,21 +581,25 @@ fn replace_guide(staging: &Path, folder: &Path) -> Result<(), String> {
         return Ok(());
     };
 
-    let restored = moved_in
-        .iter()
-        .try_for_each(|entry| std::fs::rename(folder.join(entry), staging.join(entry)))
-        .and_then(|()| {
-            moved_out
-                .iter()
-                .try_for_each(|entry| std::fs::rename(retired.join(entry), folder.join(entry)))
-        });
+    for name in moved_in {
+        let _ = std::fs::rename(folder.join(name), staging.join(name));
+    }
+    let mut stranded = false;
+    for name in moved_out {
+        stranded |= std::fs::rename(retired.join(name), folder.join(name)).is_err();
+    }
+    if made_screenshots_folder {
+        let _ = std::fs::remove_dir(&screenshots);
+    }
+    let _ = std::fs::remove_dir(retired.join(STEP_IMAGES_FOLDER));
     let _ = std::fs::remove_dir(&retired);
-    Err(match restored {
-        Ok(()) => error.to_string(),
-        Err(_) => format!(
+    Err(if stranded {
+        format!(
             "{error}. The earlier guide was moved to {}",
             retired.display()
-        ),
+        )
+    } else {
+        error.to_string()
     })
 }
 

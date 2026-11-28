@@ -634,6 +634,135 @@ fn a_shorter_re_export_leaves_no_screenshots_from_the_longer_one() {
 }
 
 #[test]
+fn a_re_export_leaves_other_files_in_the_screenshots_folder_alone() {
+    let longer = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25), (6.0, 0.5, 0.9)]);
+    export(&longer).unwrap();
+    let images = longer.folder.join(STEP_IMAGES_FOLDER);
+    let mine = [
+        images.join("diagram.png"),
+        images.join("step-09.png"),
+        images.join("raw").join("step-02.png"),
+    ];
+    std::fs::create_dir(images.join("raw")).unwrap();
+    for file in &mine {
+        std::fs::write(file, "mine").unwrap();
+    }
+    let replaced = step_image(&longer, 1);
+
+    let mut shorter = project(&[(5.0, 0.6, 0.6)]);
+    shorter.folder = longer.folder.clone();
+    export(&shorter).unwrap();
+
+    assert_eq!(
+        listing(&images),
+        ["diagram.png", "raw", "step-01.png", "step-09.png"]
+    );
+    for file in &mine {
+        assert_eq!(
+            std::fs::read_to_string(file).unwrap(),
+            "mine",
+            "{}",
+            file.display()
+        );
+    }
+    assert_ne!(step_image(&shorter, 1), replaced);
+    assert_eq!(
+        listing(longer.folder.parent().unwrap()),
+        ["guide", "steps.cap"]
+    );
+}
+
+#[test]
+fn an_earlier_guide_that_lists_files_elsewhere_has_none_of_them_removed() {
+    let project = project(&[(2.0, 0.25, 0.5)]);
+    export(&project).unwrap();
+    let beside = project.folder.parent().unwrap();
+    let images = project.folder.join(STEP_IMAGES_FOLDER);
+    let mine = [
+        beside.join("step-08.png"),
+        project.folder.join("step-07.png"),
+        images.join("diagram.png"),
+        images.join("raw").join("step-02.png"),
+    ];
+    std::fs::create_dir(images.join("raw")).unwrap();
+    for file in &mine {
+        std::fs::write(file, "mine").unwrap();
+    }
+    let mut data = guide_data(&project);
+    data["steps"] = json!([
+        { "image": "../step-08.png" },
+        { "image": "steps/../../step-08.png" },
+        { "image": mine[0].to_string_lossy() },
+        { "image": "step-07.png" },
+        { "image": "steps/../step-07.png" },
+        { "image": "steps/diagram.png" },
+        { "image": "steps/raw/step-02.png" },
+    ]);
+    std::fs::write(
+        project.folder.join(GUIDE_DATA_FILE),
+        serde_json::to_vec(&data).unwrap(),
+    )
+    .unwrap();
+
+    export(&project).unwrap();
+
+    for file in &mine {
+        assert_eq!(
+            std::fs::read_to_string(file).unwrap(),
+            "mine",
+            "{}",
+            file.display()
+        );
+    }
+    assert_eq!(guide_data(&project)["steps"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn a_folder_where_a_guide_file_would_go_is_not_replaced() {
+    let project = project(&[(2.0, 0.25, 0.5)]);
+    let taken = project.folder.join(GUIDE_FILE);
+    std::fs::create_dir_all(&taken).unwrap();
+    std::fs::write(taken.join("notes.txt"), "mine").unwrap();
+
+    assert!(matches!(export(&project), Err(StepsError::Failed(_))));
+
+    assert_eq!(listing(&project.folder), [GUIDE_FILE]);
+    assert_eq!(
+        std::fs::read_to_string(taken.join("notes.txt")).unwrap(),
+        "mine"
+    );
+    assert_eq!(
+        listing(project.folder.parent().unwrap()),
+        ["guide", "steps.cap"]
+    );
+}
+
+#[test]
+fn a_failed_first_export_into_a_folder_leaves_it_as_it_was() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("guide");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("notes.txt"), "mine").unwrap();
+
+    let staging = root.path().join(".guide.staging");
+    let written = format!("{STEP_IMAGES_FOLDER}/step-01.png");
+    std::fs::create_dir_all(staging.join(STEP_IMAGES_FOLDER)).unwrap();
+    for name in [GUIDE_FILE, GUIDE_DATA_FILE, written.as_str()] {
+        std::fs::write(staging.join(name), "new").unwrap();
+    }
+    let names = [
+        GUIDE_FILE.to_string(),
+        GUIDE_DATA_FILE.to_string(),
+        written,
+        format!("{STEP_IMAGES_FOLDER}/step-02.png"),
+    ];
+    assert!(publish(&staging, &folder, &names).is_err());
+
+    assert_eq!(listing(&folder), ["notes.txt"]);
+    assert_eq!(listing(root.path()), [".guide.staging", "guide"]);
+}
+
+#[test]
 fn a_replacement_that_fails_part_way_puts_the_earlier_guide_back() {
     let project = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25)]);
     let files = export(&project).unwrap();
@@ -641,6 +770,8 @@ fn a_replacement_that_fails_part_way_puts_the_earlier_guide_back() {
         .iter()
         .map(|file| std::fs::read(file).unwrap())
         .collect();
+    let mine = project.folder.join(STEP_IMAGES_FOLDER).join("diagram.png");
+    std::fs::write(&mine, "mine").unwrap();
 
     let staging = project.folder.with_file_name(".guide.staging");
     std::fs::create_dir(&staging).unwrap();
@@ -656,9 +787,14 @@ fn a_replacement_that_fails_part_way_puts_the_earlier_guide_back() {
     for (file, bytes) in files.iter().zip(&before) {
         assert_eq!(&std::fs::read(file).unwrap(), bytes, "{}", file.display());
     }
+    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "mine");
     assert_eq!(
         listing(&project.folder),
         [GUIDE_DATA_FILE, GUIDE_FILE, STEP_IMAGES_FOLDER]
+    );
+    assert_eq!(
+        listing(&project.folder.join(STEP_IMAGES_FOLDER)),
+        ["diagram.png", "step-01.png", "step-02.png"]
     );
     assert_eq!(
         listing(project.folder.parent().unwrap()),
