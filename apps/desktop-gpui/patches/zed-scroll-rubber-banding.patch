@@ -24,7 +24,7 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..c292525 100644
+index c02bd16..d0cb5df 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -43,6 +43,33 @@ use std::{
@@ -284,7 +284,7 @@ index c02bd16..c292525 100644
                              delta_x = delta.y;
                          }
                      }
-@@ -3109,19 +3287,242 @@ impl Interactivity {
+@@ -3109,19 +3287,250 @@ impl Interactivity {
                      if overflow.y == Overflow::Scroll {
                          if !delta.y.is_zero() {
                              delta_y = delta.y;
@@ -298,8 +298,6 @@ index c02bd16..c292525 100644
                      }
 -                    if !allow_concurrent_scroll && !delta_x.is_zero() && !delta_y.is_zero() {
 -                        if delta_x.abs() > delta_y.abs() {
--                            delta_y = Pixels::ZERO;
--                        } else {
 +                    if !allow_concurrent_scroll {
 +                        if is_precise && !delta.x.is_zero() && !delta.y.is_zero() {
 +                            if delta.x.abs() > delta.y.abs() {
@@ -320,10 +318,10 @@ index c02bd16..c292525 100644
 +                    #[cfg(feature = "scroll-rubber-banding")]
 +                    {
 +                        if consumed_x {
-                             delta_x = Pixels::ZERO;
-                         }
++                            delta_x = Pixels::ZERO;
++                        }
 +                        if consumed_y {
-+                            delta_y = Pixels::ZERO;
+                             delta_y = Pixels::ZERO;
 +                        }
 +                    }
 +                    #[cfg(feature = "scroll-rubber-banding")]
@@ -491,13 +489,22 @@ index c02bd16..c292525 100644
 +                            cx.stop_propagation();
 +                        }
 +                    } else {
-+                        scroll_offset.y += delta_y;
-+                        scroll_offset.x += delta_x;
 +                        if let Some(rb_state) = rubber_band_state.as_ref() {
 +                            let mut rb = rb_state.borrow_mut();
-+                            scroll_offset.x = scroll_offset.x.clamp(-rb.scroll_max.x, px(0.));
-+                            scroll_offset.y = scroll_offset.y.clamp(-rb.scroll_max.y, px(0.));
-+                            rb.last_applied_offset = Some(*scroll_offset);
++                            if !delta_x.is_zero() || !delta_y.is_zero() {
++                                rb.reset_motion();
++                                scroll_offset.x = (scroll_offset.x.clamp(-rb.scroll_max.x, px(0.))
++                                    + delta_x)
++                                    .clamp(-rb.scroll_max.x, px(0.));
++                                scroll_offset.y = (scroll_offset.y.clamp(-rb.scroll_max.y, px(0.))
++                                    + delta_y)
++                                    .clamp(-rb.scroll_max.y, px(0.));
++                                rb.last_applied_offset = Some(*scroll_offset);
++                            }
+                         } else {
+-                            delta_x = Pixels::ZERO;
++                            scroll_offset.y += delta_y;
++                            scroll_offset.x += delta_x;
 +                        }
 +                        let contain_x = !delta_x.is_zero()
 +                            && matches!(
@@ -522,19 +529,19 @@ index c02bd16..c292525 100644
 +                        let remaining_y = !delta_y.is_zero() && !consumed_y;
 +                        if (consumed_x || consumed_y) && !remaining_x && !remaining_y {
 +                            cx.stop_propagation();
-+                        }
-+                    }
+                         }
+                     }
+-                    scroll_offset.y += delta_y;
+-                    scroll_offset.x += delta_x;
 +                    #[cfg(not(feature = "scroll-rubber-banding"))]
 +                    {
 +                        scroll_offset.y += delta_y;
 +                        scroll_offset.x += delta_x;
-                     }
--                    scroll_offset.y += delta_y;
--                    scroll_offset.x += delta_x;
++                    }
                      if *scroll_offset != old_scroll_offset {
                          cx.notify(current_view);
                      }
-@@ -3360,6 +3761,8 @@ pub struct InteractiveElementState {
+@@ -3360,6 +3769,8 @@ pub struct InteractiveElementState {
      /// blur). `None` means no activation key is pending.
      pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
@@ -618,10 +625,10 @@ index 1feee49..1c95a05 100644
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..6af1108
+index 0000000..fcbbcee
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,1277 @@
+@@ -0,0 +1,1356 @@
 +use std::f32::consts::PI;
 +#[cfg(feature = "scroll-rubber-banding-tuning")]
 +use std::sync::RwLock;
@@ -1896,6 +1903,85 @@ index 0000000..6af1108
 +        assert!(
 +            (oy2 - -100.0).abs() < 0.01,
 +            "outer Y must not double-scroll when inner consumed Y, got {oy2}"
++        );
++    }
++
++    #[crate::test]
++    fn discrete_wheel_cancels_active_spring_and_keeps_offset(cx: &mut crate::TestAppContext) {
++        use crate::{
++            Context, InteractiveElement, IntoElement, Modifiers, ParentElement, Render,
++            ScrollDelta, ScrollHandle, ScrollPhase, ScrollWheelEvent, StatefulInteractiveElement,
++            Styled, TouchPhase, Window, div, point, px,
++        };
++
++        struct SingleVertical {
++            scroll: ScrollHandle,
++        }
++
++        impl Render for SingleVertical {
++            fn render(
++                &mut self,
++                _window: &mut Window,
++                _cx: &mut Context<Self>,
++            ) -> impl IntoElement {
++                div()
++                    .id("single-v")
++                    .w(px(300.))
++                    .h(px(200.))
++                    .overflow_y_scroll()
++                    .overscroll_behavior(OverscrollBehavior::Auto)
++                    .track_scroll(&self.scroll)
++                    .child(div().w_full().h(px(800.)).flex_shrink_0())
++            }
++        }
++
++        let (view, cx) = cx.add_window_view(|_, _| SingleVertical {
++            scroll: ScrollHandle::new(),
++        });
++        cx.run_until_parked();
++
++        let pt = view.read_with(cx, |v, _| v.scroll.bounds().center());
++
++        cx.simulate_event(ScrollWheelEvent {
++            position: pt,
++            delta: ScrollDelta::Pixels(point(px(0.), px(60.))),
++            modifiers: Modifiers::none(),
++            touch_phase: TouchPhase::Started,
++            scroll_phase: ScrollPhase::Began,
++            momentum_phase: ScrollPhase::None,
++        });
++        cx.simulate_event(ScrollWheelEvent {
++            position: pt,
++            delta: ScrollDelta::Pixels(point(px(0.), px(0.))),
++            modifiers: Modifiers::none(),
++            touch_phase: TouchPhase::Ended,
++            scroll_phase: ScrollPhase::Ended,
++            momentum_phase: ScrollPhase::None,
++        });
++
++        let overscrolled_y = view.read_with(cx, |v, _| f32::from(v.scroll.offset().y));
++        assert!(
++            overscrolled_y > 1.0,
++            "expected active overscroll bounce, got {overscrolled_y}"
++        );
++
++        cx.simulate_event(ScrollWheelEvent {
++            position: pt,
++            delta: ScrollDelta::Lines(point(0.0, -3.0)),
++            modifiers: Modifiers::none(),
++            touch_phase: TouchPhase::Moved,
++            scroll_phase: ScrollPhase::None,
++            momentum_phase: ScrollPhase::None,
++        });
++        cx.run_until_parked();
++
++        view.update(cx, |_, cx| cx.notify());
++        cx.run_until_parked();
++
++        let final_y = view.read_with(cx, |v, _| f32::from(v.scroll.offset().y));
++        assert!(
++            final_y < -20.0,
++            "discrete wheel scroll during bounce must cancel spring and persist, got {final_y}"
 +        );
 +    }
 +}
