@@ -178,16 +178,21 @@ impl SegmentBounds {
             (None, Some(trailing), _) => Some((false, trailing)),
             (None, None, _) => None,
         };
+        let horizontal_exits = (exit(true, zone.top_left.x), exit(true, zone.bottom_right.x));
+        let vertical_exits = (
+            exit(false, zone.top_left.y),
+            exit(false, zone.bottom_right.y),
+        );
         let choose = |sides: Option<ZoneExitSides>| {
             (
                 pick(
-                    exit(true, zone.top_left.x),
-                    exit(true, zone.bottom_right.x),
+                    horizontal_exits.0,
+                    horizontal_exits.1,
                     sides.map(|sides| sides.leading_x),
                 ),
                 pick(
-                    exit(false, zone.top_left.y),
-                    exit(false, zone.bottom_right.y),
+                    vertical_exits.0,
+                    vertical_exits.1,
                     sides.map(|sides| sides.leading_y),
                 ),
             )
@@ -222,7 +227,7 @@ impl SegmentBounds {
                 weight * shift
             })
         };
-        let chosen = ZoneExitSides {
+        let mut chosen = ZoneExitSides {
             leading_x: horizontal.is_none_or(|(leading, _)| leading),
             leading_y: vertical.is_none_or(|(leading, _)| leading),
         };
@@ -234,17 +239,42 @@ impl SegmentBounds {
             return (blended, Some(chosen));
         }
         // The cheapest exit can be one that cannot reach, which leaves the
-        // exit that can with too little weight to clear the zone.
-        let clearing = |choice: Option<(bool, (f64, f64, bool))>| {
-            choice
-                .filter(|(_, (_, _, clears))| *clears)
-                .map(|(_, (cost, shift, _))| (cost, shift))
+        // exit that can with too little weight to clear the zone. The side
+        // across the zone is only tried once neither chosen side reaches:
+        // its shortfall penalty can still price it above a side that falls
+        // just short, and that side would keep the focus covered.
+        let reaching = |on_x: bool, leading: bool, exit: Option<(f64, f64, bool)>| {
+            exit.filter(|(_, _, clears)| *clears)
+                .map(|(cost, shift, _)| (cost, on_x, leading, shift))
         };
-        let moved = match (clearing(horizontal), clearing(vertical)) {
-            (Some(x), Some(y)) if x.0 <= y.0 => XY::new(center.x + x.1, center.y),
-            (_, Some(y)) => XY::new(center.x, center.y + y.1),
-            (Some(x), None) => XY::new(center.x + x.1, center.y),
-            (None, None) => blended,
+        let cheapest = |exits: &[Option<(f64, bool, bool, f64)>]| {
+            exits
+                .iter()
+                .flatten()
+                .copied()
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+        };
+        let taken = cheapest(&[
+            horizontal.and_then(|(leading, exit)| reaching(true, leading, Some(exit))),
+            vertical.and_then(|(leading, exit)| reaching(false, leading, Some(exit))),
+        ])
+        .or_else(|| {
+            cheapest(&[
+                reaching(true, true, horizontal_exits.0),
+                reaching(true, false, horizontal_exits.1),
+                reaching(false, true, vertical_exits.0),
+                reaching(false, false, vertical_exits.1),
+            ])
+        });
+        let Some((_, on_x, leading, shift)) = taken else {
+            return (blended, Some(chosen));
+        };
+        let moved = if on_x {
+            chosen.leading_x = leading;
+            XY::new(center.x + shift, center.y)
+        } else {
+            chosen.leading_y = leading;
+            XY::new(center.x, center.y + shift)
         };
         (moved, Some(chosen))
     }
@@ -489,6 +519,83 @@ mod test {
             center = moved;
         }
         assert_clear(amount, focus, center, &camera);
+    }
+
+    fn some_exit_can_clear(amount: f64, focus: XY<f64>, zone: &CameraZone) -> bool {
+        let travel = amount - 1.0;
+        let reaches = |axis_focus: f64, target: f64| {
+            (MIN_EXIT_EDGE_INSET..=1.0 - MIN_EXIT_EDGE_INSET).contains(&target)
+                && (-1e-9..=1.0 + 1e-9).contains(&((axis_focus * amount - target) / travel))
+        };
+        reaches(focus.x, zone.top_left.x)
+            || reaches(focus.x, zone.bottom_right.x)
+            || reaches(focus.y, zone.top_left.y)
+            || reaches(focus.y, zone.bottom_right.y)
+    }
+
+    #[test]
+    fn camera_avoidance_clears_whenever_any_exit_can_reach() {
+        let steps = |from: f64, to: f64, count: u32| {
+            (0..=count).map(move |step| from + (to - from) * f64::from(step) / f64::from(count))
+        };
+        let grid = |from: f64, to: f64, count: u32| -> Vec<XY<f64>> {
+            steps(from, to, count)
+                .flat_map(|x| steps(from, to, count).map(move |y| XY::new(x, y)))
+                .collect()
+        };
+        let cameras: Vec<CameraZone> = grid(-0.05, 0.7, 5)
+            .into_iter()
+            .flat_map(|top_left| {
+                [(0.24, 0.34), (0.35, 0.45), (0.69, 0.645)]
+                    .into_iter()
+                    .flat_map(move |(width, height)| {
+                        [0.25, 1.0, 16.0 / 9.0].map(|content_aspect| CameraZone {
+                            top_left,
+                            bottom_right: XY::new(top_left.x + width, top_left.y + height),
+                            content_aspect,
+                        })
+                    })
+            })
+            .collect();
+        let held = [None, Some((true, true)), Some((true, false))]
+            .into_iter()
+            .chain([Some((false, true)), Some((false, false))])
+            .map(|sides| {
+                sides.map(|(leading_x, leading_y)| ZoneExitSides {
+                    leading_x,
+                    leading_y,
+                })
+            });
+
+        let mut covered = Vec::new();
+        for amount in [1.1, 1.25, 1.5, 2.0, 3.0] {
+            for camera in &cameras {
+                for focus in grid(0.0, 1.0, 20) {
+                    if !some_exit_can_clear(amount, focus, camera) {
+                        continue;
+                    }
+                    for center in [manual_center(focus), follow_center(focus)] {
+                        for sides in held.clone() {
+                            let moved = SegmentBounds::center_avoiding_zone(
+                                amount, focus, center, camera, sides,
+                            )
+                            .0;
+                            assert_in_frame(amount, focus, moved);
+                            if camera.contains(SegmentBounds::focus_on_screen(amount, focus, moved))
+                            {
+                                covered.push((amount, focus, center, *camera, sides));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            covered.is_empty(),
+            "{} layouts leave the focus covered, first: {:?}",
+            covered.len(),
+            covered.first()
+        );
     }
 
     #[test]
