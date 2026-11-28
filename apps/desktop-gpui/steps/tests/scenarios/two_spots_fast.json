@@ -1,0 +1,25 @@
+{
+	"about": "Quick clicks in different places are separate steps.",
+	"duration": 10,
+	"moves": [[2.8, 0.2, 0.2], [3.4, 0.7, 0.7]],
+	"buttons": [
+		[3.0, 1, true],
+		[3.08, 1, false],
+		[3.6, 1, true],
+		[3.68, 1, false]
+	],
+	"expect": {
+		"steps": [
+			{
+				"action": "click",
+				"time": 3.0,
+				"at": [0.2, 0.2]
+			},
+			{
+				"action": "click",
+				"time": 3.6,
+				"at": [0.7, 0.7]
+			}
+		]
+	}
+}

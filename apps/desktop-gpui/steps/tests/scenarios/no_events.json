@@ -1,0 +1,9 @@
+{
+	"about": "With nothing clicked or marked there are no steps, and the narration is the intro.",
+	"duration": 8,
+	"words": [[1.0, 1.5, "Just"], [1.5, 2.0, "talking."]],
+	"expect": {
+		"intro": ["Just talking."],
+		"steps": []
+	}
+}

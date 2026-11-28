@@ -6376,7 +6376,11 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
                 if flags.contains(&"tracks") {
                     export.use_tracks(None);
                 }
+                if flags.contains(&"steps") {
+                    export.use_steps();
+                }
             }
+            view.refresh_steps(window, cx);
             cx.notify();
         });
         return;
@@ -6400,6 +6404,10 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
         view.open_export(window, cx);
         let tracks = std::env::var("CAP_GPUI_AUTO_EXPORT_TRACKS").ok();
         if let Some(export) = view.export.as_mut()
+            && std::env::var_os("CAP_GPUI_AUTO_EXPORT_STEPS").is_some()
+        {
+            export.use_steps();
+        } else if let Some(export) = view.export.as_mut()
             && let Some(tracks) = tracks.as_deref()
         {
             export.use_tracks(Some(tracks));

@@ -64,6 +64,11 @@ const FORMATTED: &[&str] = &[
     "editor.export.stats.output_value",
     "editor.export.tracks.file_count",
     "editor.export.tracks.video_detail",
+    "editor.export.steps.caption_repeat",
+    "editor.export.steps.caption_step",
+    "editor.export.steps.count",
+    "editor.export.steps.folder",
+    "editor.export.steps.more",
     "editor.tabs.captions.download",
     "editor.tabs.captions.downloading",
     "editor.tabs.captions.generate_failed",
@@ -1546,6 +1551,39 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Separate tracks are only recorded in Studio Mode.",
         ),
         (tr::editor::export::tracks::system_audio(), "System audio"),
+        (
+            tr::editor::export::steps::caption_click(),
+            "Click the highlighted spot.",
+        ),
+        (
+            tr::editor::export::steps::caption_double_click(),
+            "Double-click the highlighted spot.",
+        ),
+        (
+            tr::editor::export::steps::caption_drag(),
+            "Drag along the arrow.",
+        ),
+        (
+            tr::editor::export::steps::caption_right_click(),
+            "Right-click the highlighted spot.",
+        ),
+        (tr::editor::export::steps::cta(), "Export Steps"),
+        (tr::editor::export::steps::exported(), "Steps exported"),
+        (tr::editor::export::steps::exporting(), "Writing steps"),
+        (
+            tr::editor::export::steps::file_only(),
+            "Steps are saved as a guide in a folder.",
+        ),
+        (tr::editor::export::steps::finding(), "Finding steps…"),
+        (tr::editor::export::steps::format(), "Steps"),
+        (
+            tr::editor::export::steps::guide(),
+            "One screenshot for each click, drag and marker, with what you said around it. Saved as Markdown and images, with a JSON copy for tools and agents.",
+        ),
+        (
+            tr::editor::export::steps::none(),
+            "No clicks or markers in this recording. Click through what you are showing, or add markers, and each one becomes a step.",
+        ),
         (tr::editor::canvas::shape(), "Shape"),
         (tr::editor::timeline::track::shape(), "Shape"),
         (

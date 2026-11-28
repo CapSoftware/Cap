@@ -408,7 +408,7 @@ jobs:
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-gpui-kernels
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-glass
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-i18n-build
-          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-notes -p cap-calendar -p cap-meetings -p cap-meeting-platform -p cap-notes-ui -p cap-diarize
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-notes -p cap-calendar -p cap-meetings -p cap-meeting-platform -p cap-notes-ui -p cap-diarize -p cap-steps
 
   # Cap only builds gpui's crates as dependencies, so their own tests never run
   # in the app jobs above. Run the ones covering Cap's patches against real

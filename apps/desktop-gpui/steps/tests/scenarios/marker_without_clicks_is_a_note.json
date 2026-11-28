@@ -1,0 +1,30 @@
+{
+	"about": "A marker with nothing clicked after it is a step of its own: a screenshot of that moment.",
+	"duration": 20,
+	"markers": [[2.0, "Dashboard overview"], [8.0, "Open settings"]],
+	"moves": [[9.0, 0.9, 0.1]],
+	"buttons": [[9.5, 1, true], [9.58, 1, false]],
+	"words": [
+		[2.2, 2.525, "This"],
+		[2.525, 2.85, "is"],
+		[2.85, 3.175, "the"],
+		[3.175, 3.5, "dashboard."]
+	],
+	"expect": {
+		"steps": [
+			{
+				"action": "note",
+				"time": 2.0,
+				"heading": "Dashboard overview",
+				"says": ["This is the dashboard."]
+			},
+			{
+				"action": "click",
+				"time": 9.5,
+				"at": [0.9, 0.1],
+				"heading": "Open settings",
+				"silent": true
+			}
+		]
+	}
+}

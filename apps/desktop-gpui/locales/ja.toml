@@ -2728,6 +2728,25 @@ refining_size = "サイズを精査中…"
 refining_time = "時間を精査中…"
 unavailable = "利用不可"
 
+[editor.export.steps]
+caption_click = "ハイライトされた箇所をクリックします。"
+caption_double_click = "ハイライトされた箇所をダブルクリックします。"
+caption_drag = "矢印に沿ってドラッグします。"
+caption_repeat = "ハイライトされた箇所を{number}回クリックします。"
+caption_right_click = "ハイライトされた箇所を右クリックします。"
+caption_step = "ステップ{number}"
+count = { other = "{count}ステップ" }
+cta = "ステップを書き出す"
+exported = "ステップを書き出しました"
+exporting = "ステップを書き出し中"
+file_only = "ステップはガイドとしてフォルダに保存されます。"
+finding = "ステップを検出中…"
+folder = "{name} ステップ"
+format = "ステップ"
+guide = "クリック、ドラッグ、マーカーごとにスクリーンショットを1枚、その前後に話した内容と一緒に保存します。Markdownと画像で書き出し、ツールやエージェント向けのJSONも付きます。"
+more = { other = "ほか{count}ステップ" }
+none = "この録画にはクリックもマーカーもありません。見せたい操作をクリックするか、マーカーを追加すると、それぞれがステップになります。"
+
 [editor.export.tracks]
 aligned = "各トラックはカットや速度の変更に沿うため、どの動画編集ソフトでも揃います。映像は背景やエフェクトなしで書き出されます。"
 audio_detail = "WAV · 48 kHz"

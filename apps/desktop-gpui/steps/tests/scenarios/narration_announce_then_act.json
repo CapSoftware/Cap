@@ -1,0 +1,40 @@
+{
+	"about": "Each sentence goes with the step it was spoken around.",
+	"duration": 15,
+	"moves": [[3.5, 0.3, 0.3], [8.5, 0.6, 0.2]],
+	"buttons": [
+		[4.0, 1, true],
+		[4.08, 1, false],
+		[9.0, 1, true],
+		[9.08, 1, false]
+	],
+	"words": [
+		[2.0, 2.35, "First,"],
+		[2.35, 2.7, "open"],
+		[2.7, 3.05, "the"],
+		[3.05, 3.4, "settings."],
+		[6.2, 6.48, "Then"],
+		[6.48, 6.76, "pick"],
+		[6.76, 7.04, "the"],
+		[7.04, 7.32, "export"],
+		[7.32, 7.6, "tab."]
+	],
+	"expect": {
+		"steps": [
+			{
+				"action": "click",
+				"time": 4.0,
+				"at": [0.3, 0.3],
+				"says": ["First, open the settings."],
+				"not_says": ["export"]
+			},
+			{
+				"action": "click",
+				"time": 9.0,
+				"at": [0.6, 0.2],
+				"says": ["Then pick the export tab."],
+				"not_says": ["settings"]
+			}
+		]
+	}
+}

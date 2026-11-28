@@ -1,0 +1,13 @@
+{
+	"about": "A marker without a name still captures its moment.",
+	"duration": 12,
+	"markers": [[5.0, ""]],
+	"expect": {
+		"steps": [
+			{
+				"action": "note",
+				"time": 5.0
+			}
+		]
+	}
+}

@@ -1,0 +1,25 @@
+{
+	"about": "The secondary button is a right-click; choosing from its menu is a separate click.",
+	"duration": 10,
+	"moves": [[1.5, 0.7, 0.7], [3.2, 0.72, 0.78]],
+	"buttons": [
+		[2.0, 2, true],
+		[2.1, 2, false],
+		[3.5, 1, true],
+		[3.58, 1, false]
+	],
+	"expect": {
+		"steps": [
+			{
+				"action": "rightClick",
+				"time": 2.0,
+				"at": [0.7, 0.7]
+			},
+			{
+				"action": "click",
+				"time": 3.5,
+				"at": [0.72, 0.78]
+			}
+		]
+	}
+}

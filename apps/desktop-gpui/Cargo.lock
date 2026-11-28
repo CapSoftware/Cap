@@ -1595,6 +1595,7 @@ dependencies = [
  "cap-project",
  "cap-recording",
  "cap-rendering",
+ "cap-steps",
  "cap-timestamp",
  "cap-utils",
  "cap-verify",
@@ -2118,6 +2119,16 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "workspace-hack",
+]
+
+[[package]]
+name = "cap-steps"
+version = "0.1.0"
+dependencies = [
+ "image 0.25.10",
+ "serde",
+ "serde_json",
+ "tiny-skia",
 ]
 
 [[package]]

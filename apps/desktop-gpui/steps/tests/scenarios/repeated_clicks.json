@@ -1,0 +1,37 @@
+{
+	"about": "Clicking one control again and again is one step that says how many times; a later click there is its own step.",
+	"duration": 20,
+	"moves": [
+		[4.5, 0.8, 0.2],
+		[5.65, 0.801, 0.2],
+		[7.05, 0.8, 0.201],
+		[11.5, 0.8, 0.2]
+	],
+	"buttons": [
+		[5.0, 1, true],
+		[5.08, 1, false],
+		[5.7, 1, true],
+		[5.78, 1, false],
+		[6.4, 1, true],
+		[6.48, 1, false],
+		[7.1, 1, true],
+		[7.18, 1, false],
+		[12.0, 1, true],
+		[12.08, 1, false]
+	],
+	"expect": {
+		"steps": [
+			{
+				"action": "click",
+				"time": 5.0,
+				"at": [0.8, 0.2],
+				"repeat": 4
+			},
+			{
+				"action": "click",
+				"time": 12.0,
+				"at": [0.8, 0.2]
+			}
+		]
+	}
+}

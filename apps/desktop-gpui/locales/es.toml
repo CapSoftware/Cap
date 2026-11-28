@@ -2728,6 +2728,25 @@ refining_size = "Ajustando tamaño…"
 refining_time = "Ajustando tiempo…"
 unavailable = "No disponible"
 
+[editor.export.steps]
+caption_click = "Haz clic en el punto resaltado."
+caption_double_click = "Haz doble clic en el punto resaltado."
+caption_drag = "Arrastra siguiendo la flecha."
+caption_repeat = "Haz clic {number} veces en el punto resaltado."
+caption_right_click = "Haz clic derecho en el punto resaltado."
+caption_step = "Paso {number}"
+count = { one = "{count} paso", other = "{count} pasos" }
+cta = "Exportar pasos"
+exported = "Pasos exportados"
+exporting = "Escribiendo los pasos"
+file_only = "Los pasos se guardan como una guía en una carpeta."
+finding = "Buscando pasos…"
+folder = "{name} Pasos"
+format = "Pasos"
+guide = "Una captura por cada clic, arrastre y marcador, con lo que dijiste en ese momento. Se guarda como Markdown con imágenes, y con una copia en JSON para herramientas y agentes."
+more = { one = "y {count} paso más", other = "y {count} pasos más" }
+none = "No hay clics ni marcadores en esta grabación. Haz clic en lo que muestras, o añade marcadores, y cada uno se convertirá en un paso."
+
 [editor.export.tracks]
 aligned = "Las pistas siguen tus cortes y tu velocidad, así que encajan en cualquier editor de vídeo. El vídeo sale limpio, sin fondo ni efectos."
 audio_detail = "WAV · 48 kHz"

@@ -1,0 +1,21 @@
+{
+	"about": "Pressing, moving and releasing is a drag from where it started to where it ended.",
+	"duration": 15,
+	"moves": [
+		[5.0, 0.2, 0.3],
+		[6.1, 0.3, 0.35],
+		[6.4, 0.5, 0.5],
+		[6.8, 0.6, 0.6]
+	],
+	"buttons": [[6.0, 1, true], [6.9, 1, false]],
+	"expect": {
+		"steps": [
+			{
+				"action": "drag",
+				"time": 6.0,
+				"at": [0.2, 0.3],
+				"to": [0.6, 0.6]
+			}
+		]
+	}
+}

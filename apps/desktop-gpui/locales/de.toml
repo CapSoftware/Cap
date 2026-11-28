@@ -2728,6 +2728,25 @@ refining_size = "Größe wird präzisiert…"
 refining_time = "Dauer wird präzisiert…"
 unavailable = "Nicht verfügbar"
 
+[editor.export.steps]
+caption_click = "Klicken Sie auf die markierte Stelle."
+caption_double_click = "Doppelklicken Sie auf die markierte Stelle."
+caption_drag = "Ziehen Sie entlang des Pfeils."
+caption_repeat = "Klicken Sie {number}-mal auf die markierte Stelle."
+caption_right_click = "Klicken Sie mit der rechten Maustaste auf die markierte Stelle."
+caption_step = "Schritt {number}"
+count = { one = "{count} Schritt", other = "{count} Schritte" }
+cta = "Schritte exportieren"
+exported = "Schritte exportiert"
+exporting = "Schritte werden geschrieben"
+file_only = "Schritte werden als Anleitung in einem Ordner gespeichert."
+finding = "Schritte werden gesucht…"
+folder = "{name} Schritte"
+format = "Schritte"
+guide = "Ein Screenshot für jeden Klick, jedes Ziehen und jeden Marker, mit dem, was Sie dazu gesagt haben. Gespeichert als Markdown mit Bildern, dazu eine JSON-Kopie für Tools und Agenten."
+more = { one = "und {count} weiterer Schritt", other = "und {count} weitere Schritte" }
+none = "Diese Aufnahme enthält keine Klicks oder Marker. Klicken Sie sich durch das, was Sie zeigen, oder fügen Sie Marker hinzu: Jeder wird zu einem Schritt."
+
 [editor.export.tracks]
 aligned = "Spuren folgen Ihren Schnitten und Ihrer Geschwindigkeit und passen in jedem Videoeditor zusammen. Video wird ohne Hintergrund und Effekte exportiert."
 audio_detail = "WAV · 48 kHz"

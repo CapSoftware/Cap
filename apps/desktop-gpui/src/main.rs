@@ -117,6 +117,7 @@ mod single_instance;
 #[cfg(debug_assertions)]
 mod snapshot;
 mod startup;
+mod steps_export;
 mod store;
 mod style_presets;
 mod target_overlay;

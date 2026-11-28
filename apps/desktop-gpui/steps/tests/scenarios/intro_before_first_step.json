@@ -1,0 +1,32 @@
+{
+	"about": "What is said long before the first step introduces the guide.",
+	"duration": 20,
+	"moves": [[11.5, 0.5, 0.5]],
+	"buttons": [[12.0, 1, true], [12.08, 1, false]],
+	"words": [
+		[0.5, 0.8, "Hi,"],
+		[0.8, 1.1, "this"],
+		[1.1, 1.4, "is"],
+		[1.4, 1.7, "a"],
+		[1.7, 2.0, "quick"],
+		[2.0, 2.3, "tour"],
+		[2.3, 2.6, "of"],
+		[2.6, 2.9, "the"],
+		[2.9, 3.2, "billing"],
+		[3.2, 3.5, "page."],
+		[10.8, 11.2, "Click"],
+		[11.2, 11.6, "invoices."]
+	],
+	"expect": {
+		"intro": ["quick tour of the billing page."],
+		"steps": [
+			{
+				"action": "click",
+				"time": 12.0,
+				"at": [0.5, 0.5],
+				"says": ["Click invoices."],
+				"not_says": ["tour"]
+			}
+		]
+	}
+}

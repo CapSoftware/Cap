@@ -1,0 +1,542 @@
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+
+use cap_project::{
+    CaptionTrackSegment, CaptionWord, ProjectConfiguration, RecordingMeta, TimelineMarker,
+};
+use cap_steps::{Action, Captions, Point, Size, Step, crop_for};
+use cap_verify::fixture::{FixtureSpec, SegmentSpec, Timing, VideoTrackSpec, write_fixture};
+use serde_json::json;
+
+use super::{
+    GUIDE_DATA_FILE, GUIDE_FILE, STEP_IMAGES_FOLDER, StepsError, export_steps, recording_events,
+};
+
+const FRAME: Size = Size {
+    width: 1280,
+    height: 720,
+};
+const LENGTH: f64 = 8.0;
+const CAP_BLUE: [u8; 3] = [0x47, 0x85, 0xFF];
+
+struct Project {
+    _root: tempfile::TempDir,
+    folder: PathBuf,
+    meta: RecordingMeta,
+    config: ProjectConfiguration,
+}
+
+/// A real studio project: an 8 s 1280x720 screen track, and a cursor file
+/// with one left click per `(seconds, x, y)`, the pointer arriving 200 ms
+/// before each press.
+fn project(clicks: &[(f64, f64, f64)]) -> Project {
+    project_with(clicks, |_| {})
+}
+
+/// The same project, with `patch` applied to its `recording-meta.json`.
+fn project_with(clicks: &[(f64, f64, f64)], patch: impl FnOnce(&mut serde_json::Value)) -> Project {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("steps.cap");
+    let spec = FixtureSpec {
+        name: "Invite a teammate".into(),
+        segments: vec![SegmentSpec {
+            display: VideoTrackSpec::new(
+                FRAME.width,
+                FRAME.height,
+                30,
+                Timing::Constant { duration: LENGTH },
+            ),
+            camera: None,
+            mic: None,
+            system_audio: None,
+        }],
+    };
+    write_fixture(&spec, &bundle).unwrap();
+
+    let mut moves = Vec::new();
+    let mut presses = Vec::new();
+    for &(seconds, x, y) in clicks {
+        let at = seconds * 1000.0;
+        moves.push(json!({
+            "active_modifiers": [], "cursor_id": "0", "time_ms": at - 200.0, "x": x, "y": y
+        }));
+        for (offset, down) in [(0.0, true), (80.0, false)] {
+            presses.push(json!({
+                "active_modifiers": [], "cursor_num": 1, "cursor_id": "0",
+                "time_ms": at + offset, "down": down
+            }));
+        }
+    }
+    let cursor = "content/segments/segment-0/cursor.json";
+    std::fs::write(
+        bundle.join(cursor),
+        serde_json::to_vec(&json!({ "clicks": presses, "moves": moves })).unwrap(),
+    )
+    .unwrap();
+    let meta_path = bundle.join("recording-meta.json");
+    let mut meta: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
+    meta["segments"][0]["cursor"] = cursor.into();
+    patch(&mut meta);
+    std::fs::write(&meta_path, serde_json::to_vec_pretty(&meta).unwrap()).unwrap();
+
+    Project {
+        folder: root.path().join("guide"),
+        meta: RecordingMeta::load_for_project(&bundle).unwrap(),
+        config: ProjectConfiguration::load(&bundle).unwrap(),
+        _root: root,
+    }
+}
+
+fn export(project: &Project) -> Result<Vec<PathBuf>, StepsError> {
+    export_steps(
+        &project.meta,
+        &project.config,
+        "Invite a teammate",
+        &project.folder,
+        &Captions::default(),
+        &AtomicBool::new(false),
+        &|_, _| {},
+    )
+}
+
+fn read_png(path: &Path) -> image::RgbaImage {
+    image::load_from_memory_with_format(&std::fs::read(path).unwrap(), image::ImageFormat::Png)
+        .unwrap()
+        .to_rgba8()
+}
+
+fn click_step(x: f64, y: f64) -> Step {
+    Step {
+        time: 0.0,
+        frame_time: 0.0,
+        action: Action::Click,
+        position: Some(Point::new(x, y)),
+        drag_to: None,
+        repeat: 1,
+        heading: None,
+        narration: String::new(),
+    }
+}
+
+fn caption(start: f64, end: f64, text: &str, words: &[(f32, f32, &str)]) -> CaptionTrackSegment {
+    CaptionTrackSegment {
+        id: format!("caption-{start}"),
+        start,
+        end,
+        text: text.into(),
+        words: words
+            .iter()
+            .map(|&(start, end, text)| CaptionWord {
+                text: text.into(),
+                start,
+                end,
+            })
+            .collect(),
+        fade_duration_override: None,
+        linger_duration_override: None,
+        position_override: None,
+        color_override: None,
+        background_color_override: None,
+        font_size_override: None,
+    }
+}
+
+#[test]
+fn events_come_out_in_seconds_at_their_positions() {
+    let project = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25)]);
+    let recording = recording_events(&project.meta, &project.config).unwrap();
+
+    assert!((recording.duration - LENGTH).abs() < 0.2, "{recording:?}");
+    assert_eq!(recording.buttons.len(), 4);
+    assert!((recording.buttons[0].time - 2.0).abs() < 1e-6);
+    assert_eq!(recording.buttons[0].button, cap_steps::LEFT_BUTTON);
+    assert!(recording.buttons[0].down);
+    assert!((recording.buttons[1].time - 2.08).abs() < 1e-6);
+    assert!(!recording.buttons[1].down);
+    assert_eq!(recording.moves.len(), 2);
+    assert!((recording.moves[0].time - 1.8).abs() < 1e-6);
+    assert_eq!(recording.moves[0].position, Point::new(0.25, 0.5));
+}
+
+#[test]
+fn events_in_cut_footage_are_dropped_and_the_rest_shift() {
+    let mut project = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25)]);
+    let timeline = project.config.timeline.as_mut().unwrap();
+    timeline.segments[0].start = 3.0;
+    timeline.segments[0].end = 7.0;
+    let recording = recording_events(&project.meta, &project.config).unwrap();
+
+    assert!((recording.duration - 4.0).abs() < 1e-6, "{recording:?}");
+    assert_eq!(recording.buttons.len(), 2, "{recording:?}");
+    assert!((recording.buttons[0].time - 1.0).abs() < 1e-6);
+    assert_eq!(recording.moves.len(), 1);
+    assert!((recording.moves[0].time - 0.8).abs() < 1e-6);
+}
+
+#[test]
+fn a_faster_clip_brings_its_events_closer() {
+    let mut project = project(&[(4.0, 0.75, 0.25)]);
+    project.config.timeline.as_mut().unwrap().segments[0].timescale = 2.0;
+    let recording = recording_events(&project.meta, &project.config).unwrap();
+
+    assert!(
+        (recording.duration - LENGTH / 2.0).abs() < 0.2,
+        "{recording:?}"
+    );
+    assert!((recording.buttons[0].time - 2.0).abs() < 1e-6);
+}
+
+#[test]
+fn markers_and_captions_are_read_in_timeline_time() {
+    let mut project = project(&[(4.0, 0.5, 0.5)]);
+    let mut marker = TimelineMarker::new(0, 3.5);
+    marker.label = "Setup".into();
+    let mut cut = TimelineMarker::new(0, 1.0);
+    cut.label = "Cut away".into();
+    project.config.markers = vec![cut, marker];
+    let timeline = project.config.timeline.as_mut().unwrap();
+    timeline.segments[0].start = 3.0;
+    timeline.caption_segments = vec![
+        caption(
+            0.2,
+            0.9,
+            "Open the menu.",
+            &[(0.2, 0.4, "Open"), (0.4, 0.5, "the"), (0.5, 0.9, "menu.")],
+        ),
+        caption(2.0, 3.0, "Then save", &[]),
+    ];
+    let recording = recording_events(&project.meta, &project.config).unwrap();
+
+    assert_eq!(recording.markers.len(), 1, "{recording:?}");
+    assert_eq!(recording.markers[0].label, "Setup");
+    assert!((recording.markers[0].time - 0.5).abs() < 1e-6);
+    let words: Vec<&str> = recording
+        .words
+        .iter()
+        .map(|word| word.text.as_str())
+        .collect();
+    assert_eq!(words, ["Open", "the", "menu.", "Then", "save"]);
+    assert!((recording.words[0].start - 0.2).abs() < 1e-4);
+    assert!((recording.words[2].end - 0.9).abs() < 1e-4);
+    assert!((recording.words[3].start - 2.0).abs() < 1e-4);
+    assert!((recording.words[3].end - 2.5).abs() < 1e-4);
+    assert!((recording.words[4].end - 3.0).abs() < 1e-4);
+}
+
+#[test]
+fn export_writes_the_guide_its_data_and_one_image_per_step() {
+    let project = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25), (6.0, 0.5, 0.9)]);
+    let files = export(&project).unwrap();
+
+    let images = project.folder.join(STEP_IMAGES_FOLDER);
+    assert_eq!(
+        files,
+        vec![
+            project.folder.join(GUIDE_FILE),
+            project.folder.join(GUIDE_DATA_FILE),
+            images.join("step-01.png"),
+            images.join("step-02.png"),
+            images.join("step-03.png"),
+        ]
+    );
+    for file in &files {
+        assert!(file.is_file(), "{}", file.display());
+    }
+
+    let guide = std::fs::read_to_string(project.folder.join(GUIDE_FILE)).unwrap();
+    assert!(guide.starts_with("# Invite a teammate\n"), "{guide}");
+    for number in 1..=3 {
+        assert!(
+            guide.contains(&format!("![Step {number}](steps/step-0{number}.png)")),
+            "{guide}"
+        );
+    }
+    assert!(guide.contains("### Step 2 · 0:04"), "{guide}");
+
+    let data: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(project.folder.join(GUIDE_DATA_FILE)).unwrap())
+            .unwrap();
+    assert_eq!(data["title"], "Invite a teammate");
+    assert_eq!(data["steps"].as_array().unwrap().len(), 3);
+    assert_eq!(data["steps"][1]["action"], "click");
+    assert_eq!(data["steps"][1]["image"], "steps/step-02.png");
+
+    let crop = crop_for(&click_step(0.25, 0.5), FRAME);
+    let image = read_png(&images.join("step-01.png"));
+    assert_eq!((image.width(), image.height()), (crop.width, crop.height));
+}
+
+#[test]
+fn each_click_is_ringed_where_it_happened() {
+    let clicks = [(2.0, 0.25, 0.5), (4.0, 0.75, 0.25)];
+    let project = project(&clicks);
+    export(&project).unwrap();
+
+    for (index, &(_, x, y)) in clicks.iter().enumerate() {
+        let image = read_png(
+            &project
+                .folder
+                .join(STEP_IMAGES_FOLDER)
+                .join(format!("step-0{}.png", index + 1)),
+        );
+        let crop = crop_for(&click_step(x, y), FRAME);
+        let cx = x * f64::from(FRAME.width) - f64::from(crop.x);
+        let cy = y * f64::from(FRAME.height) - f64::from(crop.y);
+        let radius = (f64::from(crop.width) * 0.022).max(14.0);
+        for turn in 0..8 {
+            let angle = f64::from(turn) * std::f64::consts::FRAC_PI_4;
+            let pixel = image.get_pixel(
+                (cx + radius * angle.cos()).round() as u32,
+                (cy + radius * angle.sin()).round() as u32,
+            );
+            assert!(
+                pixel.0[..3]
+                    .iter()
+                    .zip(CAP_BLUE)
+                    .all(|(channel, blue)| (i32::from(*channel) - i32::from(blue)).abs() <= 24),
+                "step {} turn {turn}: {pixel:?}",
+                index + 1
+            );
+        }
+    }
+}
+
+#[test]
+fn screenshots_come_from_their_own_moments() {
+    let project = project(&[(2.0, 0.5, 0.5), (6.0, 0.5, 0.5)]);
+    export(&project).unwrap();
+    let images = project.folder.join(STEP_IMAGES_FOLDER);
+    assert_ne!(
+        read_png(&images.join("step-01.png")).into_raw(),
+        read_png(&images.join("step-02.png")).into_raw()
+    );
+}
+
+#[test]
+fn narration_and_headings_reach_the_guide() {
+    let mut project = project(&[(4.0, 0.5, 0.5)]);
+    let mut marker = TimelineMarker::new(0, 1.0);
+    marker.label = "Setup".into();
+    project.config.markers = vec![marker];
+    project.config.timeline.as_mut().unwrap().caption_segments = vec![caption(
+        2.5,
+        3.6,
+        "Open the team page.",
+        &[
+            (2.5, 2.8, "Open"),
+            (2.8, 2.9, "the"),
+            (2.9, 3.2, "team"),
+            (3.2, 3.6, "page."),
+        ],
+    )];
+    export(&project).unwrap();
+
+    let guide = std::fs::read_to_string(project.folder.join(GUIDE_FILE)).unwrap();
+    assert!(
+        guide.contains("## Setup\n\n### Step 1 · 0:04\n\nOpen the team page.\n\n![Step 1]"),
+        "{guide}"
+    );
+}
+
+#[test]
+fn a_recording_with_nothing_clicked_or_marked_has_no_steps() {
+    let project = project(&[]);
+    assert_eq!(export(&project), Err(StepsError::NoSteps));
+    assert!(!project.folder.join(GUIDE_FILE).exists());
+}
+
+#[test]
+fn a_cancelled_export_stops_without_a_guide() {
+    let project = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25)]);
+    let result = export_steps(
+        &project.meta,
+        &project.config,
+        "Invite a teammate",
+        &project.folder,
+        &Captions::default(),
+        &AtomicBool::new(true),
+        &|_, _| {},
+    );
+    assert_eq!(result, Err(StepsError::Cancelled));
+    assert!(!project.folder.join(GUIDE_FILE).exists());
+}
+
+#[test]
+fn progress_counts_every_screenshot() {
+    let project = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25), (6.0, 0.5, 0.9)]);
+    let seen = Mutex::new(Vec::new());
+    export_steps(
+        &project.meta,
+        &project.config,
+        "Invite a teammate",
+        &project.folder,
+        &Captions::default(),
+        &AtomicBool::new(false),
+        &|done, total| seen.lock().unwrap().push((done, total)),
+    )
+    .unwrap();
+
+    let seen = seen.into_inner().unwrap();
+    assert_eq!(seen.last(), Some(&(3, 3)), "{seen:?}");
+    assert!(seen.iter().all(|&(_, total)| total == 3), "{seen:?}");
+    assert!(
+        seen.windows(2).all(|pair| pair[0].0 <= pair[1].0),
+        "{seen:?}"
+    );
+}
+
+fn step_image(project: &Project, number: usize) -> Vec<u8> {
+    read_png(
+        &project
+            .folder
+            .join(STEP_IMAGES_FOLDER)
+            .join(format!("step-0{number}.png")),
+    )
+    .into_raw()
+}
+
+fn guide_data(project: &Project) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(project.folder.join(GUIDE_DATA_FILE)).unwrap()).unwrap()
+}
+
+/// Cursor events are on the recording's clock; the timeline starts at the
+/// latest track start, and the screen file at the screen's own start.
+#[test]
+fn track_start_offsets_place_clicks_and_their_screenshots() {
+    let offset = project_with(&[(3.0, 0.5, 0.5)], |meta| {
+        meta["segments"][0]["display"]["start_time"] = 0.2.into();
+        meta["segments"][0]["mic"] =
+            json!({ "path": "content/segments/segment-0/mic.ogg", "start_time": 0.5 });
+    });
+    let recording = recording_events(&offset.meta, &offset.config).unwrap();
+    assert!(
+        (recording.buttons[0].time - 2.5).abs() < 1e-6,
+        "{recording:?}"
+    );
+    assert!(
+        (recording.moves[0].time - 2.3).abs() < 1e-6,
+        "{recording:?}"
+    );
+    export(&offset).unwrap();
+
+    let plain = project(&[(2.8, 0.5, 0.5)]);
+    export(&plain).unwrap();
+    assert_eq!(step_image(&offset, 1), step_image(&plain, 1));
+}
+
+#[test]
+fn a_click_outside_the_recorded_area_is_not_a_step() {
+    let project = project(&[(2.0, 1.3, 0.5), (4.0, 0.5, 0.5), (5.5, 0.4, -0.2)]);
+    export(&project).unwrap();
+    let data = guide_data(&project);
+    let steps = data["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 1, "{data}");
+    assert!((steps[0]["time"].as_f64().unwrap() - 4.0).abs() < 1e-6);
+}
+
+#[test]
+fn a_click_after_a_cut_is_ringed_where_the_pointer_was() {
+    let mut project = project(&[(3.1, 0.75, 0.25)]);
+    project.config.timeline.as_mut().unwrap().segments[0].start = 3.0;
+    export(&project).unwrap();
+    let data = guide_data(&project);
+    let position = &data["steps"][0]["position"];
+    assert!(
+        (position["x"].as_f64().unwrap() - 0.75).abs() < 1e-6,
+        "{data}"
+    );
+    assert!(
+        (position["y"].as_f64().unwrap() - 0.25).abs() < 1e-6,
+        "{data}"
+    );
+}
+
+#[test]
+fn a_click_right_after_a_cut_shows_footage_from_after_the_cut() {
+    let mut cut = project(&[(5.02, 0.5, 0.5)]);
+    let timeline = cut.config.timeline.as_mut().unwrap();
+    let mut second = timeline.segments[0].clone();
+    timeline.segments[0].end = 2.0;
+    second.start = 5.0;
+    timeline.segments.push(second);
+    export(&cut).unwrap();
+
+    let whole = project(&[(5.06, 0.5, 0.5)]);
+    export(&whole).unwrap();
+    assert_eq!(step_image(&cut, 1), step_image(&whole, 1));
+}
+
+#[test]
+fn the_stop_click_is_judged_by_the_recording_not_the_trimmed_timeline() {
+    let mut trimmed = project(&[(4.5, 0.5, 0.5)]);
+    trimmed.config.timeline.as_mut().unwrap().segments[0].end = 5.0;
+    export(&trimmed).unwrap();
+    assert_eq!(guide_data(&trimmed)["steps"].as_array().unwrap().len(), 1);
+
+    let stopped = project(&[(7.5, 0.5, 0.5)]);
+    assert_eq!(export(&stopped), Err(StepsError::NoSteps));
+}
+
+#[test]
+fn a_cancelled_re_export_leaves_the_earlier_guide_as_it_was() {
+    let project = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25), (6.0, 0.5, 0.9)]);
+    let files = export(&project).unwrap();
+    let before: Vec<Vec<u8>> = files
+        .iter()
+        .map(|file| std::fs::read(file).unwrap())
+        .collect();
+    let listing = |folder: &Path| {
+        let mut names: Vec<_> = std::fs::read_dir(folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    };
+    let beside = listing(project.folder.parent().unwrap());
+    let inside = listing(&project.folder.join(STEP_IMAGES_FOLDER));
+
+    let cancel = AtomicBool::new(false);
+    let result = export_steps(
+        &project.meta,
+        &project.config,
+        "A different title",
+        &project.folder,
+        &Captions::default(),
+        &cancel,
+        &|done, _| {
+            if done == 1 {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        },
+    );
+    assert_eq!(result, Err(StepsError::Cancelled));
+    for (file, bytes) in files.iter().zip(&before) {
+        assert_eq!(&std::fs::read(file).unwrap(), bytes, "{}", file.display());
+    }
+    assert_eq!(listing(project.folder.parent().unwrap()), beside);
+    assert_eq!(listing(&project.folder.join(STEP_IMAGES_FOLDER)), inside);
+}
+
+#[test]
+fn cancelling_during_the_last_screenshot_still_cancels() {
+    let project = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25)]);
+    let cancel = AtomicBool::new(false);
+    let result = export_steps(
+        &project.meta,
+        &project.config,
+        "Invite a teammate",
+        &project.folder,
+        &Captions::default(),
+        &cancel,
+        &|done, total| {
+            if done == total {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        },
+    );
+    assert_eq!(result, Err(StepsError::Cancelled));
+    assert!(!project.folder.join(GUIDE_FILE).exists());
+}

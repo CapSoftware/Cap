@@ -2728,6 +2728,25 @@ refining_size = "Affinage de la taille…"
 refining_time = "Affinage de la durée…"
 unavailable = "Indisponible"
 
+[editor.export.steps]
+caption_click = "Cliquez sur le point en surbrillance."
+caption_double_click = "Double-cliquez sur le point en surbrillance."
+caption_drag = "Faites glisser le long de la flèche."
+caption_repeat = "Cliquez {number} fois sur le point en surbrillance."
+caption_right_click = "Faites un clic droit sur le point en surbrillance."
+caption_step = "Étape {number}"
+count = { one = "{count} étape", other = "{count} étapes" }
+cta = "Exporter les étapes"
+exported = "Étapes exportées"
+exporting = "Écriture des étapes"
+file_only = "Les étapes sont enregistrées sous forme de guide dans un dossier."
+finding = "Recherche des étapes…"
+folder = "{name} Étapes"
+format = "Étapes"
+guide = "Une capture pour chaque clic, glissement et repère, avec ce que vous avez dit à ce moment-là. Enregistré en Markdown avec des images, et avec une copie JSON pour les outils et les agents."
+more = { one = "et {count} autre étape", other = "et {count} autres étapes" }
+none = "Aucun clic ni repère dans cet enregistrement. Cliquez sur ce que vous montrez, ou ajoutez des repères : chacun devient une étape."
+
 [editor.export.tracks]
 aligned = "Les pistes suivent vos coupes et votre vitesse, et s'alignent dans n'importe quel logiciel de montage. La vidéo sort propre, sans arrière-plan ni effets."
 audio_detail = "WAV · 48 kHz"
