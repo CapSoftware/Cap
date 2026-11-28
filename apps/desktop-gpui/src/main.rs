@@ -111,7 +111,8 @@ mod screenshot_editor;
 mod screenshot_export;
 mod script_text;
 #[cfg(feature = "scroll-rubber-banding-test")]
-mod scroll_rubber_banding_test_window;
+#[path = "dev/scroll_rubber_banding.rs"]
+mod scroll_rubber_banding_test;
 mod session;
 mod settings_pages;
 mod settings_window;
@@ -606,7 +607,7 @@ fn main() {
             .detach();
         }
         #[cfg(feature = "scroll-rubber-banding-test")]
-        scroll_rubber_banding_test_window::open(cx);
+        scroll_rubber_banding_test::open(cx);
         // `CAP_GPUI_AUTO_TRAY` / `CAP_GPUI_TRAY_DUMP`: the tray's harness path.
         tray::drive_from_env(cx);
         // `CAP_GPUI_AUTO_CLOSE=settings|main:<secs>`: run the ⌘W body against
