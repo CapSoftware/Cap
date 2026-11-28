@@ -3,14 +3,16 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
 use cap_project::{
-    CaptionTrackSegment, CaptionWord, ProjectConfiguration, RecordingMeta, TimelineMarker,
+    CaptionTrackSegment, CaptionWord, ClipTransition, ClipTransitionType, MaskSegment,
+    ProjectConfiguration, RecordingMeta, TimelineMarker,
 };
-use cap_steps::{Action, Captions, Point, Size, Step, crop_for};
+use cap_steps::{Action, Captions, Point, Size, Source, Step, crop_for};
 use cap_verify::fixture::{FixtureSpec, SegmentSpec, Timing, VideoTrackSpec, write_fixture};
 use serde_json::json;
 
 use super::{
-    GUIDE_DATA_FILE, GUIDE_FILE, STEP_IMAGES_FOLDER, StepsError, export_steps, recording_events,
+    GUIDE_DATA_FILE, GUIDE_FILE, STEP_IMAGES_FOLDER, StepsError, caption_words, export_steps,
+    project_guide, publish,
 };
 
 const FRAME: Size = Size {
@@ -34,7 +36,6 @@ fn project(clicks: &[(f64, f64, f64)]) -> Project {
     project_with(clicks, |_| {})
 }
 
-/// The same project, with `patch` applied to its `recording-meta.json`.
 fn project_with(clicks: &[(f64, f64, f64)], patch: impl FnOnce(&mut serde_json::Value)) -> Project {
     let root = tempfile::tempdir().unwrap();
     let bundle = root.path().join("steps.cap");
@@ -110,6 +111,7 @@ fn read_png(path: &Path) -> image::RgbaImage {
 fn click_step(x: f64, y: f64) -> Step {
     Step {
         time: 0.0,
+        source: Source { clip: 0, time: 0.0 },
         frame_time: 0.0,
         action: Action::Click,
         position: Some(Point::new(x, y)),
@@ -144,48 +146,52 @@ fn caption(start: f64, end: f64, text: &str, words: &[(f32, f32, &str)]) -> Capt
 }
 
 #[test]
-fn events_come_out_in_seconds_at_their_positions() {
+fn clicks_come_out_in_seconds_at_their_positions() {
     let project = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25)]);
-    let recording = recording_events(&project.meta, &project.config).unwrap();
+    let guide = project_guide(&project.meta, &project.config);
 
-    assert!((recording.duration - LENGTH).abs() < 0.2, "{recording:?}");
-    assert_eq!(recording.buttons.len(), 4);
-    assert!((recording.buttons[0].time - 2.0).abs() < 1e-6);
-    assert_eq!(recording.buttons[0].button, cap_steps::LEFT_BUTTON);
-    assert!(recording.buttons[0].down);
-    assert!((recording.buttons[1].time - 2.08).abs() < 1e-6);
-    assert!(!recording.buttons[1].down);
-    assert_eq!(recording.moves.len(), 2);
-    assert!((recording.moves[0].time - 1.8).abs() < 1e-6);
-    assert_eq!(recording.moves[0].position, Point::new(0.25, 0.5));
+    assert_eq!(guide.steps.len(), 2, "{guide:?}");
+    for (step, (time, x, y)) in guide
+        .steps
+        .iter()
+        .zip([(2.0, 0.25, 0.5), (4.0, 0.75, 0.25)])
+    {
+        assert_eq!(step.action, Action::Click);
+        assert!((step.time - time).abs() < 1e-6, "{guide:?}");
+        assert_eq!(step.source.clip, 0);
+        assert!((step.source.time - time).abs() < 1e-6, "{guide:?}");
+        assert_eq!(step.position, Some(Point::new(x, y)));
+    }
 }
 
 #[test]
-fn events_in_cut_footage_are_dropped_and_the_rest_shift() {
+fn clicks_in_cut_footage_are_dropped_and_the_rest_shift() {
     let mut project = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25)]);
     let timeline = project.config.timeline.as_mut().unwrap();
     timeline.segments[0].start = 3.0;
     timeline.segments[0].end = 7.0;
-    let recording = recording_events(&project.meta, &project.config).unwrap();
+    let guide = project_guide(&project.meta, &project.config);
 
-    assert!((recording.duration - 4.0).abs() < 1e-6, "{recording:?}");
-    assert_eq!(recording.buttons.len(), 2, "{recording:?}");
-    assert!((recording.buttons[0].time - 1.0).abs() < 1e-6);
-    assert_eq!(recording.moves.len(), 1);
-    assert!((recording.moves[0].time - 0.8).abs() < 1e-6);
+    assert_eq!(guide.steps.len(), 1, "{guide:?}");
+    assert!((guide.steps[0].time - 1.0).abs() < 1e-6, "{guide:?}");
+    assert!((guide.steps[0].source.time - 4.0).abs() < 1e-6, "{guide:?}");
+    assert_eq!(guide.steps[0].position, Some(Point::new(0.75, 0.25)));
+
+    export(&project).unwrap();
+    let duration = guide_data(&project)["duration"].as_f64().unwrap();
+    assert!((duration - 4.0).abs() < 1e-6, "{duration}");
 }
 
 #[test]
-fn a_faster_clip_brings_its_events_closer() {
+fn a_faster_clip_brings_its_clicks_closer() {
     let mut project = project(&[(4.0, 0.75, 0.25)]);
     project.config.timeline.as_mut().unwrap().segments[0].timescale = 2.0;
-    let recording = recording_events(&project.meta, &project.config).unwrap();
+    let guide = project_guide(&project.meta, &project.config);
 
-    assert!(
-        (recording.duration - LENGTH / 2.0).abs() < 0.2,
-        "{recording:?}"
-    );
-    assert!((recording.buttons[0].time - 2.0).abs() < 1e-6);
+    assert_eq!(guide.steps.len(), 1, "{guide:?}");
+    assert!((guide.steps[0].time - 2.0).abs() < 1e-6, "{guide:?}");
+    assert!((guide.steps[0].source.time - 4.0).abs() < 1e-6, "{guide:?}");
+    assert!((guide.steps[0].frame_time - 3.95).abs() < 1e-6, "{guide:?}");
 }
 
 #[test]
@@ -207,22 +213,26 @@ fn markers_and_captions_are_read_in_timeline_time() {
         ),
         caption(2.0, 3.0, "Then save", &[]),
     ];
-    let recording = recording_events(&project.meta, &project.config).unwrap();
+    project.config.markers.push(TimelineMarker::new(0, 7.0));
 
-    assert_eq!(recording.markers.len(), 1, "{recording:?}");
-    assert_eq!(recording.markers[0].label, "Setup");
-    assert!((recording.markers[0].time - 0.5).abs() < 1e-6);
-    let words: Vec<&str> = recording
-        .words
-        .iter()
-        .map(|word| word.text.as_str())
-        .collect();
-    assert_eq!(words, ["Open", "the", "menu.", "Then", "save"]);
-    assert!((recording.words[0].start - 0.2).abs() < 1e-4);
-    assert!((recording.words[2].end - 0.9).abs() < 1e-4);
-    assert!((recording.words[3].start - 2.0).abs() < 1e-4);
-    assert!((recording.words[3].end - 2.5).abs() < 1e-4);
-    assert!((recording.words[4].end - 3.0).abs() < 1e-4);
+    let guide = project_guide(&project.meta, &project.config);
+    assert_eq!(guide.steps.len(), 2, "{guide:?}");
+    assert_eq!(guide.steps[0].action, Action::Click);
+    assert_eq!(guide.steps[0].heading.as_deref(), Some("Setup"));
+    assert_eq!(guide.steps[0].narration, "Open the menu.");
+    assert_eq!(guide.steps[1].action, Action::Note);
+    assert_eq!(guide.steps[1].narration, "Then save");
+    assert!((guide.steps[1].time - 4.0).abs() < 1e-6, "{guide:?}");
+    assert_eq!(guide.steps[1].source, Source { clip: 0, time: 7.0 });
+
+    let words = caption_words(project.config.timeline.as_ref().unwrap());
+    let spoken: Vec<&str> = words.iter().map(|word| word.text.as_str()).collect();
+    assert_eq!(spoken, ["Open", "the", "menu.", "Then", "save"]);
+    assert!((words[0].start - 0.2).abs() < 1e-4);
+    assert!((words[2].end - 0.9).abs() < 1e-4);
+    assert!((words[3].start - 2.0).abs() < 1e-4);
+    assert!((words[3].end - 2.5).abs() < 1e-4);
+    assert!((words[4].end - 3.0).abs() < 1e-4);
 }
 
 #[test]
@@ -401,6 +411,26 @@ fn guide_data(project: &Project) -> serde_json::Value {
     serde_json::from_slice(&std::fs::read(project.folder.join(GUIDE_DATA_FILE)).unwrap()).unwrap()
 }
 
+fn listing(folder: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+fn mask(kind: &str) -> MaskSegment {
+    serde_json::from_value(json!({
+        "start": 0.0,
+        "end": LENGTH,
+        "maskType": kind,
+        "center": { "x": 0.5, "y": 0.5 },
+        "size": { "x": 0.3, "y": 0.3 },
+    }))
+    .unwrap()
+}
+
 /// Cursor events are on the recording's clock; the timeline starts at the
 /// latest track start, and the screen file at the screen's own start.
 #[test]
@@ -410,15 +440,9 @@ fn track_start_offsets_place_clicks_and_their_screenshots() {
         meta["segments"][0]["mic"] =
             json!({ "path": "content/segments/segment-0/mic.ogg", "start_time": 0.5 });
     });
-    let recording = recording_events(&offset.meta, &offset.config).unwrap();
-    assert!(
-        (recording.buttons[0].time - 2.5).abs() < 1e-6,
-        "{recording:?}"
-    );
-    assert!(
-        (recording.moves[0].time - 2.3).abs() < 1e-6,
-        "{recording:?}"
-    );
+    let guide = project_guide(&offset.meta, &offset.config);
+    assert!((guide.steps[0].time - 2.5).abs() < 1e-6, "{guide:?}");
+    assert!((guide.steps[0].frame_time - 2.45).abs() < 1e-6, "{guide:?}");
     export(&offset).unwrap();
 
     let plain = project(&[(2.8, 0.5, 0.5)]);
@@ -487,14 +511,6 @@ fn a_cancelled_re_export_leaves_the_earlier_guide_as_it_was() {
         .iter()
         .map(|file| std::fs::read(file).unwrap())
         .collect();
-    let listing = |folder: &Path| {
-        let mut names: Vec<_> = std::fs::read_dir(folder)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect();
-        names.sort();
-        names
-    };
     let beside = listing(project.folder.parent().unwrap());
     let inside = listing(&project.folder.join(STEP_IMAGES_FOLDER));
 
@@ -539,4 +555,130 @@ fn cancelling_during_the_last_screenshot_still_cancels() {
     );
     assert_eq!(result, Err(StepsError::Cancelled));
     assert!(!project.folder.join(GUIDE_FILE).exists());
+}
+
+#[test]
+fn a_click_under_a_crossfade_shows_the_clip_it_was_made_in() {
+    let mut faded = project(&[(3.5, 0.5, 0.5)]);
+    let timeline = faded.config.timeline.as_mut().unwrap();
+    let mut second = timeline.segments[0].clone();
+    timeline.segments[0].end = 4.0;
+    second.start = 4.0;
+    timeline.segments.push(second);
+    timeline.transitions = vec![ClipTransition {
+        segment_index: 1,
+        kind: ClipTransitionType::CrossFade,
+        duration: 1.0,
+    }];
+    export(&faded).unwrap();
+    assert!((guide_data(&faded)["steps"][0]["time"].as_f64().unwrap() - 3.5).abs() < 1e-6);
+
+    let plain = project(&[(3.5, 0.5, 0.5)]);
+    export(&plain).unwrap();
+    assert_eq!(step_image(&faded, 1), step_image(&plain, 1));
+}
+
+#[test]
+fn a_slowed_clip_keeps_its_double_click() {
+    let mut slowed = project(&[(2.0, 0.5, 0.5), (2.3, 0.5, 0.5)]);
+    slowed.config.timeline.as_mut().unwrap().segments[0].timescale = 0.5;
+    export(&slowed).unwrap();
+    let data = guide_data(&slowed);
+    let steps = data["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 1, "{data}");
+    assert_eq!(steps[0]["action"], "doubleClick", "{data}");
+    assert!(
+        (steps[0]["time"].as_f64().unwrap() - 4.0).abs() < 1e-6,
+        "{data}"
+    );
+}
+
+#[test]
+fn a_sped_up_clip_keeps_its_clicks_apart() {
+    let mut fast = project(&[(2.0, 0.5, 0.5), (2.8, 0.5, 0.5)]);
+    fast.config.timeline.as_mut().unwrap().segments[0].timescale = 2.0;
+    export(&fast).unwrap();
+    let data = guide_data(&fast);
+    let steps = data["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 1, "{data}");
+    assert_eq!(steps[0]["action"], "click", "{data}");
+    assert_eq!(steps[0]["repeat"], 2, "{data}");
+    assert!(
+        (steps[0]["time"].as_f64().unwrap() - 1.0).abs() < 1e-6,
+        "{data}"
+    );
+}
+
+#[test]
+fn a_shorter_re_export_leaves_no_screenshots_from_the_longer_one() {
+    let longer = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25), (6.0, 0.5, 0.9)]);
+    export(&longer).unwrap();
+    let kept = longer.folder.join("notes.txt");
+    std::fs::write(&kept, "mine").unwrap();
+
+    let mut shorter = project(&[(2.0, 0.25, 0.5)]);
+    shorter.folder = longer.folder.clone();
+    export(&shorter).unwrap();
+
+    assert_eq!(
+        listing(&longer.folder.join(STEP_IMAGES_FOLDER)),
+        ["step-01.png"]
+    );
+    assert_eq!(guide_data(&shorter)["steps"].as_array().unwrap().len(), 1);
+    assert_eq!(std::fs::read_to_string(&kept).unwrap(), "mine");
+    assert_eq!(
+        listing(longer.folder.parent().unwrap()),
+        ["guide", "steps.cap"]
+    );
+}
+
+#[test]
+fn a_replacement_that_fails_part_way_puts_the_earlier_guide_back() {
+    let project = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25)]);
+    let files = export(&project).unwrap();
+    let before: Vec<Vec<u8>> = files
+        .iter()
+        .map(|file| std::fs::read(file).unwrap())
+        .collect();
+
+    let staging = project.folder.with_file_name(".guide.staging");
+    std::fs::create_dir(&staging).unwrap();
+    std::fs::write(staging.join(GUIDE_FILE), "new").unwrap();
+    std::fs::write(staging.join(GUIDE_DATA_FILE), "new").unwrap();
+    let names = [
+        GUIDE_FILE.to_string(),
+        GUIDE_DATA_FILE.to_string(),
+        format!("{STEP_IMAGES_FOLDER}/step-01.png"),
+    ];
+    assert!(publish(&staging, &project.folder, &names).is_err());
+
+    for (file, bytes) in files.iter().zip(&before) {
+        assert_eq!(&std::fs::read(file).unwrap(), bytes, "{}", file.display());
+    }
+    assert_eq!(
+        listing(&project.folder),
+        [GUIDE_DATA_FILE, GUIDE_FILE, STEP_IMAGES_FOLDER]
+    );
+    assert_eq!(
+        listing(project.folder.parent().unwrap()),
+        [".guide.staging", "guide", "steps.cap"]
+    );
+}
+
+#[test]
+fn a_recording_with_a_hidden_area_is_not_exported() {
+    let mut hidden = project(&[(2.0, 0.5, 0.5)]);
+    hidden.config.timeline.as_mut().unwrap().mask_segments = vec![mask("sensitive")];
+    assert_eq!(export(&hidden), Err(StepsError::HiddenAreas));
+    assert!(!hidden.folder.exists());
+    assert_eq!(listing(hidden.folder.parent().unwrap()), ["steps.cap"]);
+}
+
+#[test]
+fn masks_that_hide_nothing_do_not_stop_an_export() {
+    let mut shown = project(&[(2.0, 0.5, 0.5)]);
+    let mut switched_off = mask("sensitive");
+    switched_off.enabled = false;
+    shown.config.timeline.as_mut().unwrap().mask_segments = vec![switched_off, mask("highlight")];
+    export(&shown).unwrap();
 }

@@ -2744,6 +2744,7 @@ finding = "Recherche des étapes…"
 folder = "{name} Étapes"
 format = "Étapes"
 guide = "Une capture pour chaque clic, glissement et repère, avec ce que vous avez dit à ce moment-là. Enregistré en Markdown avec des images, et avec une copie JSON pour les outils et les agents."
+hidden_areas = "Cet enregistrement contient un masque de type Sensible. Les captures des étapes proviennent directement de l'enregistrement de l'écran et montreraient ce que le masque cache : les étapes ne peuvent donc pas être exportées tant qu'il est sur la timeline."
 more = { one = "et {count} autre étape", other = "et {count} autres étapes" }
 none = "Aucun clic ni repère dans cet enregistrement. Cliquez sur ce que vous montrez, ou ajoutez des repères : chacun devient une étape."
 

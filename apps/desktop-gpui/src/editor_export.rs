@@ -237,6 +237,7 @@ fn step_rows(guide: &cap_steps::Guide, captions: &cap_steps::Captions) -> Vec<St
 fn steps_failure(error: &StepsError) -> String {
     match error {
         StepsError::NoSteps => tr::editor::export::steps::none().into(),
+        StepsError::HiddenAreas => tr::editor::export::steps::hidden_areas().into(),
         StepsError::Cancelled => String::new(),
         StepsError::Failed(error) => error.clone(),
     }
@@ -492,8 +493,6 @@ pub struct ExportUi {
     /// exporting sound once does not change what the next video export
     /// opens with.
     saved_format: ExportFormatKind,
-    /// What the Steps format would write, for its stage. `None` until the
-    /// recording has been read.
     pub steps: Option<Vec<StepRow>>,
     steps_task: Option<gpui::Task<()>>,
 }
@@ -3173,6 +3172,7 @@ impl EditorWindow {
         );
         let found = ui.steps.as_deref();
         let count = found.map_or(0, <[StepRow]>::len);
+        let hidden_areas = crate::steps_export::hides_areas(&self.project);
 
         let row = |step: &StepRow| {
             let text = if step.text.is_empty() {
@@ -3312,6 +3312,9 @@ impl EditorWindow {
                                 card.child(note(tr::editor::export::steps::more(
                                     count - STEP_ROWS_SHOWN,
                                 )))
+                            })
+                            .when(count > 0 && hidden_areas, |card| {
+                                card.child(note(tr::editor::export::steps::hidden_areas().into()))
                             }),
                     )
                     .child(
@@ -3482,7 +3485,8 @@ impl EditorWindow {
         let busy = ui.phase.is_busy()
             || (ui.format == ExportFormatKind::Tracks && ui.tracks.is_empty())
             || (ui.format == ExportFormatKind::Steps
-                && ui.steps.as_ref().is_none_or(|steps| steps.is_empty()));
+                && (ui.steps.as_ref().is_none_or(|steps| steps.is_empty())
+                    || crate::steps_export::hides_areas(&self.project)));
         let (bg, hover_bg, text) = if primary {
             (
                 Hsla::from(editor.accent),

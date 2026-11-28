@@ -1581,6 +1581,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "One screenshot for each click, drag and marker, with what you said around it. Saved as Markdown and images, with a JSON copy for tools and agents.",
         ),
         (
+            tr::editor::export::steps::hidden_areas(),
+            "This recording has a Sensitive mask. Step screenshots come straight from the screen recording and would show what the mask hides, so steps cannot be exported while it is on the timeline.",
+        ),
+        (
             tr::editor::export::steps::none(),
             "No clicks or markers in this recording. Click through what you are showing, or add markers, and each one becomes a step.",
         ),

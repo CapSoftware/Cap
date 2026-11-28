@@ -1,0 +1,22 @@
+{
+	"about": "Two unhurried clicks on one spot stay two clicks when their clip is sped up to double speed.",
+	"duration": 10,
+	"speed": 2,
+	"moves": [[1.0, 0.3, 0.3], [2.9, 0.4, 0.55]],
+	"buttons": [
+		[3.0, 1, true],
+		[3.08, 1, false],
+		[3.8, 1, true],
+		[3.88, 1, false]
+	],
+	"expect": {
+		"steps": [
+			{
+				"action": "click",
+				"time": 1.5,
+				"at": [0.4, 0.55],
+				"repeat": 2
+			}
+		]
+	}
+}

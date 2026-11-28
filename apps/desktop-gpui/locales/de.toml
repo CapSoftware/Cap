@@ -2744,6 +2744,7 @@ finding = "Schritte werden gesucht…"
 folder = "{name} Schritte"
 format = "Schritte"
 guide = "Ein Screenshot für jeden Klick, jedes Ziehen und jeden Marker, mit dem, was Sie dazu gesagt haben. Gespeichert als Markdown mit Bildern, dazu eine JSON-Kopie für Tools und Agenten."
+hidden_areas = "Diese Aufnahme enthält eine Maske vom Typ „Vertraulich“. Die Screenshots der Schritte stammen direkt aus der Bildschirmaufnahme und würden zeigen, was die Maske verbirgt. Solange sie in der Zeitleiste liegt, lassen sich keine Schritte exportieren."
 more = { one = "und {count} weiterer Schritt", other = "und {count} weitere Schritte" }
 none = "Diese Aufnahme enthält keine Klicks oder Marker. Klicken Sie sich durch das, was Sie zeigen, oder fügen Sie Marker hinzu: Jeder wird zu einem Schritt."
 

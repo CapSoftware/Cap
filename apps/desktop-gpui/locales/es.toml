@@ -2744,6 +2744,7 @@ finding = "Buscando pasos…"
 folder = "{name} Pasos"
 format = "Pasos"
 guide = "Una captura por cada clic, arrastre y marcador, con lo que dijiste en ese momento. Se guarda como Markdown con imágenes, y con una copia en JSON para herramientas y agentes."
+hidden_areas = "Esta grabación tiene una máscara de tipo Sensible. Las capturas de los pasos salen directamente de la grabación de pantalla y mostrarían lo que la máscara oculta, así que no se pueden exportar pasos mientras esté en la línea de tiempo."
 more = { one = "y {count} paso más", other = "y {count} pasos más" }
 none = "No hay clics ni marcadores en esta grabación. Haz clic en lo que muestras, o añade marcadores, y cada uno se convertirá en un paso."
 

@@ -1,4 +1,4 @@
-use cap_steps::{Action, Captions, Guide, Point, Step};
+use cap_steps::{Action, Captions, Guide, Point, Source, Step};
 
 use super::{
     ExportDestination, ExportFormatKind, ExportUi, normalize_export_options, step_rows,
@@ -35,6 +35,7 @@ fn prefs(format: &str, export_to: &str) -> ExportPrefs {
 fn step(time: f64, action: Action, narration: &str, heading: Option<&str>, repeat: u32) -> Step {
     Step {
         time,
+        source: Source { clip: 0, time },
         frame_time: time,
         action,
         position: (action != Action::Note).then(|| Point::new(0.5, 0.5)),
@@ -128,4 +129,6 @@ fn a_recording_without_steps_says_how_to_get_some() {
         steps_failure(&StepsError::Failed("disk full".into())),
         "disk full"
     );
+    let hidden = steps_failure(&StepsError::HiddenAreas);
+    assert!(hidden.contains("Sensitive mask"), "{hidden}");
 }

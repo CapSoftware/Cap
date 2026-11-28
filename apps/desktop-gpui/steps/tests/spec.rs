@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use cap_steps::{
-    Action, ButtonEvent, Captions, Document, DocumentStep, Guide, LEFT_BUTTON, Marker, Point,
-    PointerMove, Recording, Rect, Size, Step, Word, build_guide, crop_for, encode_png, image_name,
-    json, markdown, render_step_image, timestamp,
+    Action, ButtonEvent, Captions, ClipEvents, Document, DocumentStep, Guide, LEFT_BUTTON, Marker,
+    Point, PointerMove, Rect, Size, Source, Step, Word, build_guide, clip_steps, crop_for,
+    encode_png, image_name, json, markdown, render_step_image, timestamp,
 };
 use serde::Deserialize;
 
@@ -16,6 +16,8 @@ struct Scenario {
     #[allow(dead_code)]
     about: String,
     duration: f64,
+    #[serde(default = "normal_speed")]
+    speed: f64,
     #[serde(default)]
     moves: Vec<(f64, f64, f64)>,
     #[serde(default)]
@@ -58,10 +60,51 @@ fn once() -> u32 {
     1
 }
 
+fn normal_speed() -> f64 {
+    1.0
+}
+
+#[derive(Default)]
+struct Recording {
+    duration: f64,
+    speed: f64,
+    moves: Vec<PointerMove>,
+    buttons: Vec<ButtonEvent>,
+    markers: Vec<(f64, String)>,
+    words: Vec<Word>,
+}
+
+fn guide_of(recording: &Recording) -> Guide {
+    let events = ClipEvents {
+        clip: 0,
+        stopped_at: Some(recording.duration).filter(|duration| *duration > 0.0),
+        moves: &recording.moves,
+        buttons: &recording.buttons,
+    };
+    let markers: Vec<Marker> = recording
+        .markers
+        .iter()
+        .map(|(time, label)| Marker {
+            time: *time,
+            source: Source {
+                clip: 0,
+                time: time * recording.speed,
+            },
+            label: label.clone(),
+        })
+        .collect();
+    build_guide(
+        clip_steps(&events, |time| Some(time / recording.speed)),
+        &markers,
+        &recording.words,
+    )
+}
+
 impl Scenario {
     fn recording(&self) -> Recording {
         Recording {
             duration: self.duration,
+            speed: self.speed,
             moves: self
                 .moves
                 .iter()
@@ -75,14 +118,7 @@ impl Scenario {
                 .iter()
                 .map(|&(time, button, down)| ButtonEvent { time, button, down })
                 .collect(),
-            markers: self
-                .markers
-                .iter()
-                .map(|(time, label)| Marker {
-                    time: *time,
-                    label: label.clone(),
-                })
-                .collect(),
+            markers: self.markers.clone(),
             words: self
                 .words
                 .iter()
@@ -130,7 +166,7 @@ fn says(narration: &str, fragment: &str) -> bool {
 
 fn judge(text: &str) -> Result<(), String> {
     let scenario: Scenario = serde_json::from_str(text).map_err(|error| error.to_string())?;
-    let guide = build_guide(&scenario.recording());
+    let guide = guide_of(&scenario.recording());
     let mut problems = Vec::new();
     for fragment in &scenario.expect.intro {
         if !says(&guide.intro, fragment) {
@@ -239,6 +275,9 @@ scenarios!(
     no_events,
     two_spots_fast,
     long_press_is_a_click,
+    double_click_in_slow_motion,
+    separate_clicks_sped_up,
+    narration_fullwidth_sentence_ends,
 );
 
 /// Scores a folder of scenario files of your own: set
@@ -275,6 +314,7 @@ fn extra_scenarios() {
 fn click_at(time: f64, x: f64, y: f64) -> Recording {
     Recording {
         duration: time + 10.0,
+        speed: 1.0,
         moves: vec![PointerMove {
             time: 0.0,
             position: Point::new(x, y),
@@ -297,28 +337,84 @@ fn click_at(time: f64, x: f64, y: f64) -> Recording {
 
 #[test]
 fn the_frame_is_taken_just_before_the_press() {
-    let guide = build_guide(&click_at(4.0, 0.5, 0.5));
+    let guide = guide_of(&click_at(4.0, 0.5, 0.5));
     assert_eq!(guide.steps.len(), 1);
     assert!((guide.steps[0].frame_time - 3.95).abs() < 1e-9);
 
-    let guide = build_guide(&click_at(0.02, 0.5, 0.5));
+    let guide = guide_of(&click_at(0.02, 0.5, 0.5));
     assert_eq!(guide.steps.len(), 1);
     assert_eq!(guide.steps[0].frame_time, 0.0);
 }
 
 #[test]
+fn a_step_keeps_the_clip_and_moment_it_was_recorded_at() {
+    let mut recording = click_at(4.0, 0.5, 0.5);
+    recording.speed = 2.0;
+    let guide = guide_of(&recording);
+    assert_eq!(guide.steps.len(), 1);
+    assert_eq!(guide.steps[0].time, 2.0);
+    assert_eq!(guide.steps[0].source, Source { clip: 0, time: 4.0 });
+    assert!((guide.steps[0].frame_time - 3.95).abs() < 1e-9);
+}
+
+#[test]
+fn clicks_cut_from_the_timeline_are_left_out_before_actions_are_read() {
+    let mut recording = click_at(4.0, 0.5, 0.5);
+    for (time, down) in [(4.3, true), (4.38, false)] {
+        recording.buttons.push(ButtonEvent {
+            time,
+            button: LEFT_BUTTON,
+            down,
+        });
+    }
+    let events = ClipEvents {
+        clip: 3,
+        stopped_at: None,
+        moves: &recording.moves,
+        buttons: &recording.buttons,
+    };
+    let steps = clip_steps(&events, |time| (time >= 4.2).then_some(time - 4.2));
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].action, Action::Click);
+    assert!((steps[0].time - 0.1).abs() < 1e-9);
+    assert_eq!(steps[0].source.clip, 3);
+    assert!((steps[0].source.time - 4.3).abs() < 1e-9);
+}
+
+#[test]
+fn steps_from_several_clips_are_put_in_output_order() {
+    let later = click_at(1.0, 0.2, 0.2);
+    let earlier = click_at(5.0, 0.8, 0.8);
+    let clip = |clip, recording: &Recording, starts: f64| {
+        clip_steps(
+            &ClipEvents {
+                clip,
+                stopped_at: None,
+                moves: &recording.moves,
+                buttons: &recording.buttons,
+            },
+            |time| Some(starts + time),
+        )
+    };
+    let mut steps = clip(0, &later, 20.0);
+    steps.extend(clip(1, &earlier, 0.0));
+    let guide = build_guide(steps, &[], &[]);
+    let order: Vec<u32> = guide.steps.iter().map(|step| step.source.clip).collect();
+    assert_eq!(order, [1, 0]);
+}
+
+#[test]
 fn a_note_is_framed_at_its_marker() {
-    let guide = build_guide(&Recording {
+    let guide = guide_of(&Recording {
         duration: 20.0,
-        markers: vec![Marker {
-            time: 6.5,
-            label: "Overview".into(),
-        }],
+        speed: 2.0,
+        markers: vec![(6.5, "Overview".into())],
         ..Recording::default()
     });
     assert_eq!(guide.steps.len(), 1);
     assert_eq!(guide.steps[0].action, Action::Note);
-    assert_eq!(guide.steps[0].frame_time, 6.5);
+    assert_eq!(guide.steps[0].time, 6.5);
+    assert_eq!(guide.steps[0].frame_time, 13.0);
 }
 
 #[test]
@@ -343,7 +439,7 @@ fn events_out_of_order_still_give_steps_in_time_order() {
         button: LEFT_BUTTON,
         down: true,
     });
-    let guide = build_guide(&recording);
+    let guide = guide_of(&recording);
     assert_eq!(guide.steps.len(), 2);
     assert!((guide.steps[0].time - 3.0).abs() < 1e-9);
     assert!((guide.steps[1].time - 8.0).abs() < 1e-9);
@@ -372,7 +468,7 @@ fn broken_numbers_are_ignored_not_fatal() {
         end: 1.0,
         text: "lost".into(),
     });
-    let guide = build_guide(&recording);
+    let guide = guide_of(&recording);
     assert_eq!(guide.steps.len(), 1);
     assert!(near(guide.steps[0].position, Some((0.5, 0.5))));
     assert!(!says(&guide.steps[0].narration, "lost"));
@@ -381,7 +477,7 @@ fn broken_numbers_are_ignored_not_fatal() {
 
 #[test]
 fn positions_outside_the_frame_are_pulled_onto_it() {
-    let guide = build_guide(&click_at(4.0, 1.2, -0.1));
+    let guide = guide_of(&click_at(4.0, 1.2, -0.1));
     assert_eq!(guide.steps.len(), 1);
     assert!(near(guide.steps[0].position, Some((1.0, 0.0))));
 }
@@ -389,6 +485,7 @@ fn positions_outside_the_frame_are_pulled_onto_it() {
 fn step(action: Action, position: Option<(f64, f64)>, drag_to: Option<(f64, f64)>) -> Step {
     Step {
         time: 4.0,
+        source: Source { clip: 0, time: 4.0 },
         frame_time: 3.95,
         action,
         position: position.map(|(x, y)| Point::new(x, y)),
@@ -749,6 +846,7 @@ fn document_step(
     DocumentStep {
         step: Step {
             time,
+            source: Source { clip: 0, time },
             frame_time: time,
             action,
             position: (action != Action::Note).then(|| Point::new(0.5, 0.5)),

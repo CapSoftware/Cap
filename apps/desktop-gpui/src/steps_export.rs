@@ -2,27 +2,28 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cap_project::{
-    CursorEvents, ProjectConfiguration, RecordingMeta, StudioRecordingMeta, TimelineConfiguration,
+    CursorEvents, MaskKind, ProjectConfiguration, RecordingMeta, StudioRecordingMeta,
+    TimelineConfiguration,
 };
 use cap_steps::{
-    ButtonEvent, Captions, Document, DocumentStep, Marker, Point, PointerMove, Recording, Size,
-    Word,
+    ButtonEvent, Captions, ClipEvents, Document, DocumentStep, Marker, Point, PointerMove, Size,
+    Source, Word,
 };
 
 pub(crate) const GUIDE_FILE: &str = "guide.md";
 pub(crate) const GUIDE_DATA_FILE: &str = "guide.json";
 pub(crate) const STEP_IMAGES_FOLDER: &str = "steps";
+const GUIDE_ENTRIES: [&str; 3] = [GUIDE_FILE, GUIDE_DATA_FILE, STEP_IMAGES_FOLDER];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StepsError {
     NoSteps,
+    HiddenAreas,
     Cancelled,
     Failed(String),
 }
 
-const STOP_CLICK_WINDOW: f64 = 1.0;
 const OUTSIDE_FRAME: f64 = 0.001;
-const MAX_FRAME_LEAD: f64 = 1.0;
 
 /// One recording segment. Cursor events are on the recording's clock, the
 /// timeline's source time starts at the segment's latest track start, and
@@ -76,10 +77,10 @@ fn source_length(clip: &Clip) -> f64 {
     (media_duration(&clip.display) - clip.screen_offset).max(0.0)
 }
 
-fn pointer_at(path: &[(f64, Point)], time: f64) -> Option<Point> {
-    let after = path.partition_point(|(moved, _)| *moved <= time);
+fn pointer_at(path: &[PointerMove], time: f64) -> Option<Point> {
+    let after = path.partition_point(|moved| moved.time <= time);
     path.get(after.saturating_sub(1))
-        .map(|(_, position)| *position)
+        .map(|moved| moved.position)
 }
 
 fn outside_frame(position: Point) -> bool {
@@ -131,17 +132,6 @@ impl<'a> Playback<'a> {
                 .map(|(start, _)| start + source_time),
         }
     }
-
-    fn source(&self, output_time: f64) -> Option<(u32, f64)> {
-        match self {
-            Self::Edited(timeline) => timeline.source_for_output_time(output_time),
-            Self::BackToBack(spans) => spans
-                .iter()
-                .enumerate()
-                .rfind(|(_, (start, _))| *start <= output_time)
-                .map(|(index, (start, length))| (index as u32, (output_time - start).min(*length))),
-        }
-    }
 }
 
 fn caption_words(timeline: &TimelineConfiguration) -> Vec<Word> {
@@ -166,13 +156,17 @@ fn caption_words(timeline: &TimelineConfiguration) -> Vec<Word> {
     words
 }
 
-#[cfg(test)]
-pub(crate) fn recording_events(
-    meta: &RecordingMeta,
-    project: &ProjectConfiguration,
-) -> Result<Recording, String> {
-    let clips = clips(meta);
-    Ok(events(project, &clips, &Playback::new(project, &clips)).0)
+/// A Sensitive mask is drawn over the styled frame, after padding, zoom and
+/// the 3D camera have moved the screen under it, so only the renderer knows
+/// which part of the recorded screen it covers. Screenshots are cut from the
+/// screen track below all of that and would show what the mask hides.
+pub(crate) fn hides_areas(project: &ProjectConfiguration) -> bool {
+    project.timeline.as_ref().is_some_and(|timeline| {
+        timeline
+            .mask_segments
+            .iter()
+            .any(|mask| mask.enabled && matches!(mask.mask_type, MaskKind::Sensitive))
+    })
 }
 
 pub(crate) fn project_guide(
@@ -180,99 +174,76 @@ pub(crate) fn project_guide(
     project: &ProjectConfiguration,
 ) -> cap_steps::Guide {
     let clips = clips(meta);
-    guide(project, &clips, &Playback::new(project, &clips)).1
+    guide(project, &clips, &Playback::new(project, &clips))
 }
 
-/// The guide and the duration of the video it follows. The stop click is
-/// already gone from the events (judged against the recording itself), so
-/// the guide is built without a duration: an end the timeline trimmed would
-/// otherwise cost a real click its step.
-fn guide(
-    project: &ProjectConfiguration,
-    clips: &[Clip],
-    playback: &Playback,
-) -> (f64, cap_steps::Guide) {
-    let (mut recording, anchors) = events(project, clips, playback);
-    let duration = std::mem::replace(&mut recording.duration, f64::INFINITY);
-    recording.moves.extend(anchors);
-    (duration, cap_steps::build_guide(&recording))
-}
-
-/// Returns the events and, for every button event, where the pointer was:
-/// a click is placed from the uncut pointer path, because the pointer may
-/// have reached it in footage the timeline cut.
-fn events(
-    project: &ProjectConfiguration,
-    clips: &[Clip],
-    playback: &Playback,
-) -> (Recording, Vec<PointerMove>) {
-    let mut recording = Recording {
-        duration: playback.duration(),
-        ..Recording::default()
-    };
-    let mut anchors = Vec::new();
+/// Actions are read on each clip's own clock and uncut pointer path, and
+/// only then placed on the timeline: a clip's speed must not turn a
+/// double-click into two clicks, and the pointer may have reached a click in
+/// footage the timeline cut.
+fn guide(project: &ProjectConfiguration, clips: &[Clip], playback: &Playback) -> cap_steps::Guide {
+    let mut steps = Vec::new();
     for (index, clip) in clips.iter().enumerate() {
         let clip_index = index as u32;
-        let source_time = |time_ms: f64| time_ms / 1000.0 - clip.event_offset;
-        let mut path: Vec<(f64, Point)> = clip
+        let on_clip = |time_ms: f64| time_ms / 1000.0 - clip.event_offset;
+        let mut moves: Vec<PointerMove> = clip
             .cursor
             .moves
             .iter()
             .filter(|event| event.time_ms.is_finite() && event.x.is_finite() && event.y.is_finite())
-            .map(|event| (source_time(event.time_ms), Point::new(event.x, event.y)))
+            .map(|event| PointerMove {
+                time: on_clip(event.time_ms),
+                position: Point::new(event.x, event.y),
+            })
             .collect();
-        path.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let last_press = if index + 1 == clips.len() {
-            Some(source_length(clip))
-                .filter(|length| *length > 0.0)
-                .map_or(f64::INFINITY, |length| length - STOP_CLICK_WINDOW)
-        } else {
-            f64::INFINITY
-        };
-
-        recording
-            .moves
-            .extend(path.iter().filter_map(|&(time, position)| {
-                Some(PointerMove {
-                    time: playback.output_time(clip_index, time)?,
-                    position,
-                })
-            }));
-        for event in &clip.cursor.clicks {
-            let time = source_time(event.time_ms);
-            let position = pointer_at(&path, time);
-            if event.down && (time > last_press || position.is_some_and(outside_frame)) {
-                continue;
-            }
-            let Some(time) = playback.output_time(clip_index, time) else {
-                continue;
-            };
-            recording.buttons.push(ButtonEvent {
-                time,
+        moves.sort_by(|a, b| a.time.total_cmp(&b.time));
+        let buttons: Vec<ButtonEvent> = clip
+            .cursor
+            .clicks
+            .iter()
+            .map(|event| ButtonEvent {
+                time: on_clip(event.time_ms),
                 button: event.cursor_num,
                 down: event.down,
-            });
-            anchors.extend(position.map(|position| PointerMove { time, position }));
-        }
+            })
+            .filter(|event| {
+                !(event.down && pointer_at(&moves, event.time).is_some_and(outside_frame))
+            })
+            .collect();
+        let events = ClipEvents {
+            clip: clip_index,
+            stopped_at: (index + 1 == clips.len())
+                .then(|| source_length(clip))
+                .filter(|length| *length > 0.0),
+            moves: &moves,
+            buttons: &buttons,
+        };
+        steps.extend(cap_steps::clip_steps(&events, |time| {
+            playback.output_time(clip_index, time)
+        }));
     }
-    recording.moves.sort_by(|a, b| a.time.total_cmp(&b.time));
-    recording.buttons.sort_by(|a, b| a.time.total_cmp(&b.time));
 
-    recording.markers = project
+    let mut markers: Vec<Marker> = project
         .markers
         .iter()
         .filter_map(|marker| {
             Some(Marker {
                 time: playback.output_time(marker.recording_clip, marker.time)?,
+                source: Source {
+                    clip: marker.recording_clip,
+                    time: marker.time,
+                },
                 label: marker.label.clone(),
             })
         })
         .collect();
-    recording.markers.sort_by(|a, b| a.time.total_cmp(&b.time));
-    if let Some(timeline) = &project.timeline {
-        recording.words = caption_words(timeline);
-    }
-    (recording, anchors)
+    markers.sort_by(|a, b| a.time.total_cmp(&b.time));
+    let words = project
+        .timeline
+        .as_ref()
+        .map(caption_words)
+        .unwrap_or_default();
+    cap_steps::build_guide(steps, &markers, &words)
 }
 
 fn settle(
@@ -371,7 +342,7 @@ fn frame_at(path: &Path, seconds: f64) -> Result<(Size, Vec<u8>), String> {
 /// Blocking. The screenshots come from the screen track itself, not the
 /// styled video, so they are sharp and carry no cursor but the ring. The
 /// guide is written beside `folder` and moved in only once it is whole, so
-/// a cancelled or failed export leaves an earlier guide there untouched.
+/// a cancelled or failed export leaves an earlier guide there as it was.
 pub(crate) fn export_steps(
     meta: &RecordingMeta,
     project: &ProjectConfiguration,
@@ -383,9 +354,12 @@ pub(crate) fn export_steps(
 ) -> Result<Vec<PathBuf>, StepsError> {
     let clips = clips(meta);
     let playback = Playback::new(project, &clips);
-    let (duration, guide) = guide(project, &clips, &playback);
+    let guide = guide(project, &clips, &playback);
     if guide.steps.is_empty() {
         return Err(StepsError::NoSteps);
+    }
+    if hides_areas(project) {
+        return Err(StepsError::HiddenAreas);
     }
     let name = folder
         .file_name()
@@ -398,7 +372,7 @@ pub(crate) fn export_steps(
         cancel,
         progress,
     };
-    let written = write_guide(&staging, &clips, &playback, guide, duration, &output)
+    let written = write_guide(&staging, &clips, &playback, guide, &output)
         .and_then(|names| publish(&staging, folder, &names).map_err(StepsError::Failed));
     let _ = std::fs::remove_dir_all(&staging);
     written
@@ -416,7 +390,6 @@ fn write_guide(
     clips: &[Clip],
     playback: &Playback,
     guide: cap_steps::Guide,
-    duration: f64,
     output: &Output,
 ) -> Result<Vec<String>, StepsError> {
     let cancelled = || {
@@ -438,18 +411,16 @@ fn write_guide(
             "{STEP_IMAGES_FOLDER}/{}",
             cap_steps::image_name(index + 1, total)
         );
-        let pressed = playback.source(step.time);
-        playback
-            .source(step.frame_time)
-            .filter(|(clip, time)| {
-                pressed.is_none_or(|(pressed_clip, pressed_time)| {
-                    *clip == pressed_clip && (0.0..=MAX_FRAME_LEAD).contains(&(pressed_time - time))
-                })
-            })
-            .or(pressed)
-            .and_then(|(clip, time)| Some((clips.get(clip as usize)?, time)))
-            .ok_or_else(|| format!("Step {} is not on the timeline", index + 1))
-            .and_then(|(clip, time)| frame_at(&clip.display, time + clip.screen_offset))
+        let Source { clip, time } = step.source;
+        let shown = if playback.output_time(clip, step.frame_time).is_some() {
+            step.frame_time
+        } else {
+            time
+        };
+        clips
+            .get(clip as usize)
+            .ok_or_else(|| format!("Step {} has no screen recording", index + 1))
+            .and_then(|clip| frame_at(&clip.display, shown + clip.screen_offset))
             .and_then(|(size, rgba)| {
                 cap_steps::render_step_image(&rgba, size, &step)
                     .ok_or_else(|| "The screen frame could not be read".to_string())
@@ -465,7 +436,7 @@ fn write_guide(
 
     let document = Document {
         title: output.title.to_string(),
-        duration,
+        duration: playback.duration(),
         intro: guide.intro,
         steps,
     };
@@ -480,14 +451,66 @@ fn write_guide(
 
 fn publish(staging: &Path, folder: &Path, names: &[String]) -> Result<Vec<PathBuf>, String> {
     if folder.exists() {
-        std::fs::create_dir_all(folder.join(STEP_IMAGES_FOLDER)).map_err(|e| e.to_string())?;
-        for name in names {
-            std::fs::rename(staging.join(name), folder.join(name)).map_err(|e| e.to_string())?;
-        }
+        replace_guide(staging, folder)?;
     } else {
         std::fs::rename(staging, folder).map_err(|e| e.to_string())?;
     }
     Ok(names.iter().map(|name| folder.join(name)).collect())
+}
+
+/// Only the guide's own entries are swapped, because the folder is one the
+/// user picked and may hold other files. The entries they replace wait in
+/// `retired` until every new one is in. `retired` is deleted with its
+/// contents only after that, so an entry that could not be put back after a
+/// failed swap is still there.
+fn replace_guide(staging: &Path, folder: &Path) -> Result<(), String> {
+    let mut retired = staging.as_os_str().to_owned();
+    retired.push(".replaced");
+    let retired = PathBuf::from(retired);
+    std::fs::create_dir(&retired).map_err(|e| e.to_string())?;
+
+    let mut moved_out = Vec::new();
+    let mut moved_in = Vec::new();
+    let swapped = GUIDE_ENTRIES
+        .iter()
+        .try_for_each(
+            |entry| match std::fs::rename(folder.join(entry), retired.join(entry)) {
+                Ok(()) => {
+                    moved_out.push(entry);
+                    Ok(())
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            },
+        )
+        .and_then(|()| {
+            GUIDE_ENTRIES.iter().try_for_each(|entry| {
+                std::fs::rename(staging.join(entry), folder.join(entry))?;
+                moved_in.push(entry);
+                Ok(())
+            })
+        });
+    let Err(error) = swapped else {
+        let _ = std::fs::remove_dir_all(&retired);
+        return Ok(());
+    };
+
+    let restored = moved_in
+        .iter()
+        .try_for_each(|entry| std::fs::rename(folder.join(entry), staging.join(entry)))
+        .and_then(|()| {
+            moved_out
+                .iter()
+                .try_for_each(|entry| std::fs::rename(retired.join(entry), folder.join(entry)))
+        });
+    let _ = std::fs::remove_dir(&retired);
+    Err(match restored {
+        Ok(()) => error.to_string(),
+        Err(_) => format!(
+            "{error}. The earlier guide was moved to {}",
+            retired.display()
+        ),
+    })
 }
 
 #[cfg(test)]

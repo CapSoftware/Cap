@@ -2746,6 +2746,7 @@ finding = "Finding steps…"
 folder = { text = "{name} Steps", context = "Name of the folder an exported guide is saved in; {name} is the recording's name." }
 format = { text = "Steps", context = "Export format: a step-by-step guide with a screenshot for each click." }
 guide = "One screenshot for each click, drag and marker, with what you said around it. Saved as Markdown and images, with a JSON copy for tools and agents."
+hidden_areas = { text = "This recording has a Sensitive mask. Step screenshots come straight from the screen recording and would show what the mask hides, so steps cannot be exported while it is on the timeline.", context = "Shown instead of exporting a step-by-step guide. A Sensitive mask is the editor's mask type that blurs a private area of the screen." }
 more = { one = "and {count} more step", other = "and {count} more steps", context = "Closes a list that shows only the first steps of a guide." }
 none = "No clicks or markers in this recording. Click through what you are showing, or add markers, and each one becomes a step."
 

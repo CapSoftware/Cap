@@ -1,0 +1,21 @@
+{
+	"about": "A double-click stays one when its clip is slowed to half speed: the gap that counts is the one it was made with, not the one it plays back with.",
+	"duration": 10,
+	"speed": 0.5,
+	"moves": [[1.0, 0.3, 0.3], [2.9, 0.4, 0.55]],
+	"buttons": [
+		[3.0, 1, true],
+		[3.08, 1, false],
+		[3.3, 1, true],
+		[3.38, 1, false]
+	],
+	"expect": {
+		"steps": [
+			{
+				"action": "doubleClick",
+				"time": 6.0,
+				"at": [0.4, 0.55]
+			}
+		]
+	}
+}

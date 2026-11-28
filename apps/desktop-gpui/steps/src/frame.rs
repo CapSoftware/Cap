@@ -84,7 +84,6 @@ pub fn crop_for(step: &Step, frame: Size) -> Rect {
     }
 }
 
-/// `None` when the buffer is not a whole RGBA frame of that size.
 pub fn render_step_image(frame_rgba: &[u8], frame: Size, step: &Step) -> Option<StepImage> {
     let row_bytes = (frame.width as usize).checked_mul(4)?;
     let expected = row_bytes.checked_mul(frame.height as usize)?;

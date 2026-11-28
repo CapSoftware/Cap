@@ -1,6 +1,7 @@
-use crate::{Guide, Recording, Step, Word};
+use crate::{Guide, Step, Word};
 
 const SENTENCE_PAUSE: f64 = 1.0;
+const SENTENCE_ENDS: [char; 6] = ['.', '!', '?', '。', '！', '？'];
 const EARLIER_STEP_WEIGHT: f64 = 1.5;
 const INTRO_LEAD: f64 = 4.0;
 
@@ -12,10 +13,10 @@ struct Sentence {
 
 /// People mostly announce what they are about to do, so a step that has
 /// already happened counts as further away than one still to come.
-pub(crate) fn attach(recording: &Recording, mut steps: Vec<Step>) -> Guide {
+pub(crate) fn attach(words: &[Word], mut steps: Vec<Step>) -> Guide {
     let first_step = steps.first().map(|step| step.time);
     let mut intro: Vec<String> = Vec::new();
-    for sentence in sentences(&recording.words) {
+    for sentence in sentences(words) {
         let introduces = first_step.is_none_or(|first| sentence.end < first - INTRO_LEAD);
         match nearest(&steps, &sentence) {
             Some(index) if !introduces => {
@@ -59,7 +60,7 @@ fn sentences(words: &[Word]) -> Vec<Sentence> {
                 text: text.to_string(),
             }),
         }
-        open = !text.ends_with(['.', '!', '?']);
+        open = !text.ends_with(SENTENCE_ENDS);
     }
     found
 }

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    Action, ButtonEvent, Guide, LEFT_BUTTON, Marker, Point, PointerMove, RIGHT_BUTTON, Recording,
-    Step,
+    Action, ButtonEvent, ClipEvents, Guide, LEFT_BUTTON, Marker, Point, PointerMove, RIGHT_BUTTON,
+    Source, Step, Word,
 };
 
 const FRAME_LEAD: f64 = 0.05;
@@ -19,14 +19,24 @@ struct Press {
     drag_to: Option<Point>,
 }
 
-pub fn build_guide(recording: &Recording) -> Guide {
-    let moves = pointer_path(&recording.moves);
-    let mut presses = presses(&recording.buttons, &moves);
-    if recording.duration.is_finite() && recording.duration > 0.0 {
-        presses.retain(|press| press.time <= recording.duration - STOP_CLICK_WINDOW);
+pub fn clip_steps(events: &ClipEvents, output_time: impl Fn(f64) -> Option<f64>) -> Vec<Step> {
+    let path = pointer_path(events.moves);
+    let mut buttons: Vec<&ButtonEvent> = events
+        .buttons
+        .iter()
+        .filter(|event| event.time.is_finite() && output_time(event.time).is_some())
+        .collect();
+    buttons.sort_by(|a, b| a.time.total_cmp(&b.time));
+    let mut presses = presses(&buttons, &path);
+    if let Some(stopped_at) = events.stopped_at.filter(|time| time.is_finite()) {
+        presses.retain(|press| press.time <= stopped_at - STOP_CLICK_WINDOW);
     }
-    let steps = with_markers(pointer_steps(&presses), &recording.markers);
-    crate::narration::attach(recording, steps)
+    pointer_steps(events.clip, &presses, output_time)
+}
+
+pub fn build_guide(mut steps: Vec<Step>, markers: &[Marker], words: &[Word]) -> Guide {
+    steps.sort_by(|a, b| a.time.total_cmp(&b.time));
+    crate::narration::attach(words, with_markers(steps, markers))
 }
 
 fn with_markers(mut steps: Vec<Step>, markers: &[Marker]) -> Vec<Step> {
@@ -50,7 +60,8 @@ fn with_markers(mut steps: Vec<Step>, markers: &[Marker]) -> Vec<Step> {
             Some(step) => step.heading = heading,
             None => notes.push(Step {
                 time: marker.time,
-                frame_time: marker.time.max(0.0),
+                source: marker.source,
+                frame_time: marker.source.time,
                 action: Action::Note,
                 position: None,
                 drag_to: None,
@@ -73,7 +84,11 @@ fn same_spot(a: Option<Point>, b: Option<Point>) -> bool {
     }
 }
 
-fn pointer_steps(presses: &[Press]) -> Vec<Step> {
+fn pointer_steps(
+    clip: u32,
+    presses: &[Press],
+    output_time: impl Fn(f64) -> Option<f64>,
+) -> Vec<Step> {
     let mut steps = Vec::new();
     let mut index = 0;
     while let Some(first) = presses.get(index) {
@@ -93,8 +108,16 @@ fn pointer_steps(presses: &[Press]) -> Vec<Step> {
         }
         let double =
             count == 2 && first.button == LEFT_BUTTON && previous - first.time <= DOUBLE_CLICK_GAP;
+        index += count;
+        let Some(time) = output_time(first.time) else {
+            continue;
+        };
         steps.push(Step {
-            time: first.time,
+            time,
+            source: Source {
+                clip,
+                time: first.time,
+            },
             frame_time: (first.time - FRAME_LEAD).max(0.0),
             action: if first.drag_to.is_some() {
                 Action::Drag
@@ -111,7 +134,6 @@ fn pointer_steps(presses: &[Press]) -> Vec<Step> {
             heading: None,
             narration: String::new(),
         });
-        index += count;
     }
     steps
 }
@@ -140,16 +162,10 @@ fn position_at(path: &[PointerMove], time: f64) -> Option<Point> {
         .map(|event| event.position)
 }
 
-fn presses(buttons: &[ButtonEvent], path: &[PointerMove]) -> Vec<Press> {
-    let mut events: Vec<&ButtonEvent> = buttons
-        .iter()
-        .filter(|event| event.time.is_finite())
-        .collect();
-    events.sort_by(|a, b| a.time.total_cmp(&b.time));
-
+fn presses(buttons: &[&ButtonEvent], path: &[PointerMove]) -> Vec<Press> {
     let mut found: Vec<Press> = Vec::new();
     let mut held: HashMap<u8, usize> = HashMap::new();
-    for event in events {
+    for event in buttons {
         if event.down {
             held.insert(event.button, found.len());
             found.push(Press {

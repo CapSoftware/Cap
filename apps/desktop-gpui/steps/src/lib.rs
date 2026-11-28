@@ -1,6 +1,8 @@
-//! Everything here is in output time, the seconds a viewer sees, and in
-//! positions normalised to the recorded frame. Reading a project and decoding
-//! its frames is the app's side.
+//! Pointer events are read on their clip's own clock, the seconds since that
+//! clip started recording: how fast someone clicked does not change with the
+//! speed the clip is played at. A guide is in output time, the seconds a
+//! viewer sees. Positions are normalised to the recorded frame. Reading a
+//! project and decoding its frames is the app's side.
 
 mod detect;
 mod document;
@@ -9,7 +11,7 @@ mod narration;
 
 use serde::{Deserialize, Serialize};
 
-pub use detect::build_guide;
+pub use detect::{build_guide, clip_steps};
 pub use document::{
     Captions, Document, DocumentStep, image_name, instruction, json, markdown, timestamp,
 };
@@ -47,9 +49,23 @@ pub struct ButtonEvent {
     pub down: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Source {
+    pub clip: u32,
+    pub time: f64,
+}
+
+pub struct ClipEvents<'a> {
+    pub clip: u32,
+    pub stopped_at: Option<f64>,
+    pub moves: &'a [PointerMove],
+    pub buttons: &'a [ButtonEvent],
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Marker {
     pub time: f64,
+    pub source: Source,
     pub label: String,
 }
 
@@ -58,15 +74,6 @@ pub struct Word {
     pub start: f64,
     pub end: f64,
     pub text: String,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Recording {
-    pub duration: f64,
-    pub moves: Vec<PointerMove>,
-    pub buttons: Vec<ButtonEvent>,
-    pub markers: Vec<Marker>,
-    pub words: Vec<Word>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -82,6 +89,7 @@ pub enum Action {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Step {
     pub time: f64,
+    pub source: Source,
     pub frame_time: f64,
     pub action: Action,
     pub position: Option<Point>,
