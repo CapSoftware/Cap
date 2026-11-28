@@ -7,6 +7,8 @@ use cap_rendering::{
 use clap::{Parser, ValueEnum};
 use std::time::Instant;
 
+const WARMUP_FRAMES: u32 = 10;
+
 #[derive(Clone, Copy, ValueEnum)]
 enum CameraFormat {
     Rgba,
@@ -58,7 +60,15 @@ fn fnv1a(bytes: impl Iterator<Item = u8>) -> u64 {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    ensure!(args.frames > 1);
+    ensure!(
+        args.frames > WARMUP_FRAMES,
+        "--frames must be greater than the {WARMUP_FRAMES} warm-up frames"
+    );
+    ensure!(
+        matches!(args.format, CameraFormat::Rgba)
+            || (args.camera_width.is_multiple_of(2) && args.camera_height.is_multiple_of(2)),
+        "NV12 camera dimensions must be even"
+    );
     let metadata: RecordingMeta = serde_json::from_value(serde_json::json!({
         "pretty_name": "camera only scene benchmark",
         "display": { "path": "unused.mp4", "fps": 60 },
@@ -154,7 +164,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    let steady = &mut frame_ms[10..];
+    let steady = &mut frame_ms[WARMUP_FRAMES as usize..];
     steady.sort_by(f64::total_cmp);
     println!(
         "camera_only_scene adapter={} output={}x{} camera={}x{} format={} frames={} median_ms={:.3} p90_ms={:.3} output_hash={output_hash:016x}",
