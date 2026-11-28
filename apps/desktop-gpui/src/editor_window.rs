@@ -6266,7 +6266,7 @@ impl EditorWindow {
     /// 1319-1348`). `delta` is already in output seconds; the recording domain
     /// is `delta * timescale`.
     #[allow(clippy::too_many_arguments)]
-    fn clip_trim(
+    pub(crate) fn clip_trim(
         &mut self,
         index: usize,
         anchor: f64,
@@ -6373,7 +6373,11 @@ impl EditorWindow {
         // trimmed without a commit.
         let box_start = self.timeline.clips.get(index).map_or(0., |clip| clip.start);
         self.set_preview_time(box_start + (clamped - segment_start) / timescale);
-        cx.notify();
+        // The draft, the snap guide and the preview time are drawn by the
+        // timeline, the transport and the canvas only, and the config is
+        // untouched until release, so the header, toolbar and sidebar keep
+        // their cached frames for the whole drag.
+        self.invalidate_hover_chrome(cx);
     }
 
     /// Blip's `video_segment_drag_layout` in Ghost mode, expressed as deltas
