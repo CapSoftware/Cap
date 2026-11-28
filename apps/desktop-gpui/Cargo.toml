@@ -233,6 +233,7 @@ tempfile = "3"
 [features]
 default = ["gpui-scroll-rubber-banding"]
 gpui-scroll-rubber-banding = ["gpui/scroll-rubber-banding"]
+scroll-rubber-banding-test = ["gpui-scroll-rubber-banding"]
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
