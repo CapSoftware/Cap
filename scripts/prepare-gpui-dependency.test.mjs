@@ -158,6 +158,8 @@ test("dependency verification handles overlapping patches without changing the c
 	patch("zed-perf.patch");
 	writeFileSync(path.join(upstream, "recovery.rs"), "one instance\n");
 	patch("zed-device-lost.patch");
+	writeFileSync(path.join(upstream, "rubber_band.rs"), "spring scroll\n");
+	patch("zed-scroll-rubber-banding.patch");
 	const script = path.join(cap, "scripts/prepare-gpui-dependency.sh");
 	writeFileSync(
 		script,

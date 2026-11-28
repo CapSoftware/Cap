@@ -5,7 +5,18 @@
 # gpui's tree does not want.
 [workspace]
 resolver = "2"
-members = [".", "kernels", "i18n-build", "glass", "notes", "notes-ui", "calendar", "meetings", "meeting-platform", "diarize"]
+members = [
+    ".",
+    "kernels",
+    "i18n-build",
+    "glass",
+    "notes",
+    "notes-ui",
+    "calendar",
+    "meetings",
+    "meeting-platform",
+    "diarize",
+]
 
 [package]
 name = "cap-desktop-gpui"
@@ -199,7 +210,9 @@ cc = "1.4"
 tauri-winres = "0.3.5"
 
 [dev-dependencies]
-gpui = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d", features = ["test-support"] }
+gpui = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d", features = [
+    "test-support",
+] }
 # The editor smoke (`tests/editor_frame0.rs`) drives `EditorInstance`, whose
 # decoders, renderer and preview tasks are all tokio-spawned -- a current-thread
 # runtime would deadlock the moment the test thread blocks on a frame. Kept in
@@ -216,6 +229,11 @@ tokio = { version = "1", features = [
 # audio markers for the fake transcriber.
 cap-verify = { path = "../../crates/verify" }
 tempfile = "3"
+
+[features]
+default = ["gpui-scroll-rubber-banding"]
+gpui-scroll-rubber-banding = ["gpui/scroll-rubber-banding"]
+scroll-rubber-banding-test = ["gpui-scroll-rubber-banding", "gpui/scroll-rubber-banding-tuning"]
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

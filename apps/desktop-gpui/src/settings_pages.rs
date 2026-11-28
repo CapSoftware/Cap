@@ -2733,7 +2733,7 @@ impl SettingsWindow {
         // the only implementation, so the 0.6.0 page's experimental switch has
         // nothing to switch. The store key (`enableNativeCameraPreview`) stays
         // readable in `store.rs` and is left untouched in the store.
-        vec![
+        let sections = vec![
             self.section(
                 tr::settings::experimental::reliability(),
                 None,
@@ -2778,7 +2778,8 @@ impl SettingsWindow {
                 ],
             )
             .into_any_element(),
-        ]
+        ];
+        sections
     }
 }
 
@@ -3528,6 +3529,16 @@ impl SettingsWindow {
             .border_1()
             .border_color(theme.settings_border())
             .overflow_y_scroll()
+            .map(|el| {
+                #[cfg(feature = "gpui-scroll-rubber-banding")]
+                {
+                    el.overscroll_behavior(gpui::OverscrollBehavior::Chain)
+                }
+                #[cfg(not(feature = "gpui-scroll-rubber-banding"))]
+                {
+                    el
+                }
+            })
             .child(
                 ui::TextInput::bare(&theme, "feedback-input", &self.pages.feedback_input)
                     .text_size(px(13.))

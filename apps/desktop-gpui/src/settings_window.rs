@@ -2235,6 +2235,16 @@ impl SettingsWindow {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+            .map(|el| {
+                #[cfg(feature = "gpui-scroll-rubber-banding")]
+                {
+                    el.overscroll_none()
+                }
+                #[cfg(not(feature = "gpui-scroll-rubber-banding"))]
+                {
+                    el
+                }
+            })
             .children(Page::ALL.iter().copied().map(|page| {
                 let selected = page == self.page;
                 div()
@@ -2581,6 +2591,16 @@ impl SettingsWindow {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .map(|el| {
+                        #[cfg(feature = "gpui-scroll-rubber-banding")]
+                        {
+                            el.overscroll_behavior(gpui::OverscrollBehavior::Auto)
+                        }
+                        #[cfg(not(feature = "gpui-scroll-rubber-banding"))]
+                        {
+                            el
+                        }
+                    })
                     .track_scroll(&self.page_scroll)
                     // `.cap-settings-page > .px-6 { max-width: none; padding:
                     //  18px var(--macos-settings-content-padding-x) 28px }`,

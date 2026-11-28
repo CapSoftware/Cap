@@ -87,6 +87,8 @@ mod onboarding_audio;
 mod onboarding_doodles;
 mod onboarding_window;
 mod overlay_backdrop;
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+mod parakeet_split;
 mod permission_guide;
 mod permission_help;
 mod permissions;
@@ -109,6 +111,9 @@ mod screenshot_crop;
 mod screenshot_editor;
 mod screenshot_export;
 mod script_text;
+#[cfg(feature = "scroll-rubber-banding-test")]
+#[path = "dev/scroll_rubber_banding.rs"]
+mod scroll_rubber_banding_test;
 mod session;
 mod settings_pages;
 mod settings_window;
@@ -124,8 +129,6 @@ mod target_thumbnails;
 mod teleprompter_window;
 mod theme;
 mod transcript;
-#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
-mod parakeet_split;
 mod transcription;
 mod tray;
 mod ui;
@@ -604,6 +607,8 @@ fn main() {
             })
             .detach();
         }
+        #[cfg(feature = "scroll-rubber-banding-test")]
+        scroll_rubber_banding_test::open(cx);
         // `CAP_GPUI_AUTO_TRAY` / `CAP_GPUI_TRAY_DUMP`: the tray's harness path.
         tray::drive_from_env(cx);
         // `CAP_GPUI_AUTO_CLOSE=settings|main:<secs>`: run the ⌘W body against
