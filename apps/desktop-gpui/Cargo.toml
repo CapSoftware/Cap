@@ -5,7 +5,7 @@
 # gpui's tree does not want.
 [workspace]
 resolver = "2"
-members = [".", "kernels", "i18n-build", "glass", "notes", "notes-ui", "calendar", "meetings", "meeting-platform", "diarize"]
+members = [".", "kernels", "i18n-build", "glass", "notes", "notes-ui", "calendar", "meetings", "meeting-platform", "diarize", "steps"]
 
 [package]
 name = "cap-desktop-gpui"
@@ -35,6 +35,7 @@ cap-calendar = { path = "calendar" }
 cap-diarize = { path = "diarize" }
 cap-notes = { path = "notes" }
 cap-notes-ui = { path = "notes-ui" }
+cap-steps = { path = "steps" }
 iana-time-zone = "0.1"
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
@@ -89,6 +90,10 @@ cap-rendering = { path = "../../crates/rendering" }
 # Already in this lockfile through cap-rendering, so naming it only makes the
 # edge direct.
 cap-camera-effects = { path = "../../crates/camera-effects" }
+# Opens a screen track left as a folder of fragments (`src/steps_export.rs`).
+# Already in this lockfile through cap-rendering, so naming it only makes the
+# edge direct.
+cap-video-decode = { path = "../../crates/video-decode" }
 # The blur worker's device/queue/texture types. Must stay on cap-rendering's
 # wgpu 25 line (the vendored wgpu-hal `[patch.crates-io]` below applies to
 # it); gpui's own wgpu 29 is a separate tree and never touches these types.

@@ -1,0 +1,16 @@
+{
+	"about": "One click is one step, placed where the pointer last was.",
+	"duration": 12,
+	"moves": [[0, 0.2, 0.2], [3.0, 0.5, 0.4], [3.9, 0.62, 0.48]],
+	"buttons": [[4.0, 1, true], [4.08, 1, false]],
+	"expect": {
+		"steps": [
+			{
+				"action": "click",
+				"time": 4.0,
+				"at": [0.62, 0.48],
+				"silent": true
+			}
+		]
+	}
+}

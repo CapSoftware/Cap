@@ -1,0 +1,46 @@
+{
+	"about": "Japanese and Chinese sentences end in a full-width mark, so two said in one breath still go to their own steps.",
+	"duration": 12,
+	"moves": [[2.0, 0.3, 0.3], [5.6, 0.6, 0.6], [8.6, 0.5, 0.2]],
+	"buttons": [
+		[2.3, 1, true],
+		[2.38, 1, false],
+		[5.8, 1, true],
+		[5.88, 1, false],
+		[8.8, 1, true],
+		[8.88, 1, false]
+	],
+	"words": [
+		[1.0, 1.6, "メニューを"],
+		[1.6, 2.2, "開きます。"],
+		[2.9, 4.2, "次に書き出しを"],
+		[4.2, 5.5, "選びますか？"],
+		[6.3, 7.4, "最后点击"],
+		[7.4, 8.6, "保存！"]
+	],
+	"expect": {
+		"steps": [
+			{
+				"action": "click",
+				"time": 2.3,
+				"at": [0.3, 0.3],
+				"says": ["メニューを 開きます。"],
+				"not_says": ["書き出し"]
+			},
+			{
+				"action": "click",
+				"time": 5.8,
+				"at": [0.6, 0.6],
+				"says": ["次に書き出しを 選びますか？"],
+				"not_says": ["メニュー", "保存"]
+			},
+			{
+				"action": "click",
+				"time": 8.8,
+				"at": [0.5, 0.2],
+				"says": ["最后点击 保存！"],
+				"not_says": ["書き出し"]
+			}
+		]
+	}
+}

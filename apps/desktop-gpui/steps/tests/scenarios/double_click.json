@@ -1,0 +1,20 @@
+{
+	"about": "Two quick clicks on one spot are a double-click, not two steps.",
+	"duration": 10,
+	"moves": [[1.0, 0.3, 0.3], [2.9, 0.4, 0.55]],
+	"buttons": [
+		[3.0, 1, true],
+		[3.08, 1, false],
+		[3.25, 1, true],
+		[3.33, 1, false]
+	],
+	"expect": {
+		"steps": [
+			{
+				"action": "doubleClick",
+				"time": 3.0,
+				"at": [0.4, 0.55]
+			}
+		]
+	}
+}

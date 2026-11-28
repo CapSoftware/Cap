@@ -1,0 +1,20 @@
+{
+	"about": "A press whose release was cut is still a click; a release on its own is nothing.",
+	"duration": 12,
+	"moves": [[0.5, 0.3, 0.3], [5.5, 0.7, 0.7]],
+	"buttons": [[1.0, 1, false], [3.0, 1, true], [6.0, 1, true], [6.1, 1, false]],
+	"expect": {
+		"steps": [
+			{
+				"action": "click",
+				"time": 3.0,
+				"at": [0.3, 0.3]
+			},
+			{
+				"action": "click",
+				"time": 6.0,
+				"at": [0.7, 0.7]
+			}
+		]
+	}
+}

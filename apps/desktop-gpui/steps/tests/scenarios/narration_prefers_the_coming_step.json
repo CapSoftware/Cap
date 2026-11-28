@@ -1,0 +1,32 @@
+{
+	"about": "A sentence between two steps belongs to the one it announces, even when the earlier one is a little closer.",
+	"duration": 12,
+	"moves": [[3.0, 0.2, 0.2], [7.0, 0.8, 0.8]],
+	"buttons": [
+		[3.5, 1, true],
+		[3.58, 1, false],
+		[7.6, 1, true],
+		[7.68, 1, false]
+	],
+	"words": [
+		[5.0, 5.333, "Now"],
+		[5.333, 5.667, "click"],
+		[5.667, 6.0, "save."]
+	],
+	"expect": {
+		"steps": [
+			{
+				"action": "click",
+				"time": 3.5,
+				"at": [0.2, 0.2],
+				"silent": true
+			},
+			{
+				"action": "click",
+				"time": 7.6,
+				"at": [0.8, 0.8],
+				"says": ["Now click save."]
+			}
+		]
+	}
+}

@@ -1,0 +1,20 @@
+{
+	"about": "The click that stops the recording, in its last second, is not a step.",
+	"duration": 10,
+	"moves": [[3.0, 0.4, 0.4], [9.3, 0.97, 0.01]],
+	"buttons": [
+		[4.0, 1, true],
+		[4.08, 1, false],
+		[9.6, 1, true],
+		[9.68, 1, false]
+	],
+	"expect": {
+		"steps": [
+			{
+				"action": "click",
+				"time": 4.0,
+				"at": [0.4, 0.4]
+			}
+		]
+	}
+}

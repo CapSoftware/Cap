@@ -2728,6 +2728,26 @@ refining_size = "正在精确估算大小…"
 refining_time = "正在精确估算用时…"
 unavailable = "不可用"
 
+[editor.export.steps]
+caption_click = "点击高亮的位置。"
+caption_double_click = "双击高亮的位置。"
+caption_drag = "沿箭头拖动。"
+caption_repeat = "点击高亮的位置 {number} 次。"
+caption_right_click = "右键点击高亮的位置。"
+caption_step = "步骤 {number}"
+count = { other = "{count} 个步骤" }
+cta = "导出步骤"
+exported = "步骤已导出"
+exporting = "正在写入步骤"
+file_only = "步骤会以指南的形式保存到一个文件夹中。"
+finding = "正在查找步骤…"
+folder = "{name} 步骤"
+format = "步骤"
+guide = "每次点击、拖动和标记各生成一张截图，并附上你当时说的话。保存为 Markdown 和图片，另附一份供工具和智能体使用的 JSON。"
+hidden_areas = "这段录制中有“敏感内容”遮罩。步骤截图直接取自屏幕录制，会显示遮罩隐藏的内容，因此只要遮罩还在时间线上，就无法导出步骤。"
+more = { other = "还有 {count} 个步骤" }
+none = "这段录制中没有点击或标记。点击你要演示的内容，或添加标记，每一个都会成为一个步骤。"
+
 [editor.export.tracks]
 aligned = "各轨道会跟随你的剪辑和速度，在任何视频编辑软件中都能对齐。视频不含背景和效果。"
 audio_detail = "WAV · 48 kHz"

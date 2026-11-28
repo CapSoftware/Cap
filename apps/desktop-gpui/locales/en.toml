@@ -2730,6 +2730,26 @@ refining_size = "Refining size…"
 refining_time = "Refining time…"
 unavailable = "Unavailable"
 
+[editor.export.steps]
+caption_click = "Click the highlighted spot."
+caption_double_click = "Double-click the highlighted spot."
+caption_drag = "Drag along the arrow."
+caption_repeat = { text = "Click the highlighted spot {number} times.", context = "Written into an exported guide for a step that clicks one place several times; {number} is 2 or more." }
+caption_right_click = "Right-click the highlighted spot."
+caption_step = { text = "Step {number}", context = "Heading of one step in an exported guide." }
+count = { one = "{count} step", other = "{count} steps", context = "How many steps an exported guide has." }
+cta = "Export Steps"
+exported = "Steps exported"
+exporting = "Writing steps"
+file_only = "Steps are saved as a guide in a folder."
+finding = "Finding steps…"
+folder = { text = "{name} Steps", context = "Name of the folder an exported guide is saved in; {name} is the recording's name." }
+format = { text = "Steps", context = "Export format: a step-by-step guide with a screenshot for each click." }
+guide = "One screenshot for each click, drag and marker, with what you said around it. Saved as Markdown and images, with a JSON copy for tools and agents."
+hidden_areas = { text = "This recording has a Sensitive mask. Step screenshots come straight from the screen recording and would show what the mask hides, so steps cannot be exported while it is on the timeline.", context = "Shown instead of exporting a step-by-step guide. A Sensitive mask is the editor's mask type that blurs a private area of the screen." }
+more = { one = "and {count} more step", other = "and {count} more steps", context = "Closes a list that shows only the first steps of a guide." }
+none = "No clicks or markers in this recording. Click through what you are showing, or add markers, and each one becomes a step."
+
 [editor.export.tracks]
 aligned = "Tracks follow your cuts and speed, so they line up in any video editor. Video comes out clean, without background or effects."
 audio_detail = "WAV · 48 kHz"

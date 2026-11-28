@@ -1,0 +1,15 @@
+{
+	"about": "Holding the button without moving is a click, not a drag.",
+	"duration": 10,
+	"moves": [[2.5, 0.5, 0.5], [3.5, 0.505, 0.5]],
+	"buttons": [[3.0, 1, true], [4.2, 1, false]],
+	"expect": {
+		"steps": [
+			{
+				"action": "click",
+				"time": 3.0,
+				"at": [0.5, 0.5]
+			}
+		]
+	}
+}

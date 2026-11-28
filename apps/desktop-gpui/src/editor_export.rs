@@ -29,6 +29,7 @@ use gpui::{
 use crate::editor_window::EditorWindow;
 use crate::i18n::tr;
 use crate::sign_in::{SignIn, SignInEvent, SignInOrigin, SignInOutcome};
+use crate::steps_export::StepsError;
 use crate::store::{self, ExportPrefs};
 use crate::ui;
 use crate::{library, platform};
@@ -40,6 +41,7 @@ const STAGE_PADDING_X: f32 = 24.;
 /// padding: everything on the stage that is not the preview itself.
 const STAGE_VERTICAL_CHROME: f32 = 16. + 22. + 14. + 18. + STATS_HEIGHT + 20.;
 const STATS_HEIGHT: f32 = 44.;
+const STEP_ROWS_SHOWN: usize = 7;
 const SEGMENT_HEIGHT: f32 = 26.;
 const COMPRESSION_PRESETS: [(ExportCompression, fn() -> &'static str); 4] = [
     (
@@ -106,10 +108,11 @@ pub enum ExportFormatKind {
     Gif,
     Tracks,
     Audio,
+    Steps,
 }
 
 impl ExportFormatKind {
-    const ALL: [Self; 3] = [Self::Mp4, Self::Gif, Self::Tracks];
+    const ALL: [Self; 4] = [Self::Mp4, Self::Gif, Self::Tracks, Self::Steps];
 
     fn label(self) -> &'static str {
         match self {
@@ -117,6 +120,7 @@ impl ExportFormatKind {
             Self::Gif => "GIF",
             Self::Tracks => tr::editor::export::tracks::format(),
             Self::Audio => tr::editor::export::audio::format(),
+            Self::Steps => tr::editor::export::steps::format(),
         }
     }
 
@@ -138,6 +142,7 @@ impl ExportFormatKind {
             Self::Gif => "Gif",
             Self::Tracks => "Tracks",
             Self::Audio => "Audio",
+            Self::Steps => "Steps",
         }
     }
 
@@ -146,6 +151,7 @@ impl ExportFormatKind {
             "Gif" => Self::Gif,
             "Tracks" => Self::Tracks,
             "Audio" => Self::Audio,
+            "Steps" => Self::Steps,
             _ => Self::Mp4,
         }
     }
@@ -188,6 +194,53 @@ fn track_options(
             TrackOption { kind, size }
         })
         .collect()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct StepRow {
+    pub number: usize,
+    pub time: String,
+    pub text: String,
+    pub heading: Option<String>,
+}
+
+fn steps_folder_name(pretty_name: &str) -> String {
+    let reserved = tr::editor::export::steps::folder("").len();
+    tr::editor::export::steps::folder(export_name_stem(pretty_name, reserved))
+}
+
+fn steps_captions() -> cap_steps::Captions {
+    cap_steps::Captions {
+        step: tr::editor::export::steps::caption_step("{number}"),
+        click: tr::editor::export::steps::caption_click().into(),
+        double_click: tr::editor::export::steps::caption_double_click().into(),
+        right_click: tr::editor::export::steps::caption_right_click().into(),
+        drag: tr::editor::export::steps::caption_drag().into(),
+        repeat: tr::editor::export::steps::caption_repeat("{count}"),
+    }
+}
+
+fn step_rows(guide: &cap_steps::Guide, captions: &cap_steps::Captions) -> Vec<StepRow> {
+    guide
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| StepRow {
+            number: index + 1,
+            time: cap_steps::timestamp(step.time),
+            text: cap_steps::instruction(step, captions),
+            heading: step.heading.clone(),
+        })
+        .collect()
+}
+
+fn steps_failure(error: &StepsError) -> String {
+    match error {
+        StepsError::NoSteps => tr::editor::export::steps::none().into(),
+        StepsError::HiddenAreas => tr::editor::export::steps::hidden_areas().into(),
+        StepsError::Cancelled => String::new(),
+        StepsError::Failed(error) => error.clone(),
+    }
 }
 
 fn track_label(kind: TrackKind) -> &'static str {
@@ -440,6 +493,8 @@ pub struct ExportUi {
     /// exporting sound once does not change what the next video export
     /// opens with.
     saved_format: ExportFormatKind,
+    pub steps: Option<Vec<StepRow>>,
+    steps_task: Option<gpui::Task<()>>,
 }
 
 /// What the project renders from: its output size before any export scaling
@@ -599,6 +654,8 @@ impl ExportUi {
                 _ => AudioExportFormat::Mp3,
             },
             saved_format: ExportFormatKind::from_slug(&prefs.format),
+            steps: None,
+            steps_task: None,
         }
     }
 
@@ -615,7 +672,11 @@ impl ExportUi {
     fn set_track_options(&mut self, options: Vec<TrackOption>) {
         self.tracks = selected_tracks(&options, &self.excluded_tracks);
         self.track_options = options;
-        if self.format == ExportFormatKind::Tracks && self.track_options.is_empty() {
+        if matches!(
+            self.format,
+            ExportFormatKind::Tracks | ExportFormatKind::Steps
+        ) && self.track_options.is_empty()
+        {
             self.format = ExportFormatKind::Mp4;
         }
     }
@@ -639,6 +700,14 @@ impl ExportUi {
             tracks.dedup();
             self.tracks = tracks;
         }
+    }
+
+    /// Switches to a step-by-step guide, for the `CAP_GPUI_AUTO_EXPORT*`
+    /// hooks.
+    pub(crate) fn use_steps(&mut self) {
+        self.format = ExportFormatKind::Steps;
+        self.set_destination(ExportDestination::File);
+        self.cursor_only = false;
     }
 
     fn toggle_track(&mut self, kind: TrackKind) {
@@ -1114,7 +1183,38 @@ impl EditorWindow {
         .to_vec()
     }
 
+    pub(crate) fn refresh_steps(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ui) = self.export.as_mut() else {
+            return;
+        };
+        if ui.format != ExportFormatKind::Steps || ui.steps.is_some() || ui.steps_task.is_some() {
+            return;
+        }
+        let project_path = self.project_path.clone();
+        let project = self.project.clone();
+        let captions = steps_captions();
+        ui.steps_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let rows = cx
+                .background_executor()
+                .spawn(async move {
+                    let meta = RecordingMeta::load_for_project(&project_path).ok()?;
+                    let guide = crate::steps_export::project_guide(&meta, &project);
+                    Some(step_rows(&guide, &captions))
+                })
+                .await
+                .unwrap_or_default();
+            let _ = this.update(cx, |this, cx| {
+                if let Some(ui) = this.export.as_mut() {
+                    ui.steps = Some(rows);
+                    ui.steps_task = None;
+                }
+                cx.notify();
+            });
+        }));
+    }
+
     fn refresh_export_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_steps(window, cx);
         let path = self.project_path.clone();
         let time = self.preview_or_playhead();
         let instance = self.instance.clone();
@@ -1282,6 +1382,10 @@ impl EditorWindow {
         }
         if ui.format == ExportFormatKind::Audio {
             self.start_audio_export(pretty_name, window, cx);
+            return;
+        }
+        if ui.format == ExportFormatKind::Steps {
+            self.start_steps_export(pretty_name, window, cx);
             return;
         }
         if ui.destination == ExportDestination::Link {
@@ -1706,6 +1810,156 @@ impl EditorWindow {
                         tracing::error!(%error, "editor tracks export task ended without a result");
                         ui.phase = ExportPhase::Failed;
                         ui.error = Some(tr::editor::export::task_failed().into());
+                    }
+                }
+                cx.notify();
+            });
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_requested_export_close(window, cx)
+            });
+        }));
+    }
+
+    fn start_steps_export(
+        &mut self,
+        pretty_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let project_path = self.project_path.clone();
+        let project = self.project.clone();
+        let Some(ui) = self.export.as_mut() else {
+            return;
+        };
+        let folder_name = steps_folder_name(&pretty_name);
+        let captions = steps_captions();
+        ui.cancel = Arc::new(AtomicBool::new(false));
+        let cancel = ui.cancel.clone();
+        ui.phase = ExportPhase::ChoosingFile;
+        ui.error = None;
+        ui.rendered = 0;
+        ui.total_frames = 0;
+        ui.output_path = None;
+        cx.notify();
+
+        ui.export_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let chosen: Result<Option<PathBuf>, String> =
+                match std::env::var_os("CAP_GPUI_AUTO_EXPORT") {
+                    Some(path) => Ok(Some(PathBuf::from(path))),
+                    None => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            platform::try_save_file_panel(&folder_name, &[])
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            Ok(platform::save_file_panel_async(&folder_name, &[], cx).await)
+                        }
+                    }
+                };
+            let folder = match chosen {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        if let Some(ui) = this.export.as_mut()
+                            && Arc::ptr_eq(&ui.cancel, &cancel)
+                        {
+                            ui.phase = ExportPhase::Idle;
+                        }
+                        cx.notify();
+                        this.finish_requested_export_close(window, cx);
+                    });
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error,
+                        "Save dialog unavailable; keeping the steps in the project output folder"
+                    );
+                    project_path.join("output").join(&folder_name)
+                }
+            };
+            let started = this.update(cx, |this, cx| {
+                let Some(ui) = this.export.as_mut() else {
+                    return false;
+                };
+                if !Arc::ptr_eq(&ui.cancel, &cancel) || cancel.load(Ordering::Relaxed) {
+                    ui.phase = ExportPhase::Idle;
+                    cx.notify();
+                    return false;
+                }
+                ui.phase = ExportPhase::Starting;
+                cx.notify();
+                true
+            });
+            if !started.unwrap_or(false) {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.finish_requested_export_close(window, cx)
+                });
+                return;
+            }
+
+            let (progress_tx, progress_rx) = flume::unbounded::<(usize, usize)>();
+            let export_cancel = cancel.clone();
+            let export_folder = folder.clone();
+            let started_at = std::time::Instant::now();
+            let export = cx.background_executor().spawn(async move {
+                let meta = RecordingMeta::load_for_project(&project_path)
+                    .map_err(|error| StepsError::Failed(error.to_string()))?;
+                crate::steps_export::export_steps(
+                    &meta,
+                    &project,
+                    &pretty_name,
+                    &export_folder,
+                    &captions,
+                    &export_cancel,
+                    &move |done, total| {
+                        let _ = progress_tx.send((done, total));
+                    },
+                )
+            });
+
+            loop {
+                if let Some((done, total)) = progress_rx.try_iter().last() {
+                    let _ = this.update(cx, |this, cx| {
+                        if let Some(ui) = this.export.as_mut() {
+                            ui.rendered = done.min(u32::MAX as usize) as u32;
+                            ui.total_frames = total.min(u32::MAX as usize) as u32;
+                            ui.phase = ExportPhase::Rendering;
+                        }
+                        cx.notify();
+                    });
+                }
+                if progress_rx.is_disconnected() {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(50))
+                    .await;
+            }
+
+            let result = export.await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(ui) = this.export.as_mut() else {
+                    return;
+                };
+                match result {
+                    Ok(files) => {
+                        tracing::info!(
+                            folder = %folder.display(),
+                            files = files.len(),
+                            elapsed_ms = started_at.elapsed().as_millis() as u64,
+                            "editor steps export completed"
+                        );
+                        crate::app_sounds::play_notification();
+                        ui.phase = ExportPhase::Done;
+                        ui.output_path = Some(folder);
+                    }
+                    Err(StepsError::Cancelled) => ui.phase = ExportPhase::Idle,
+                    Err(error) => {
+                        tracing::error!(?error, "editor steps export failed");
+                        ui.phase = ExportPhase::Failed;
+                        ui.error = Some(steps_failure(&error));
                     }
                 }
                 cx.notify();
@@ -2472,6 +2726,8 @@ impl EditorWindow {
                     .min_h_0()
                     .child(if ui.format == ExportFormatKind::Tracks {
                         self.render_tracks_stage(ui).into_any_element()
+                    } else if ui.format == ExportFormatKind::Steps {
+                        self.render_steps_stage(ui).into_any_element()
                     } else if ui.format == ExportFormatKind::Audio {
                         self.render_audio_stage(ui).into_any_element()
                     } else {
@@ -2904,13 +3160,217 @@ impl EditorWindow {
             )
     }
 
+    fn render_steps_stage(&self, ui: &ExportUi) -> impl IntoElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let duration = self.total_duration();
+        let folder = steps_folder_name(
+            self.summary()
+                .map(|summary| summary.pretty_name.as_str())
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or("Cap Recording"),
+        );
+        let found = ui.steps.as_deref();
+        let count = found.map_or(0, <[StepRow]>::len);
+        let hidden_areas = crate::steps_export::hides_areas(&self.project);
+
+        let row = |step: &StepRow| {
+            let text = if step.text.is_empty() {
+                step.heading.clone().unwrap_or_default()
+            } else {
+                step.text.clone()
+            };
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(12.))
+                .h(px(34.))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(26.))
+                        .h(px(22.))
+                        .rounded(px(6.))
+                        .bg(Hsla::from(editor.ctl))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(Hsla::from(editor.text_2))
+                        .child(step.number.to_string()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(12.5))
+                        .text_color(Hsla::from(editor.text_1))
+                        .truncate()
+                        .child(text),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(Hsla::from(editor.text_3))
+                        .child(step.time.clone()),
+                )
+        };
+        let note = |text: String| {
+            div()
+                .py(px(10.))
+                .text_size(px(12.))
+                .text_color(Hsla::from(editor.text_3))
+                .child(text)
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .bg(Hsla::from(editor.stage))
+            .pt(px(16.))
+            .px(px(STAGE_PADDING_X))
+            .pb(px(20.))
+            .child(
+                div()
+                    .h(px(22.))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(Hsla::from(editor.text_2))
+                    .child(tr::editor::export::steps::format()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(12.))
+                    .pt(px(14.))
+                    .pb(px(18.))
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(640.))
+                            .flex()
+                            .flex_col()
+                            .p(px(16.))
+                            .rounded(px(12.))
+                            .bg(Hsla::from(editor.card))
+                            .shadow(editor.card_shadow())
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .pb(px(8.))
+                                    .mb(px(4.))
+                                    .border_b_1()
+                                    .border_color(Hsla::from(editor.line))
+                                    .child(
+                                        svg()
+                                            .path("icons/folder.svg")
+                                            .size(px(16.))
+                                            .flex_none()
+                                            .text_color(Hsla::from(editor.text_2)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(Hsla::from(editor.text_1))
+                                            .truncate()
+                                            .child(folder),
+                                    ),
+                            )
+                            .children(
+                                found
+                                    .unwrap_or_default()
+                                    .iter()
+                                    .take(STEP_ROWS_SHOWN)
+                                    .map(row),
+                            )
+                            .when(found.is_none(), |card| {
+                                card.child(note(tr::editor::export::steps::finding().into()))
+                            })
+                            .when(found.is_some() && count == 0, |card| {
+                                card.child(note(tr::editor::export::steps::none().into()))
+                            })
+                            .when(count > STEP_ROWS_SHOWN, |card| {
+                                card.child(note(tr::editor::export::steps::more(
+                                    count - STEP_ROWS_SHOWN,
+                                )))
+                            })
+                            .when(count > 0 && hidden_areas, |card| {
+                                card.child(note(tr::editor::export::steps::hidden_areas().into()))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(640.))
+                            .px(px(4.))
+                            .text_size(px(11.))
+                            .text_color(Hsla::from(editor.text_3))
+                            .child(tr::editor::export::steps::guide()),
+                    ),
+            )
+            .child(
+                div().flex().flex_row().justify_center().child(
+                    div()
+                        .h(px(STATS_HEIGHT))
+                        .min_w(px(420.))
+                        .flex()
+                        .flex_row()
+                        .rounded(px(10.))
+                        .bg(Hsla::from(editor.card))
+                        .shadow(editor.card_shadow())
+                        .child(export_stat(
+                            &theme,
+                            tr::editor::export::stats::duration(),
+                            Some(format_duration(duration)),
+                            false,
+                        ))
+                        .child(export_stat(
+                            &theme,
+                            tr::editor::export::steps::format(),
+                            found.map(|_| tr::editor::export::steps::count(count)),
+                            true,
+                        ))
+                        .child(export_stat(
+                            &theme,
+                            tr::editor::export::tracks::files(),
+                            Some(if count == 0 {
+                                tr::editor::export::stats::unavailable().into()
+                            } else {
+                                tr::editor::export::tracks::file_count(count + 2)
+                            }),
+                            true,
+                        )),
+                ),
+            )
+    }
+
     fn render_export_sidebar(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
         let transparent = has_transparent_background(&self.project);
         let tracks_mode = ui.format == ExportFormatKind::Tracks;
         let audio_mode = ui.format == ExportFormatKind::Audio;
-        let link_disabled = transparent || ui.cursor_only || tracks_mode;
+        let steps_mode = ui.format == ExportFormatKind::Steps;
+        let link_disabled = transparent || ui.cursor_only || tracks_mode || steps_mode;
         let resolutions = self.export_resolutions(ui);
         let fps_options = self.export_fps_options(ui);
 
@@ -2943,10 +3403,10 @@ impl EditorWindow {
                     .when(tracks_mode, |this| {
                         this.child(self.export_tracks_field(ui, cx))
                     })
-                    .when(!tracks_mode && !audio_mode, |this| {
+                    .when(!tracks_mode && !audio_mode && !steps_mode, |this| {
                         this.child(self.export_resolution_field(ui, &resolutions, cx))
                     })
-                    .when(!audio_mode, |this| {
+                    .when(!audio_mode && !steps_mode, |this| {
                         this.child(self.export_fps_field(ui, fps_options, cx))
                     })
                     .when(
@@ -2957,7 +3417,7 @@ impl EditorWindow {
                         ui.format == ExportFormatKind::Gif && !ui.cursor_only,
                         |this| this.child(self.export_gif_quality_field(ui, cx)),
                     )
-                    .when(!tracks_mode && !audio_mode, |this| {
+                    .when(!tracks_mode && !audio_mode && !steps_mode, |this| {
                         this.child(div().h(px(1.)).flex_none().bg(Hsla::from(editor.line)))
                             .child(self.export_advanced(ui, cx))
                     }),
@@ -2989,6 +3449,11 @@ impl EditorWindow {
                 Some("icons/music.svg"),
                 true,
             ),
+            ExportDestination::File if ui.format == ExportFormatKind::Steps => (
+                tr::editor::export::steps::cta(),
+                Some("icons/file-text.svg"),
+                true,
+            ),
             ExportDestination::File => (
                 tr::editor::export::cta::file(),
                 Some("icons/folder.svg"),
@@ -3017,8 +3482,11 @@ impl EditorWindow {
                 true,
             ),
         };
-        let busy =
-            ui.phase.is_busy() || (ui.format == ExportFormatKind::Tracks && ui.tracks.is_empty());
+        let busy = ui.phase.is_busy()
+            || (ui.format == ExportFormatKind::Tracks && ui.tracks.is_empty())
+            || (ui.format == ExportFormatKind::Steps
+                && (ui.steps.as_ref().is_none_or(|steps| steps.is_empty())
+                    || crate::steps_export::hides_areas(&self.project)));
         let (bg, hover_bg, text) = if primary {
             (
                 Hsla::from(editor.accent),
@@ -3102,7 +3570,10 @@ impl EditorWindow {
                             .disabled(
                                 (*dest == ExportDestination::Link && link_disabled)
                                     || (*dest == ExportDestination::Clipboard
-                                        && ui.format == ExportFormatKind::Tracks),
+                                        && matches!(
+                                            ui.format,
+                                            ExportFormatKind::Tracks | ExportFormatKind::Steps
+                                        )),
                             );
                         option.icon = Some(dest.icon().into());
                         option
@@ -3117,7 +3588,11 @@ impl EditorWindow {
                     return;
                 };
                 if let Some(ui) = this.export.as_mut() {
-                    if ui.format == ExportFormatKind::Tracks && dest != ExportDestination::File {
+                    if matches!(
+                        ui.format,
+                        ExportFormatKind::Tracks | ExportFormatKind::Steps
+                    ) && dest != ExportDestination::File
+                    {
                         return;
                     }
                     if dest == ExportDestination::Link
@@ -3145,6 +3620,8 @@ impl EditorWindow {
                     .text_color(Hsla::from(editor.text_3))
                     .child(if ui.format == ExportFormatKind::Tracks {
                         tr::editor::export::tracks::file_only()
+                    } else if ui.format == ExportFormatKind::Steps {
+                        tr::editor::export::steps::file_only()
                     } else if ui.cursor_only {
                         tr::editor::export::link_unavailable_cursor()
                     } else {
@@ -3288,6 +3765,7 @@ impl EditorWindow {
             ExportFormatKind::Gif => cursor_only,
             ExportFormatKind::Tracks => no_tracks,
             ExportFormatKind::Audio => false,
+            ExportFormatKind::Steps => no_tracks,
         };
         self.export_section(tr::editor::export::section::format(), "icons/video.svg")
             .child(
@@ -3989,6 +4467,9 @@ impl EditorWindow {
             ExportPhase::Rendering if ui.format == ExportFormatKind::Audio => {
                 tr::editor::export::audio::exporting()
             }
+            ExportPhase::Rendering if ui.format == ExportFormatKind::Steps => {
+                tr::editor::export::steps::exporting()
+            }
             ExportPhase::Rendering if ui.cursor_only => {
                 tr::editor::export::phase::rendering_cursor()
             }
@@ -4016,6 +4497,9 @@ impl EditorWindow {
             }
             ExportPhase::Done if ui.format == ExportFormatKind::Audio => {
                 tr::editor::export::audio::exported()
+            }
+            ExportPhase::Done if ui.format == ExportFormatKind::Steps => {
+                tr::editor::export::steps::exported()
             }
             ExportPhase::Done => tr::editor::export::phase::complete(),
             ExportPhase::Failed if ui.clipboard_retry_path().is_some() => {
@@ -4203,11 +4687,16 @@ impl EditorWindow {
                                     ui::ButtonVariant::Gray,
                                     ui::ButtonSize::Md,
                                 )
-                                .label(if ui.format == ExportFormatKind::Tracks {
-                                    tr::editor::export::tracks::open_folder()
-                                } else {
-                                    tr::editor::export::done::open_file()
-                                })
+                                .label(
+                                    if matches!(
+                                        ui.format,
+                                        ExportFormatKind::Tracks | ExportFormatKind::Steps
+                                    ) {
+                                        tr::editor::export::tracks::open_folder()
+                                    } else {
+                                        tr::editor::export::done::open_file()
+                                    },
+                                )
                                 .on_click(move |_, _, cx| {
                                     if let Some(path) = &path {
                                         library::open_with_system(path, cx);
@@ -4518,7 +5007,7 @@ fn normalize_export_options(ui: &mut ExportUi, transparent: bool) {
     if ui.format == ExportFormatKind::Tracks {
         ui.set_destination(ExportDestination::File);
     }
-    if ui.format == ExportFormatKind::Audio {
+    if matches!(ui.format, ExportFormatKind::Audio | ExportFormatKind::Steps) {
         ui.set_destination(ExportDestination::File);
         ui.cursor_only = false;
     }
@@ -4721,6 +5210,9 @@ fn export_progress(
         progress_tx.send((rendered, total)).is_ok()
     }
 }
+
+#[cfg(test)]
+mod steps_tests;
 
 #[cfg(test)]
 mod tests {

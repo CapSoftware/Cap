@@ -1,0 +1,35 @@
+{
+	"about": "A labelled marker heads the steps that follow it.",
+	"duration": 20,
+	"markers": [[1.0, "Create a project"], [10.0, "Invite your team"]],
+	"moves": [[2.5, 0.2, 0.2], [5.5, 0.4, 0.4], [11.5, 0.7, 0.7]],
+	"buttons": [
+		[3.0, 1, true],
+		[3.08, 1, false],
+		[6.0, 1, true],
+		[6.08, 1, false],
+		[12.0, 1, true],
+		[12.08, 1, false]
+	],
+	"expect": {
+		"steps": [
+			{
+				"action": "click",
+				"time": 3.0,
+				"at": [0.2, 0.2],
+				"heading": "Create a project"
+			},
+			{
+				"action": "click",
+				"time": 6.0,
+				"at": [0.4, 0.4]
+			},
+			{
+				"action": "click",
+				"time": 12.0,
+				"at": [0.7, 0.7],
+				"heading": "Invite your team"
+			}
+		]
+	}
+}
