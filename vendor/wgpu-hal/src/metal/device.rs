@@ -1,8 +1,8 @@
 use alloc::{borrow::ToOwned as _, sync::Arc, vec::Vec};
 use core::{ptr::NonNull, sync::atomic};
-use std::{thread, time};
+use std::time;
 
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use objc::{runtime::Object, sel, sel_impl, Message as _};
 
 use super::{conv, PassthroughShader};
@@ -1505,6 +1505,7 @@ impl crate::Device for super::Device {
             completed_value: Arc::new(atomic::AtomicU64::new(0)),
             pending_command_buffers: Vec::new(),
             shared_event,
+            completion: Arc::new((Mutex::new(()), Condvar::new())),
         })
     }
 
@@ -1543,15 +1544,22 @@ impl crate::Device for super::Device {
             }
         };
 
+        // Cap-local patch to the vendored wgpu-hal; reapply it whenever vendor/wgpu-hal is replaced.
+        // Upstream sleeps 1 ms between status polls, so no wait returned in under a millisecond
+        // however quickly the GPU finished. The completion handler `Queue::submit` installs now
+        // notifies `Fence::completion`; the 1 ms poll is kept only as the fallback.
         let start = time::Instant::now();
+        let timeout = time::Duration::from_millis(u64::from(timeout_ms));
+        let (lock, completed) = &*fence.completion;
+        let mut guard = lock.lock();
         loop {
             if let metal::MTLCommandBufferStatus::Completed = cmd_buf.status() {
                 return Ok(true);
             }
-            if start.elapsed().as_millis() >= timeout_ms as u128 {
+            let Some(remaining) = timeout.checked_sub(start.elapsed()) else {
                 return Ok(false);
-            }
-            thread::sleep(time::Duration::from_millis(1));
+            };
+            completed.wait_for(&mut guard, remaining.min(time::Duration::from_millis(1)));
         }
     }
 

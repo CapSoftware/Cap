@@ -43,7 +43,7 @@ use bitflags::bitflags;
 use hashbrown::HashMap;
 use metal::foreign_types::ForeignTypeRef as _;
 use naga::FastHashMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Condvar, Mutex, RwLock};
 
 #[derive(Clone, Debug)]
 pub struct Api;
@@ -423,8 +423,11 @@ impl crate::Queue for Queue {
         objc::rc::autoreleasepool(|| {
             let extra_command_buffer = {
                 let completed_value = Arc::clone(&signal_fence.completed_value);
+                let completion = Arc::clone(&signal_fence.completion);
                 let block = block::ConcreteBlock::new(move |_cmd_buf| {
                     completed_value.store(signal_value, atomic::Ordering::Release);
+                    let _guard = completion.0.lock();
+                    completion.1.notify_all();
                 })
                 .copy();
 
@@ -903,6 +906,7 @@ pub struct Fence {
     /// The pending fence values have to be ascending.
     pending_command_buffers: Vec<(crate::FenceValue, metal::CommandBuffer)>,
     shared_event: Option<metal::SharedEvent>,
+    completion: Arc<(Mutex<()>, Condvar)>,
 }
 
 impl crate::DynFence for Fence {}
