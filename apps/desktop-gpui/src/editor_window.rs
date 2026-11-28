@@ -2856,7 +2856,7 @@ impl EditorWindow {
             self.end_timeline_gesture(window, cx);
         }
         let landed = landing.land(&mut self.project);
-        self.history.amend_all(|entry| {
+        self.amend_history_following_speech(|entry| {
             landing.land(entry);
         });
         let Some(moved_cuts) = landed else {
@@ -2869,7 +2869,7 @@ impl EditorWindow {
             self.transcript.hovered_cut = None;
             self.set_selection(None, cx);
             self.canvas_selection = None;
-            self.resynchronize_silence_history(window, cx);
+            self.synchronize_silence_scenes(window, cx);
             self.rebuild_timeline();
             self.note_edit("caption-refinement", Some(TrackKind::Clip));
         }

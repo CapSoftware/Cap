@@ -167,25 +167,6 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.catch_up_silence_scenes(false, window, cx)
-    }
-
-    /// The same catch-up for a change that rewrote every undo entry, where
-    /// each entry's scenes have to follow its own timeline.
-    pub(super) fn resynchronize_silence_history(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.catch_up_silence_scenes(true, window, cx);
-    }
-
-    fn catch_up_silence_scenes(
-        &mut self,
-        every_undo_entry: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
         if !silence_scenes_stale(&self.project, self.silence_sync_signature) {
             return false;
         }
@@ -193,25 +174,47 @@ impl EditorWindow {
             self.analyze_speech(window, cx);
             return false;
         };
-        self.regenerate_stale_silence_scenes(&speech, every_undo_entry, cx);
+        self.regenerate_stale_silence_scenes(&speech, cx);
         true
+    }
+
+    /// For a change written into every undo entry. It can move the speech in
+    /// some entries and not others, and regenerating one it left alone would
+    /// throw away the fades and trims saved on that entry's generated scenes.
+    pub(super) fn amend_history_following_speech(
+        &mut self,
+        change: impl FnMut(&mut ProjectConfiguration),
+    ) {
+        let speech = self.cached_clip_speech();
+        amend_following_speech(
+            &mut self.history,
+            speech.as_ref().map(|speech| speech.as_slice()),
+            change,
+        );
     }
 
     /// Edits made while the mics were still being read were recorded with
     /// scenes from before them, so the result is written into those entries
     /// instead of becoming an undo step that changes nothing the user did.
+    /// Entries still at the synced timing are left as saved, and the repair
+    /// does not wait on the open project being stale: an undo may have
+    /// stepped back off the stale entries, which a redo would then restore.
     fn land_silence_resync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !silence_scenes_stale(&self.project, self.silence_sync_signature) {
-            return;
-        }
+        let stale = silence_scenes_stale(&self.project, self.silence_sync_signature);
         let Some(speech) = self.cached_clip_speech() else {
             // Left stale, every later edit, slider ticks included, would
             // decode every mic again. The next timing change retries once.
-            self.trust_loaded_silence_scenes();
+            if stale {
+                self.trust_loaded_silence_scenes();
+            }
             return;
         };
+        repair_stale_history(&mut self.history, self.silence_sync_signature, &speech);
+        if !stale {
+            return;
+        }
         self.end_timeline_gesture(window, cx);
-        self.regenerate_stale_silence_scenes(&speech, true, cx);
+        self.regenerate_stale_silence_scenes(&speech, cx);
         self.rebuild_timeline();
         self.publish_project();
         self.schedule_save(window, cx);
@@ -220,14 +223,9 @@ impl EditorWindow {
     fn regenerate_stale_silence_scenes(
         &mut self,
         speech: &[Option<ClipSpeech>],
-        every_undo_entry: bool,
         cx: &mut Context<Self>,
     ) {
-        self.silence_sync_signature = follow_speech_timing(
-            &mut self.project,
-            every_undo_entry.then_some(&mut self.history),
-            speech,
-        );
+        self.silence_sync_signature = follow_speech_timing(&mut self.project, speech);
         if self
             .selection
             .as_ref()
@@ -260,19 +258,40 @@ fn silence_scenes_stale(project: &ProjectConfiguration, synced: Option<u64>) -> 
 
 fn follow_speech_timing(
     project: &mut ProjectConfiguration,
-    history: Option<&mut ProjectHistory>,
     speech: &[Option<ClipSpeech>],
 ) -> Option<u64> {
-    let regenerate = |project: &mut ProjectConfiguration| {
-        if let Some(delay) = project.camera_silence_delay {
-            regenerate_silence_scenes(project, speech, f64::from(delay));
-        }
-    };
-    if let Some(history) = history {
-        history.amend_all(regenerate);
+    if let Some(delay) = project.camera_silence_delay {
+        regenerate_silence_scenes(project, speech, f64::from(delay));
     }
-    regenerate(project);
     silence_timing_signature(project)
+}
+
+fn repair_stale_history(
+    history: &mut ProjectHistory,
+    synced: Option<u64>,
+    speech: &[Option<ClipSpeech>],
+) {
+    history.amend_all(|entry| {
+        if silence_scenes_stale(entry, synced) {
+            follow_speech_timing(entry, speech);
+        }
+    });
+}
+
+fn amend_following_speech(
+    history: &mut ProjectHistory,
+    speech: Option<&[Option<ClipSpeech>]>,
+    mut change: impl FnMut(&mut ProjectConfiguration),
+) {
+    history.amend_all(|entry| {
+        let synced = silence_timing_signature(entry);
+        change(entry);
+        if let Some(speech) = speech
+            && silence_scenes_stale(entry, synced)
+        {
+            follow_speech_timing(entry, speech);
+        }
+    });
 }
 
 fn analyze_project_speech(project_path: &std::path::Path) -> Vec<Option<ClipSpeech>> {
@@ -332,7 +351,7 @@ mod tests {
             camera_silence_delay: Some(2.0),
             ..Default::default()
         };
-        let synced = follow_speech_timing(&mut project, None, &clip_speech());
+        let synced = follow_speech_timing(&mut project, &clip_speech());
         (project, synced)
     }
 
@@ -356,6 +375,29 @@ mod tests {
             .collect()
     }
 
+    fn generated_scenes(project: &ProjectConfiguration) -> Vec<(f64, f64, f64)> {
+        project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .scene_segments
+            .iter()
+            .filter(|scene| scene.from_silence)
+            .map(|scene| (scene.start, scene.end, scene.transition_in))
+            .collect()
+    }
+
+    fn customize_generated_scene(project: &mut ProjectConfiguration) -> (f64, f64, f64) {
+        let scene = timeline(project)
+            .scene_segments
+            .iter_mut()
+            .find(|scene| scene.from_silence)
+            .unwrap();
+        scene.end -= 1.0;
+        scene.transition_in = 1.2;
+        (scene.start, scene.end, scene.transition_in)
+    }
+
     fn assert_hidden_only_over(project: &ProjectConfiguration, start: f64, end: f64) {
         let hidden = scenes(project, true);
         assert!(!hidden.is_empty());
@@ -375,7 +417,7 @@ mod tests {
 
         swap_clips(&mut project);
         assert!(silence_scenes_stale(&project, synced));
-        let synced = follow_speech_timing(&mut project, None, &clip_speech());
+        let synced = follow_speech_timing(&mut project, &clip_speech());
         assert_hidden_only_over(&project, CLIP_SECS, CLIP_SECS * 2.0);
         assert_eq!(scenes(&project, false), vec![(15.0, 16.0)]);
         assert!(!silence_scenes_stale(&project, synced));
@@ -439,7 +481,7 @@ mod tests {
             .retain(|scene| !scene.from_silence);
         swap_clips(&mut disabled);
         assert!(!silence_scenes_stale(&disabled, synced));
-        follow_speech_timing(&mut disabled, None, &clip_speech());
+        follow_speech_timing(&mut disabled, &clip_speech());
         assert!(scenes(&disabled, true).is_empty());
     }
 
@@ -447,7 +489,7 @@ mod tests {
     fn mic_offsets_and_speed_move_the_hidden_window() {
         let (mut project, _) = silent_then_spoken();
         timeline(&mut project).segments[0].timescale = 2.0;
-        follow_speech_timing(&mut project, None, &clip_speech());
+        follow_speech_timing(&mut project, &clip_speech());
         assert_hidden_only_over(&project, 0.0, CLIP_SECS / 2.0);
 
         project.clips.push(cap_project::ClipConfiguration {
@@ -458,7 +500,7 @@ mod tests {
             },
             ..Default::default()
         });
-        follow_speech_timing(&mut project, None, &clip_speech());
+        follow_speech_timing(&mut project, &clip_speech());
         assert_hidden_only_over(&project, 0.0, CLIP_SECS / 2.0 + 4.0);
         assert!(
             scenes(&project, true)
@@ -482,7 +524,8 @@ mod tests {
         assert!(silence_scenes_stale(&project, synced));
         assert_hidden_only_over(&project, 0.0, CLIP_SECS);
 
-        let synced = follow_speech_timing(&mut project, Some(&mut history), &clip_speech());
+        repair_stale_history(&mut history, synced, &clip_speech());
+        let synced = follow_speech_timing(&mut project, &clip_speech());
         assert!(!silence_scenes_stale(&project, synced));
         assert_hidden_only_over(&project, CLIP_SECS, CLIP_SECS * 2.0);
 
@@ -495,5 +538,69 @@ mod tests {
         let before_the_swap = history.undo().unwrap().clone();
         assert_hidden_only_over(&before_the_swap, 0.0, CLIP_SECS);
         assert!(!history.can_undo());
+    }
+
+    #[test]
+    fn a_saved_fade_survives_a_reorder_made_before_the_mics_were_read() {
+        let (mut project, synced) = silent_then_spoken();
+        let saved = customize_generated_scene(&mut project);
+        let mut history = ProjectHistory::new(project.clone());
+        swap_clips(&mut project);
+        history.record(&project);
+
+        repair_stale_history(&mut history, synced, &clip_speech());
+        follow_speech_timing(&mut project, &clip_speech());
+        assert_hidden_only_over(&project, CLIP_SECS, CLIP_SECS * 2.0);
+
+        let before_the_swap = history.undo().unwrap().clone();
+        assert_eq!(generated_scenes(&before_the_swap), vec![saved]);
+        let swapped = history.redo().unwrap().clone();
+        assert_hidden_only_over(&swapped, CLIP_SECS, CLIP_SECS * 2.0);
+        assert_ne!(generated_scenes(&swapped), vec![saved]);
+    }
+
+    #[test]
+    fn a_reorder_undone_before_the_mics_were_read_is_repaired_for_redo() {
+        let (mut project, synced) = silent_then_spoken();
+        let saved = customize_generated_scene(&mut project);
+        let mut history = ProjectHistory::new(project.clone());
+        swap_clips(&mut project);
+        history.record(&project);
+        project = history.undo().unwrap().clone();
+        assert!(!silence_scenes_stale(&project, synced));
+
+        repair_stale_history(&mut history, synced, &clip_speech());
+        assert_eq!(generated_scenes(&project), vec![saved]);
+        let redone = history.redo().unwrap().clone();
+        assert_hidden_only_over(&redone, CLIP_SECS, CLIP_SECS * 2.0);
+    }
+
+    #[test]
+    fn a_change_to_every_undo_entry_only_regenerates_the_entries_it_retimed() {
+        const SPOKEN_SECS: f64 = 6.0;
+        let trim_a_leading_spoken_clip = |entry: &mut ProjectConfiguration| {
+            let first = &mut timeline(entry).segments[0];
+            if first.recording_clip == 1 {
+                first.end = SPOKEN_SECS;
+            }
+        };
+        let (mut project, _) = silent_then_spoken();
+        let saved = customize_generated_scene(&mut project);
+        let mut history = ProjectHistory::new(project.clone());
+        swap_clips(&mut project);
+        follow_speech_timing(&mut project, &clip_speech());
+        history.record(&project);
+
+        let mut unread = history.clone();
+        amend_following_speech(&mut unread, None, trim_a_leading_spoken_clip);
+        assert_hidden_only_over(unread.undo().unwrap(), 0.0, CLIP_SECS);
+        assert_hidden_only_over(unread.redo().unwrap(), CLIP_SECS, CLIP_SECS * 2.0);
+
+        let speech = clip_speech();
+        amend_following_speech(&mut history, Some(&speech), trim_a_leading_spoken_clip);
+        let before_the_swap = history.undo().unwrap().clone();
+        assert_eq!(generated_scenes(&before_the_swap), vec![saved]);
+        let swapped = history.redo().unwrap().clone();
+        assert_hidden_only_over(&swapped, SPOKEN_SECS, SPOKEN_SECS + CLIP_SECS);
     }
 }
