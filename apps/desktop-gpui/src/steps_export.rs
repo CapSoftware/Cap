@@ -551,6 +551,26 @@ fn retire(file: &Path, retired: &Path) -> std::io::Result<bool> {
     }
 }
 
+/// Every screenshot is reached through this one name, so a link here would
+/// carry the swap into the folder it points at: screenshots there moved out
+/// and deleted, new ones written in. `symlink_metadata` does not follow the
+/// link, so only a real folder passes. `Ok(false)` is none there yet.
+fn has_screenshots_folder(screenshots: &Path) -> std::io::Result<bool> {
+    match std::fs::symlink_metadata(screenshots) {
+        Ok(found) if found.is_dir() => Ok(true),
+        Ok(found) => Err(std::io::Error::new(
+            std::io::ErrorKind::NotADirectory,
+            format!(
+                "{} is a {}, not a folder",
+                screenshots.display(),
+                if found.is_symlink() { "link" } else { "file" }
+            ),
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 /// The folder is one the user picked, and it and its screenshots folder may
 /// hold other files. Only the guide's own files are swapped: the ones this
 /// export writes, and the screenshots the earlier guide's `guide.json`
@@ -558,6 +578,10 @@ fn retire(file: &Path, retired: &Path) -> std::io::Result<bool> {
 /// in. `retired` is deleted with its contents only after that, so a file
 /// that could not be put back after a failed swap is still there.
 fn replace_guide(staging: &Path, folder: &Path, names: &[String]) -> Result<(), String> {
+    let screenshots = folder.join(STEP_IMAGES_FOLDER);
+    let made_screenshots_folder =
+        !has_screenshots_folder(&screenshots).map_err(|error| error.to_string())?;
+
     let mut retired = staging.as_os_str().to_owned();
     retired.push(".replaced");
     let retired = PathBuf::from(retired);
@@ -568,8 +592,6 @@ fn replace_guide(staging: &Path, folder: &Path, names: &[String]) -> Result<(), 
             outgoing.push(image);
         }
     }
-    let screenshots = folder.join(STEP_IMAGES_FOLDER);
-    let made_screenshots_folder = !screenshots.exists();
 
     let mut moved_out = Vec::new();
     let mut moved_in = Vec::new();

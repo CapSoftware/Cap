@@ -805,6 +805,85 @@ fn a_folder_where_a_guide_file_would_go_is_not_replaced() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_link_where_the_screenshots_folder_would_go_is_not_followed() {
+    let earlier = project(&[(2.0, 0.25, 0.5), (4.0, 0.75, 0.25)]);
+    export(&earlier).unwrap();
+    let images = earlier.folder.join(STEP_IMAGES_FOLDER);
+    let elsewhere = earlier.folder.with_file_name("elsewhere");
+    let theirs = ["diagram.png", "step-01.png", "step-02.png"];
+    std::fs::remove_dir_all(&images).unwrap();
+    std::fs::create_dir(&elsewhere).unwrap();
+    for name in theirs {
+        std::fs::write(elsewhere.join(name), "theirs").unwrap();
+    }
+    std::os::unix::fs::symlink(&elsewhere, &images).unwrap();
+    let guide = [GUIDE_FILE, GUIDE_DATA_FILE];
+    let before = guide.map(|name| std::fs::read(earlier.folder.join(name)).unwrap());
+
+    let mut later = project(&[(5.0, 0.6, 0.6)]);
+    later.folder = earlier.folder.clone();
+    assert!(matches!(export(&later), Err(StepsError::Failed(_))));
+
+    assert_eq!(listing(&elsewhere), theirs);
+    for name in theirs {
+        assert_eq!(
+            std::fs::read_to_string(elsewhere.join(name)).unwrap(),
+            "theirs",
+            "{name}"
+        );
+    }
+    assert_eq!(std::fs::read_link(&images).unwrap(), elsewhere);
+    for (name, bytes) in guide.iter().zip(&before) {
+        assert_eq!(
+            &std::fs::read(earlier.folder.join(name)).unwrap(),
+            bytes,
+            "{name}"
+        );
+    }
+    assert_eq!(
+        listing(&earlier.folder),
+        [GUIDE_DATA_FILE, GUIDE_FILE, STEP_IMAGES_FOLDER]
+    );
+    assert_eq!(
+        listing(earlier.folder.parent().unwrap()),
+        ["elsewhere", "guide", "steps.cap"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_where_a_guide_file_would_go_is_replaced_and_what_it_points_at_is_kept() {
+    let project = project(&[(2.0, 0.25, 0.5)]);
+    export(&project).unwrap();
+    let elsewhere = project.folder.with_file_name("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    let screenshot = format!("{STEP_IMAGES_FOLDER}/step-01.png");
+    let linked = [GUIDE_FILE, screenshot.as_str()];
+    for name in linked {
+        let theirs = elsewhere.join(Path::new(name).file_name().unwrap());
+        std::fs::write(&theirs, "theirs").unwrap();
+        std::fs::remove_file(project.folder.join(name)).unwrap();
+        std::os::unix::fs::symlink(&theirs, project.folder.join(name)).unwrap();
+    }
+
+    export(&project).unwrap();
+
+    assert_eq!(listing(&elsewhere), [GUIDE_FILE, "step-01.png"]);
+    for name in listing(&elsewhere) {
+        assert_eq!(
+            std::fs::read_to_string(elsewhere.join(&name)).unwrap(),
+            "theirs",
+            "{name}"
+        );
+    }
+    for name in linked {
+        let written = std::fs::symlink_metadata(project.folder.join(name)).unwrap();
+        assert!(written.is_file(), "{name}");
+    }
+}
+
 #[test]
 fn a_failed_first_export_into_a_folder_leaves_it_as_it_was() {
     let root = tempfile::tempdir().unwrap();
