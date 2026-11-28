@@ -1,0 +1,23 @@
+{
+	"name": "cap",
+	"version": "1.0.0",
+	"description": "Cap's agent skills and local MCP server: record, export and upload screen recordings, manage the Cap library, and generate product-demo videos with the cap CLI.",
+	"author": {
+		"name": "Cap Software, Inc.",
+		"url": "https://cap.so"
+	},
+	"homepage": "https://cap.so",
+	"repository": "https://github.com/CapSoftware/Cap",
+	"license": "AGPL-3.0",
+	"keywords": [
+		"cap",
+		"screen-recording",
+		"video",
+		"loom-alternative",
+		"mcp",
+		"cli",
+		"agent-skills"
+	],
+	"skills": "./skill/",
+	"mcpServers": "./.mcp.json"
+}
