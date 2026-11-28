@@ -331,11 +331,13 @@ impl ControlsWindow {
     /// The timer shows whole seconds, so wake just after each one ticks over;
     /// `refresh` (not just `notify`) because this window is usually not the
     /// active one while a recording runs. Respawned whenever the timer starts
-    /// or stops running, so a resume lines up with the next second.
+    /// or stops running, so a resume lines up with the next second. A paused
+    /// or stopping clock does not move, and everything else the bar shows
+    /// repaints through the session observer, so it has no tick at all.
     fn spawn_tick(window: &mut Window, cx: &mut Context<Self>) -> gpui::Task<()> {
         cx.spawn_in(window, async move |this, cx| {
             loop {
-                let Ok(delay) = this.update_in(cx, |this, _, cx| {
+                let Ok(Some(delay)) = this.update_in(cx, |this, _, cx| {
                     let session = this.session.read(cx);
                     tick_delay(this.timer_is_live(cx), session.elapsed())
                 }) else {
@@ -1493,12 +1495,8 @@ fn disconnected_issue(disconnected: crate::session::DisconnectedInputs) -> Optio
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
-fn tick_delay(live: bool, elapsed: Duration) -> Duration {
-    if live {
-        until_next_second(elapsed)
-    } else {
-        Duration::from_secs(1)
-    }
+fn tick_delay(live: bool, elapsed: Duration) -> Option<Duration> {
+    live.then(|| until_next_second(elapsed))
 }
 
 fn until_next_second(elapsed: Duration) -> Duration {
@@ -1581,15 +1579,12 @@ mod repaint_tests {
     }
 
     #[test]
-    fn a_resumed_timer_wakes_at_the_next_second_and_a_paused_one_idles() {
+    fn a_resumed_timer_wakes_at_the_next_second_and_a_paused_one_sleeps() {
         assert_eq!(
             tick_delay(true, Duration::from_millis(3_900)),
-            Duration::from_millis(100)
+            Some(Duration::from_millis(100))
         );
-        assert_eq!(
-            tick_delay(false, Duration::from_millis(3_900)),
-            Duration::from_secs(1)
-        );
+        assert_eq!(tick_delay(false, Duration::from_millis(3_900)), None);
     }
 }
 
