@@ -1,0 +1,8 @@
+{
+	"mcpServers": {
+		"cap": {
+			"command": "cap",
+			"args": ["mcp", "serve"]
+		}
+	}
+}

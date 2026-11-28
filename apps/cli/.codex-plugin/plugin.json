@@ -1,0 +1,40 @@
+{
+	"name": "cap",
+	"version": "1.0.0",
+	"description": "Cap's agent skills and local MCP server: record, export and upload screen recordings, manage the Cap library, and generate product-demo videos with the cap CLI.",
+	"author": {
+		"name": "Cap Software, Inc.",
+		"url": "https://cap.so"
+	},
+	"homepage": "https://cap.so",
+	"repository": "https://github.com/CapSoftware/Cap",
+	"license": "AGPL-3.0",
+	"keywords": [
+		"cap",
+		"screen-recording",
+		"video",
+		"loom-alternative",
+		"mcp",
+		"cli",
+		"agent-skills"
+	],
+	"skills": "./skill/",
+	"mcpServers": "./.mcp.json",
+	"interface": {
+		"displayName": "Cap",
+		"shortDescription": "Screen recording from your agent",
+		"longDescription": "Packages the skills that ship with the Cap CLI together with its local MCP server (cap mcp serve). The cap skill routes screen recording, exports, uploads, the Cap library, transcripts, comments, sharing, analytics, organizations and developer apps through Cap's CLI or MCP instead of browser automation. The cap-demo skill turns a URL into a short cinematic 3D product-demo video. Requires the cap command from Cap Desktop or the install script.",
+		"developerName": "Cap Software, Inc.",
+		"category": "Productivity",
+		"capabilities": ["Interactive", "Read", "Write"],
+		"websiteURL": "https://cap.so",
+		"defaultPrompt": [
+			"Record my main screen for 30 seconds and upload it to Cap",
+			"Export this .cap project to MP4 and give me a share link",
+			"Make a product-demo video of https://cap.so"
+		],
+		"brandColor": "#4080F0",
+		"composerIcon": "./assets/logo.png",
+		"logo": "./assets/logo.png"
+	}
+}
